@@ -130,15 +130,30 @@ func _grove(min_v: Vector3i, max_v: Vector3i, count: int) -> void:
 
 
 func _hedge_beds(min_v: Vector3i, max_v: Vector3i) -> void:
+	## Sparse flower boxes / short hedges along a loose grid — not a field of pillars.
 	var y0 := ground_y
-	for z in range(min_v.z + 2, max_v.z - 2, 7):
-		for x in range(min_v.x + 3, max_v.x - 3):
+	for z in range(min_v.z + 4, max_v.z - 4, 11):
+		for x in range(min_v.x + 4, max_v.x - 4, 9):
 			if brush.get_vox(Vector3i(x, y0, z)) != VoxelMaterial.PARK:
 				continue
-			if (x + z) % 5 != 0:
+			if rng.randf() < 0.35:
 				continue
-			brush.set_vox(Vector3i(x, y0 + 1, z), VoxelMaterial.PLANTER)
-			brush.set_vox(Vector3i(x, y0 + 2, z), VoxelMaterial.PAINT)
+			# 2×1 planter box with leaf hedge on top.
+			var x1 := x + 1
+			if brush.get_vox(Vector3i(x1, y0, z)) != VoxelMaterial.PARK:
+				x1 = x
+			brush.fill_box(
+				Vector3i(x, y0 + 1, z),
+				Vector3i(x1 + 1, y0 + 2, z + 1),
+				VoxelMaterial.PLANTER
+			)
+			brush.fill_box(
+				Vector3i(x, y0 + 2, z),
+				Vector3i(x1 + 1, y0 + 3, z + 1),
+				VoxelMaterial.LEAVES
+			)
+			if rng.randf() < 0.4:
+				brush.set_vox(Vector3i(x, y0 + 3, z), VoxelMaterial.PAINT)
 
 
 func _tree(x: int, y0: int, z: int) -> void:

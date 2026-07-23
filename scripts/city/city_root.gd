@@ -26,7 +26,7 @@ var _building_lod: BuildingImpostorLod
 var _hud: Label
 var _status: Label
 var _generating: bool = false
-var _hud_lod_accum: float = 0.0
+var _fps_accum: float = 0.0
 
 ## Player voxel mesh radius (2× the previous 220 default).
 const PLAYER_VIEW_DISTANCE := 440
@@ -88,9 +88,10 @@ func _build_hud() -> void:
 	layer.add_child(cross)
 
 	_hud = Label.new()
-	_hud.add_theme_font_size_override("font_size", 16)
+	_hud.add_theme_font_size_override("font_size", 18)
 	_hud.add_theme_color_override("font_color", Color(0.95, 0.95, 0.95, 0.9))
 	_hud.position = Vector2(16, 12)
+	_hud.text = "—"
 	layer.add_child(_hud)
 
 	_status = Label.new()
@@ -101,42 +102,15 @@ func _build_hud() -> void:
 	_status.offset_bottom = -40
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(_status)
-	_refresh_hud()
-
-
-func _refresh_hud() -> void:
-	if _hud == null:
-		return
-	var meters_x := float(_generator.size_x) * VOXEL_SIZE
-	var meters_z := float(_generator.size_z) * VOXEL_SIZE
-	var height_m := float(_generator.max_building_height_vox) * VOXEL_SIZE
-	var lod_line := "Crowd %d" % crowd_count
-	if _crowd != null and is_instance_valid(_crowd):
-		var dist := _crowd.get_lod_distances()
-		var tiers := _crowd.count_lod_tiers()
-		lod_line = "Crowd %d  ·  render %.0fm  ·  visible %d culled %d" % [
-			crowd_count, dist.x, tiers.x, tiers.z
-		]
-	var traffic_line := "Traffic %d" % vehicle_count
-	if _vehicles != null and is_instance_valid(_vehicles):
-		var vt := _vehicles.count_lod_tiers()
-		traffic_line = "Traffic %d  ·  visible %d culled %d" % [vehicle_count, vt.x, vt.z]
-	var building_line := ""
-	if _building_lod != null and is_instance_valid(_building_lod):
-		building_line = "\nBuildings  ·  far impostors %d" % _building_lod.visible_count()
-	_hud.text = (
-		"City POC  ·  seed %d  ·  %.0f×%.0f m  ·  max %.0f m\n%s\n%s%s\nWASD move  ·  dig LMB  ·  R new seed  ·  F9/F10 crowd range"
-		% [city_seed, meters_x, meters_z, height_m, lod_line, traffic_line, building_line]
-	)
 
 
 func _process(delta: float) -> void:
-	_hud_lod_accum += delta
-	if _hud_lod_accum < 0.5:
+	_fps_accum += delta
+	if _fps_accum < 0.25:
 		return
-	_hud_lod_accum = 0.0
-	if _crowd != null and is_instance_valid(_crowd):
-		_refresh_hud()
+	_fps_accum = 0.0
+	if _hud != null:
+		_hud.text = "%d FPS" % Engine.get_frames_per_second()
 
 
 func _create_terrain() -> void:
@@ -350,7 +324,6 @@ func _regenerate() -> void:
 		push_error("CityRoot: StreetNavLayers failed — crowd/traffic disabled")
 		_status.visible = false
 		_generating = false
-		_refresh_hud()
 		return
 
 	var ped_map := PedRoadMap.new()
@@ -398,7 +371,6 @@ func _regenerate() -> void:
 
 	_status.visible = false
 	_generating = false
-	_refresh_hud()
 
 
 func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> void:
@@ -446,8 +418,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_F9:
 				if _crowd != null and is_instance_valid(_crowd):
 					_crowd.adjust_near_distance(-1.0)
-					_refresh_hud()
 			KEY_F10:
 				if _crowd != null and is_instance_valid(_crowd):
 					_crowd.adjust_near_distance(1.0)
-					_refresh_hud()

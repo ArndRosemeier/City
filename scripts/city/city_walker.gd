@@ -28,6 +28,7 @@ const LIB_NAME := &"quat"
 
 @export var walk_speed: float = 5.0
 @export var sprint_speed: float = 8.5
+@export var jump_velocity: float = 6.8
 @export var mouse_sensitivity: float = 0.0022
 @export var turn_speed: float = 10.0
 @export var blast_range: float = 80.0
@@ -45,6 +46,9 @@ const LIB_NAME := &"quat"
 @export var scale_factor_step: float = 1.15
 @export var scale_min: float = 0.1
 @export var scale_max: float = 20.0
+## Auto-step onto curbs / low ledges (meters at scale 1).
+@export var max_step_height: float = 0.38
+@export var coyote_time_sec: float = 0.12
 
 var _yaw: float = 0.0
 var _pitch: float = -0.35
@@ -67,6 +71,8 @@ var _moving: bool = false
 var _body_base_y: float = 0.0
 var _feet_aligned: bool = false
 var _rng := RandomNumberGenerator.new()
+var _jump_queued: bool = false
+var _coyote_left: float = 0.0
 
 
 func _ready() -> void:
@@ -74,7 +80,9 @@ func _ready() -> void:
 	_zoom = zoom_default
 	collision_layer = 2
 	collision_mask = 1
-	floor_snap_length = 0.25
+	floor_snap_length = 0.35
+	floor_max_angle = deg_to_rad(55.0)
+	safe_margin = 0.06
 
 	_capsule = CollisionShape3D.new()
 	var shape := CapsuleShape3D.new()
@@ -257,7 +265,7 @@ func _apply_proportions() -> void:
 	_update_capsule_from_proportions()
 	if _pivot != null:
 		_pivot.position.y = pivot_height * character_scale
-	floor_snap_length = 0.25 * character_scale
+	floor_snap_length = 0.35 * character_scale
 	_feet_aligned = false
 	_body_base_y = 0.0
 
@@ -433,6 +441,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				toggle_character_editor()
 				get_viewport().set_input_as_handled()
 				return
+			KEY_SPACE:
+				_jump_queued = true
+				get_viewport().set_input_as_handled()
+				return
 			KEY_EQUAL, KEY_KP_ADD:
 				adjust_character_scale(1.0)
 				get_viewport().set_input_as_handled()
@@ -471,9 +483,10 @@ func _physics_process(delta: float) -> void:
 	if _editor != null and _editor.call("is_open"):
 		velocity.x = 0.0
 		velocity.z = 0.0
+		_jump_queued = false
 		if not is_on_floor():
-			var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
-			velocity.y -= gravity * delta
+			var gravity_edit: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+			velocity.y -= gravity_edit * delta
 		else:
 			velocity.y = 0.0
 			if not _feet_aligned and _skeleton != null:
@@ -483,12 +496,13 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
-	if not is_on_floor():
-		velocity.y -= gravity * delta
+	if is_on_floor():
+		_coyote_left = coyote_time_sec
+		if velocity.y < 0.0:
+			velocity.y = 0.0
 	else:
-		velocity.y = 0.0
-		if not _feet_aligned and _skeleton != null:
-			_align_soles_to_floor()
+		_coyote_left = maxf(_coyote_left - delta, 0.0)
+		velocity.y -= gravity * delta
 
 	var input_dir := Vector2.ZERO
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
@@ -520,12 +534,43 @@ func _physics_process(delta: float) -> void:
 		velocity.x = 0.0
 		velocity.z = 0.0
 
-	if Input.is_key_pressed(KEY_SPACE) and is_on_floor():
-		velocity.y = 4.2 * sqrt(character_scale)
+	var can_jump := _coyote_left > 0.0
+	if _jump_queued and can_jump:
+		velocity.y = jump_velocity * sqrt(character_scale)
+		_coyote_left = 0.0
+		_jump_queued = false
+	else:
+		_jump_queued = false
+
+	if _moving and is_on_floor() and velocity.y <= 0.0:
+		_try_step_up(delta)
 
 	move_and_slide()
 	_apply_camera_angles()
 	_update_locomotion_anim(speed)
+
+	if is_on_floor() and not _feet_aligned and _skeleton != null:
+		_align_soles_to_floor()
+
+
+func _try_step_up(delta: float) -> void:
+	## If horizontal motion is blocked by a low ledge, lift onto it (curbs, planters).
+	var step := max_step_height * character_scale
+	if step <= 0.001:
+		return
+	var motion := Vector3(velocity.x, 0.0, velocity.z) * delta
+	if motion.length_squared() < 0.000001:
+		return
+	if not test_move(global_transform, motion):
+		return
+	var up := Vector3(0.0, step, 0.0)
+	if test_move(global_transform, up):
+		return
+	var raised := global_transform.translated(up)
+	if test_move(raised, motion):
+		return
+	global_position.y += step
+	floor_snap_length = maxf(floor_snap_length, step * 0.5)
 
 
 func _update_locomotion_anim(move_speed: float) -> void:

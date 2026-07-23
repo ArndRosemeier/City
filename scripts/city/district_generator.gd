@@ -40,6 +40,9 @@ func generate(tool: VoxelTool, seed_value: int = -1) -> void:
 	## One-shot stamp — requires the full district AABB to already be editable.
 	begin_generate(tool, seed_value)
 	paint_tile(0, 0, size_x, size_z)
+	## Multi-cell plazas/parks must decorate *after* the cell loop: each paint_tile
+	## cell clears its AABB to air first, which would wipe a compose done mid-loop.
+	decorate_open_spaces()
 	end_generate()
 
 
@@ -399,33 +402,25 @@ func _paint_crosswalk_bridges(min_v: Vector3i, max_v: Vector3i) -> void:
 func _paint_plaza_cell(
 	min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, plaza: PlazaComposer
 ) -> void:
+	## Base pave every plaza cell. Fancy compose runs once in decorate_open_spaces().
+	_brush.fill_box(min_v, max_v, VoxelMaterial.PLAZA)
 	var in_grand := _planner.grand_plaza.has_point(Vector2i(cx, cz))
 	if in_grand:
-		if cx == _planner.grand_plaza.position.x and cz == _planner.grand_plaza.position.y:
-			var g := _planner.grand_plaza
-			var gmin := Vector3i(g.position.x * cell_size, ground_thickness, g.position.y * cell_size)
-			var gmax := Vector3i(g.end.x * cell_size, ground_thickness + 1, g.end.y * cell_size)
-			plaza.compose_grand(gmin, gmax)
 		return
 	for s in _planner.satellite_plazas:
 		if s.has_point(Vector2i(cx, cz)):
-			if cx == s.position.x and cz == s.position.y:
-				var smin := Vector3i(s.position.x * cell_size, ground_thickness, s.position.y * cell_size)
-				var smax := Vector3i(s.end.x * cell_size, ground_thickness + 1, s.end.y * cell_size)
-				plaza.compose_satellite(smin, smax)
 			return
+	# Orphan single-cell plaza — compose immediately (won't be wiped by neighbors).
 	plaza.compose_satellite(min_v, max_v)
 
 
 func _paint_park_cell(
 	min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, park: ParkComposer
 ) -> void:
+	## Base lawn every park cell. Large-park compose runs in decorate_open_spaces().
 	var lp := _planner.large_park
 	if lp.size.x > 0 and lp.has_point(Vector2i(cx, cz)):
-		if cx == lp.position.x and cz == lp.position.y:
-			var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
-			var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
-			park.compose_large(pmin, pmax)
+		_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		return
 	park.compose_pocket(min_v, max_v)
 
