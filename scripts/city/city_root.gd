@@ -65,6 +65,12 @@ func _build_env() -> void:
 	e.fog_enabled = true
 	e.fog_light_color = Color(0.65, 0.72, 0.8)
 	e.fog_density = 0.0022
+	## Soft bloom so scale-pad emission reads clearly outdoors.
+	e.glow_enabled = true
+	e.glow_intensity = 0.55
+	e.glow_strength = 0.85
+	e.glow_bloom = 0.12
+	e.glow_hdr_threshold = 0.85
 	env.environment = e
 	add_child(env)
 
@@ -373,8 +379,12 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 
 
 func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -> void:
-	## March in small steps and remove exactly one building voxel under the limb.
-	if _tool == null or _terrain == null:
+	## March to the first fabric voxel, then carve a sphere whose diameter (in voxels)
+	## equals character_scale. Below 0.5× the fist/foot is too small to break anything.
+	if _tool == null or _terrain == null or _walker == null:
+		return
+	var scale := float(_walker.get_character_scale())
+	if scale < 0.5:
 		return
 	var dir := direction
 	if dir.length_squared() < 0.0001:
@@ -400,11 +410,45 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 		break
 	if not found:
 		return
+
+	## Diameter = 1 voxel per human scale → radius = scale/2.
+	var radius_vox := scale * 0.5
+	var hit_center := Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
+	var r_i := int(ceil(radius_vox))
+	var r2 := radius_vox * radius_vox
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.AIR
-	_tool.do_point(hit_vox)
-	if _cascade != null:
-		_cascade.collapse_column_above(hit_vox)
+	## Collect fabric in the punch sphere, then clear. Cascade must use the TOP of the
+	## hole — starting from the bottom found only AIR (sphere already wiped the column).
+	var detached: Array = []
+	var column_max_y: Dictionary = {}  # Vector2i → int
+	for z in range(hit_vox.z - r_i, hit_vox.z + r_i + 1):
+		for y in range(hit_vox.y - r_i, hit_vox.y + r_i + 1):
+			for x in range(hit_vox.x - r_i, hit_vox.x + r_i + 1):
+				var center := Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
+				if center.distance_squared_to(hit_center) > r2 + 0.0001:
+					continue
+				var vox := Vector3i(x, y, z)
+				var mat_id := int(_tool.get_voxel(vox))
+				if not VoxelMaterial.is_building_fabric(mat_id):
+					continue
+				detached.append({"vox": vox, "mat": mat_id})
+				_tool.do_point(vox)
+				var col := Vector2i(x, z)
+				if column_max_y.has(col):
+					column_max_y[col] = maxi(int(column_max_y[col]), y)
+				else:
+					column_max_y[col] = y
+
+	if _cascade == null:
+		return
+	## Punched voxels become debris (already AIR in the world).
+	_cascade.detach_voxels(detached)
+	## Remaining fabric above the hole tumbles down per column.
+	for col_key in column_max_y.keys():
+		var xz: Vector2i = col_key
+		var max_y: int = int(column_max_y[col_key])
+		_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
 
 
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:

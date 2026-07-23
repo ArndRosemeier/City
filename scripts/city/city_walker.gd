@@ -3,7 +3,8 @@ class_name CityWalker
 extends CharacterBody3D
 
 signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
-## Precise single-voxel melee: origin + flat facing direction, range in meters.
+## Melee strike: origin + flat facing direction, range in meters.
+## CityRoot scales the carve diameter with character_scale (no break below 0.5×).
 signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
@@ -51,13 +52,22 @@ const LIB_NAME := &"quat"
 ## Walk clip is authored near ~1.4 m/s; scale playback to match move speed.
 @export var walk_anim_reference_speed: float = 1.4
 @export var character_scale: float = 1.0
-## Multiplicative +/- step (wide 0.1×…20× range).
+## Multiplicative +/- step (0.2×…5× range).
 @export var scale_factor_step: float = 1.15
-@export var scale_min: float = 0.1
-@export var scale_max: float = 20.0
-## Auto-step onto curbs / low ledges (meters at scale 1).
+@export var scale_min: float = 0.2
+@export var scale_max: float = 5.0
+## Auto-step onto curbs / low ledges (meters, NOT scaled — giants ignore curbs).
 @export var max_step_height: float = 0.38
 @export var coyote_time_sec: float = 0.12
+## How long wished move can be blocked before jump-unstuck arms.
+@export var stuck_time_sec: float = 0.55
+## Above this scale, Y is ray-locked to the ground (no capsule/voxel bob).
+@export var ray_ground_scale: float = 1.35
+
+## Capsule sole sits this far above the CharacterBody origin — constant at every size.
+const CAPSULE_FOOT_CLEARANCE := 0.05
+const FLOOR_SNAP_M := 0.2
+const SAFE_MARGIN_M := 0.06
 
 var _yaw: float = 0.0
 var _pitch: float = -0.35
@@ -92,6 +102,9 @@ var _action_playing: bool = false
 var _action_anim: String = ""
 var _action_names: PackedStringArray = PackedStringArray()
 var _melee_strike_token: int = 0
+var _stuck_timer: float = 0.0
+var _unstuck_cooldown: float = 0.0
+var _was_ray_grounded: bool = false
 
 
 func _ready() -> void:
@@ -99,9 +112,10 @@ func _ready() -> void:
 	_zoom = zoom_default
 	collision_layer = 2
 	collision_mask = 1
-	floor_snap_length = 0.35
+	floor_snap_length = FLOOR_SNAP_M
 	floor_max_angle = deg_to_rad(55.0)
-	safe_margin = 0.06
+	safe_margin = SAFE_MARGIN_M
+	floor_stop_on_slope = true
 
 	_capsule = CollisionShape3D.new()
 	var shape := CapsuleShape3D.new()
@@ -258,12 +272,37 @@ func adjust_character_scale(direction: float) -> void:
 	if is_zero_approx(direction):
 		return
 	var factor := scale_factor_step if direction > 0.0 else 1.0 / scale_factor_step
-	var next := clampf(character_scale * factor, scale_min, scale_max)
+	set_character_scale(character_scale * factor, false)
+
+
+func set_character_scale(value: float, silent: bool = false) -> void:
+	var next := clampf(value, scale_min, scale_max)
 	if is_equal_approx(next, character_scale):
 		return
+	var prev := character_scale
+	var pos_before := global_position
 	character_scale = next
 	_apply_proportions()
-	print("CityWalker scale=%.2f dig=%.2fm speed×%.2f" % [character_scale, get_dig_radius(), character_scale])
+	## Capsule sole clearance is constant, so scale no longer pumps world Y.
+	## Re-align mesh soles only on discrete +/- steps (not every pad tick).
+	if not silent:
+		_feet_aligned = false
+		_body_base_y = 0.0
+	## Growing into walls/ceilings — roll back that step.
+	if next > prev and not _can_stand_at(global_position):
+		character_scale = prev
+		_apply_proportions()
+		global_position = pos_before
+		return
+	if not silent:
+		print("CityWalker scale=%.2f dig=%.2fm speed×%.2f" % [character_scale, get_dig_radius(), character_scale])
+
+
+## Continuous pad scaling: log_rate is natural-log change per second (positive = grow).
+func nudge_character_scale_exp(log_rate: float, delta: float) -> void:
+	if is_zero_approx(log_rate) or delta <= 0.0:
+		return
+	set_character_scale(character_scale * exp(log_rate * delta), true)
 
 
 func _effective_body_scale() -> float:
@@ -283,13 +322,13 @@ func _apply_proportions() -> void:
 	if _body_root != null:
 		var s := _effective_body_scale()
 		_body_root.scale = Vector3(s, s, s)
-		_body_root.position.y = 0.0
+		## Keep any prior foot-align offset in body-local space (scaled visuals only).
+		_body_root.position.y = _body_base_y
 	_update_capsule_from_proportions()
 	if _pivot != null:
 		_pivot.position.y = pivot_height * character_scale
-	floor_snap_length = 0.35 * character_scale
-	_feet_aligned = false
-	_body_base_y = 0.0
+	floor_snap_length = FLOOR_SNAP_M
+	safe_margin = SAFE_MARGIN_M
 
 
 func _update_capsule_from_proportions() -> void:
@@ -306,7 +345,9 @@ func _update_capsule_from_proportions() -> void:
 		prop_r = _proportions.capsule_radius(0.35)
 	shape.height = prop_h * character_scale
 	shape.radius = prop_r * character_scale
-	_capsule.position.y = shape.height * 0.5 + 0.1 * character_scale
+	## Sole at a FIXED clearance above the body origin — independent of scale.
+	## (Old 0.1*scale floated giants and fought floor snap every frame.)
+	_capsule.position.y = shape.height * 0.5 + CAPSULE_FOOT_CLEARANCE
 
 
 func _on_editor_proportions(props: BodyProportions) -> void:
@@ -505,7 +546,6 @@ func _align_soles_to_floor() -> void:
 	_body_root.position.y += delta
 	_body_base_y = _body_root.position.y
 	_feet_aligned = true
-	print("CityWalker foot align: contact_y=%.3f sole_y=%.3f delta=%.3f" % [contact_y, sole_y, delta])
 
 
 func _capsule_bottom_world_y() -> float:
@@ -640,14 +680,18 @@ func _physics_process(delta: float) -> void:
 			velocity.y -= gravity_edit * delta
 		else:
 			velocity.y = 0.0
-			if not _feet_aligned and _skeleton != null:
+			if not _feet_aligned and _skeleton != null and character_scale < ray_ground_scale:
 				_align_soles_to_floor()
 		move_and_slide()
 		_apply_camera_angles()
 		return
 
 	var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
-	if is_on_floor():
+	var ray_mode := character_scale >= ray_ground_scale
+	## Large bodies: no floor-snap — Y is owned by the ground ray after the slide.
+	floor_snap_length = 0.0 if ray_mode else FLOOR_SNAP_M
+
+	if is_on_floor() or _was_ray_grounded:
 		_coyote_left = coyote_time_sec
 		if velocity.y < 0.0:
 			velocity.y = 0.0
@@ -689,33 +733,88 @@ func _physics_process(delta: float) -> void:
 		velocity.z = 0.0
 
 	var can_jump := _coyote_left > 0.0
+	## Jump always tries a horizontal unstick when you've been blocked — no Y pumping.
+	if _jump_queued and _stuck_timer > 0.15:
+		_unstuck_horizontal()
 	if _jump_queued and can_jump:
 		velocity.y = jump_velocity * sqrt(character_scale)
 		_coyote_left = 0.0
+		_was_ray_grounded = false
 		_jump_queued = false
 	else:
 		_jump_queued = false
 
-	if _moving and is_on_floor() and velocity.y <= 0.0:
+	## Human-scale curb step only — giants walk over curbs via radius, no Y pops.
+	if not ray_mode and _moving and is_on_floor() and velocity.y <= 0.0:
 		_try_step_up(delta)
 
-	## Soft void gate: don't walk off stamped/meshed ground into empty air.
 	if _moving:
 		_clamp_wish_to_solid_ground()
 
+	var wish_speed := speed if _moving else 0.0
 	move_and_slide()
+	## Soft wall slide: push out along collision normals in XZ only (no vertical).
+	if _stuck_timer > 0.12:
+		_slide_out_horizontal()
+	_stabilize_vertical(ray_mode)
+	_update_stuck_timer(delta, wish_speed)
+	## Auto-recover without jumping — still horizontal-only + one ground snap.
+	if _stuck_timer >= stuck_time_sec:
+		if _unstuck_horizontal():
+			_stuck_timer = 0.0
 	_update_safety_deck()
 	_apply_camera_angles()
 	_update_locomotion_anim(speed)
 
-	if is_on_floor() and not _feet_aligned and _skeleton != null:
+	if not ray_mode and is_on_floor() and not _feet_aligned and _skeleton != null:
 		_align_soles_to_floor()
-	elif not is_on_floor() and velocity.y < -2.0:
+	elif not is_on_floor() and not _was_ray_grounded and velocity.y < -2.0:
 		_rescue_from_void()
 	## Absolute floor — never drop below sidewalk height into Forget voids.
 	if global_position.y < SAFETY_FLOOR_TOP_Y - 0.5:
-		global_position.y = SAFETY_FLOOR_TOP_Y + 0.15 * character_scale
+		global_position.y = SAFETY_FLOOR_TOP_Y
 		velocity.y = 0.0
+		_was_ray_grounded = true
+	if _unstuck_cooldown > 0.0:
+		_unstuck_cooldown = maxf(_unstuck_cooldown - delta, 0.0)
+
+
+func _stabilize_vertical(ray_mode: bool) -> void:
+	## Kill residual vertical chatter after the slide.
+	if not ray_mode:
+		_was_ray_grounded = false
+		if is_on_floor() and velocity.y <= 0.0:
+			velocity.y = 0.0
+		return
+	## Giant mode: own Y via a single ground ray. Capsule/voxel micro-hits cannot bob us.
+	if velocity.y > 0.15:
+		_was_ray_grounded = false
+		return
+	var hit := _ray_ground(2.5 * character_scale, 6.0 * character_scale)
+	if hit.is_empty():
+		_was_ray_grounded = false
+		return
+	var ground_y: float = hit.position.y
+	## Only stick when close to ground (airborne jumps/falls keep physics Y).
+	if global_position.y - ground_y > 1.25 * character_scale and not is_on_floor():
+		_was_ray_grounded = false
+		return
+	global_position.y = ground_y
+	velocity.y = 0.0
+	_was_ray_grounded = true
+
+
+func _ray_ground(up_m: float, down_m: float) -> Dictionary:
+	var space := get_world_3d().direct_space_state
+	var from := global_position + Vector3(0.0, up_m, 0.0)
+	var to := global_position + Vector3(0.0, -down_m, 0.0)
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = 1
+	var exclude: Array[RID] = [get_rid()]
+	if _safety_deck != null and is_instance_valid(_safety_deck):
+		exclude.append(_safety_deck.get_rid())
+	q.exclude = exclude
+	return space.intersect_ray(q)
 
 
 func _ensure_safety_deck() -> void:
@@ -727,12 +826,14 @@ func _ensure_safety_deck() -> void:
 	_safety_deck.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(64.0, 0.8, 64.0)
+	box.size = Vector3(80.0, 1.0, 80.0)
 	shape.shape = box
 	_safety_deck.add_child(shape)
 
 
 func _update_safety_deck() -> void:
+	## Always well below the feet so it never fights the real floor (old fixed-Y deck
+	## at sidewalk height dual-contacted giants and caused vertical jitter).
 	if _safety_deck == null or not is_instance_valid(_safety_deck):
 		return
 	var host := get_parent()
@@ -744,22 +845,22 @@ func _update_safety_deck() -> void:
 		host.add_child(_safety_deck)
 	_safety_deck.global_position = Vector3(
 		global_position.x,
-		SAFETY_FLOOR_TOP_Y - 0.4,
+		global_position.y - 8.0,
 		global_position.z
 	)
 
 
 func _clamp_wish_to_solid_ground() -> void:
-	## If the next step has no floor within ~2 m below, cancel horizontal motion that way.
-	var space := get_world_3d().direct_space_state
-	var step := Vector3(velocity.x, 0.0, velocity.z).normalized() * 0.9
+	## If the next step has no floor within reach below, cancel horizontal motion that way.
+	var step_len := maxf(0.9, 0.35 * character_scale)
+	var step := Vector3(velocity.x, 0.0, velocity.z).normalized() * step_len
 	if step.length_squared() < 0.0001:
 		return
-	var probe := global_position + step + Vector3(0.0, 1.2, 0.0)
-	var q := PhysicsRayQueryParameters3D.create(probe, probe + Vector3(0.0, -4.0, 0.0))
-	q.collision_mask = 1
-	q.exclude = [get_rid()]
-	var hit := space.intersect_ray(q)
+	var probe_pos := global_position + step
+	var saved := global_position
+	global_position = probe_pos
+	var hit := _ray_ground(2.0 * maxf(character_scale, 1.0), 5.0 * maxf(character_scale, 1.0))
+	global_position = saved
 	if hit.is_empty():
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -768,35 +869,133 @@ func _clamp_wish_to_solid_ground() -> void:
 
 func _rescue_from_void() -> void:
 	## Last-resort snap if we somehow fell through checkerboard collision gaps.
-	var space := get_world_3d().direct_space_state
-	var from := global_position + Vector3(0.0, 8.0, 0.0)
-	var to := global_position + Vector3(0.0, -40.0, 0.0)
-	var q := PhysicsRayQueryParameters3D.create(from, to)
-	q.collision_mask = 1
-	q.exclude = [get_rid()]
-	var hit := space.intersect_ray(q)
+	var hit := _ray_ground(12.0, 50.0)
 	if hit.is_empty():
-		## Search nearby for any floor.
 		for ox in [-3.0, 0.0, 3.0, -6.0, 6.0]:
 			for oz in [-3.0, 0.0, 3.0, -6.0, 6.0]:
-				var f2 := global_position + Vector3(ox, 8.0, oz)
-				var q2 := PhysicsRayQueryParameters3D.create(f2, f2 + Vector3(0.0, -40.0, 0.0))
-				q2.collision_mask = 1
-				q2.exclude = [get_rid()]
-				hit = space.intersect_ray(q2)
+				var saved := global_position
+				global_position = saved + Vector3(ox, 0.0, oz)
+				hit = _ray_ground(12.0, 50.0)
+				global_position = saved
 				if not hit.is_empty():
 					break
 			if not hit.is_empty():
 				break
 	if hit.is_empty():
 		return
-	global_position = hit.position + Vector3(0.0, 0.15, 0.0)
+	global_position = Vector3(hit.position.x, hit.position.y, hit.position.z)
 	velocity = Vector3.ZERO
+	_was_ray_grounded = true
+
+
+func _update_stuck_timer(delta: float, wish_speed: float) -> void:
+	if wish_speed < 0.35 * character_scale:
+		_stuck_timer = 0.0
+		return
+	var real := get_real_velocity()
+	var real_h := Vector2(real.x, real.z).length()
+	if real_h < wish_speed * 0.1:
+		_stuck_timer += delta
+	else:
+		_stuck_timer = 0.0
+
+
+func _capsule_radius() -> float:
+	if _capsule == null:
+		return 0.35 * character_scale
+	var shape := _capsule.shape as CapsuleShape3D
+	if shape == null:
+		return 0.35 * character_scale
+	return shape.radius
+
+
+## Push away from walls using slide normals — XZ only, tiny steps, no Y change.
+func _slide_out_horizontal() -> void:
+	var count := get_slide_collision_count()
+	if count <= 0:
+		return
+	var push := Vector3.ZERO
+	for i in count:
+		var col := get_slide_collision(i)
+		var n := col.get_normal()
+		n.y = 0.0
+		if n.length_squared() < 0.0001:
+			continue
+		push += n.normalized()
+	if push.length_squared() < 0.0001:
+		return
+	## Scale with size so giants clear voxel facades; keep small to avoid pops.
+	var dist := clampf(0.04 * character_scale, 0.04, 0.35)
+	global_position += push.normalized() * dist
+
+
+## Find a free footprint at the SAME height, then one ground-ray snap (same as stabilize).
+## Never lifts in a loop — that was the jitter source.
+func _unstuck_horizontal() -> bool:
+	if _unstuck_cooldown > 0.0:
+		return false
+	_unstuck_cooldown = 0.45
+	var origin := global_position
+	var r0 := maxf(_capsule_radius() * 0.4, 0.25)
+	var radii: Array[float] = [r0, r0 * 2.0, r0 * 3.5, r0 * 5.5, r0 * 8.0]
+	## Prefer escaping opposite to facing.
+	var prefer := Vector3(-global_transform.basis.z.x, 0.0, -global_transform.basis.z.z)
+	if prefer.length_squared() < 0.0001:
+		prefer = Vector3(0.0, 0.0, -1.0)
+	else:
+		prefer = prefer.normalized()
+
+	for radius in radii:
+		for i in 12:
+			var ang := atan2(prefer.x, prefer.z) + TAU * float(i) / 12.0
+			var candidate := origin + Vector3(sin(ang) * radius, 0.0, cos(ang) * radius)
+			if not _can_stand_at(candidate):
+				continue
+			global_position = candidate
+			_snap_y_to_ground_once()
+			velocity.x = 0.0
+			velocity.z = 0.0
+			_stuck_timer = 0.0
+			return true
+	## Last resort: re-snap Y only (clears micro-embed in floor mesh).
+	global_position = origin
+	_snap_y_to_ground_once()
+	_stuck_timer = 0.0
+	return false
+
+
+func _can_stand_at(pos: Vector3) -> bool:
+	var xf := global_transform
+	xf.origin = pos
+	var s := clampf(0.12 * character_scale, 0.1, 0.45)
+	var free := 0
+	var dirs: Array[Vector3] = [
+		Vector3(s, 0.0, 0.0),
+		Vector3(-s, 0.0, 0.0),
+		Vector3(0.0, 0.0, s),
+		Vector3(0.0, 0.0, -s),
+	]
+	for d in dirs:
+		if not test_move(xf, d):
+			free += 1
+	## Need room to move in at least two horizontal directions.
+	return free >= 2
+
+
+func _snap_y_to_ground_once() -> void:
+	var up := 2.5 * maxf(character_scale, 1.0)
+	var down := 8.0 * maxf(character_scale, 1.0)
+	var hit := _ray_ground(up, down)
+	if hit.is_empty():
+		return
+	global_position.y = hit.position.y
+	velocity.y = 0.0
+	_was_ray_grounded = true
 
 
 func _try_step_up(delta: float) -> void:
-	## If horizontal motion is blocked by a low ledge, lift onto it (curbs, planters).
-	var step := max_step_height * character_scale
+	## Human-scale curb assist only (absolute meters, never grows with character_scale).
+	var step := max_step_height
 	if step <= 0.001:
 		return
 	var motion := Vector3(velocity.x, 0.0, velocity.z) * delta
@@ -811,7 +1010,6 @@ func _try_step_up(delta: float) -> void:
 	if test_move(raised, motion):
 		return
 	global_position.y += step
-	floor_snap_length = maxf(floor_snap_length, step * 0.5)
 
 
 func _update_locomotion_anim(move_speed: float) -> void:

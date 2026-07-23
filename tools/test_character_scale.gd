@@ -62,7 +62,7 @@ func _run() -> void:
 		quit(1)
 		return
 
-	# Shrink many times → clamp at scale_min (0.1).
+	# Shrink many times → clamp at scale_min (0.2).
 	for _i in range(80):
 		walker.adjust_character_scale(-1.0)
 	await process_frame
@@ -72,7 +72,7 @@ func _run() -> void:
 		quit(1)
 		return
 
-	# Grow many times → clamp at scale_max (20).
+	# Grow many times → clamp at scale_max (5).
 	for _j in range(120):
 		walker.adjust_character_scale(1.0)
 	await process_frame

@@ -8,6 +8,7 @@ const OfflineVolumeCommitterScript := preload("res://scripts/city/offline_volume
 const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
 const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
+const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
 const CarRoadMapScript := preload("res://scripts/city/car_roadmap.gd")
@@ -31,6 +32,7 @@ var generator: DistrictGenerator
 var crowd: CrowdDirector
 var vehicles: VehicleDirector
 var street_props: StreetPropPlacer
+var scale_pads: Node
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -348,6 +350,19 @@ func _stamp_detail_async() -> void:
 		generator.ground_thickness,
 		camera,
 		origin_vox
+	)
+	await get_tree().process_frame
+
+	scale_pads = ScalePadPlacerScript.new()
+	scale_pads.name = "ScalePads"
+	add_child(scale_pads)
+	scale_pads.place_from_planner(
+		generator.get_planner(),
+		generator.cell_size,
+		_voxel_size,
+		generator.ground_thickness,
+		origin_vox,
+		_dseed
 	)
 	await get_tree().process_frame
 
