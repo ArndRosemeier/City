@@ -207,7 +207,7 @@ func _ready() -> void:
 	_camera.name = "Camera"
 	_camera.fov = 70.0
 	_camera.near = 0.08
-	_camera.far = 280.0
+	_camera.far = 520.0
 	_camera.current = true
 	_spring.add_child(_camera)
 

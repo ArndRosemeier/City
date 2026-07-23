@@ -8,11 +8,19 @@ extends Node3D
 @export var activate_distance: float = 45.0
 ## Hide pole meshes beyond this (lights already distance-budgeted).
 @export var pole_draw_distance: float = 90.0
+## 0 = full day (lamps off), 1 = full night (lamps at full energy).
+@export var night_factor: float = 0.0
 
 var _poles: Array[Node3D] = []
 var _omnis: Array[OmniLight3D] = []
+var _lamp_mats: Array[StandardMaterial3D] = []
 var _camera: Camera3D
 var _accum: float = 0.0
+
+
+func set_night_factor(factor: float) -> void:
+	night_factor = clampf(factor, 0.0, 1.0)
+	_refresh_lights(true)
 
 
 func clear_props() -> void:
@@ -21,6 +29,7 @@ func clear_props() -> void:
 			p.queue_free()
 	_poles.clear()
 	_omnis.clear()
+	_lamp_mats.clear()
 	for c in get_children():
 		c.queue_free()
 
@@ -96,7 +105,7 @@ func _spawn_pole(origin: Vector3) -> void:
 	lamp_mat.albedo_color = Color(1.0, 0.92, 0.75)
 	lamp_mat.emission_enabled = true
 	lamp_mat.emission = Color(1.0, 0.88, 0.55)
-	lamp_mat.emission_energy_multiplier = 2.2
+	lamp_mat.emission_energy_multiplier = 0.15
 	lamp.material_override = lamp_mat
 	lamp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	lamp.position = Vector3(0.95, 5.05, 0.0)
@@ -114,6 +123,7 @@ func _spawn_pole(origin: Vector3) -> void:
 	add_child(root)
 	_poles.append(root)
 	_omnis.append(omni)
+	_lamp_mats.append(lamp_mat)
 
 
 func _process(delta: float) -> void:
@@ -139,11 +149,19 @@ func _refresh_lights(_force: bool) -> void:
 	scored.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["d2"]) < float(b["d2"]))
 	var limit := mini(max_omni_lights, scored.size())
 	var activate_r2 := activate_distance * activate_distance
+	## Lamps only come on as night falls.
+	var lamps_on := night_factor > 0.18
+	var lamp_power := smoothstep(0.18, 0.75, night_factor)
 	var active: Dictionary = {}
-	for k in range(limit):
-		var item: Dictionary = scored[k]
-		var idx := int(item["i"])
-		if float(item["d2"]) <= activate_r2 and _poles[idx].visible:
-			active[idx] = true
+	if lamps_on:
+		for k in range(limit):
+			var item: Dictionary = scored[k]
+			var idx := int(item["i"])
+			if float(item["d2"]) <= activate_r2 and _poles[idx].visible:
+				active[idx] = true
 	for i in range(_omnis.size()):
-		_omnis[i].visible = active.has(i)
+		var on := active.has(i)
+		_omnis[i].visible = on
+		_omnis[i].light_energy = light_energy * lamp_power if on else 0.0
+		if i < _lamp_mats.size() and _lamp_mats[i] != null:
+			_lamp_mats[i].emission_energy_multiplier = lerpf(0.12, 3.4, lamp_power) if on else lerpf(0.08, 0.35, lamp_power * 0.25)

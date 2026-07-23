@@ -11,11 +11,14 @@ const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd"
 const VoxelCascadeDebrisScript := preload("res://scripts/city/voxel_cascade_debris.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
+const DayNightCycleScript := preload("res://scripts/city/day_night_cycle.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
 @export var vehicles_per_district: int = 14
 @export var bubble_radius_m: float = 360.0
+## Real-time seconds for a full 24h cycle.
+@export var day_length_sec: float = 420.0
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
@@ -27,8 +30,10 @@ var _action_bar: Node
 var _debris_root: Node3D
 var _cascade: Node
 var _audio: Node
+var _day_night: Node
 var _booting: bool = false
 var _fps_accum: float = 0.0
+var _street_night_factor: float = 0.0
 
 ## Visual mesh radius (~90 m). Collisions use a shorter viewer below.
 const PLAYER_VIEW_DISTANCE := 180
@@ -50,33 +55,83 @@ func _ready() -> void:
 
 func _build_env() -> void:
 	var light := DirectionalLight3D.new()
+	light.name = "Sun"
 	light.rotation_degrees = Vector3(-50, 40, 0)
 	light.light_energy = 1.3
+	light.light_color = Color(1.0, 0.96, 0.88)
 	light.shadow_enabled = true
 	## 4K + dense Blocky voxels: long cascades destroy fill-rate. Keep near-field only.
 	light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	light.directional_shadow_max_distance = 100.0
+	light.directional_shadow_max_distance = 120.0
 	add_child(light)
 
+	var moon := DirectionalLight3D.new()
+	moon.name = "Moon"
+	moon.light_color = Color(0.62, 0.72, 1.0)
+	moon.light_energy = 0.0
+	moon.shadow_enabled = false
+	moon.visible = false
+	add_child(moon)
+
+	var sky_shader: Shader = load("res://assets/city/shaders/city_sky.gdshader") as Shader
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = sky_shader
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+	sky.process_mode = Sky.PROCESS_MODE_REALTIME
+	sky.radiance_size = Sky.RADIANCE_SIZE_256
+
 	var env := WorldEnvironment.new()
+	env.name = "WorldEnvironment"
 	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.55, 0.68, 0.82)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	e.background_mode = Environment.BG_SKY
+	e.sky = sky
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	e.ambient_light_color = Color(0.72, 0.76, 0.85)
-	e.ambient_light_energy = 0.45
+	e.ambient_light_energy = 0.42
 	e.tonemap_mode = Environment.TONE_MAPPER_ACES
+	e.tonemap_exposure = 1.0
 	e.fog_enabled = true
 	e.fog_light_color = Color(0.65, 0.72, 0.8)
-	e.fog_density = 0.0022
-	## Soft bloom so scale-pad emission reads clearly outdoors.
+	e.fog_density = 0.0016
 	e.glow_enabled = true
 	e.glow_intensity = 0.55
 	e.glow_strength = 0.85
 	e.glow_bloom = 0.12
 	e.glow_hdr_threshold = 0.85
+	## Soft contact shadowing so Blocky walls stop reading flat.
+	e.ssao_enabled = true
+	e.ssao_radius = 1.4
+	e.ssao_intensity = 1.6
+	e.ssao_power = 1.5
 	env.environment = e
 	add_child(env)
+
+	_day_night = DayNightCycleScript.new()
+	_day_night.name = "DayNightCycle"
+	_day_night.day_length_sec = day_length_sec
+	add_child(_day_night)
+	_day_night.call("setup", light, moon, e, sky_mat)
+	if _day_night.has_signal("night_factor_changed"):
+		_day_night.connect("night_factor_changed", _on_night_factor_changed)
+
+
+func _on_night_factor_changed(night_factor: float) -> void:
+	_street_night_factor = clampf(night_factor, 0.0, 1.0)
+	_push_night_factor_to_street_lights()
+
+
+func _push_night_factor_to_street_lights() -> void:
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst):
+			continue
+		if inst.street_props != null and is_instance_valid(inst.street_props):
+			if inst.street_props.has_method("set_night_factor"):
+				inst.street_props.call("set_night_factor", _street_night_factor)
 
 
 func _build_hud() -> void:
@@ -117,7 +172,13 @@ func _process(delta: float) -> void:
 		return
 	_fps_accum = 0.0
 	if _hud != null:
-		_hud.text = "%d FPS" % Engine.get_frames_per_second()
+		var clock := ""
+		if _day_night != null and _day_night.has_method("get_hour"):
+			var h := float(_day_night.call("get_hour"))
+			var hh := int(floor(h)) % 24
+			var mm := int(floor(fposmod(h, 1.0) * 60.0))
+			clock = "  %02d:%02d" % [hh, mm]
+		_hud.text = "%d FPS%s" % [Engine.get_frames_per_second(), clock]
 
 
 func _create_terrain() -> void:

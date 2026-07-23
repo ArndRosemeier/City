@@ -351,6 +351,9 @@ func _stamp_detail_async() -> void:
 		camera,
 		origin_vox
 	)
+	var day_night := get_tree().get_first_node_in_group(&"day_night")
+	if day_night != null and day_night.has_method("get_night_factor"):
+		street_props.set_night_factor(float(day_night.call("get_night_factor")))
 	await get_tree().process_frame
 
 	scale_pads = ScalePadPlacerScript.new()
