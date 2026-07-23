@@ -1,0 +1,15 @@
+[package]
+name = "city_voxel"
+version = "0.1.0"
+edition = "2021"
+description = "Native OfflineVoxelVolume fill/export for City bake workers"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+godot = { version = "0.5.3", features = ["api-4-6", "experimental-threads"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

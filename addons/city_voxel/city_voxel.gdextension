@@ -1,0 +1,14 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.3
+reloadable = true
+
+[libraries]
+windows.debug.x86_64 = "res://addons/city_voxel/bin/city_voxel.dll"
+windows.release.x86_64 = "res://addons/city_voxel/bin/city_voxel.dll"
+linux.debug.x86_64 = "res://addons/city_voxel/bin/libcity_voxel.so"
+linux.release.x86_64 = "res://addons/city_voxel/bin/libcity_voxel.so"
+macos.debug.x86_64 = "res://addons/city_voxel/bin/libcity_voxel.dylib"
+macos.release.x86_64 = "res://addons/city_voxel/bin/libcity_voxel.dylib"
+macos.debug.arm64 = "res://addons/city_voxel/bin/libcity_voxel.dylib"
+macos.release.arm64 = "res://addons/city_voxel/bin/libcity_voxel.dylib"

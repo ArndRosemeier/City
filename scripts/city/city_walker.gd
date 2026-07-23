@@ -74,6 +74,8 @@ var _rng := RandomNumberGenerator.new()
 var _jump_queued: bool = false
 var _coyote_left: float = 0.0
 var _safety_deck: StaticBody3D
+## Hold forward without pressing W (toggle with R).
+var _auto_run: bool = false
 ## Matches district surface top: (ground_thickness+1) * 0.5 m.
 const SAFETY_FLOOR_TOP_Y := 1.0
 
@@ -119,7 +121,7 @@ func _ready() -> void:
 	_camera.name = "Camera"
 	_camera.fov = 70.0
 	_camera.near = 0.08
-	_camera.far = 500.0
+	_camera.far = 280.0
 	_camera.current = true
 	_spring.add_child(_camera)
 
@@ -447,6 +449,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				toggle_character_editor()
 				get_viewport().set_input_as_handled()
 				return
+			KEY_R:
+				_auto_run = not _auto_run
+				get_viewport().set_input_as_handled()
+				return
 			KEY_SPACE:
 				_jump_queued = true
 				get_viewport().set_input_as_handled()
@@ -511,10 +517,13 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= gravity * delta
 
 	var input_dir := Vector2.ZERO
-	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP) or _auto_run:
 		input_dir.y -= 1.0
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
 		input_dir.y += 1.0
+		## Manual back cancels autorun so you can stop without hunting R.
+		if _auto_run:
+			_auto_run = false
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
 		input_dir.x -= 1.0
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):

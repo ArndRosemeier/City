@@ -266,32 +266,92 @@ func _fill_shell(
 	ribbon_windows: bool,
 	is_ground: bool
 ) -> void:
+	## Face slabs via fill_box (O(faces)) instead of walking the full AABB volume.
+	if min_v.x >= max_v.x or min_v.y >= max_v.y or min_v.z >= max_v.z:
+		return
 	var fh := max_v.y - min_v.y
+	## Floor deck.
+	brush.fill_box(
+		Vector3i(min_v.x, min_v.y, min_v.z),
+		Vector3i(max_v.x, min_v.y + 1, max_v.z),
+		wall_mat
+	)
+	## Solid ground-floor fill (matches old lower_fill interior).
+	if is_ground:
+		var fill_h := mini(2, fh)
+		if fill_h > 1:
+			brush.fill_box(
+				Vector3i(min_v.x + 1, min_v.y + 1, min_v.z + 1),
+				Vector3i(max_v.x - 1, min_v.y + fill_h, max_v.z - 1),
+				wall_mat
+			)
+	## Ceiling / top slab when tall enough.
+	if fh >= 2:
+		brush.fill_box(
+			Vector3i(min_v.x, max_v.y - 1, min_v.z),
+			Vector3i(max_v.x, max_v.y, max_v.z),
+			wall_mat
+		)
+	## Four walls (full height). Corners overlap — fine.
+	brush.fill_box(
+		Vector3i(min_v.x, min_v.y, min_v.z),
+		Vector3i(min_v.x + 1, max_v.y, max_v.z),
+		wall_mat
+	)
+	brush.fill_box(
+		Vector3i(max_v.x - 1, min_v.y, min_v.z),
+		Vector3i(max_v.x, max_v.y, max_v.z),
+		wall_mat
+	)
+	brush.fill_box(
+		Vector3i(min_v.x, min_v.y, min_v.z),
+		Vector3i(max_v.x, max_v.y, min_v.z + 1),
+		wall_mat
+	)
+	brush.fill_box(
+		Vector3i(min_v.x, min_v.y, max_v.z - 1),
+		Vector3i(max_v.x, max_v.y, max_v.z),
+		wall_mat
+	)
+	## Windows / doors only on façade strips (not the volume interior).
+	_punch_facades(min_v, max_v, facing, door_on_ground, ribbon_windows, is_ground)
+
+
+func _punch_facades(
+	min_v: Vector3i,
+	max_v: Vector3i,
+	facing: int,
+	door_on_ground: bool,
+	ribbon_windows: bool,
+	is_ground: bool
+) -> void:
 	for y in range(min_v.y, max_v.y):
-		for z in range(min_v.z, max_v.z):
-			for x in range(min_v.x, max_v.x):
-				var on_wall := (
-					x == min_v.x
-					or x == max_v.x - 1
-					or z == min_v.z
-					or z == max_v.z - 1
-					or y == min_v.y
-					or y == max_v.y - 1
-				)
-				var lower_fill := is_ground and y < min_v.y + mini(2, fh)
-				if not on_wall and not lower_fill:
-					if (y - min_v.y) == 0:
-						brush.set_vox(Vector3i(x, y, z), wall_mat)
-					continue
-				if not on_wall and lower_fill:
-					brush.set_vox(Vector3i(x, y, z), wall_mat)
-					continue
-				if door_on_ground and _is_door_cell(x, y, z, min_v, max_v, facing):
-					continue
-				if _is_window_cell(x, y, z, min_v, max_v, ribbon_windows, is_ground):
-					brush.set_vox(Vector3i(x, y, z), VoxelMaterial.GLASS)
-				else:
-					brush.set_vox(Vector3i(x, y, z), wall_mat)
+		for x in range(min_v.x, max_v.x):
+			_punch_facade_cell(x, y, min_v.z, min_v, max_v, facing, door_on_ground, ribbon_windows, is_ground)
+			if max_v.z - 1 != min_v.z:
+				_punch_facade_cell(x, y, max_v.z - 1, min_v, max_v, facing, door_on_ground, ribbon_windows, is_ground)
+		for z in range(min_v.z + 1, max_v.z - 1):
+			_punch_facade_cell(min_v.x, y, z, min_v, max_v, facing, door_on_ground, ribbon_windows, is_ground)
+			if max_v.x - 1 != min_v.x:
+				_punch_facade_cell(max_v.x - 1, y, z, min_v, max_v, facing, door_on_ground, ribbon_windows, is_ground)
+
+
+func _punch_facade_cell(
+	x: int,
+	y: int,
+	z: int,
+	min_v: Vector3i,
+	max_v: Vector3i,
+	facing: int,
+	door_on_ground: bool,
+	ribbon_windows: bool,
+	is_ground: bool
+) -> void:
+	if door_on_ground and _is_door_cell(x, y, z, min_v, max_v, facing):
+		brush.set_vox(Vector3i(x, y, z), VoxelMaterial.AIR)
+		return
+	if _is_window_cell(x, y, z, min_v, max_v, ribbon_windows, is_ground):
+		brush.set_vox(Vector3i(x, y, z), VoxelMaterial.GLASS)
 
 
 func _is_door_cell(x: int, y: int, z: int, min_v: Vector3i, max_v: Vector3i, facing: int) -> bool:
@@ -324,18 +384,15 @@ func _is_window_cell(
 		return false
 	var fh := max_v.y - min_v.y
 	var local_y := y - min_v.y
-	# Always keep the bottom course as wall; keep top course as lintel when tall enough.
 	if local_y <= 0:
 		return false
 	if fh >= 4 and local_y >= fh - 1:
 		return false
 	if is_ground and local_y < 2:
-		# Storefront band on ground
 		return local_y >= 1 and (x + z) % 2 == 0
 	if ribbon:
 		var along := x if (z == min_v.z or z == max_v.z - 1) else z
 		return along % 3 != 0
-	# Punched windows — on short floors skip the dedicated sill row.
 	if fh >= 4 and local_y == 1:
 		return false
 	var along2 := x if (z == min_v.z or z == max_v.z - 1) else z
@@ -349,11 +406,11 @@ func _flat_roof_parapet(bmin: Vector3i, bmax: Vector3i, floors: int, roof_mat: i
 		Vector3i(bmax.x - 1, top + 1, bmax.z - 1),
 		roof_mat
 	)
-	# Parapet ring
-	for z in range(bmin.z, bmax.z):
-		for x in range(bmin.x, bmax.x):
-			if x == bmin.x or x == bmax.x - 1 or z == bmin.z or z == bmax.z - 1:
-				brush.set_vox(Vector3i(x, top + 1, z), roof_mat)
+	## Parapet ring as four edge slabs.
+	brush.fill_box(Vector3i(bmin.x, top + 1, bmin.z), Vector3i(bmax.x, top + 2, bmin.z + 1), roof_mat)
+	brush.fill_box(Vector3i(bmin.x, top + 1, bmax.z - 1), Vector3i(bmax.x, top + 2, bmax.z), roof_mat)
+	brush.fill_box(Vector3i(bmin.x, top + 1, bmin.z + 1), Vector3i(bmin.x + 1, top + 2, bmax.z - 1), roof_mat)
+	brush.fill_box(Vector3i(bmax.x - 1, top + 1, bmin.z + 1), Vector3i(bmax.x, top + 2, bmax.z - 1), roof_mat)
 
 
 func _gable_roof(umin: Vector3i, umax: Vector3i, floors: int, facing: int) -> void:
@@ -417,10 +474,10 @@ func _arcade_ground(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 
 func _cornice(min_v: Vector3i, max_v: Vector3i) -> void:
 	var y := max_v.y - 1
-	for z in range(min_v.z, max_v.z):
-		for x in range(min_v.x, max_v.x):
-			if x == min_v.x or x == max_v.x - 1 or z == min_v.z or z == max_v.z - 1:
-				brush.set_vox(Vector3i(x, y, z), VoxelMaterial.STONE)
+	brush.fill_box(Vector3i(min_v.x, y, min_v.z), Vector3i(max_v.x, y + 1, min_v.z + 1), VoxelMaterial.STONE)
+	brush.fill_box(Vector3i(min_v.x, y, max_v.z - 1), Vector3i(max_v.x, y + 1, max_v.z), VoxelMaterial.STONE)
+	brush.fill_box(Vector3i(min_v.x, y, min_v.z + 1), Vector3i(min_v.x + 1, y + 1, max_v.z - 1), VoxelMaterial.STONE)
+	brush.fill_box(Vector3i(max_v.x - 1, y, min_v.z + 1), Vector3i(max_v.x, y + 1, max_v.z - 1), VoxelMaterial.STONE)
 
 
 func _grand_steps(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:

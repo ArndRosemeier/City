@@ -2,10 +2,12 @@
 class_name StreetPropPlacer
 extends Node3D
 
-@export var max_omni_lights: int = 24
-@export var light_energy: float = 1.35
-@export var light_range: float = 18.0
-@export var activate_distance: float = 70.0
+@export var max_omni_lights: int = 12
+@export var light_energy: float = 1.2
+@export var light_range: float = 14.0
+@export var activate_distance: float = 45.0
+## Hide pole meshes beyond this (lights already distance-budgeted).
+@export var pole_draw_distance: float = 90.0
 
 var _poles: Array[Node3D] = []
 var _omnis: Array[OmniLight3D] = []
@@ -72,6 +74,7 @@ func _spawn_pole(origin: Vector3) -> void:
 	pole_mat.metallic = 0.4
 	pole_mat.roughness = 0.45
 	pole.material_override = pole_mat
+	pole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	pole.position.y = 2.6
 	root.add_child(pole)
 
@@ -80,6 +83,7 @@ func _spawn_pole(origin: Vector3) -> void:
 	arm_mesh.size = Vector3(1.1, 0.08, 0.08)
 	arm.mesh = arm_mesh
 	arm.material_override = pole_mat
+	arm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	arm.position = Vector3(0.45, 5.15, 0.0)
 	root.add_child(arm)
 
@@ -94,6 +98,7 @@ func _spawn_pole(origin: Vector3) -> void:
 	lamp_mat.emission = Color(1.0, 0.88, 0.55)
 	lamp_mat.emission_energy_multiplier = 2.2
 	lamp.material_override = lamp_mat
+	lamp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	lamp.position = Vector3(0.95, 5.05, 0.0)
 	root.add_child(lamp)
 
@@ -124,9 +129,12 @@ func _refresh_lights(_force: bool) -> void:
 		return
 	var cam := _camera.global_position
 	var scored: Array = []
+	var pole_r2 := pole_draw_distance * pole_draw_distance
 	for i in range(_poles.size()):
 		var p: Node3D = _poles[i]
 		var d2 := p.global_position.distance_squared_to(cam)
+		var in_view := d2 <= pole_r2 and _camera.is_position_in_frustum(p.global_position + Vector3(0.0, 3.0, 0.0))
+		p.visible = in_view
 		scored.append({"i": i, "d2": d2})
 	scored.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["d2"]) < float(b["d2"]))
 	var limit := mini(max_omni_lights, scored.size())
@@ -134,7 +142,8 @@ func _refresh_lights(_force: bool) -> void:
 	var active: Dictionary = {}
 	for k in range(limit):
 		var item: Dictionary = scored[k]
-		if float(item["d2"]) <= activate_r2:
-			active[int(item["i"])] = true
+		var idx := int(item["i"])
+		if float(item["d2"]) <= activate_r2 and _poles[idx].visible:
+			active[idx] = true
 	for i in range(_omnis.size()):
 		_omnis[i].visible = active.has(i)

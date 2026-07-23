@@ -29,6 +29,14 @@ tools/vendor/
 # Local Godot voxel engine binary
 tools/godot/
 
+# Rust / GDExtension build artifacts
+native/**/target/
+addons/city_voxel/bin/*.dll
+addons/city_voxel/bin/*.so
+addons/city_voxel/bin/*.dylib
+addons/city_voxel/bin/*.pdb
+!addons/city_voxel/bin/.gitkeep
+
 # Tooling scratch / smoke logs
 tools/_*.txt
 tools/_*.txt.*

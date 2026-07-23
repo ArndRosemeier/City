@@ -82,7 +82,7 @@ func _build_ui() -> void:
 	_body.add_child(_stats_label)
 
 	var hint := Label.new()
-	hint.text = "F3 toggle · bake off-thread · commit ≤3ms/frame · stalled = free capacity with queued work"
+	hint.text = "F3 toggle · face shells · far=impostors · commit ≤3ms/frame · stalled = free capacity"
 	hint.add_theme_font_size_override("font_size", 10)
 	hint.add_theme_color_override("font_color", Color(0.55, 0.6, 0.65))
 	_body.add_child(hint)

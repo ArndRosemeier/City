@@ -12,7 +12,7 @@ crosswalks, and street lights. Showcase scene still available via `start.bat`.
 
 Double-click **`start_city.bat`** — ~320×224 m district, towers up to 100 m.
 
-Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** new city · **Esc** quit · **F9/F10** crowd LOD.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **F9/F10** crowd LOD.
 
 ## Layout
 

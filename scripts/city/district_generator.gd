@@ -223,6 +223,42 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
 
 
+func paint_cell_impostor_only(cx: int, cz: int) -> void:
+	## Far-LOD: record building massing boxes without voxel shells.
+	if _planner == null:
+		return
+	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:
+		return
+	var tag := _planner.tag_at(cx, cz)
+	match tag:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK:
+			return
+		_:
+			pass
+	var smin := Vector3i(cx * cell_size, ground_thickness, cz * cell_size)
+	var smax := Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size)
+	var ring := 1 if cell_size < 20 else 2
+	var bmin := smin + Vector3i(ring, 0, ring)
+	var bmax := smax - Vector3i(ring, 0, ring)
+	if bmax.x - bmin.x < 6 or bmax.z - bmin.z < 6:
+		return
+	var mass_h := 48
+	match tag:
+		LandUse.CORE_LOT:
+			mass_h = max_building_height_vox
+		LandUse.CIVIC_LOT:
+			mass_h = mini(max_building_height_vox, 48)
+		LandUse.MID_LOT:
+			mass_h = 66
+		LandUse.TOWN_LOT:
+			mass_h = 28
+		LandUse.COURTYARD_LOT:
+			mass_h = 40
+		_:
+			mass_h = 48
+	_record_building_impostor(bmin, bmax, mass_h, tag)
+
+
 func decorate_open_spaces() -> void:
 	## Fancy plaza/park pass — call only once the full feature AABBs are editable.
 	if _brush == null or _planner == null or _plaza == null or _park == null:

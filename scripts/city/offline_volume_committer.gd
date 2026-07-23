@@ -22,6 +22,7 @@ static func release_commit(coord: Vector2i) -> void:
 
 
 static func sorted_block_keys(blocks: Dictionary) -> Array[Vector3i]:
+	## Legacy Y-major order (kept for tests / callers that don't pass a focus).
 	var keys: Array[Vector3i] = []
 	for k: Variant in blocks.keys():
 		keys.append(k as Vector3i)
@@ -33,6 +34,41 @@ static func sorted_block_keys(blocks: Dictionary) -> Array[Vector3i]:
 				return a.z < b.z
 			return a.x < b.x
 	)
+	return keys
+
+
+static func sorted_block_keys_near_player(
+	blocks: Dictionary,
+	origin_vox: Vector3i,
+	focus_world: Vector3,
+	voxel_size: float,
+	max_local_by: int = -1,
+	min_local_by: int = -1
+) -> Array[Vector3i]:
+	## Nearest-first by horizontal distance to the player/camera.
+	## Optional Y filters: ground phase uses max_local_by=0; detail uses min_local_by=1.
+	var scored: Array = []
+	var half := float(BLOCK) * 0.5
+	var vs := maxf(voxel_size, 0.001)
+	for k: Variant in blocks.keys():
+		var bp: Vector3i = k as Vector3i
+		if max_local_by >= 0 and bp.y > max_local_by:
+			continue
+		if min_local_by >= 0 and bp.y < min_local_by:
+			continue
+		var wbp := world_block_pos(origin_vox, bp)
+		var cx := (float(wbp.x) * float(BLOCK) + half) * vs
+		var cz := (float(wbp.z) * float(BLOCK) + half) * vs
+		var dx := cx - focus_world.x
+		var dz := cz - focus_world.z
+		scored.append({"bp": bp, "d2": dx * dx + dz * dz})
+	scored.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool: return float(a["d2"]) < float(b["d2"])
+	)
+	var keys: Array[Vector3i] = []
+	keys.resize(scored.size())
+	for i in range(scored.size()):
+		keys[i] = scored[i]["bp"] as Vector3i
 	return keys
 
 

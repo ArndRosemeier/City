@@ -44,6 +44,7 @@ func ensure_body(female: bool, scene_path: String = "") -> void:
 	_body.name = "Body"
 	_body.rotation.y = PI
 	add_child(_body)
+	_disable_mesh_shadows(_body)
 	var skel := _find_skeleton(_body)
 	if skel != null:
 		skel.unique_name_in_owner = true
@@ -126,6 +127,7 @@ func _spawn_capsule(female: bool) -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.86, 0.68, 0.54) if female else Color(0.78, 0.58, 0.44)
 	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.position.y = capsule.height * 0.5
 	_body.add_child(mi)
 	_mesh = mi
@@ -147,6 +149,16 @@ func _find_body_mesh(root: Node) -> MeshInstance3D:
 		for c in n.get_children():
 			stack.append(c)
 	return first
+
+
+func _disable_mesh_shadows(root: Node) -> void:
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is GeometryInstance3D:
+			(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		for c in n.get_children():
+			stack.append(c)
 
 
 func _find_skeleton(root: Node) -> Skeleton3D:

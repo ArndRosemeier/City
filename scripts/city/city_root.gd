@@ -7,11 +7,12 @@ const AirGeneratorScript := preload("res://scripts/city/air_generator.gd")
 const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library.gd")
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityDebugHudScript := preload("res://scripts/city/city_debug_hud.gd")
+const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 
 @export var city_seed: int = 42
-@export var crowd_per_district: int = 48
-@export var vehicles_per_district: int = 6
-@export var bubble_radius_m: float = 460.0
+@export var crowd_per_district: int = 96
+@export var vehicles_per_district: int = 14
+@export var bubble_radius_m: float = 360.0
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
@@ -23,10 +24,16 @@ var _debug_hud: Node
 var _booting: bool = false
 var _fps_accum: float = 0.0
 
-const PLAYER_VIEW_DISTANCE := 280
+## Visual mesh radius (~90 m). Collisions use a shorter viewer below.
+const PLAYER_VIEW_DISTANCE := 180
+const PLAYER_COLLISION_DISTANCE := 64
 
 
 func _ready() -> void:
+	if CityVoxelNativeScript.ensure_loaded():
+		print("CityRoot: NativeOfflineVoxelVolume ready")
+	else:
+		print("CityRoot: using GDScript OfflineVoxelVolume fallback")
 	_build_env()
 	_build_hud()
 	call_deferred("_regenerate")
@@ -37,7 +44,9 @@ func _build_env() -> void:
 	light.rotation_degrees = Vector3(-50, 40, 0)
 	light.light_energy = 1.3
 	light.shadow_enabled = true
-	light.directional_shadow_max_distance = 420.0
+	## 4K + dense Blocky voxels: long cascades destroy fill-rate. Keep near-field only.
+	light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	light.directional_shadow_max_distance = 100.0
 	add_child(light)
 
 	var env := WorldEnvironment.new()
@@ -50,7 +59,7 @@ func _build_env() -> void:
 	e.tonemap_mode = Environment.TONE_MAPPER_ACES
 	e.fog_enabled = true
 	e.fog_light_color = Color(0.65, 0.72, 0.8)
-	e.fog_density = 0.0015
+	e.fog_density = 0.0022
 	env.environment = e
 	add_child(env)
 
@@ -120,7 +129,8 @@ func _create_terrain() -> void:
 	## forever was the multi‑GB leak.
 	## Soft large bounds — streamer loads tiles inside the bubble.
 	_terrain.bounds = AABB(Vector3(-20000, 0, -20000), Vector3(40000, 220, 40000))
-	## VoxelTerrain clamps viewers to this (internal practical cap ~512).
+	## Ceiling only — must fit a district half-diagonal (~482 vox) so data-only
+	## anchors can make the full tile editable. Player viewers stay shorter below.
 	_terrain.max_view_distance = 512
 	_terrain.generate_collisions = true
 	_tool = _terrain.get_voxel_tool()
@@ -153,7 +163,8 @@ func _regenerate() -> void:
 	_streamer = CityStreamerScript.new()
 	_streamer.name = "CityStreamer"
 	_streamer.bubble_radius_m = bubble_radius_m
-	_streamer.unload_radius_m = bubble_radius_m + 180.0
+	_streamer.unload_radius_m = bubble_radius_m + 140.0
+	_streamer.voxel_detail_radius_m = minf(bubble_radius_m * 0.45, 140.0)
 	_streamer.crowd_per_district = crowd_per_district
 	_streamer.vehicles_per_district = vehicles_per_district
 	add_child(_streamer)
@@ -207,14 +218,23 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	_walker.blast_requested.connect(_on_blast)
 	var cam := _walker.get_camera()
+	## Visuals out to ~90 m; collisions only near the player (big 4K/remesh win).
 	var player_viewer := VoxelViewer.new()
 	player_viewer.name = "VoxelViewer"
 	player_viewer.view_distance = PLAYER_VIEW_DISTANCE
-	player_viewer.requires_collisions = true
+	player_viewer.requires_collisions = false
 	player_viewer.requires_visuals = true
 	cam.add_child(player_viewer)
 
-	## Extra collision viewer pinned on spawn so the neighborhood is forced resident.
+	var collision_viewer := VoxelViewer.new()
+	collision_viewer.name = "CollisionViewer"
+	collision_viewer.view_distance = PLAYER_COLLISION_DISTANCE
+	collision_viewer.requires_collisions = true
+	collision_viewer.requires_visuals = false
+	cam.add_child(collision_viewer)
+
+	## Extra viewer pinned on spawn so neighborhood meshes + collisions exist
+	## before the walker drops in (player camera may still be far / unset).
 	var spawn_viewer := VoxelViewer.new()
 	spawn_viewer.name = "SpawnCollisionViewer"
 	spawn_viewer.view_distance = 96
@@ -348,6 +368,3 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_TAB:
 				if _walker != null:
 					_walker.toggle_capture()
-			KEY_R:
-				city_seed = randi()
-				_regenerate()

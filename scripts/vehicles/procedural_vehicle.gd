@@ -745,7 +745,7 @@ static func _box(
 	mi.mesh = mesh
 	mi.position = pos
 	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -769,7 +769,7 @@ static func _cyl(
 	mi.mesh = mesh
 	mi.position = pos
 	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 
@@ -891,7 +891,7 @@ static func _mesh_from_faces(
 	mi.name = node_name
 	mi.mesh = st.commit()
 	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
 

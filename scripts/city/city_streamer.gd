@@ -12,18 +12,20 @@ signal status_message(text: String)
 signal debug_job_started(kind: String, coord: Vector2i)
 signal debug_job_finished(kind: String, coord: Vector2i)
 
-@export var bubble_radius_m: float = 460.0
-@export var unload_radius_m: float = 640.0
-@export var crowd_per_district: int = 48
-@export var vehicles_per_district: int = 6
+@export var bubble_radius_m: float = 360.0
+@export var unload_radius_m: float = 500.0
+@export var crowd_per_district: int = 96
+@export var vehicles_per_district: int = 14
 @export var job_cooldown_sec: float = 0.0
 ## Cooperative stamp slots. Bake runs on WorkerThreadPool; main thread only commits
 ## blocks + scene setup. Two slots ⇒ two districts baking in parallel on OS threads.
 @export var max_workers: int = 2
+## Within this edge distance, bake full voxel buildings. Beyond: ground + impostors only.
+@export var voxel_detail_radius_m: float = 140.0
 
 var world_seed: int = 42
 var voxel_size: float = 0.5
-var player_view_m: float = 220.0
+var player_view_m: float = 90.0
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
@@ -291,7 +293,7 @@ func _request_district(coord: Vector2i, is_boot: bool) -> void:
 	inst.stamp_progress.connect(_on_stamp_progress)
 	if is_boot:
 		_begin_tracked_job("ground", inst)
-		inst.begin_ground(_terrain, _tool, _camera)
+		inst.begin_ground(_terrain, _tool, _camera, "full")
 		_kick_next_job()
 
 
@@ -342,14 +344,27 @@ func _try_start_one_job() -> bool:
 		## Boot may run before camera exists — allow ground-only boot job already started.
 		return false
 	var player_pos := _player_pos()
+	## Prefer upgrading far tiles that entered the detail radius.
+	var upgrade_job := _pick_nearest(func(inst: DistrictInstance) -> bool: return inst.needs_upgrade() and inst.distance_to_point(player_pos) <= voxel_detail_radius_m)
+	if upgrade_job != null:
+		_begin_tracked_job("upgrade", upgrade_job)
+		print(
+			"CityStreamer upgrade %s edge=%.0fm workers=%d/%d"
+			% [str(upgrade_job.coord), upgrade_job.distance_to_point(player_pos), _active_jobs.size(), max_workers]
+		)
+		upgrade_job.begin_upgrade(_terrain, _tool, _camera)
+		return true
 	var ground_job := _pick_nearest(func(inst: DistrictInstance) -> bool: return inst.needs_ground())
 	if ground_job != null:
+		var quality := "full"
+		if ground_job.distance_to_point(player_pos) > voxel_detail_radius_m:
+			quality = "far"
 		_begin_tracked_job("ground", ground_job)
 		print(
-			"CityStreamer ground %s edge=%.0fm workers=%d/%d"
-			% [str(ground_job.coord), ground_job.distance_to_point(player_pos), _active_jobs.size(), max_workers]
+			"CityStreamer ground %s quality=%s edge=%.0fm workers=%d/%d"
+			% [str(ground_job.coord), quality, ground_job.distance_to_point(player_pos), _active_jobs.size(), max_workers]
 		)
-		ground_job.begin_ground(_terrain, _tool, _camera)
+		ground_job.begin_ground(_terrain, _tool, _camera, quality)
 		return true
 	var detail_job := _pick_nearest(func(inst: DistrictInstance) -> bool: return inst.needs_detail())
 	if detail_job == null:
@@ -376,7 +391,10 @@ func _on_district_ground_ready(inst: DistrictInstance) -> void:
 func _on_district_ready(inst: DistrictInstance) -> void:
 	if not inst.from_stream_cache:
 		_job_cooldown = job_cooldown_sec
-		_note_job_finished(inst.coord, "detail")
+		var kind := "detail"
+		if str(inst.bake_quality) == "far":
+			kind = "far"
+		_note_job_finished(inst.coord, kind)
 	if not _booted and inst.coord == _boot_coord:
 		_booted = true
 		spawn_district_ready.emit(inst)

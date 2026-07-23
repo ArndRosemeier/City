@@ -8,7 +8,7 @@ Procedural district on **Zylann Voxel Tools** (`godot_voxel` module build):
 - Layout: `DistrictPlanner` (avenues, plazas, parks, zones) → `PlazaComposer` / `ParkComposer` → `BuildingGrammar`
 - Scale: ~14 m lots/streets (euro mid-rise depth), ~3.0 m floors, 100 m height ceiling; district ~392×280 m
 - Humans: MPFB bodies + Quaternius Idle/Walk (CC0), humanoid retarget — see `assets/humans/animations/`
-- `CityRoot` + `scenes/city_poc.tscn` — third-person walk, LMB dig, R new seed
+- `CityRoot` + `scenes/city_poc.tscn` — third-person walk, LMB dig, R autorun
 
 Refresh textures:
 

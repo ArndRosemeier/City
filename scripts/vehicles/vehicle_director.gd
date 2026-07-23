@@ -8,8 +8,8 @@ const VehicleVisualScript := preload("res://scripts/vehicles/vehicle_visual.gd")
 const VehicleCatalogScript := preload("res://scripts/vehicles/vehicle_catalog.gd")
 
 @export var vehicle_count: int = 48
-## Full vehicle render distance (2× the old near default). Beyond this: not drawn.
-@export var render_distance: float = 110.0
+## Full vehicle render distance. Beyond this: not drawn.
+@export var render_distance: float = 120.0
 @export var lod_hysteresis_m: float = 18.0
 @export var trip_min_m: float = 20.0
 @export var trip_max_m: float = 180.0
@@ -22,6 +22,7 @@ const VehicleCatalogScript := preload("res://scripts/vehicles/vehicle_catalog.gd
 @export var crossing_occupancy_interval_sec: float = 0.12
 
 var _agents: Array[VehicleAgent] = []
+var _near_agents: Array[VehicleAgent] = []
 var _roadmap: CarRoadMap
 var _layers: StreetNavLayers
 var _crowd: CrowdDirector
@@ -77,6 +78,7 @@ func clear_vehicles() -> void:
 	for agent in _agents:
 		_release_visual(agent)
 	_agents.clear()
+	_near_agents.clear()
 	_near_count = 0
 
 
@@ -153,6 +155,7 @@ func _physics_process(delta: float) -> void:
 	if _lod_accum >= lod_interval_sec:
 		_lod_accum = 0.0
 		_refresh_lod(false)
+	_update_frustum_visibility()
 	_sync_near_visuals()
 
 
@@ -243,7 +246,6 @@ func _refresh_lod(force: bool) -> void:
 	var cam_pos := _camera.global_position
 	var enter_r := render_distance
 	var exit_r := render_distance + lod_hysteresis_m
-	_near_count = 0
 	for i in range(_agents.size()):
 		var agent: VehicleAgent = _agents[i]
 		var dx := agent.position.x - cam_pos.x
@@ -256,14 +258,31 @@ func _refresh_lod(force: bool) -> void:
 		else:
 			if dist <= enter_r:
 				next_lod = VehicleAgent.Lod.NEAR
+		if force:
+			next_lod = VehicleAgent.Lod.NEAR if dist <= enter_r else VehicleAgent.Lod.CULLED
 		if force or next_lod != agent.lod:
 			agent.lod = next_lod
 			if agent.lod == VehicleAgent.Lod.NEAR:
 				_ensure_visual(i, agent)
 			else:
 				_release_visual(agent)
-		if agent.lod == VehicleAgent.Lod.NEAR:
+
+
+func _update_frustum_visibility() -> void:
+	_near_agents.clear()
+	_near_count = 0
+	if _camera == null or not is_instance_valid(_camera):
+		return
+	for agent in _agents:
+		var vis := agent.visual as VehicleVisual
+		if vis == null or not is_instance_valid(vis):
+			continue
+		var in_view := _camera.is_position_in_frustum(agent.position + Vector3(0.0, 1.0, 0.0))
+		vis.visible = in_view
+		vis.process_mode = Node.PROCESS_MODE_INHERIT if in_view else Node.PROCESS_MODE_DISABLED
+		if in_view:
 			_near_count += 1
+			_near_agents.append(agent)
 
 
 func _ensure_visual(agent_index: int, agent: VehicleAgent) -> void:
@@ -296,7 +315,9 @@ func _release_visual(agent: VehicleAgent) -> void:
 
 
 func _sync_near_visuals() -> void:
-	for agent in _agents:
+	for agent in _near_agents:
 		if agent.visual == null or not is_instance_valid(agent.visual):
+			continue
+		if not agent.visual.visible:
 			continue
 		(agent.visual as VehicleVisual).sync_pose(agent.position, agent.yaw)

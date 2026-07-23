@@ -24,6 +24,8 @@ var is_busy: bool = false
 var is_ground_ready: bool = false
 ## True when this instance only re-pinned an already-stamped stream tile.
 var from_stream_cache: bool = false
+## "full" = voxel buildings; "far" = ground + impostors only.
+var bake_quality: String = "full"
 
 var generator: DistrictGenerator
 var crowd: CrowdDirector
@@ -110,10 +112,16 @@ func needs_detail() -> bool:
 	return is_ground_ready and not is_ready and not from_stream_cache
 
 
-func begin_ground(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> void:
+func needs_upgrade() -> bool:
+	## Far impostor tile that has entered the voxel-detail radius.
+	return is_ready and bake_quality == "far" and not is_busy and not from_stream_cache
+
+
+func begin_ground(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D, quality: String = "full") -> void:
 	if is_busy or is_ready or is_ground_ready:
 		return
 	is_busy = true
+	bake_quality = quality
 	_terrain_ref = terrain
 	_tool_ref = tool
 	_camera_ref = camera
@@ -128,6 +136,42 @@ func begin_detail(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> v
 	_tool_ref = tool
 	_camera_ref = camera
 	_stamp_detail_async()
+
+
+func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> void:
+	## Promote a far impostor tile to full voxel buildings.
+	if not needs_upgrade():
+		return
+	is_busy = true
+	is_ready = false
+	is_ground_ready = false
+	bake_quality = "full"
+	_bake_blocks.clear()
+	_bake_block_keys.clear()
+	_bake_key_index = 0
+	_bake_impostors.clear()
+	if building_lod != null and is_instance_valid(building_lod):
+		building_lod.clear()
+		building_lod.queue_free()
+	building_lod = null
+	if crowd != null and is_instance_valid(crowd):
+		crowd.clear_crowd()
+		crowd.queue_free()
+	crowd = null
+	if vehicles != null and is_instance_valid(vehicles):
+		vehicles.clear_vehicles()
+		vehicles.queue_free()
+	vehicles = null
+	if street_props != null and is_instance_valid(street_props):
+		street_props.clear_props()
+		street_props.queue_free()
+	street_props = null
+	_nav_layers = null
+	generator = null
+	_terrain_ref = terrain
+	_tool_ref = tool
+	_camera_ref = camera
+	_stamp_ground_async()
 
 
 func begin_generate(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> void:
@@ -199,10 +243,12 @@ func _stamp_ground_async() -> void:
 		failed.emit(self, "bake missing generator")
 		return
 
-	_bake_block_keys = OfflineVolumeCommitterScript.sorted_block_keys(_bake_blocks)
+	## Ground layer first, nearest-to-player within that layer.
+	_bake_block_keys = OfflineVolumeCommitterScript.sorted_block_keys_near_player(
+		_bake_blocks, origin_vox, _focus_world(_camera_ref), _voxel_size, 0, -1
+	)
 	_bake_key_index = 0
-	var ground_max_by := 0
-	var ground_ok := await _commit_blocks_until(func(bp: Vector3i) -> bool: return bp.y <= ground_max_by)
+	var ground_ok := await _commit_blocks_until()
 	if not is_instance_valid(self):
 		return
 	if not ground_ok:
@@ -214,7 +260,7 @@ func _stamp_ground_async() -> void:
 	_pin_data_only()
 	is_ground_ready = true
 	is_busy = false
-	print("DistrictInstance ground ready %s (baked off-thread)" % str(coord))
+	print("DistrictInstance ground ready %s quality=%s" % [str(coord), bake_quality])
 	ground_ready.emit(self)
 
 
@@ -230,7 +276,12 @@ func _stamp_detail_async() -> void:
 	_pin_data_only()
 	_ensure_proxy_floor()
 
-	var detail_ok := await _commit_blocks_until(func(_bp: Vector3i) -> bool: return true)
+	## Upper blocks nearest-to-player (re-focus in case the camera moved during ground).
+	_bake_block_keys = OfflineVolumeCommitterScript.sorted_block_keys_near_player(
+		_bake_blocks, origin_vox, _focus_world(camera), _voxel_size, -1, 1
+	)
+	_bake_key_index = 0
+	var detail_ok := await _commit_blocks_until()
 	if not is_instance_valid(self):
 		return
 	if not detail_ok:
@@ -239,6 +290,24 @@ func _stamp_detail_async() -> void:
 		return
 	_bake_blocks.clear()
 	_bake_block_keys.clear()
+
+	## Far tiles: impostors only — skip nav/crowd/traffic until upgraded.
+	if bake_quality == "far":
+		generator.end_generate()
+		building_lod = BuildingImpostorLodScript.new()
+		building_lod.name = "BuildingImpostors"
+		add_child(building_lod)
+		var far_impostors: Array = _bake_impostors
+		if far_impostors.is_empty():
+			far_impostors = generator.building_impostors
+		## Show shells even near the camera — no voxel buildings on far tiles.
+		building_lod.setup(camera, far_impostors, 0.0)
+		_pin_data_only()
+		is_ready = true
+		is_busy = false
+		ready_to_play.emit(self)
+		print("DistrictInstance far-ready %s seed=%d" % [str(coord), _dseed])
+		return
 
 	generator.end_generate()
 	await get_tree().process_frame
@@ -288,7 +357,7 @@ func _stamp_detail_async() -> void:
 	var impostors: Array = _bake_impostors
 	if impostors.is_empty():
 		impostors = generator.building_impostors
-	building_lod.setup(camera, impostors, maxf(_player_view_m, 120.0))
+	building_lod.setup(camera, impostors, maxf(_player_view_m, 1.0))
 
 	## Player VoxelViewer remeshes the near field; district anchor stays data-only
 	## so whole-tile remesh storms don't tank FPS while other districts generate.
@@ -310,6 +379,7 @@ func _bake_on_worker() -> Dictionary:
 		"floor_height_vox": 6,
 		"max_building_height_vox": 200,
 		"voxel_size": _voxel_size,
+		"quality": bake_quality,
 	}
 	var mutex := Mutex.new()
 	var state := {"done": false, "payload": {}}
@@ -335,8 +405,8 @@ func _bake_on_worker() -> Dictionary:
 	return payload
 
 
-func _commit_blocks_until(include: Callable) -> bool:
-	## Time-budgeted commits. Blocks are already uint16 (or uniform sentinel) from the worker.
+func _commit_blocks_until() -> bool:
+	## Time-budgeted commits. Keys must already be nearest-first for this phase.
 	const BUDGET_MSEC := 3
 	var terrain := _terrain_ref
 	while true:
@@ -348,17 +418,11 @@ func _commit_blocks_until(include: Callable) -> bool:
 			continue
 		if _bake_key_index >= _bake_block_keys.size():
 			break
-		var peek: Vector3i = _bake_block_keys[_bake_key_index]
-		if not bool(include.call(peek)):
-			break
 
 		var t0 := Time.get_ticks_msec()
 		var committed := 0
 		while _bake_key_index < _bake_block_keys.size():
 			var bp: Vector3i = _bake_block_keys[_bake_key_index]
-			if not bool(include.call(bp)):
-				OfflineVolumeCommitterScript.release_commit(coord)
-				return true
 			var data: PackedByteArray = _bake_blocks.get(bp, PackedByteArray())
 			var ok := OfflineVolumeCommitterScript.commit_block(terrain, origin_vox, bp, data)
 			var attempts := 0

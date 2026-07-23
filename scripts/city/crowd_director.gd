@@ -7,8 +7,8 @@ const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
 const PedOutfitScript := preload("res://scripts/humans/ped_outfit.gd")
 
 @export var pedestrian_count: int = 1000
-## Full body render distance (2× the old near default). Beyond this: not drawn.
-@export var render_distance: float = 56.0
+## Full body render distance. Beyond this: not drawn.
+@export var render_distance: float = 70.0
 @export var render_distance_min: float = 10.0
 @export var render_distance_max: float = 250.0
 @export var render_distance_step: float = 5.0
@@ -23,8 +23,10 @@ const PedOutfitScript := preload("res://scripts/humans/ped_outfit.gd")
 @export var lod_interval_sec: float = 0.35
 ## Probability that a decision picks WALK (idle is the exception).
 @export var walk_decision_chance: float = 0.92
+@export var lod_hysteresis_m: float = 12.0
 
 var _agents: Array[PedAgent] = []
+var _near_agents: Array[PedAgent] = []
 var _roadmap: PedRoadMap
 var _rng := RandomNumberGenerator.new()
 var _camera: Camera3D
@@ -58,6 +60,7 @@ func clear_crowd() -> void:
 	for agent in _agents:
 		_release_visual(agent)
 	_agents.clear()
+	_near_agents.clear()
 	_skinned_count = 0
 
 
@@ -143,6 +146,7 @@ func _physics_process(delta: float) -> void:
 	if _lod_accum >= lod_interval_sec:
 		_lod_accum = 0.0
 		_refresh_lod(false)
+	_update_frustum_visibility()
 	_sync_near_visuals()
 
 
@@ -242,23 +246,48 @@ func _decide(agent: PedAgent) -> void:
 	agent.next_decision_at = _time + 600.0
 
 
-func _refresh_lod(_force: bool) -> void:
+func _refresh_lod(force: bool) -> void:
 	if _camera == null or not is_instance_valid(_camera):
 		return
 	var cam_pos := _camera.global_position
-	var r2 := render_distance * render_distance
-	_skinned_count = 0
+	var enter_r2 := render_distance * render_distance
+	var exit_r := render_distance + lod_hysteresis_m
+	var exit_r2 := exit_r * exit_r
 	for i in range(_agents.size()):
 		var agent: PedAgent = _agents[i]
 		var dx := agent.position.x - cam_pos.x
 		var dz := agent.position.z - cam_pos.z
-		if dx * dx + dz * dz <= r2:
+		var d2 := dx * dx + dz * dz
+		var want_near := agent.lod == PedAgent.Lod.NEAR
+		if want_near:
+			want_near = d2 <= exit_r2
+		else:
+			want_near = d2 <= enter_r2
+		if force:
+			want_near = d2 <= enter_r2
+		if want_near:
 			agent.lod = PedAgent.Lod.NEAR
 			_ensure_visual(i, agent)
-			_skinned_count += 1
 		else:
 			agent.lod = PedAgent.Lod.CULLED
 			_release_visual(agent)
+
+
+func _update_frustum_visibility() -> void:
+	_near_agents.clear()
+	_skinned_count = 0
+	if _camera == null or not is_instance_valid(_camera):
+		return
+	for agent in _agents:
+		var vis := agent.visual as CrowdPedVisual
+		if vis == null or not is_instance_valid(vis):
+			continue
+		var in_view := _camera.is_position_in_frustum(agent.position + Vector3(0.0, 1.1, 0.0))
+		vis.visible = in_view
+		vis.process_mode = Node.PROCESS_MODE_INHERIT if in_view else Node.PROCESS_MODE_DISABLED
+		if in_view:
+			_skinned_count += 1
+			_near_agents.append(agent)
 
 
 func _ensure_visual(agent_index: int, agent: PedAgent) -> void:
@@ -280,7 +309,9 @@ func _release_visual(agent: PedAgent) -> void:
 
 
 func _sync_near_visuals() -> void:
-	for agent in _agents:
+	for agent in _near_agents:
 		if agent.visual == null or not is_instance_valid(agent.visual):
+			continue
+		if not agent.visual.visible:
 			continue
 		(agent.visual as CrowdPedVisual).sync_from_agent(agent)

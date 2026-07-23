@@ -4,10 +4,11 @@ class_name CityBrush
 extends RefCounted
 
 const OfflineVoxelVolumeScript := preload("res://scripts/city/offline_voxel_volume.gd")
+const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 
 var tool: VoxelTool
 var origin: Vector3i = Vector3i.ZERO
-## OfflineVoxelVolume when baking off-thread; null in live VoxelTool mode.
+## OfflineVoxelVolume / NativeOfflineVoxelVolume when baking off-thread; null in live mode.
 var volume
 
 
@@ -20,10 +21,12 @@ func _init(p_tool: VoxelTool = null, p_origin: Vector3i = Vector3i.ZERO) -> void
 
 
 func use_offline_volume(p_volume = null) -> void:
-	if p_volume == null:
-		volume = OfflineVoxelVolumeScript.new()
-	else:
+	if p_volume != null:
 		volume = p_volume
+	else:
+		volume = CityVoxelNativeScript.make_volume()
+		if volume == null:
+			volume = OfflineVoxelVolumeScript.new()
 	## Offline paints in local space; origin applied at commit time.
 	origin = Vector3i.ZERO
 
