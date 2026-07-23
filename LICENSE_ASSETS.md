@@ -57,6 +57,15 @@ See `assets/city/textures/CREDITS.txt` for ambientCG asset IDs. Fetch: `python t
 See `assets/humans/outfits/CREDITS.txt`. Export: `tools/export_mpfb_outfits.bat`.  
 Optional extra CC0 packs: `python tools/download_mh_clothes_packs.py` (shirts01/pants01/shoes01).
 
+## Vehicles (non-voxel meshes)
+
+| Asset | Source | License |
+|-------|--------|---------|
+| `assets/vehicles/models/*.glb` | [Kenney Car Kit 3.1](https://kenney.nl/assets/car-kit) — kept as opaque `fallback_path` only | **CC0** |
+| `scripts/vehicles/procedural_vehicle.gd` | Project-authored low-poly traffic kits (real glass materials) | Project-authored |
+
+See `assets/vehicles/CREDITS.txt`. Catalog: `assets/vehicles/catalog.json`.
+
 ## Anatomy / clothing proxies (future)
 
 | Asset | Author / URL | License | Used in build? |

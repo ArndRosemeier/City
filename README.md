@@ -1,40 +1,34 @@
 # City — Procedural voxel city (Godot 4)
 
-Phase 1 **Human POC**: skinned procedural pedestrians with proportion morphs,
-anatomy proxy slot, and stubs for voxel city + cars.
+Voxel district POC with skinned MPFB pedestrians, Quaternius cars, sidewalks/curbs,
+crosswalks, and street lights. Showcase scene still available via `start.bat`.
 
 ## Requirements
 
-- [Godot 4.3+](https://godotengine.org/) (Forward Plus)
-- Optional: [MakeHuman](http://www.makehumancommunity.org/) or [MPFB](https://static.makehumancommunity.org/mpfb.html) to replace mannequin bases
-- Optional: Python 3.10+ to regenerate POC glTF bases (`python tools/generate_human_bases.py`)
+- Godot **4.6 + Voxel Tools** (`tools/godot/Godot_v4.6-voxel_win64.exe`) for the city POC
+- Optional stock Godot 4.3+ for the human showcase (`start.bat` / `scenes/main.tscn`)
 
-## Run
+## Run (city)
 
-Double-click **`start.bat`** — that launches the POC showcase maximized (no editor).
+Double-click **`start_city.bat`** — ~320×224 m district, towers up to 100 m.
 
-Controls: **Esc** quit · **R** reshuffle crowd · **Space** pause/resume camera orbit.
-
-Or from a terminal: open `C:\Projekte\City` in Godot 4 and run `scenes/main.tscn`.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** new city · **Esc** quit · **F9/F10** crowd LOD.
 
 ## Layout
 
 ```
-assets/humans/     glTF bases + MakeHuman replacement notes
-assets/city/       (future voxel assets)
-assets/vehicles/   (future car assets)
-scenes/            main demo scene
-scripts/humans/    Pedestrian, spawner, proportions, AnatomyProxy
-scripts/city/      CityStub
-scripts/vehicles/  VehicleStub
-tools/             generate_human_bases.py
+assets/humans/     MPFB bases, outfits, Quaternius Idle/Walk
+assets/city/       Voxel textures
+assets/vehicles/   Quaternius CC0 car GLBs + catalog.json
+scenes/            city_poc.tscn, main.tscn
+scripts/city/      District generation, crowd, street lights
+scripts/vehicles/  VehicleDirector / catalog / visuals
+scripts/humans/    Outfits, proportions
 LICENSE_ASSETS.md  Content license provenance
 ```
 
-## Design rules (from plan)
+## Design rules
 
-- Humans are **meshes + skeleton**, not voxels.
-- Crotch / anatomy stays an **optional proxy** (`AnatomyProxy` on `Pelvis`) so
-  full anatomy can be added later without remaking the crowd pipeline.
-- Prefer MakeHuman/MPFB (CC0 exports) over MB-Lab / SMPL / DAZ for shipped bodies.
-  See `LICENSE_ASSETS.md`.
+- Humans and cars are **meshes**, not voxels.
+- Pedestrians walk sidewalks / plazas / parks / crosswalks only (not asphalt).
+- Prefer CC0 (MakeHuman/MPFB, Quaternius). See `LICENSE_ASSETS.md`.

@@ -1,0 +1,117 @@
+{
+  "source": "procedural",
+  "license": "project-authored",
+  "notes": "Primary visuals are ProceduralVehicle kits. Kenney GLBs remain as fallback_path only (opaque last resort).",
+  "vehicles": [
+    {
+      "id": "sedan",
+      "profile": "sedan",
+      "kind": "car",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/sedan.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "sedan_sports",
+      "profile": "sedan_sports",
+      "kind": "car",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/sedan-sports.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "hatchback_sports",
+      "profile": "hatchback_sports",
+      "kind": "car",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/hatchback-sports.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "suv",
+      "profile": "suv",
+      "kind": "car",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/suv.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "suv_luxury",
+      "profile": "suv_luxury",
+      "kind": "car",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/suv-luxury.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "taxi",
+      "profile": "taxi",
+      "kind": "car",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/taxi.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "police",
+      "profile": "police",
+      "kind": "car",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/police.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "van",
+      "profile": "van",
+      "kind": "van",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/van.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "delivery",
+      "profile": "delivery",
+      "kind": "van",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/delivery.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    },
+    {
+      "id": "truck",
+      "profile": "truck",
+      "kind": "van",
+      "source": "procedural",
+      "fallback_path": "res://assets/vehicles/models/truck.glb",
+      "scale": 1.0,
+      "y_offset": 0.0,
+      "yaw_fix": 0.0,
+      "seat_offsets": []
+    }
+  ]
+}

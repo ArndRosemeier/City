@@ -6,7 +6,7 @@ var brush: CityBrush
 var rng: RandomNumberGenerator
 var floor_height: int = 3
 var ground_floor_height: int = 4
-var max_height: int = 60
+var max_height: int = 200
 var park: ParkComposer
 
 

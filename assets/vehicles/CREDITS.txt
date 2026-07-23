@@ -1,0 +1,21 @@
+Kenney Car Kit 3.1 (CC0)
+
+Author: Kenney (www.kenney.nl)
+License: CC0 1.0 Universal (Public Domain)
+http://creativecommons.org/publicdomain/zero/1.0/
+
+Sources:
+- https://kenney.nl/assets/car-kit
+- https://opengameart.org/content/car-kit (kenney_car-kit_3.1.zip)
+
+Files used under models/:
+- sedan.glb, sedan-sports.glb, hatchback-sports.glb
+- suv.glb, suv-luxury.glb
+- taxi.glb, police.glb
+- van.glb, delivery.glb, truck.glb
+- Textures/colormap.png
+
+Glass: Kenney colormap window swatches (desaturated blue-grey) made transparent via
+`kenney_car_glass.gdshader`. Dark chassis greys stay opaque.
+
+Attribution appreciated but not required: Kenney / www.kenney.nl

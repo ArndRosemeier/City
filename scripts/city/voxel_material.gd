@@ -39,19 +39,20 @@ static func is_solid(id: int) -> bool:
 
 
 static func is_walkable_surface(id: int) -> bool:
+	## Pedestrians: sidewalks / plazas / parks / crosswalks only — not car asphalt.
 	return (
-		id == ASPHALT
-		or id == ROAD
-		or id == PLAZA
+		id == PLAZA
 		or id == SIDEWALK
 		or id == GRAVEL
 		or id == DIRT
 		or id == TILES
 		or id == PARK
-		or id == ROAD_LINE
 		or id == CROSSWALK
-		or id == CURB
 	)
+
+
+static func is_drivable_surface(id: int) -> bool:
+	return id == ASPHALT or id == ROAD or id == ROAD_LINE or id == CROSSWALK
 
 
 static func color(id: int) -> Color:

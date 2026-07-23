@@ -43,3 +43,7 @@ tools/pose_*.png.import
 *.blend1
 *.blend2
 *.mhm.bak
+
+# Kenney kit extract / download scratch (fallback GLBs live under models/)
+assets/vehicles/_kenney_src/
+assets/vehicles/_kenney_tmp.zip
