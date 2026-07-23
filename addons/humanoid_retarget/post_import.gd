@@ -11,9 +11,16 @@ func _pre_process(scene: Node) -> void:
 		return
 	var map_path := ""
 	var is_quaternius := false
+	var is_mixamo := false
 	if skel.find_bone("DEF-hips") >= 0:
 		map_path = "res://assets/humans/animations/bonemap_quaternius.tres"
 		is_quaternius = true
+	elif skel.find_bone("mixamorig:Hips") >= 0:
+		map_path = "res://assets/humans/animations/bonemap_mixamo.tres"
+		is_mixamo = true
+	elif skel.find_bone("mixamorig_Hips") >= 0:
+		map_path = "res://assets/humans/animations/bonemap_mixamo_underscore.tres"
+		is_mixamo = true
 	elif skel.find_bone("pelvis") >= 0:
 		map_path = "res://assets/humans/animations/bonemap_mpfb.tres"
 	else:
@@ -53,7 +60,7 @@ func _pre_process(scene: Node) -> void:
 		node_opts["retarget/rest_fixer/fix_silhouette/filter"] = PackedStringArray(
 			["LeftFoot", "RightFoot", "LeftToes", "RightToes"]
 		)
-	if is_quaternius:
+	if is_quaternius or is_mixamo:
 		node_opts["retarget/remove_tracks/unimportant_positions"] = true
 		node_opts["retarget/remove_tracks/unmapped_bones"] = true
 	nodes[key] = node_opts

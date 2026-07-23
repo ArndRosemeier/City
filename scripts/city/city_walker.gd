@@ -22,6 +22,7 @@ const FEMALE_PATHS: Array[String] = [
 const QUATERNIUS_LIB := (
 	"res://assets/humans/animations/quaternius/AnimationLibrary_Godot_Standard.gltf"
 )
+const MIXAMO_LIB := "res://assets/humans/animations/mixamo/mixamo_actions.tres"
 const ANIM_IDLE := &"Idle"
 const ANIM_WALK := &"Walk"
 const LIB_NAME := &"quat"
@@ -78,6 +79,10 @@ var _safety_deck: StaticBody3D
 var _auto_run: bool = false
 ## Matches district surface top: (ground_thickness+1) * 0.5 m.
 const SAFETY_FLOOR_TOP_Y := 1.0
+## One-shot / emote override from the action bar; blocks Idle/Walk until done.
+var _action_playing: bool = false
+var _action_anim: String = ""
+var _action_names: PackedStringArray = PackedStringArray()
 
 
 func _ready() -> void:
@@ -313,6 +318,9 @@ func _setup_animation_player(body: Node3D) -> void:
 	_anim_player = AnimationPlayer.new()
 	_anim_player.name = "AnimationPlayer"
 	body.add_child(_anim_player)
+	_action_playing = false
+	_action_anim = ""
+	_action_names = PackedStringArray()
 
 	if not ResourceLoader.exists(QUATERNIUS_LIB):
 		push_error("CityWalker: missing Quaternius library at %s" % QUATERNIUS_LIB)
@@ -329,28 +337,145 @@ func _setup_animation_player(body: Node3D) -> void:
 		return
 
 	var library := AnimationLibrary.new()
-	for anim_name in [String(ANIM_IDLE), String(ANIM_WALK)]:
-		if not src_player.has_animation(anim_name):
-			push_error("CityWalker: missing animation '%s'" % anim_name)
+	var names: PackedStringArray = src_player.get_animation_list()
+	var skip := {"A_TPose": true}
+	for anim_name in names:
+		var key := String(anim_name)
+		if skip.has(key):
 			continue
+		## Prefer non-root-motion variants when both exist (Roll vs Roll_RM).
+		if key.ends_with("_RM"):
+			var base := key.substr(0, key.length() - 3)
+			if src_player.has_animation(base):
+				continue
 		var src: Animation = src_player.get_animation(anim_name)
+		if src == null:
+			continue
 		var copy: Animation = src.duplicate(true) as Animation
-		_prepare_locomotion_clip(copy)
-		library.add_animation(anim_name, copy)
+		_strip_root_translation(copy)
+		## Keep locomotion looping even if import flags slip.
+		if key == String(ANIM_IDLE) or key == String(ANIM_WALK):
+			copy.loop_mode = Animation.LOOP_LINEAR
+		library.add_animation(key, copy)
+		_action_names.append(key)
 
+	_action_names.sort()
 	_anim_player.add_animation_library(String(LIB_NAME), library)
 	lib_root.free()
-	_anim_player.play("%s/%s" % [LIB_NAME, ANIM_IDLE])
+	_merge_mixamo_actions(library)
+	_action_names.sort()
+	if not _anim_player.animation_finished.is_connected(_on_animation_finished):
+		_anim_player.animation_finished.connect(_on_animation_finished)
+	if library.has_animation(String(ANIM_IDLE)):
+		_anim_player.play("%s/%s" % [LIB_NAME, ANIM_IDLE])
+	elif _action_names.size() > 0:
+		_anim_player.play("%s/%s" % [LIB_NAME, _action_names[0]])
 
 
-func _prepare_locomotion_clip(anim: Animation) -> void:
-	anim.loop_mode = Animation.LOOP_LINEAR
-	# Drop Root translation so the clip stays in-place (CharacterBody moves the actor).
+func _merge_mixamo_actions(library: AnimationLibrary) -> void:
+	## Optional Mixamo bake (tools/bake_mixamo_library.gd). Names already end with _m.
+	if not ResourceLoader.exists(MIXAMO_LIB):
+		return
+	var mix: Resource = load(MIXAMO_LIB)
+	if not (mix is AnimationLibrary):
+		push_warning("CityWalker: Mixamo library is not AnimationLibrary: %s" % MIXAMO_LIB)
+		return
+	var mix_lib := mix as AnimationLibrary
+	var added := 0
+	for anim_name in mix_lib.get_animation_list():
+		var key := String(anim_name)
+		if not key.ends_with("_m"):
+			key = key + "_m"
+		var src: Animation = mix_lib.get_animation(anim_name)
+		if src == null:
+			continue
+		var copy: Animation = src.duplicate(true) as Animation
+		_strip_root_translation(copy)
+		## Also strip Hips translation (Mixamo often roots on Hips).
+		_strip_hips_translation(copy)
+		if library.has_animation(key):
+			library.remove_animation(key)
+		library.add_animation(key, copy)
+		if _action_names.find(key) < 0:
+			_action_names.append(key)
+		added += 1
+	if added > 0:
+		print("CityWalker: merged %d Mixamo actions (*_m)" % added)
+
+
+func _strip_hips_translation(anim: Animation) -> void:
+	for i in range(anim.get_track_count() - 1, -1, -1):
+		var path := str(anim.track_get_path(i))
+		var typ := anim.track_get_type(i)
+		if typ != Animation.TYPE_POSITION_3D:
+			continue
+		if path.ends_with(":Hips") or path.ends_with("/Hips"):
+			anim.remove_track(i)
+
+
+func _strip_root_translation(anim: Animation) -> void:
+	## Drop Root translation so the clip stays in-place (CharacterBody moves the actor).
 	for i in range(anim.get_track_count() - 1, -1, -1):
 		var path := str(anim.track_get_path(i))
 		var typ := anim.track_get_type(i)
 		if typ == Animation.TYPE_POSITION_3D and path.ends_with(":Root"):
 			anim.remove_track(i)
+
+
+func list_action_animations() -> PackedStringArray:
+	return _action_names.duplicate()
+
+
+func has_action_animation(anim_name: String) -> bool:
+	if _anim_player == null or anim_name.is_empty():
+		return false
+	return _anim_player.has_animation("%s/%s" % [LIB_NAME, anim_name])
+
+
+func is_playing_action() -> bool:
+	return _action_playing
+
+
+func play_action(anim_name: String) -> void:
+	if _anim_player == null or anim_name.is_empty():
+		return
+	var path := "%s/%s" % [LIB_NAME, anim_name]
+	if not _anim_player.has_animation(path):
+		push_error("CityWalker: unknown action '%s'" % anim_name)
+		return
+	## Re-click same action cancels back to idle/walk.
+	if _action_playing and _action_anim == anim_name:
+		cancel_action()
+		return
+	_action_playing = true
+	_action_anim = anim_name
+	_anim_player.play(path, 0.15)
+	_anim_player.speed_scale = clampf(1.0 / maxf(character_scale, 0.001), 0.05, 4.0)
+
+
+func cancel_action() -> void:
+	if not _action_playing:
+		return
+	_action_playing = false
+	_action_anim = ""
+	## Locomotion will restore Idle/Walk next physics frame.
+
+
+func _on_animation_finished(anim_name: StringName) -> void:
+	if not _action_playing:
+		return
+	var finished := String(anim_name)
+	var expected := "%s/%s" % [LIB_NAME, _action_anim]
+	if finished != expected and finished != _action_anim:
+		return
+	## Looping clips keep playing; one-shots end the override.
+	var path := expected if _anim_player.has_animation(expected) else _action_anim
+	if _anim_player.has_animation(path):
+		var anim: Animation = _anim_player.get_animation(path)
+		if anim != null and anim.loop_mode != Animation.LOOP_NONE:
+			return
+	_action_playing = false
+	_action_anim = ""
 
 
 func _finish_body_setup() -> void:
@@ -678,6 +803,11 @@ func _try_step_up(delta: float) -> void:
 func _update_locomotion_anim(move_speed: float) -> void:
 	if _anim_player == null:
 		return
+	if _action_playing:
+		if _moving:
+			cancel_action()
+		else:
+			return
 	var idle_path := "%s/%s" % [LIB_NAME, ANIM_IDLE]
 	var walk_path := "%s/%s" % [LIB_NAME, ANIM_WALK]
 	# Bigger → slower playback (long strides / heavy idle). Tiny → snappier.

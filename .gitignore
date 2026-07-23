@@ -29,6 +29,13 @@ tools/vendor/
 # Local Godot voxel engine binary
 tools/godot/
 
+# Mixamo raw FBX (Adobe terms — keep local; bake to mixamo_actions.tres)
+assets/humans/animations/mixamo/raw/*.fbx
+assets/humans/animations/mixamo/raw/*.FBX
+assets/humans/animations/mixamo/raw/*.glb
+assets/humans/animations/mixamo/raw/*.gltf
+!assets/humans/animations/mixamo/raw/.gitkeep
+
 # Rust / GDExtension build artifacts
 native/**/target/
 addons/city_voxel/bin/*.dll

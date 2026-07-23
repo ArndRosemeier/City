@@ -1,0 +1,10 @@
+Adobe Mixamo character animations (Kick, Stomp, …).
+
+Source: https://www.mixamo.com/
+License: Adobe Mixamo Additional Terms — free for use inside games/apps;
+do not redistribute as standalone Mixamo asset packs.
+Not CC0 (unlike Quaternius).
+
+Imported into Godot via SkeletonProfileHumanoid BoneMap
+(assets/humans/animations/bonemap_mixamo.tres) and listed in the
+player action bar with an "_m" name postfix.

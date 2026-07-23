@@ -8,6 +8,7 @@ const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityDebugHudScript := preload("res://scripts/city/city_debug_hud.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
@@ -21,6 +22,7 @@ var _walker: CityWalker
 var _hud: Label
 var _status: Label
 var _debug_hud: Node
+var _action_bar: Node
 var _booting: bool = false
 var _fps_accum: float = 0.0
 
@@ -155,6 +157,9 @@ func _regenerate() -> void:
 	if _debug_hud != null and is_instance_valid(_debug_hud):
 		_debug_hud.queue_free()
 		_debug_hud = null
+	if _action_bar != null and is_instance_valid(_action_bar):
+		_action_bar.queue_free()
+		_action_bar = null
 
 	_create_terrain()
 	await get_tree().process_frame
@@ -271,6 +276,10 @@ func _on_spawn_district_ready(inst: Node) -> void:
 
 	_status.visible = false
 	_booting = false
+	_action_bar = PlayerActionBarScript.new()
+	_action_bar.name = "PlayerActionBar"
+	add_child(_action_bar)
+	_action_bar.setup(_walker)
 	print("CityRoot: playable — endless stream active at y=%.2f" % floor_y)
 
 
