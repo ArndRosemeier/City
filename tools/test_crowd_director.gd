@@ -39,8 +39,7 @@ func _run() -> void:
 
 	var crowd: CrowdDirector = CrowdDirectorScript.new()
 	crowd.pedestrian_count = 1000
-	crowd.near_distance = 12.0
-	crowd.mid_distance = 40.0
+	crowd.render_distance = 12.0
 	crowd.stay_min_sec = 1.0
 	crowd.stay_max_sec = 2.0
 	root.add_child(crowd)

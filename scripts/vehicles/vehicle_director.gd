@@ -1,4 +1,5 @@
-## Spawns and simulates cars on planner road graph with crossing yield + LOD visuals.
+## Spawns and simulates cars on planner road graph with crossing yield.
+## Full catalog visuals when near; culled when far (no mid box proxies).
 class_name VehicleDirector
 extends Node3D
 
@@ -7,8 +8,8 @@ const VehicleVisualScript := preload("res://scripts/vehicles/vehicle_visual.gd")
 const VehicleCatalogScript := preload("res://scripts/vehicles/vehicle_catalog.gd")
 
 @export var vehicle_count: int = 48
-@export var near_distance: float = 55.0
-@export var mid_distance: float = 120.0
+## Full vehicle render distance (2× the old near default). Beyond this: not drawn.
+@export var render_distance: float = 110.0
 @export var lod_hysteresis_m: float = 18.0
 @export var trip_min_m: float = 20.0
 @export var trip_max_m: float = 180.0
@@ -24,7 +25,6 @@ var _agents: Array[VehicleAgent] = []
 var _roadmap: CarRoadMap
 var _layers: StreetNavLayers
 var _crowd: CrowdDirector
-var _mid_mm: MultiMeshInstance3D
 var _rng := RandomNumberGenerator.new()
 var _camera: Camera3D
 var _time: float = 0.0
@@ -54,12 +54,18 @@ func setup(roadmap: CarRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
 		push_error("VehicleDirector: car roadmap has no edges — traffic disabled")
 		return
 	_ground_y = _roadmap.ground_y
-	_build_mid_multimesh()
 	_spawn_agents()
 	_refresh_lod(true)
 	print(
-		"VehicleDirector: agents=%d roadmap_nodes=%d edges=%d catalog=%d near=%d"
-		% [_agents.size(), _roadmap.node_count, _roadmap.edge_count, VehicleCatalogScript.count(), _near_count]
+		"VehicleDirector: agents=%d roadmap_nodes=%d edges=%d catalog=%d visible=%d render=%.0fm"
+		% [
+			_agents.size(),
+			_roadmap.node_count,
+			_roadmap.edge_count,
+			VehicleCatalogScript.count(),
+			_near_count,
+			render_distance,
+		]
 	)
 
 
@@ -72,9 +78,6 @@ func clear_vehicles() -> void:
 		_release_visual(agent)
 	_agents.clear()
 	_near_count = 0
-	if _mid_mm != null and is_instance_valid(_mid_mm):
-		_mid_mm.queue_free()
-	_mid_mm = null
 
 
 func vehicle_live_count() -> int:
@@ -88,51 +91,15 @@ func sample_agent_position(index: int = 0) -> Vector3:
 
 
 func count_lod_tiers() -> Vector3i:
+	## x=visible, y=0 (no mid), z=culled
 	var near_n := 0
-	var mid_n := 0
 	var culled_n := 0
 	for agent in _agents:
-		match agent.lod:
-			VehicleAgent.Lod.NEAR:
-				near_n += 1
-			VehicleAgent.Lod.MID:
-				mid_n += 1
-			_:
-				culled_n += 1
-	return Vector3i(near_n, mid_n, culled_n)
-
-
-func _build_mid_multimesh() -> void:
-	# Headless / dummy renderer cannot host BoxMesh RIDs — skip mid proxies.
-	if DisplayServer.get_name() == "headless":
-		_mid_mm = null
-		return
-	_mid_mm = MultiMeshInstance3D.new()
-	_mid_mm.name = "MidVehicleProxies"
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.instance_count = maxi(vehicle_count, 1)
-	var box := BoxMesh.new()
-	box.size = Vector3(1.7, 0.55, 3.8)
-	mm.mesh = box
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.45
-	mat.metallic = 0.2
-	_mid_mm.material_override = mat
-	_mid_mm.multimesh = mm
-	add_child(_mid_mm)
-	_hide_all_mid_proxies()
-
-
-func _hide_all_mid_proxies() -> void:
-	if _mid_mm == null:
-		return
-	var mm := _mid_mm.multimesh
-	var hidden := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, -1000.0, 0.0))
-	for i in range(mm.instance_count):
-		mm.set_instance_transform(i, hidden)
+		if agent.lod == VehicleAgent.Lod.NEAR:
+			near_n += 1
+		else:
+			culled_n += 1
+	return Vector3i(near_n, 0, culled_n)
 
 
 func _spawn_agents() -> void:
@@ -187,7 +154,6 @@ func _physics_process(delta: float) -> void:
 		_lod_accum = 0.0
 		_refresh_lod(false)
 	_sync_near_visuals()
-	_sync_mid_proxies()
 
 
 func _refresh_crossing_occupancy() -> void:
@@ -275,10 +241,8 @@ func _refresh_lod(force: bool) -> void:
 	if _camera == null or not is_instance_valid(_camera):
 		return
 	var cam_pos := _camera.global_position
-	var near_enter := near_distance
-	var near_exit := near_distance + lod_hysteresis_m
-	var mid_enter := mid_distance
-	var mid_exit := mid_distance + lod_hysteresis_m
+	var enter_r := render_distance
+	var exit_r := render_distance + lod_hysteresis_m
 	_near_count = 0
 	for i in range(_agents.size()):
 		var agent: VehicleAgent = _agents[i]
@@ -286,27 +250,18 @@ func _refresh_lod(force: bool) -> void:
 		var dz := agent.position.z - cam_pos.z
 		var dist := sqrt(dx * dx + dz * dz)
 		var next_lod := agent.lod
-		match agent.lod:
-			VehicleAgent.Lod.NEAR:
-				if dist > near_exit:
-					next_lod = VehicleAgent.Lod.MID if dist <= mid_exit else VehicleAgent.Lod.CULLED
-			VehicleAgent.Lod.MID:
-				if dist <= near_enter:
-					next_lod = VehicleAgent.Lod.NEAR
-				elif dist > mid_exit:
-					next_lod = VehicleAgent.Lod.CULLED
-			_:
-				if dist <= near_enter:
-					next_lod = VehicleAgent.Lod.NEAR
-				elif dist <= mid_enter:
-					next_lod = VehicleAgent.Lod.MID
+		if agent.lod == VehicleAgent.Lod.NEAR:
+			if dist > exit_r:
+				next_lod = VehicleAgent.Lod.CULLED
+		else:
+			if dist <= enter_r:
+				next_lod = VehicleAgent.Lod.NEAR
 		if force or next_lod != agent.lod:
 			agent.lod = next_lod
-			match agent.lod:
-				VehicleAgent.Lod.NEAR:
-					_ensure_visual(i, agent)
-				_:
-					_release_visual(agent)
+			if agent.lod == VehicleAgent.Lod.NEAR:
+				_ensure_visual(i, agent)
+			else:
+				_release_visual(agent)
 		if agent.lod == VehicleAgent.Lod.NEAR:
 			_near_count += 1
 
@@ -345,24 +300,3 @@ func _sync_near_visuals() -> void:
 		if agent.visual == null or not is_instance_valid(agent.visual):
 			continue
 		(agent.visual as VehicleVisual).sync_pose(agent.position, agent.yaw)
-
-
-func _sync_mid_proxies() -> void:
-	if _mid_mm == null or not is_instance_valid(_mid_mm) or _mid_mm.get_parent() == null:
-		return
-	var mm := _mid_mm.multimesh
-	if mm == null:
-		return
-	if mm.instance_count < _agents.size():
-		mm.instance_count = _agents.size()
-	var hidden := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, -1000.0, 0.0))
-	for i in range(_agents.size()):
-		var agent: VehicleAgent = _agents[i]
-		if agent.lod != VehicleAgent.Lod.MID:
-			mm.set_instance_transform(i, hidden)
-			continue
-		var basis := Basis.from_euler(Vector3(0.0, agent.yaw, 0.0))
-		var origin := agent.position + Vector3(0.0, 0.35, 0.0)
-		mm.set_instance_transform(i, Transform3D(basis, origin))
-		var hue := float(absi(agent.catalog_id.hash()) % 100) / 100.0
-		mm.set_instance_color(i, Color.from_hsv(hue, 0.55, 0.65))

@@ -1,4 +1,4 @@
-## Simulates many pedestrians; every agent inside near_distance gets a full skinned body.
+## Pedestrian crowd: full skinned bodies when near, culled when far (no mid proxies).
 class_name CrowdDirector
 extends Node3D
 
@@ -7,11 +7,11 @@ const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
 const PedOutfitScript := preload("res://scripts/humans/ped_outfit.gd")
 
 @export var pedestrian_count: int = 1000
-@export var near_distance: float = 28.0
-@export var mid_distance: float = 75.0
-@export var near_distance_min: float = 5.0
-@export var near_distance_max: float = 250.0
-@export var near_distance_step: float = 5.0
+## Full body render distance (2× the old near default). Beyond this: not drawn.
+@export var render_distance: float = 56.0
+@export var render_distance_min: float = 10.0
+@export var render_distance_max: float = 250.0
+@export var render_distance_step: float = 5.0
 ## Rare pause window when a ped chooses to stay (exception, not the rule).
 @export var stay_min_sec: float = 1.2
 @export var stay_max_sec: float = 4.0
@@ -26,7 +26,6 @@ const PedOutfitScript := preload("res://scripts/humans/ped_outfit.gd")
 
 var _agents: Array[PedAgent] = []
 var _roadmap: PedRoadMap
-var _mid_mm: MultiMeshInstance3D
 var _rng := RandomNumberGenerator.new()
 var _camera: Camera3D
 var _time: float = 0.0
@@ -47,12 +46,11 @@ func setup(roadmap: PedRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
 		push_warning("CrowdDirector: empty roadmap; crowd empty")
 		return
 	_ground_y = _roadmap.ground_y
-	_build_mid_multimesh()
 	_spawn_agents()
 	_refresh_lod(true)
 	print(
-		"CrowdDirector: agents=%d roadmap_nodes=%d skinned=%d"
-		% [_agents.size(), _roadmap.node_count, _skinned_count]
+		"CrowdDirector: agents=%d roadmap_nodes=%d skinned=%d render=%.0fm"
+		% [_agents.size(), _roadmap.node_count, _skinned_count, render_distance]
 	)
 
 
@@ -61,9 +59,6 @@ func clear_crowd() -> void:
 		_release_visual(agent)
 	_agents.clear()
 	_skinned_count = 0
-	if _mid_mm != null and is_instance_valid(_mid_mm):
-		_mid_mm.queue_free()
-	_mid_mm = null
 
 
 func agent_count() -> int:
@@ -71,24 +66,21 @@ func agent_count() -> int:
 
 
 func adjust_near_distance(direction: float) -> void:
-	## direction > 0 grows near LOD radius, < 0 shrinks. Mid ring scales with it.
+	## F9/F10: shrink/grow full-body render radius.
 	if is_zero_approx(direction):
 		return
-	var next := near_distance + (near_distance_step if direction > 0.0 else -near_distance_step)
-	next = clampf(snappedf(next, near_distance_step), near_distance_min, near_distance_max)
-	if is_equal_approx(next, near_distance):
+	var next := render_distance + (render_distance_step if direction > 0.0 else -render_distance_step)
+	next = clampf(snappedf(next, render_distance_step), render_distance_min, render_distance_max)
+	if is_equal_approx(next, render_distance):
 		return
-	near_distance = next
-	mid_distance = maxf(near_distance + 20.0, near_distance * 2.5)
+	render_distance = next
 	_refresh_lod(true)
-	print(
-		"CrowdDirector LOD near=%.0fm mid=%.0fm skinned=%d"
-		% [near_distance, mid_distance, _skinned_count]
-	)
+	print("CrowdDirector render=%.0fm skinned=%d" % [render_distance, _skinned_count])
 
 
 func get_lod_distances() -> Vector2:
-	return Vector2(near_distance, mid_distance)
+	## x = render distance, y unused (kept for HUD compatibility).
+	return Vector2(render_distance, render_distance)
 
 
 func get_skinned_count() -> int:
@@ -96,7 +88,6 @@ func get_skinned_count() -> int:
 
 
 func collect_positions() -> Array:
-	## Allocating copy — prefer agents_for_occupancy() for hot paths.
 	var out: Array = []
 	out.resize(_agents.size())
 	for i in range(_agents.size()):
@@ -105,42 +96,19 @@ func collect_positions() -> Array:
 
 
 func agents_for_occupancy() -> Array:
-	## Zero-copy agent list for StreetNavLayers occupancy refresh.
 	return _agents
 
 
 func count_lod_tiers() -> Vector3i:
+	## x=visible, y=0 (no mid), z=culled
 	var near_n := 0
-	var mid_n := 0
 	var culled_n := 0
 	for agent in _agents:
-		match agent.lod:
-			PedAgent.Lod.NEAR:
-				near_n += 1
-			PedAgent.Lod.MID:
-				mid_n += 1
-			_:
-				culled_n += 1
-	return Vector3i(near_n, mid_n, culled_n)
-
-
-func _build_mid_multimesh() -> void:
-	_mid_mm = MultiMeshInstance3D.new()
-	_mid_mm.name = "MidPedProxies"
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.instance_count = 0
-	var capsule := CapsuleMesh.new()
-	capsule.radius = 0.2
-	capsule.height = 1.7
-	mm.mesh = capsule
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.85
-	_mid_mm.material_override = mat
-	_mid_mm.multimesh = mm
-	add_child(_mid_mm)
+		if agent.lod == PedAgent.Lod.NEAR:
+			near_n += 1
+		else:
+			culled_n += 1
+	return Vector3i(near_n, 0, culled_n)
 
 
 func _spawn_agents() -> void:
@@ -154,7 +122,6 @@ func _spawn_agents() -> void:
 		agent.position = _roadmap.positions[spawn_node]
 		agent.yaw = _rng.randf_range(0.0, TAU)
 		agent.female = _rng.randf() < 0.5
-		# High walk bias; per-agent flavor still varies a little.
 		agent.walk_tendency = clampf(_rng.randfn(walk_decision_chance, 0.04), 0.82, 0.99)
 		agent.walk_speed = _rng.randf_range(1.15, 1.85)
 		agent.body_scale = _rng.randf_range(0.92, 1.08)
@@ -177,7 +144,6 @@ func _physics_process(delta: float) -> void:
 		_lod_accum = 0.0
 		_refresh_lod(false)
 	_sync_near_visuals()
-	_sync_mid_proxies()
 
 
 func _simulate_agents(delta: float) -> void:
@@ -214,12 +180,10 @@ func _simulate_agents(delta: float) -> void:
 func _finish_walk(agent: PedAgent) -> void:
 	agent.clear_path()
 	_leave_carriageway_if_needed(agent)
-	# Chain another walk almost immediately — standing is rare.
 	agent.next_decision_at = _time + _rng.randf_range(rewalk_min_sec, rewalk_max_sec)
 
 
 func _leave_carriageway_if_needed(agent: PedAgent) -> void:
-	## If a ped finished or paused on a crossing mid, snap to nearest curb/sidewalk.
 	if _roadmap == null or _roadmap.is_empty():
 		return
 	var node := _roadmap.nearest_node(agent.position)
@@ -238,9 +202,7 @@ func _decide(agent: PedAgent) -> void:
 		agent.next_decision_at = _time + stay_max_sec
 		return
 	_leave_carriageway_if_needed(agent)
-	# Idle is the exception.
-	var walk_roll := _rng.randf()
-	var will_walk := walk_roll <= agent.walk_tendency
+	var will_walk := _rng.randf() <= agent.walk_tendency
 	if not will_walk:
 		agent.clear_path()
 		_leave_carriageway_if_needed(agent)
@@ -262,7 +224,6 @@ func _decide(agent: PedAgent) -> void:
 			agent.clear_path()
 			agent.next_decision_at = _time + stay_max_sec
 			return
-		# Prefer a non-crossing neighbor when leaving the curb.
 		to_node = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
 		for _pick in range(mini(nbrs.size(), 4)):
 			var cand: int = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
@@ -278,7 +239,6 @@ func _decide(agent: PedAgent) -> void:
 			return
 		nodes = PackedInt32Array([from_node, nbrs2[_rng.randi_range(0, nbrs2.size() - 1)]])
 	agent.set_path(_roadmap.path_to_world(nodes))
-	# While walking, don't re-roll until the trip ends (_finish_walk schedules next).
 	agent.next_decision_at = _time + 600.0
 
 
@@ -286,22 +246,16 @@ func _refresh_lod(_force: bool) -> void:
 	if _camera == null or not is_instance_valid(_camera):
 		return
 	var cam_pos := _camera.global_position
-	var near_r2 := near_distance * near_distance
-	var mid_r2 := mid_distance * mid_distance
+	var r2 := render_distance * render_distance
 	_skinned_count = 0
-
 	for i in range(_agents.size()):
 		var agent: PedAgent = _agents[i]
 		var dx := agent.position.x - cam_pos.x
 		var dz := agent.position.z - cam_pos.z
-		var d2 := dx * dx + dz * dz
-		if d2 <= near_r2:
+		if dx * dx + dz * dz <= r2:
 			agent.lod = PedAgent.Lod.NEAR
 			_ensure_visual(i, agent)
 			_skinned_count += 1
-		elif d2 <= mid_r2:
-			agent.lod = PedAgent.Lod.MID
-			_release_visual(agent)
 		else:
 			agent.lod = PedAgent.Lod.CULLED
 			_release_visual(agent)
@@ -330,26 +284,3 @@ func _sync_near_visuals() -> void:
 		if agent.visual == null or not is_instance_valid(agent.visual):
 			continue
 		(agent.visual as CrowdPedVisual).sync_from_agent(agent)
-
-
-func _sync_mid_proxies() -> void:
-	if _mid_mm == null:
-		return
-	var mm := _mid_mm.multimesh
-	var mid_indices: Array[int] = []
-	for i in range(_agents.size()):
-		if _agents[i].lod == PedAgent.Lod.MID:
-			mid_indices.append(i)
-	var count := mid_indices.size()
-	if mm.instance_count != count:
-		mm.instance_count = count
-	for j in range(count):
-		var agent: PedAgent = _agents[mid_indices[j]]
-		var basis := Basis.from_euler(Vector3(0.0, agent.yaw, 0.0))
-		basis = basis.scaled(Vector3(agent.body_scale, agent.body_scale, agent.body_scale))
-		var origin := agent.position + Vector3(0.0, 0.85 * agent.body_scale, 0.0)
-		mm.set_instance_transform(j, Transform3D(basis, origin))
-		var proxy := Color(0.55, 0.45, 0.38)
-		if agent.outfit != null:
-			proxy = agent.outfit.mid_proxy_color()
-		mm.set_instance_color(j, proxy)

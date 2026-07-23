@@ -57,8 +57,7 @@ func _run() -> void:
 
 	var crowd: CrowdDirector = CrowdDirectorScript.new()
 	crowd.pedestrian_count = 50
-	crowd.near_distance = 5.0
-	crowd.mid_distance = 20.0
+	crowd.render_distance = 5.0
 	root.add_child(crowd)
 	crowd.setup(map, cam, 3)
 	if crowd.agent_count() != 50:

@@ -130,16 +130,14 @@ func _run() -> void:
 
 	var crowd := CrowdDirectorScript.new()
 	crowd.pedestrian_count = 8
-	crowd.near_distance = 0.1
-	crowd.mid_distance = 0.2
+	crowd.render_distance = 0.1
 	root.add_child(crowd)
 	crowd.setup(ped, cam, 42)
 
 	var traffic := VehicleDirectorScript.new()
 	traffic.vehicle_count = 16
 	# Cull visuals in headless — DummyMesh RIDs crash on MultiMesh / skinned sync.
-	traffic.near_distance = 0.05
-	traffic.mid_distance = 0.1
+	traffic.render_distance = 0.05
 	root.add_child(traffic)
 	traffic.setup(car, cam, 42)
 	traffic.bind_crowd(crowd)

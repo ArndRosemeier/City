@@ -3,7 +3,7 @@ class_name PedAgent
 extends RefCounted
 
 enum State { STAY, WALK }
-enum Lod { CULLED, MID, NEAR }
+enum Lod { CULLED, NEAR }
 
 var position: Vector3 = Vector3.ZERO
 var yaw: float = 0.0
@@ -17,7 +17,7 @@ var female: bool = false
 var body_scale: float = 1.0
 var outfit: PedOutfit
 var next_decision_at: float = 0.0
-## Bound near-LOD visual while inside near_distance; null when mid/culled.
+## Bound skinned visual while inside render distance; null when culled.
 var visual: Node3D = null
 
 ## Roadmap path in world space; walk toward waypoints[path_i].

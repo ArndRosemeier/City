@@ -32,6 +32,8 @@ var _planner: DistrictPlanner
 var _plaza: PlazaComposer
 var _park: ParkComposer
 var _grammar: BuildingGrammar
+## World-space building massing for far LOD: {center, size, color}.
+var building_impostors: Array = []
 
 
 func generate(tool: VoxelTool, seed_value: int = -1) -> void:
@@ -46,6 +48,7 @@ func begin_generate(tool: VoxelTool, seed_value: int = -1) -> void:
 		city_seed = seed_value
 	_rng.seed = city_seed
 	size_xz = maxi(size_x, size_z)
+	building_impostors.clear()
 	_brush = CityBrushScript.new(tool)
 	_planner = DistrictPlannerScript.new()
 	_planner.build(size_x, size_z, city_seed, cell_size)
@@ -460,4 +463,51 @@ func _paint_lot(
 	var on_plaza := _planner.faces_plaza(cx, cz)
 	var on_park := _planner.faces_park(cx, cz)
 	grammar.build_for_zone(bmin, bmax, zone, facing, corner, on_plaza, on_park)
+	# Approximate massing height for far LOD (zone caps overshoot actual floors a bit — fine for shells).
+	var mass_h := grammar.max_height
+	match zone:
+		LandUse.CORE_LOT:
+			mass_h = grammar.max_height
+		LandUse.CIVIC_LOT:
+			mass_h = mini(grammar.max_height, 48)
+		LandUse.MID_LOT:
+			mass_h = int(float(grammar.max_height) * 0.55)
+		LandUse.TOWN_LOT:
+			mass_h = 28
+		LandUse.COURTYARD_LOT:
+			mass_h = 40
+		_:
+			mass_h = mini(grammar.max_height, 48)
+	_record_building_impostor(bmin, bmax, mass_h, zone)
 	grammar.max_height = saved
+
+
+func _record_building_impostor(bmin: Vector3i, bmax: Vector3i, height_vox: int, zone: int) -> void:
+	var vs := voxel_size
+	var w := float(bmax.x - bmin.x) * vs
+	var d := float(bmax.z - bmin.z) * vs
+	var h := float(maxi(height_vox, 8)) * vs
+	var center := Vector3(
+		(float(bmin.x) + float(bmax.x)) * 0.5 * vs,
+		float(bmin.y) * vs + h * 0.5,
+		(float(bmin.z) + float(bmax.z)) * 0.5 * vs
+	)
+	var color := Color(0.62, 0.58, 0.52)
+	match zone:
+		LandUse.CORE_LOT:
+			color = Color(0.55, 0.58, 0.62)
+		LandUse.CIVIC_LOT:
+			color = Color(0.72, 0.70, 0.66)
+		LandUse.MID_LOT:
+			color = Color(0.66, 0.48, 0.40)
+		LandUse.TOWN_LOT:
+			color = Color(0.70, 0.55, 0.42)
+		LandUse.COURTYARD_LOT:
+			color = Color(0.58, 0.52, 0.46)
+		_:
+			pass
+	building_impostors.append({
+		"center": center,
+		"size": Vector3(w, h, d),
+		"color": color,
+	})

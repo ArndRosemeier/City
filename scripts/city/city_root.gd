@@ -8,6 +8,7 @@ const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library
 const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
 const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
+const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 @export var city_seed: int = 42
 @export var crowd_count: int = 1000
@@ -21,10 +22,14 @@ var _walker: CityWalker
 var _crowd: CrowdDirector
 var _vehicles: VehicleDirector
 var _street_props: StreetPropPlacer
+var _building_lod: BuildingImpostorLod
 var _hud: Label
 var _status: Label
 var _generating: bool = false
 var _hud_lod_accum: float = 0.0
+
+## Player voxel mesh radius (2× the previous 220 default).
+const PLAYER_VIEW_DISTANCE := 440
 
 
 func _ready() -> void:
@@ -109,16 +114,19 @@ func _refresh_hud() -> void:
 	if _crowd != null and is_instance_valid(_crowd):
 		var dist := _crowd.get_lod_distances()
 		var tiers := _crowd.count_lod_tiers()
-		lod_line = "Crowd %d  ·  near %.0fm mid %.0fm  ·  skinned %d mid %d culled %d" % [
-			crowd_count, dist.x, dist.y, tiers.x, tiers.y, tiers.z
+		lod_line = "Crowd %d  ·  render %.0fm  ·  visible %d culled %d" % [
+			crowd_count, dist.x, tiers.x, tiers.z
 		]
 	var traffic_line := "Traffic %d" % vehicle_count
 	if _vehicles != null and is_instance_valid(_vehicles):
 		var vt := _vehicles.count_lod_tiers()
-		traffic_line = "Traffic %d  ·  near %d mid %d culled %d" % [vehicle_count, vt.x, vt.y, vt.z]
+		traffic_line = "Traffic %d  ·  visible %d culled %d" % [vehicle_count, vt.x, vt.z]
+	var building_line := ""
+	if _building_lod != null and is_instance_valid(_building_lod):
+		building_line = "\nBuildings  ·  far impostors %d" % _building_lod.visible_count()
 	_hud.text = (
-		"City POC  ·  seed %d  ·  %.0f×%.0f m  ·  max %.0f m\n%s\n%s\nWASD move  ·  dig LMB  ·  R new seed  ·  F9/F10 crowd LOD"
-		% [city_seed, meters_x, meters_z, height_m, lod_line, traffic_line]
+		"City POC  ·  seed %d  ·  %.0f×%.0f m  ·  max %.0f m\n%s\n%s%s\nWASD move  ·  dig LMB  ·  R new seed  ·  F9/F10 crowd range"
+		% [city_seed, meters_x, meters_z, height_m, lod_line, traffic_line, building_line]
 	)
 
 
@@ -164,13 +172,14 @@ func _create_terrain() -> void:
 
 
 func _ensure_district_anchor_viewer() -> void:
-	## Permanent center viewer keeps the whole stamped district loaded.
+	## Permanent center viewer keeps stamped voxel *data* loaded without meshing the whole city.
+	## Player viewer meshes nearby full detail; BuildingImpostorLod draws far massing.
 	if _preload_viewer != null and is_instance_valid(_preload_viewer):
 		_preload_viewer.queue_free()
 	_preload_viewer = VoxelViewer.new()
 	_preload_viewer.name = "DistrictAnchorViewer"
 	_preload_viewer.view_distance = 512
-	_preload_viewer.requires_visuals = true
+	_preload_viewer.requires_visuals = false
 	_preload_viewer.requires_collisions = true
 	add_child(_preload_viewer)
 	_preload_viewer.global_position = Vector3(
@@ -281,6 +290,10 @@ func _regenerate() -> void:
 		_street_props.clear_props()
 		_street_props.queue_free()
 		_street_props = null
+	if _building_lod != null and is_instance_valid(_building_lod):
+		_building_lod.clear()
+		_building_lod.queue_free()
+		_building_lod = null
 
 	_create_terrain()
 	_ensure_district_anchor_viewer()
@@ -317,8 +330,9 @@ func _regenerate() -> void:
 	var cam := _walker.get_camera()
 	var player_viewer := VoxelViewer.new()
 	player_viewer.name = "VoxelViewer"
-	player_viewer.view_distance = 220
+	player_viewer.view_distance = PLAYER_VIEW_DISTANCE
 	player_viewer.requires_collisions = true
+	player_viewer.requires_visuals = true
 	cam.add_child(player_viewer)
 
 	await _settle_walker_on_floor(spawn)
@@ -374,6 +388,13 @@ func _regenerate() -> void:
 		_generator.ground_thickness,
 		cam
 	)
+
+	_status.text = "Building far LOD…"
+	await get_tree().process_frame
+	_building_lod = BuildingImpostorLodScript.new()
+	_building_lod.name = "BuildingImpostors"
+	add_child(_building_lod)
+	_building_lod.setup(cam, _generator.building_impostors, float(PLAYER_VIEW_DISTANCE) * VOXEL_SIZE)
 
 	_status.visible = false
 	_generating = false

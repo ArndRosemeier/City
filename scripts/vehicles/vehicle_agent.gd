@@ -2,7 +2,7 @@
 class_name VehicleAgent
 extends RefCounted
 
-enum Lod { CULLED, MID, NEAR }
+enum Lod { CULLED, NEAR }
 
 var position: Vector3 = Vector3.ZERO
 var yaw: float = 0.0
