@@ -1,0 +1,45 @@
+# Godot 4+
+.godot/
+.godot_check_out/
+*.translation
+
+# Imported assets cache
+.import/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python tooling (asset generation)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Large vendor downloads (Blender, MPFB zips, system assets)
+tools/vendor/
+
+# Local Godot voxel engine binary
+tools/godot/
+
+# Tooling scratch / smoke logs
+tools/_*.txt
+tools/_*.txt.*
+tools/*.log
+tools/*.err
+tools/crowd_test_out.txt
+tools/godot_*.log
+tools/pose_*.png
+tools/pose_*.png.import
+
+# Blender / MakeHuman temp
+*.blend1
+*.blend2
+*.mhm.bak

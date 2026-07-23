@@ -1,0 +1,27 @@
+Textures from ambientCG (https://ambientcg.com/)
+License: CC0 1.0 Universal (public domain dedication)
+
+Asset IDs used (1K-JPG Color/albedo maps):
+- asphalt.jpg <- Asphalt031
+- brick.jpg <- Bricks075A
+- concrete.jpg <- Concrete034
+- sidewalk.jpg <- PavingStones037
+- plaza.jpg <- PavingStones070
+- grass.jpg <- Grass001
+- roof.jpg <- RoofingTiles014A
+- wood.jpg <- Wood051
+- rock.jpg <- Rock050
+- plaster.jpg <- Plaster001
+- metal.jpg <- Metal049A
+- brick_dark.jpg <- Bricks097
+- gravel.jpg <- Gravel023
+- dirt.jpg <- Ground054
+- tiles.jpg <- Terrazzo013
+- roof_clay.jpg <- RoofingTiles013A
+- metal_plate.jpg <- MetalPlates006
+- paint.jpg <- Paint001
+- bark.jpg <- Bark014
+- stone.jpg <- PavingStones128
+
+Project-authored (see generate_city_textures.py):
+- glass.jpg, water.jpg, leaves.jpg, curb.jpg, road_line.jpg, crosswalk.jpg

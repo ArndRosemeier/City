@@ -1,0 +1,12 @@
+﻿Quaternius Universal Animation Library (Standard / free glTF)
+
+Author: Quaternius
+License: CC0 (Creative Commons Zero / Public Domain)
+Source: https://github.com/J-Ponzo/gltf-universal-animation-library
+Original Quaternius assets: https://quaternius.com/
+
+Files in this folder:
+- AnimationLibrary_Godot_Standard.gltf
+- AnimationLibrary_Godot_Standard.bin
+
+Downloaded for use in the City project.

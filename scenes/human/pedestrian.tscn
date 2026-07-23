@@ -1,0 +1,24 @@
+[gd_scene load_steps=3 format=3 uid="uid://bpedestrian001"]
+
+[ext_resource type="Script" path="res://scripts/humans/pedestrian.gd" id="1_ped"]
+[ext_resource type="Script" path="res://scripts/humans/anatomy_proxy.gd" id="2_anat"]
+
+[sub_resource type="CapsuleShape3D" id="1_cap"]
+radius = 0.25
+height = 1.8
+
+[node name="Pedestrian" type="CharacterBody3D"]
+collision_layer = 2
+collision_mask = 1
+script = ExtResource("1_ped")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("1_cap")
+
+[node name="AnatomySlot" type="Node3D" parent="."]
+script = ExtResource("2_anat")
+slot_kind = 1
+slot_id = &"crotch"
+bone_name = &"pelvis"
+proxy_visible = false

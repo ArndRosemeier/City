@@ -1,0 +1,42 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
+[application]
+
+config/name="City"
+config/description="Procedural voxel city with procedural humans and cars. Phase 1: human POC."
+run/main_scene="res://scenes/city_poc.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/mode=2
+window/stretch/mode="canvas_items"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/humanoid_retarget/plugin.cfg")
+
+[layer_names]
+
+3d_physics/layer_1="world"
+3d_physics/layer_2="humans"
+3d_physics/layer_3="vehicles"
+
+[rendering]
+
+anti_aliasing/quality/msaa_3d=1

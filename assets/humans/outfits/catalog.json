@@ -1,0 +1,146 @@
+[
+  {
+    "id": "female_casual_01",
+    "sex": "female",
+    "female": true,
+    "path": "res://assets/humans/outfits/female_casual_01.glb",
+    "tags": [
+      "casual"
+    ],
+    "suit": "female_casualsuit01",
+    "shoes": "shoes01",
+    "proxy_color": [
+      0.35,
+      0.42,
+      0.55
+    ]
+  },
+  {
+    "id": "female_casual_02",
+    "sex": "female",
+    "female": true,
+    "path": "res://assets/humans/outfits/female_casual_02.glb",
+    "tags": [
+      "casual"
+    ],
+    "suit": "female_casualsuit02",
+    "shoes": "shoes02",
+    "proxy_color": [
+      0.35,
+      0.42,
+      0.55
+    ]
+  },
+  {
+    "id": "female_elegant_01",
+    "sex": "female",
+    "female": true,
+    "path": "res://assets/humans/outfits/female_elegant_01.glb",
+    "tags": [
+      "elegant"
+    ],
+    "suit": "female_elegantsuit01",
+    "shoes": "shoes05",
+    "proxy_color": [
+      0.18,
+      0.18,
+      0.22
+    ]
+  },
+  {
+    "id": "female_sport_01",
+    "sex": "female",
+    "female": true,
+    "path": "res://assets/humans/outfits/female_sport_01.glb",
+    "tags": [
+      "sport"
+    ],
+    "suit": "female_sportsuit01",
+    "shoes": "shoes03",
+    "proxy_color": [
+      0.25,
+      0.45,
+      0.35
+    ]
+  },
+  {
+    "id": "male_casual_01",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_casual_01.glb",
+    "tags": [
+      "casual"
+    ],
+    "suit": "male_casualsuit01",
+    "shoes": "shoes01",
+    "proxy_color": [
+      0.35,
+      0.42,
+      0.55
+    ]
+  },
+  {
+    "id": "male_casual_02",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_casual_02.glb",
+    "tags": [
+      "casual"
+    ],
+    "suit": "male_casualsuit02",
+    "shoes": "shoes02",
+    "proxy_color": [
+      0.35,
+      0.42,
+      0.55
+    ]
+  },
+  {
+    "id": "male_casual_03",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_casual_03.glb",
+    "tags": [
+      "casual"
+    ],
+    "suit": "male_casualsuit03",
+    "shoes": "shoes03",
+    "proxy_color": [
+      0.35,
+      0.42,
+      0.55
+    ]
+  },
+  {
+    "id": "male_elegant_01",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_elegant_01.glb",
+    "tags": [
+      "elegant"
+    ],
+    "suit": "male_elegantsuit01",
+    "shoes": "shoes05",
+    "proxy_color": [
+      0.18,
+      0.18,
+      0.22
+    ]
+  },
+  {
+    "id": "male_work_01",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_work_01.glb",
+    "tags": [
+      "work"
+    ],
+    "suit": "male_worksuit01",
+    "shoes": "shoes04",
+    "proxy_color": [
+      0.45,
+      0.38,
+      0.28
+    ]
+  }
+]

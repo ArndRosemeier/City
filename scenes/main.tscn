@@ -1,0 +1,42 @@
+[gd_scene load_steps=6 format=3 uid="uid://bqcitymain001"]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/city/city_stub.gd" id="2_city"]
+[ext_resource type="Script" path="res://scripts/vehicles/vehicle_stub.gd" id="3_veh"]
+[ext_resource type="Script" path="res://scripts/humans/human_spawner.gd" id="4_hum"]
+
+[sub_resource type="Environment" id="1_env"]
+background_mode = 1
+background_color = Color(0.55, 0.68, 0.82, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.7, 0.75, 0.85, 1)
+ambient_light_energy = 0.45
+tonemap_mode = 2
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="City" type="Node3D" parent="."]
+script = ExtResource("2_city")
+
+[node name="Vehicles" type="Node3D" parent="."]
+script = ExtResource("3_veh")
+
+[node name="Humans" type="Node3D" parent="."]
+script = ExtResource("4_hum")
+count = 24
+spawn_radius = 18.0
+spawn_seed = 42
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 12, 22)
+current = true
+fov = 55.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 20, 0)
+shadow_enabled = true
+light_energy = 1.15
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("1_env")
