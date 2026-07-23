@@ -29,9 +29,13 @@ var _hud_lod_accum: float = 0.0
 
 func _ready() -> void:
 	_generator = DistrictGenerator.new()
-	_generator.size_x = 640
-	_generator.size_z = 448
-	_generator.size_xz = 640
+	# ~14 m lots/streets; district sized so one center viewer can keep all edits loaded
+	# (without a VoxelStream, unloaded blocks are regenerated as air).
+	_generator.size_x = 784
+	_generator.size_z = 560
+	_generator.size_xz = 784
+	_generator.cell_size = 28
+	_generator.floor_height_vox = 6
 	_generator.max_building_height_vox = 200
 	_generator.voxel_size = VOXEL_SIZE
 
@@ -45,7 +49,7 @@ func _build_env() -> void:
 	light.rotation_degrees = Vector3(-50, 40, 0)
 	light.light_energy = 1.3
 	light.shadow_enabled = true
-	light.directional_shadow_max_distance = 280.0
+	light.directional_shadow_max_distance = 420.0
 	add_child(light)
 
 	var env := WorldEnvironment.new()
@@ -78,52 +82,26 @@ func _build_hud() -> void:
 	cross.offset_bottom = 14
 	layer.add_child(cross)
 
-	var panel := PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	panel.offset_left = 12
-	panel.offset_top = 12
-	panel.offset_right = 520
-	panel.offset_bottom = 190
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.06, 0.08, 0.82)
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 10
-	style.content_margin_bottom = 10
-	panel.add_theme_stylebox_override("panel", style)
-	layer.add_child(panel)
 	_hud = Label.new()
-	_hud.add_theme_font_size_override("font_size", 14)
-	panel.add_child(_hud)
+	_hud.add_theme_font_size_override("font_size", 16)
+	_hud.add_theme_color_override("font_color", Color(0.95, 0.95, 0.95, 0.9))
+	_hud.position = Vector2(16, 12)
+	layer.add_child(_hud)
 
 	_status = Label.new()
-	_status.set_anchors_preset(Control.PRESET_CENTER)
-	_status.offset_left = -240
-	_status.offset_top = -20
-	_status.offset_right = 240
-	_status.offset_bottom = 20
-	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status.add_theme_font_size_override("font_size", 20)
-	_status.visible = false
+	_status.add_theme_color_override("font_color", Color(1, 0.92, 0.55))
+	_status.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_status.offset_top = -72
+	_status.offset_bottom = -40
+	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(_status)
 	_refresh_hud()
 
 
-func _process(delta: float) -> void:
-	if _generating:
-		return
-	if (_crowd == null or not is_instance_valid(_crowd)) and (
-		_vehicles == null or not is_instance_valid(_vehicles)
-	):
-		return
-	_hud_lod_accum += delta
-	if _hud_lod_accum < 0.5:
-		return
-	_hud_lod_accum = 0.0
-	_refresh_hud()
-
-
 func _refresh_hud() -> void:
+	if _hud == null:
+		return
 	var meters_x := float(_generator.size_x) * VOXEL_SIZE
 	var meters_z := float(_generator.size_z) * VOXEL_SIZE
 	var height_m := float(_generator.max_building_height_vox) * VOXEL_SIZE
@@ -131,28 +109,32 @@ func _refresh_hud() -> void:
 	if _crowd != null and is_instance_valid(_crowd):
 		var dist := _crowd.get_lod_distances()
 		var tiers := _crowd.count_lod_tiers()
-		lod_line = (
-			"Crowd %d  ·  LOD near %.0fm / mid %.0fm  ·  skinned %d mid %d culled %d  ·  F9/F10"
-			% [crowd_count, dist.x, dist.y, tiers.x, tiers.y, tiers.z]
-		)
+		lod_line = "Crowd %d  ·  near %.0fm mid %.0fm  ·  skinned %d mid %d culled %d" % [
+			crowd_count, dist.x, dist.y, tiers.x, tiers.y, tiers.z
+		]
 	var traffic_line := "Traffic %d" % vehicle_count
 	if _vehicles != null and is_instance_valid(_vehicles):
-		var vt: Vector3i = _vehicles.count_lod_tiers()
+		var vt := _vehicles.count_lod_tiers()
 		traffic_line = "Traffic %d  ·  near %d mid %d culled %d" % [vehicle_count, vt.x, vt.y, vt.z]
 	_hud.text = (
-		"Street-level city POC (godot_voxel)\n"
-		+ "Map ~%.0f×%.0fm  ·  towers up to %.0fm  ·  seed %d\n\n"
-		% [meters_x, meters_z, height_m, city_seed]
-		+ "Sidewalks + curbs · crosswalks · cars with passengers · street lights\n\n"
-		+ "WASD walk  ·  Shift sprint  ·  Mouse look  ·  Wheel zoom\n"
-		+ "LMB dig  ·  +/- size  ·  C character  ·  Tab free mouse  ·  R new city  ·  Esc quit\n"
-		+ lod_line
-		+ "\n"
-		+ traffic_line
+		"City POC  ·  seed %d  ·  %.0f×%.0f m  ·  max %.0f m\n%s\n%s\nWASD move  ·  dig LMB  ·  R new seed  ·  F9/F10 crowd LOD"
+		% [city_seed, meters_x, meters_z, height_m, lod_line, traffic_line]
 	)
 
 
+func _process(delta: float) -> void:
+	_hud_lod_accum += delta
+	if _hud_lod_accum < 0.5:
+		return
+	_hud_lod_accum = 0.0
+	if _crowd != null and is_instance_valid(_crowd):
+		_refresh_hud()
+
+
 func _create_terrain() -> void:
+	if _preload_viewer != null and is_instance_valid(_preload_viewer):
+		_preload_viewer.queue_free()
+		_preload_viewer = null
 	if _terrain != null and is_instance_valid(_terrain):
 		_terrain.queue_free()
 		_terrain = null
@@ -164,7 +146,8 @@ func _create_terrain() -> void:
 	_terrain.generate_collisions = true
 	_terrain.collision_layer = 1
 	_terrain.collision_mask = 1
-	_terrain.max_view_distance = 640
+	# Must cover district half-diagonal so edits stay resident (no stream → unload = air).
+	_terrain.max_view_distance = 512
 	var sx := float(_generator.size_x)
 	var sz := float(_generator.size_z)
 	var height := float(_generator.max_building_height_vox + 16)
@@ -180,19 +163,21 @@ func _create_terrain() -> void:
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 
 
-func _ensure_preload_viewer() -> void:
+func _ensure_district_anchor_viewer() -> void:
+	## Permanent center viewer keeps the whole stamped district loaded.
 	if _preload_viewer != null and is_instance_valid(_preload_viewer):
-		return
+		_preload_viewer.queue_free()
 	_preload_viewer = VoxelViewer.new()
-	_preload_viewer.name = "PreloadViewer"
-	_preload_viewer.view_distance = 640
-	_preload_viewer.requires_collisions = true
+	_preload_viewer.name = "DistrictAnchorViewer"
+	_preload_viewer.view_distance = 512
 	_preload_viewer.requires_visuals = true
+	_preload_viewer.requires_collisions = true
 	add_child(_preload_viewer)
-	var cx := float(_generator.size_x) * 0.5
-	var cz := float(_generator.size_z) * 0.5
-	var cy := float(_generator.max_building_height_vox) * 0.5
-	_preload_viewer.global_position = Vector3(cx * VOXEL_SIZE, cy * VOXEL_SIZE, cz * VOXEL_SIZE)
+	_preload_viewer.global_position = Vector3(
+		float(_generator.size_x) * 0.5 * VOXEL_SIZE,
+		float(_generator.max_building_height_vox) * 0.5 * VOXEL_SIZE,
+		float(_generator.size_z) * 0.5 * VOXEL_SIZE
+	)
 
 
 func _wait_district_editable() -> bool:
@@ -202,11 +187,12 @@ func _wait_district_editable() -> bool:
 		float(_generator.size_z)
 	)
 	var box := AABB(Vector3.ZERO, size)
+	var max_frames := 3600
 	var guard := 0
-	while not _tool.is_area_editable(box) and guard < 900:
+	while not _tool.is_area_editable(box) and guard < max_frames:
 		guard += 1
-		if guard % 30 == 0:
-			_status.text = "Loading voxels… (%d)" % guard
+		if guard % 45 == 0:
+			_status.text = "Loading voxels… %d / %d" % [guard, max_frames]
 		await get_tree().process_frame
 	return _tool.is_area_editable(box)
 
@@ -260,14 +246,12 @@ func _settle_walker_on_floor(spawn: Vector3) -> void:
 			break
 		await get_tree().physics_frame
 	if found:
-		# Capsule bottom sits ~0.1 above CharacterBody origin.
 		_walker.global_position = Vector3(spawn.x, floor_y + 0.12, spawn.z)
 	else:
 		push_warning("CityRoot: no floor ray hit at spawn; using raised spawn Y")
 		_walker.global_position = spawn
 	_walker.velocity = Vector3.ZERO
 	_walker.set_physics_process(true)
-	# One slide frame to snap without building fall speed.
 	await get_tree().physics_frame
 	if is_instance_valid(_walker) and not _walker.is_on_floor():
 		_walker.global_position.y += 0.5
@@ -299,7 +283,7 @@ func _regenerate() -> void:
 		_street_props = null
 
 	_create_terrain()
-	_ensure_preload_viewer()
+	_ensure_district_anchor_viewer()
 	await get_tree().process_frame
 	await get_tree().process_frame
 
@@ -316,9 +300,7 @@ func _regenerate() -> void:
 	_generator.generate(_tool, city_seed)
 
 	var spawn := _generator.find_spawn_world(_tool)
-	# Park preload viewer on the spawn so collisions stream in under the player.
-	if _preload_viewer != null and is_instance_valid(_preload_viewer):
-		_preload_viewer.global_position = spawn + Vector3(0.0, 8.0, 0.0)
+	# Keep district anchor at center so distant stamped voxels are not unloaded → air.
 
 	_status.text = "Waiting for ground collisions…"
 	var spawn_area := _spawn_neighborhood_aabb(spawn, 56.0)
@@ -339,7 +321,6 @@ func _regenerate() -> void:
 	player_viewer.requires_collisions = true
 	cam.add_child(player_viewer)
 
-	# Settle onto the floor once collisions exist (avoids tunneling on first frames).
 	await _settle_walker_on_floor(spawn)
 
 	var half_x := float(_generator.size_x) * VOXEL_SIZE * 0.5
@@ -348,9 +329,21 @@ func _regenerate() -> void:
 	if to.length_squared() > 0.01:
 		_walker.set_yaw(atan2(-to.x, -to.z))
 
-	_status.text = "Building pedestrian roadmap…"
+	_status.text = "Building street navigation…"
 	await get_tree().process_frame
-	var ped_map := _generator.build_ped_roadmap(_tool, 2)
+	var nav_layers := _generator.build_street_nav(_tool)
+	if nav_layers == null or not nav_layers.is_ready():
+		push_error("CityRoot: StreetNavLayers failed — crowd/traffic disabled")
+		_status.visible = false
+		_generating = false
+		_refresh_hud()
+		return
+
+	var ped_map := PedRoadMap.new()
+	ped_map.bind_graph(nav_layers.ped, nav_layers)
+	var car_map := CarRoadMap.new()
+	car_map.bind_graph(nav_layers.road, nav_layers)
+
 	_status.text = "Spawning crowd…"
 	await get_tree().process_frame
 	_crowd = CrowdDirectorScript.new()
@@ -359,9 +352,6 @@ func _regenerate() -> void:
 	add_child(_crowd)
 	_crowd.setup(ped_map, cam, city_seed)
 
-	_status.text = "Building car roadmap…"
-	await get_tree().process_frame
-	var car_map := _generator.build_car_roadmap(_tool, 2)
 	_status.text = "Spawning traffic…"
 	await get_tree().process_frame
 	_vehicles = VehicleDirectorScript.new()
@@ -369,6 +359,7 @@ func _regenerate() -> void:
 	_vehicles.vehicle_count = vehicle_count
 	add_child(_vehicles)
 	_vehicles.setup(car_map, cam, city_seed)
+	_vehicles.bind_crowd(_crowd)
 
 	_status.text = "Placing street lights…"
 	await get_tree().process_frame
@@ -399,6 +390,7 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
 	_tool.do_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
+	# TODO: dig-time StreetNavLayers rebuild — cars/peds still use pre-blast planner graphs.
 
 
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:

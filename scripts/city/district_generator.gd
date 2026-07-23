@@ -4,6 +4,7 @@ extends RefCounted
 
 const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
 const CarRoadMapScript := preload("res://scripts/city/car_roadmap.gd")
+const StreetNavLayersScript := preload("res://scripts/city/street_nav_layers.gd")
 const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
 const PlazaComposerScript := preload("res://scripts/city/plaza_composer.gd")
 const ParkComposerScript := preload("res://scripts/city/park_composer.gd")
@@ -11,95 +12,196 @@ const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 
 @export var city_seed: int = 42
-## Rectangular district in voxels (0.5 m each). Default 640×448 → 320×224 m.
-@export var size_x: int = 640
-@export var size_z: int = 448
+## Rectangular district in voxels (0.5 m each). Default 784×560 → 392×280 m.
+@export var size_x: int = 784
+@export var size_z: int = 560
 ## Kept for older callers; equals max(size_x, size_z).
-@export var size_xz: int = 640
+@export var size_xz: int = 784
 @export var ground_thickness: int = 1
-## 200 voxels * 0.5 m = 100 m.
+## 200 voxels * 0.5 m = 100 m ceiling.
 @export var max_building_height_vox: int = 200
-@export var floor_height_vox: int = 3
+## Typical residential floor-to-floor ≈ 3.0 m.
+@export var floor_height_vox: int = 6
 @export var voxel_size: float = 0.5
-@export var cell_size: int = 10
+## Planner cell ≈ 14 m — mid-size city lot / street ROW (euro mid-rise depth).
+@export var cell_size: int = 28
 
 var _rng := RandomNumberGenerator.new()
 var _brush: CityBrush
 var _planner: DistrictPlanner
+var _plaza: PlazaComposer
+var _park: ParkComposer
+var _grammar: BuildingGrammar
 
 
 func generate(tool: VoxelTool, seed_value: int = -1) -> void:
+	## One-shot stamp — requires the full district AABB to already be editable.
+	begin_generate(tool, seed_value)
+	paint_tile(0, 0, size_x, size_z)
+	end_generate()
+
+
+func begin_generate(tool: VoxelTool, seed_value: int = -1) -> void:
 	if seed_value >= 0:
 		city_seed = seed_value
 	_rng.seed = city_seed
 	size_xz = maxi(size_x, size_z)
 	_brush = CityBrushScript.new(tool)
-
-	_brush.fill_box(
-		Vector3i(0, 0, 0),
-		Vector3i(size_x, max_building_height_vox + 8, size_z),
-		VoxelMaterial.AIR
-	)
-	_brush.fill_box(
-		Vector3i(0, 0, 0),
-		Vector3i(size_x, ground_thickness, size_z),
-		VoxelMaterial.BEDROCK
-	)
-
 	_planner = DistrictPlannerScript.new()
 	_planner.build(size_x, size_z, city_seed, cell_size)
 
-	var plaza := PlazaComposerScript.new()
-	plaza.brush = _brush
-	plaza.rng = _rng
-	plaza.ground_y = ground_thickness
+	_plaza = PlazaComposerScript.new()
+	_plaza.brush = _brush
+	_plaza.rng = _rng
+	_plaza.ground_y = ground_thickness
 
-	var park := ParkComposerScript.new()
-	park.brush = _brush
-	park.rng = _rng
-	park.ground_y = ground_thickness
+	_park = ParkComposerScript.new()
+	_park.brush = _brush
+	_park.rng = _rng
+	_park.ground_y = ground_thickness
 
-	var grammar := BuildingGrammarScript.new()
-	grammar.brush = _brush
-	grammar.rng = _rng
-	grammar.floor_height = maxi(floor_height_vox, 4)
-	grammar.ground_floor_height = 5
-	grammar.max_height = max_building_height_vox
-	grammar.park = park
+	_grammar = BuildingGrammarScript.new()
+	_grammar.brush = _brush
+	_grammar.rng = _rng
+	_grammar.floor_height = maxi(floor_height_vox, 6)
+	_grammar.ground_floor_height = 8  # ~4.0 m retail / lobby
+	_grammar.max_height = max_building_height_vox
+	_grammar.park = _park
 
-	for cz in range(_planner.cells_z):
-		for cx in range(_planner.cells_x):
-			var tag := _planner.tag_at(cx, cz)
-			var min_v := Vector3i(cx * cell_size, ground_thickness, cz * cell_size)
-			var max_v := Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size)
-			match tag:
-				LandUse.AVENUE:
-					_paint_street_cell(min_v, max_v, cx, cz, true)
-				LandUse.ROAD:
-					_paint_street_cell(min_v, max_v, cx, cz, false)
-				LandUse.PLAZA:
-					_paint_plaza_cell(min_v, max_v, cx, cz, plaza)
-				LandUse.PARK:
-					_paint_park_cell(min_v, max_v, cx, cz, park)
-				_:
-					_paint_lot(min_v, max_v, cx, cz, tag, grammar)
 
+func paint_tile(min_x: int, min_z: int, max_x: int, max_z: int) -> void:
+	## Clear + paint planner cells whose origins lie inside [min,max). Tile bounds must be editable.
+	## Multi-cell plaza/park *decoration* is deferred to decorate_open_spaces().
+	if _brush == null or _planner == null:
+		push_error("DistrictGenerator.paint_tile: call begin_generate() first")
+		return
+	min_x = clampi(min_x, 0, size_x)
+	max_x = clampi(max_x, 0, size_x)
+	min_z = clampi(min_z, 0, size_z)
+	max_z = clampi(max_z, 0, size_z)
+	if max_x <= min_x or max_z <= min_z:
+		return
+	var cx0 := min_x / cell_size
+	var cz0 := min_z / cell_size
+	var cx1 := (max_x - 1) / cell_size
+	var cz1 := (max_z - 1) / cell_size
+	var top := max_building_height_vox + 8
+	for cz in range(cz0, cz1 + 1):
+		for cx in range(cx0, cx1 + 1):
+			var cmin := Vector3i(cx * cell_size, 0, cz * cell_size)
+			var cmax := Vector3i((cx + 1) * cell_size, top, (cz + 1) * cell_size)
+			_brush.fill_box(cmin, cmax, VoxelMaterial.AIR)
+			_brush.fill_box(
+				Vector3i(cmin.x, 0, cmin.z),
+				Vector3i(cmax.x, ground_thickness, cmax.z),
+				VoxelMaterial.BEDROCK
+			)
+			_paint_cell(cx, cz)
+
+
+func decorate_open_spaces() -> void:
+	## Fancy plaza/park pass — call only once the full feature AABBs are editable.
+	if _brush == null or _planner == null or _plaza == null or _park == null:
+		return
+	var g := _planner.grand_plaza
+	if g.size.x > 0:
+		var gmin := Vector3i(g.position.x * cell_size, ground_thickness, g.position.y * cell_size)
+		var gmax := Vector3i(g.end.x * cell_size, ground_thickness + 1, g.end.y * cell_size)
+		_plaza.compose_grand(gmin, gmax)
+	for s in _planner.satellite_plazas:
+		var smin := Vector3i(s.position.x * cell_size, ground_thickness, s.position.y * cell_size)
+		var smax := Vector3i(s.end.x * cell_size, ground_thickness + 1, s.end.y * cell_size)
+		_plaza.compose_satellite(smin, smax)
+	var lp := _planner.large_park
+	if lp.size.x > 0:
+		var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
+		var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
+		_park.compose_large(pmin, pmax)
+
+
+func open_space_bounds() -> Array[AABB]:
+	## Voxel-space AABBs that decorate_open_spaces() will write (for streaming waits).
+	var out: Array[AABB] = []
+	if _planner == null:
+		return out
+	var y0 := float(ground_thickness)
+	var yh := 12.0
+	var g := _planner.grand_plaza
+	if g.size.x > 0:
+		out.append(
+			AABB(
+				Vector3(g.position.x * cell_size, y0, g.position.y * cell_size),
+				Vector3(g.size.x * cell_size, yh, g.size.y * cell_size)
+			)
+		)
+	for s in _planner.satellite_plazas:
+		out.append(
+			AABB(
+				Vector3(s.position.x * cell_size, y0, s.position.y * cell_size),
+				Vector3(s.size.x * cell_size, yh, s.size.y * cell_size)
+			)
+		)
+	var lp := _planner.large_park
+	if lp.size.x > 0:
+		out.append(
+			AABB(
+				Vector3(lp.position.x * cell_size, y0, lp.position.y * cell_size),
+				Vector3(lp.size.x * cell_size, yh, lp.size.y * cell_size)
+			)
+		)
+	return out
+
+
+func end_generate() -> void:
 	_brush = null
+	_plaza = null
+	_park = null
+	_grammar = null
+
+
+func _paint_cell(cx: int, cz: int) -> void:
+	var tag := _planner.tag_at(cx, cz)
+	var min_v := Vector3i(cx * cell_size, ground_thickness, cz * cell_size)
+	var max_v := Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size)
+	match tag:
+		LandUse.AVENUE:
+			_paint_street_cell(min_v, max_v, cx, cz, true)
+		LandUse.ROAD:
+			_paint_street_cell(min_v, max_v, cx, cz, false)
+		LandUse.PLAZA:
+			_paint_plaza_cell(min_v, max_v, cx, cz, _plaza)
+		LandUse.PARK:
+			_paint_park_cell(min_v, max_v, cx, cz, _park)
+		_:
+			_paint_lot(min_v, max_v, cx, cz, tag, _grammar)
 
 
 func get_planner() -> DistrictPlanner:
 	return _planner
 
 
-func build_ped_roadmap(tool: VoxelTool, stride: int = 2) -> PedRoadMap:
+func build_street_nav(tool: VoxelTool) -> StreetNavLayers:
+	if _planner == null:
+		push_error("DistrictGenerator.build_street_nav: planner missing — call generate() first")
+		return null
+	var layers: StreetNavLayers = StreetNavLayersScript.new()
+	layers.build(_planner, tool, cell_size, ground_thickness, voxel_size)
+	return layers
+
+
+func build_ped_roadmap(tool: VoxelTool, _stride: int = 2) -> PedRoadMap:
+	var layers := build_street_nav(tool)
 	var map: PedRoadMap = PedRoadMapScript.new()
-	map.build_from_district(tool, size_x, size_z, ground_thickness, voxel_size, stride)
+	if layers != null and layers.ped != null:
+		map.bind_graph(layers.ped, layers)
 	return map
 
 
-func build_car_roadmap(tool: VoxelTool, stride: int = 2) -> CarRoadMap:
+func build_car_roadmap(tool: VoxelTool, _stride: int = 2) -> CarRoadMap:
+	var layers := build_street_nav(tool)
 	var map: CarRoadMap = CarRoadMapScript.new()
-	map.build_from_district(tool, size_x, size_z, ground_thickness, voxel_size, stride)
+	if layers != null and layers.road != null:
+		map.bind_graph(layers.road, layers)
 	return map
 
 
@@ -137,6 +239,11 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 	return Vector3(float(cx) * vs, spawn_y, float(cz) * vs)
 
 
+func _sidewalk_depth_vox() -> int:
+	## ~2.0–2.5 m sidewalk band inside the street cell.
+	return clampi(int(round(2.0 / voxel_size)), 3, maxi(3, cell_size / 6))
+
+
 func _paint_street_cell(min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, avenue: bool) -> void:
 	## Sidewalk corridors on both sides, curb step, asphalt carriageway.
 	var y := ground_thickness
@@ -147,7 +254,7 @@ func _paint_street_cell(min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, aven
 	# Base fill sidewalk so edges connect to lots.
 	_brush.fill_box(min_v, max_v, VoxelMaterial.SIDEWALK)
 
-	var sw := 2  # sidewalk depth
+	var sw := _sidewalk_depth_vox()
 	var curb := 1
 	if intersection:
 		# Asphalt diamond/cross in the middle; sidewalks on corners; crosswalks bridging.
@@ -267,7 +374,7 @@ func _should_crosswalk(cx: int, cz: int) -> bool:
 func _paint_crosswalk_bridges(min_v: Vector3i, max_v: Vector3i) -> void:
 	## Stripe bands connecting opposite sidewalks across the carriageway.
 	var y := ground_thickness
-	var sw := 2
+	var sw := _sidewalk_depth_vox()
 	# East-west stripes along N and S edges of the asphalt.
 	for i in range(min_v.x + sw, max_v.x - sw):
 		if (i % 2) != 0:
@@ -329,11 +436,13 @@ func _paint_lot(
 	grammar: BuildingGrammar
 ) -> void:
 	_brush.fill_box(min_v, max_v, VoxelMaterial.SIDEWALK)
-	var bmin := min_v + Vector3i(1, 0, 1)
-	var bmax := max_v - Vector3i(1, 0, 1)
-	if bmax.x - bmin.x < 3 or bmax.z - bmin.z < 3:
+	# Small private setback (~0.5–1.0 m) — footprint stays ~12–13 m on a 14 m lot.
+	var ring := 1 if cell_size < 20 else 2
+	var bmin := min_v + Vector3i(ring, 0, ring)
+	var bmax := max_v - Vector3i(ring, 0, ring)
+	if bmax.x - bmin.x < 6 or bmax.z - bmin.z < 6:
 		return
-	# Zone-based height caps (meters → vox via grammar.max_height).
+	# Zone-based height caps (meters → vox via grammar.max_height). 100 m ceiling in core.
 	var saved := grammar.max_height
 	match zone:
 		LandUse.CORE_LOT, LandUse.CIVIC_LOT:
@@ -343,7 +452,7 @@ func _paint_lot(
 		LandUse.TOWN_LOT:
 			grammar.max_height = mini(saved, 80)  # 40 m
 		LandUse.COURTYARD_LOT:
-			grammar.max_height = mini(saved, 72)
+			grammar.max_height = mini(saved, 72)  # 36 m
 		_:
 			pass
 	var facing := _planner.street_facing(cx, cz)

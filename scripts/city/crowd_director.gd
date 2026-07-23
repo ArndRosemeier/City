@@ -12,11 +12,17 @@ const PedOutfitScript := preload("res://scripts/humans/ped_outfit.gd")
 @export var near_distance_min: float = 5.0
 @export var near_distance_max: float = 250.0
 @export var near_distance_step: float = 5.0
-@export var decision_min_sec: float = 10.0
-@export var decision_max_sec: float = 60.0
-@export var walk_goal_min_m: float = 10.0
-@export var walk_goal_max_m: float = 45.0
+## Rare pause window when a ped chooses to stay (exception, not the rule).
+@export var stay_min_sec: float = 1.2
+@export var stay_max_sec: float = 4.0
+## Brief pause between consecutive walks.
+@export var rewalk_min_sec: float = 0.05
+@export var rewalk_max_sec: float = 0.7
+@export var walk_goal_min_m: float = 12.0
+@export var walk_goal_max_m: float = 55.0
 @export var lod_interval_sec: float = 0.35
+## Probability that a decision picks WALK (idle is the exception).
+@export var walk_decision_chance: float = 0.92
 
 var _agents: Array[PedAgent] = []
 var _roadmap: PedRoadMap
@@ -89,6 +95,20 @@ func get_skinned_count() -> int:
 	return _skinned_count
 
 
+func collect_positions() -> Array:
+	## Allocating copy — prefer agents_for_occupancy() for hot paths.
+	var out: Array = []
+	out.resize(_agents.size())
+	for i in range(_agents.size()):
+		out[i] = _agents[i].position
+	return out
+
+
+func agents_for_occupancy() -> Array:
+	## Zero-copy agent list for StreetNavLayers occupancy refresh.
+	return _agents
+
+
 func count_lod_tiers() -> Vector3i:
 	var near_n := 0
 	var mid_n := 0
@@ -134,11 +154,12 @@ func _spawn_agents() -> void:
 		agent.position = _roadmap.positions[spawn_node]
 		agent.yaw = _rng.randf_range(0.0, TAU)
 		agent.female = _rng.randf() < 0.5
-		agent.walk_tendency = clampf(_rng.randfn(0.55, 0.22), 0.05, 0.95)
-		agent.walk_speed = _rng.randf_range(1.1, 1.7)
+		# High walk bias; per-agent flavor still varies a little.
+		agent.walk_tendency = clampf(_rng.randfn(walk_decision_chance, 0.04), 0.82, 0.99)
+		agent.walk_speed = _rng.randf_range(1.15, 1.85)
 		agent.body_scale = _rng.randf_range(0.92, 1.08)
 		agent.outfit = PedOutfitScript.random(_rng, agent.female)
-		agent.next_decision_at = _time + _rng.randf_range(0.5, decision_max_sec)
+		agent.next_decision_at = _time + _rng.randf_range(0.0, 0.8)
 		agent.clear_path()
 		agent.lod = PedAgent.Lod.CULLED
 		agent.visual = null
@@ -166,10 +187,7 @@ func _simulate_agents(delta: float) -> void:
 		if agent.state != PedAgent.State.WALK:
 			continue
 		if agent.path_i >= agent.waypoints.size():
-			agent.clear_path()
-			agent.next_decision_at = _time + _rng.randf_range(
-				decision_min_sec * 0.35, decision_max_sec * 0.5
-			)
+			_finish_walk(agent)
 			continue
 		var target: Vector3 = agent.waypoints[agent.path_i]
 		var to := target - agent.position
@@ -178,15 +196,14 @@ func _simulate_agents(delta: float) -> void:
 		if dist_sq < 0.16:
 			agent.path_i += 1
 			if agent.path_i >= agent.waypoints.size():
-				agent.clear_path()
-				agent.next_decision_at = _time + _rng.randf_range(
-					decision_min_sec * 0.35, decision_max_sec * 0.5
-				)
+				_finish_walk(agent)
 			continue
 		var step := agent.walk_speed * delta
 		if dist_sq <= step * step:
 			agent.position = Vector3(target.x, _ground_y, target.z)
 			agent.path_i += 1
+			if agent.path_i >= agent.waypoints.size():
+				_finish_walk(agent)
 		else:
 			var dir := to / sqrt(dist_sq)
 			agent.yaw = atan2(-dir.x, -dir.z)
@@ -194,26 +211,75 @@ func _simulate_agents(delta: float) -> void:
 			agent.position.y = _ground_y
 
 
+func _finish_walk(agent: PedAgent) -> void:
+	agent.clear_path()
+	_leave_carriageway_if_needed(agent)
+	# Chain another walk almost immediately — standing is rare.
+	agent.next_decision_at = _time + _rng.randf_range(rewalk_min_sec, rewalk_max_sec)
+
+
+func _leave_carriageway_if_needed(agent: PedAgent) -> void:
+	## If a ped finished or paused on a crossing mid, snap to nearest curb/sidewalk.
+	if _roadmap == null or _roadmap.is_empty():
+		return
+	var node := _roadmap.nearest_node(agent.position)
+	if node < 0 or not _roadmap.is_crossing_node(node):
+		return
+	var curb := _roadmap.nearest_sidewalk_node(agent.position)
+	if curb < 0:
+		return
+	agent.position = _roadmap.positions[curb]
+	agent.position.y = _ground_y
+
+
 func _decide(agent: PedAgent) -> void:
-	agent.next_decision_at = _time + _rng.randf_range(decision_min_sec, decision_max_sec)
 	if _roadmap == null or _roadmap.is_empty():
 		agent.clear_path()
+		agent.next_decision_at = _time + stay_max_sec
 		return
-	if _rng.randf() > agent.walk_tendency:
+	_leave_carriageway_if_needed(agent)
+	# Idle is the exception.
+	var walk_roll := _rng.randf()
+	var will_walk := walk_roll <= agent.walk_tendency
+	if not will_walk:
 		agent.clear_path()
+		_leave_carriageway_if_needed(agent)
+		agent.next_decision_at = _time + _rng.randf_range(stay_min_sec, stay_max_sec)
 		return
-	var from_node := _roadmap.nearest_node(agent.position)
+	var from_node := _roadmap.nearest_sidewalk_node(agent.position)
+	if from_node < 0:
+		from_node = _roadmap.nearest_node(agent.position)
+	if from_node < 0:
+		agent.clear_path()
+		agent.next_decision_at = _time + stay_max_sec
+		return
 	var to_node := _roadmap.random_goal_node(
 		from_node, walk_goal_min_m, walk_goal_max_m, _rng
 	)
 	if to_node < 0 or to_node == from_node:
-		agent.clear_path()
-		return
+		var nbrs: PackedInt32Array = _roadmap.neighbors[from_node]
+		if nbrs.is_empty():
+			agent.clear_path()
+			agent.next_decision_at = _time + stay_max_sec
+			return
+		# Prefer a non-crossing neighbor when leaving the curb.
+		to_node = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
+		for _pick in range(mini(nbrs.size(), 4)):
+			var cand: int = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
+			if not _roadmap.is_crossing_node(cand):
+				to_node = cand
+				break
 	var nodes := _roadmap.find_path(from_node, to_node)
 	if nodes.size() < 2:
-		agent.clear_path()
-		return
+		var nbrs2: PackedInt32Array = _roadmap.neighbors[from_node]
+		if nbrs2.is_empty():
+			agent.clear_path()
+			agent.next_decision_at = _time + stay_max_sec
+			return
+		nodes = PackedInt32Array([from_node, nbrs2[_rng.randi_range(0, nbrs2.size() - 1)]])
 	agent.set_path(_roadmap.path_to_world(nodes))
+	# While walking, don't re-roll until the trip ends (_finish_walk schedules next).
+	agent.next_decision_at = _time + 600.0
 
 
 func _refresh_lod(_force: bool) -> void:

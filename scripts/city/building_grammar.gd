@@ -1,11 +1,12 @@
 ## Architectural building grammars for 0.5m voxels.
+## Footprints come from planner lots (~12–14 m mid-rise depth); height capped externally (~100 m).
 class_name BuildingGrammar
 extends RefCounted
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
-var floor_height: int = 3
-var ground_floor_height: int = 4
+var floor_height: int = 6
+var ground_floor_height: int = 8
 var max_height: int = 200
 var park: ParkComposer
 
@@ -45,7 +46,9 @@ func build_for_zone(
 
 func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 	var w := bmax.x - bmin.x
-	var units := maxi(1, w / 3)
+	# ~5.5–6.5 m frontage per townhouse (common mid-density row width).
+	var unit_w_target := 12
+	var units := maxi(1, w / unit_w_target)
 	var unit_w := w / units
 	for u in range(units):
 		var umin := Vector3i(bmin.x + u * unit_w, bmin.y, bmin.z)
@@ -109,12 +112,13 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 	_box_floors(bmin, bmax, podium_floors, VoxelMaterial.STONE if on_plaza else VoxelMaterial.CONCRETE, facing, true, true)
 	if on_plaza:
 		_arcade_ground(bmin, bmax, facing)
-	# Slender shaft inset
-	var inset := 2
+	# Shaft stays substantial (~8–12 m): inset scales with lot, not a tiny needle.
+	var lot_w := mini(bmax.x - bmin.x, bmax.z - bmin.z)
+	var inset := clampi(lot_w / 8, 2, 6)
 	var smin := bmin + Vector3i(inset, 0, inset)
 	var smax := bmax - Vector3i(inset, 0, inset)
-	if smax.x - smin.x < 4 or smax.z - smin.z < 4:
-		inset = 1
+	if smax.x - smin.x < 10 or smax.z - smin.z < 10:
+		inset = maxi(1, inset - 1)
 		smin = bmin + Vector3i(inset, 0, inset)
 		smax = bmax - Vector3i(inset, 0, inset)
 	var shaft_base_y := _floor_y(bmin.y, podium_floors)
@@ -129,7 +133,7 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 			crown_inset = 2
 		var fmin := Vector3i(smin.x + crown_inset, y0, smin.z + crown_inset)
 		var fmax := Vector3i(smax.x - crown_inset, y0 + floor_height, smax.z - crown_inset)
-		if fmax.x - fmin.x < 3 or fmax.z - fmin.z < 3:
+		if fmax.x - fmin.x < 6 or fmax.z - fmin.z < 6:
 			break
 		_fill_shell(fmin, fmax, VoxelMaterial.METAL, facing, false, true, f == 0)
 	var top := shaft_base_y + shaft_floors * floor_height
@@ -144,9 +148,12 @@ func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 	var floors := rng.randi_range(4, mini(8, max_height / floor_height - 2))
 	var wall := VoxelMaterial.BRICK if rng.randf() < 0.6 else VoxelMaterial.PLASTER
 	_box_floors(bmin, bmax, floors, wall, facing, true, false)
-	var hole_min := bmin + Vector3i(2, 1, 2)
-	var hole_max := Vector3i(bmax.x - 2, _floor_y(bmin.y, floors), bmax.z - 2)
-	if hole_max.x > hole_min.x + 2 and hole_max.z > hole_min.z + 2:
+	# Wing depth ~3–4 m around a central court (euroblock-ish on a single lot).
+	var lot_w := mini(bmax.x - bmin.x, bmax.z - bmin.z)
+	var wing := clampi(lot_w / 4, 5, 8)
+	var hole_min := bmin + Vector3i(wing, 1, wing)
+	var hole_max := Vector3i(bmax.x - wing, _floor_y(bmin.y, floors), bmax.z - wing)
+	if hole_max.x > hole_min.x + 3 and hole_max.z > hole_min.z + 3:
 		brush.fill_box(hole_min, hole_max, VoxelMaterial.AIR)
 		if park != null:
 			park.compose_courtyard_garden(hole_min, hole_max)

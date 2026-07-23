@@ -15,6 +15,8 @@ var visual: Node3D = null
 var waypoints: PackedVector3Array = PackedVector3Array()
 var path_i: int = 0
 var moving: bool = false
+var stuck_sec: float = 0.0
+var cruise_speed: float = 8.0
 
 
 func clear_path() -> void:

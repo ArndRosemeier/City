@@ -1,4 +1,4 @@
-## Spawns and simulates cars on CarRoadMap with LOD visuals + passengers.
+## Spawns and simulates cars on planner road graph with crossing yield + LOD visuals.
 class_name VehicleDirector
 extends Node3D
 
@@ -9,7 +9,6 @@ const VehicleCatalogScript := preload("res://scripts/vehicles/vehicle_catalog.gd
 @export var vehicle_count: int = 48
 @export var near_distance: float = 55.0
 @export var mid_distance: float = 120.0
-## Extra meters before demoting LOD — stops thrashing at the boundary.
 @export var lod_hysteresis_m: float = 18.0
 @export var trip_min_m: float = 20.0
 @export var trip_max_m: float = 180.0
@@ -18,14 +17,19 @@ const VehicleCatalogScript := preload("res://scripts/vehicles/vehicle_catalog.gd
 @export var cruise_speed_max: float = 12.0
 @export var turn_rate: float = 3.5
 @export var waypoint_reach_m: float = 0.85
+@export var stuck_error_sec: float = 8.0
+@export var crossing_occupancy_interval_sec: float = 0.12
 
 var _agents: Array[VehicleAgent] = []
 var _roadmap: CarRoadMap
+var _layers: StreetNavLayers
+var _crowd: CrowdDirector
 var _mid_mm: MultiMeshInstance3D
 var _rng := RandomNumberGenerator.new()
 var _camera: Camera3D
 var _time: float = 0.0
 var _lod_accum: float = 0.0
+var _occupancy_accum: float = 0.0
 var _ground_y: float = 1.0
 var _near_count: int = 0
 
@@ -38,6 +42,7 @@ func setup(roadmap: CarRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
 		_rng.randomize()
 	_camera = camera
 	_roadmap = roadmap
+	_layers = roadmap.layers() if roadmap != null else null
 	VehicleCatalogScript.reload()
 	if not VehicleCatalogScript.is_ready():
 		push_error("VehicleDirector: VehicleCatalog not ready — traffic disabled")
@@ -45,14 +50,21 @@ func setup(roadmap: CarRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
 	if _roadmap == null or _roadmap.is_empty():
 		push_error("VehicleDirector: empty car roadmap — traffic disabled")
 		return
+	if _roadmap.edge_count < 1:
+		push_error("VehicleDirector: car roadmap has no edges — traffic disabled")
+		return
 	_ground_y = _roadmap.ground_y
 	_build_mid_multimesh()
 	_spawn_agents()
 	_refresh_lod(true)
 	print(
-		"VehicleDirector: agents=%d roadmap_nodes=%d catalog=%d near=%d"
-		% [_agents.size(), _roadmap.node_count, VehicleCatalogScript.count(), _near_count]
+		"VehicleDirector: agents=%d roadmap_nodes=%d edges=%d catalog=%d near=%d"
+		% [_agents.size(), _roadmap.node_count, _roadmap.edge_count, VehicleCatalogScript.count(), _near_count]
 	)
+
+
+func bind_crowd(crowd: CrowdDirector) -> void:
+	_crowd = crowd
 
 
 func clear_vehicles() -> void:
@@ -67,6 +79,12 @@ func clear_vehicles() -> void:
 
 func vehicle_live_count() -> int:
 	return _agents.size()
+
+
+func sample_agent_position(index: int = 0) -> Vector3:
+	if index < 0 or index >= _agents.size():
+		return Vector3.ZERO
+	return _agents[index].position
 
 
 func count_lod_tiers() -> Vector3i:
@@ -85,12 +103,15 @@ func count_lod_tiers() -> Vector3i:
 
 
 func _build_mid_multimesh() -> void:
+	# Headless / dummy renderer cannot host BoxMesh RIDs — skip mid proxies.
+	if DisplayServer.get_name() == "headless":
+		_mid_mm = null
+		return
 	_mid_mm = MultiMeshInstance3D.new()
 	_mid_mm.name = "MidVehicleProxies"
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
-	# Fixed count — resizing instance_count every LOD change flickers all proxies.
 	mm.instance_count = maxi(vehicle_count, 1)
 	var box := BoxMesh.new()
 	box.size = Vector3(1.7, 0.55, 3.8)
@@ -127,7 +148,8 @@ func _spawn_agents() -> void:
 		var spawn_node := _roadmap.random_node(_rng)
 		agent.position = _roadmap.positions[spawn_node]
 		agent.yaw = _rng.randf_range(0.0, TAU)
-		agent.speed = _rng.randf_range(cruise_speed_min, cruise_speed_max)
+		agent.cruise_speed = _rng.randf_range(cruise_speed_min, cruise_speed_max)
+		agent.speed = agent.cruise_speed
 		var entry := VehicleCatalogScript.pick(_rng)
 		if entry.is_empty():
 			push_error("VehicleDirector: catalog.pick failed at agent %d" % i)
@@ -144,6 +166,7 @@ func _spawn_agents() -> void:
 		else:
 			agent.passenger_count = 1 + (_rng.randi() % 2)
 		agent.clear_path()
+		agent.stuck_sec = 0.0
 		agent.lod = VehicleAgent.Lod.CULLED
 		agent.visual = null
 		_assign_trip(agent)
@@ -154,6 +177,10 @@ func _physics_process(delta: float) -> void:
 	if _agents.is_empty():
 		return
 	_time += delta
+	_occupancy_accum += delta
+	if _occupancy_accum >= crossing_occupancy_interval_sec:
+		_occupancy_accum = 0.0
+		_refresh_crossing_occupancy()
 	_simulate(delta)
 	_lod_accum += delta
 	if _lod_accum >= lod_interval_sec:
@@ -161,6 +188,12 @@ func _physics_process(delta: float) -> void:
 		_refresh_lod(false)
 	_sync_near_visuals()
 	_sync_mid_proxies()
+
+
+func _refresh_crossing_occupancy() -> void:
+	if _layers == null or _crowd == null:
+		return
+	_layers.refresh_crossing_occupancy_agents(_crowd.agents_for_occupancy())
 
 
 func _assign_trip(agent: VehicleAgent) -> void:
@@ -180,18 +213,25 @@ func _assign_trip(agent: VehicleAgent) -> void:
 		if nbrs.is_empty():
 			agent.clear_path()
 			return
-		nodes = PackedInt32Array()
-		nodes.append(from_node)
-		nodes.append(nbrs[_rng.randi_range(0, nbrs.size() - 1)])
+		nodes = PackedInt32Array([from_node, nbrs[_rng.randi_range(0, nbrs.size() - 1)]])
 	agent.set_path(_roadmap.path_to_world(nodes))
+	agent.stuck_sec = 0.0
 
 
 func _simulate(delta: float) -> void:
 	var reach_r2 := waypoint_reach_m * waypoint_reach_m
-	for agent in _agents:
+	for i in range(_agents.size()):
+		var agent: VehicleAgent = _agents[i]
 		if not agent.moving or agent.path_i >= agent.waypoints.size():
 			_assign_trip(agent)
 			if not agent.moving:
+				agent.stuck_sec += delta
+				if agent.stuck_sec >= stuck_error_sec:
+					push_error(
+						"VehicleDirector: agent stuck with no path for %.1fs at %s"
+						% [agent.stuck_sec, str(agent.position)]
+					)
+					agent.stuck_sec = 0.0
 				continue
 		var target: Vector3 = agent.waypoints[agent.path_i]
 		var to := target - agent.position
@@ -199,21 +239,36 @@ func _simulate(delta: float) -> void:
 		var dist_sq := to.length_squared()
 		if dist_sq <= reach_r2:
 			agent.path_i += 1
+			agent.stuck_sec = 0.0
 			if agent.path_i >= agent.waypoints.size():
 				agent.clear_path()
 				_assign_trip(agent)
 			continue
+
+		# Crossing yield: stop when approaching occupied crosswalks.
+		var yield_now := false
+		if _layers != null:
+			yield_now = _layers.yielding_for_car(agent.position, target)
+		agent.speed = 0.0 if yield_now else agent.cruise_speed
+		if yield_now:
+			continue
+
 		var dist := sqrt(dist_sq)
 		var dir := to / dist
 		var desired_yaw := atan2(-dir.x, -dir.z)
 		agent.yaw = lerp_angle(agent.yaw, desired_yaw, clampf(turn_rate * delta, 0.0, 1.0))
-		# Translate straight at the waypoint — facing-only move orbits and never arrives.
-		var step := mini(agent.speed * delta, dist)
-		agent.position += dir * step
-		agent.position.y = _ground_y
+		var step := minf(agent.speed * delta, dist)
+		if step <= 0.0001:
+			agent.stuck_sec += delta
+			continue
+		var next_pos := agent.position + dir * step
+		next_pos.y = _ground_y
 		if dist - step <= waypoint_reach_m:
-			agent.position = Vector3(target.x, _ground_y, target.z)
+			next_pos = Vector3(target.x, _ground_y, target.z)
 			agent.path_i += 1
+		agent.position = next_pos
+		agent.stuck_sec = 0.0
+		_agents[i] = agent
 
 
 func _refresh_lod(force: bool) -> void:
@@ -257,6 +312,8 @@ func _refresh_lod(force: bool) -> void:
 
 
 func _ensure_visual(agent_index: int, agent: VehicleAgent) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	if agent.visual != null and is_instance_valid(agent.visual):
 		return
 	var entry := VehicleCatalogScript.entry_by_id(agent.catalog_id)
@@ -291,9 +348,11 @@ func _sync_near_visuals() -> void:
 
 
 func _sync_mid_proxies() -> void:
-	if _mid_mm == null:
+	if _mid_mm == null or not is_instance_valid(_mid_mm) or _mid_mm.get_parent() == null:
 		return
 	var mm := _mid_mm.multimesh
+	if mm == null:
+		return
 	if mm.instance_count < _agents.size():
 		mm.instance_count = _agents.size()
 	var hidden := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, -1000.0, 0.0))

@@ -27,7 +27,7 @@ if not exist "%ROOT%project.godot" (
     exit /b 1
 )
 
-echo Starting voxel city POC (godot_voxel, FPS walk, ~320x224m district)...
+echo Starting voxel city POC (godot_voxel, FPS walk, ~392x280m district)...
 echo   WASD walk   Mouse look   Wheel zoom   LMB dig   R new city   Esc quit
 echo   Sidewalks/curbs, traffic, street lights. Towers up to 100m.
 echo   Engine: %GODOT_EXE%

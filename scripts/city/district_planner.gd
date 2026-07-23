@@ -2,7 +2,7 @@
 class_name DistrictPlanner
 extends RefCounted
 
-var cell_size: int = 10
+var cell_size: int = 28
 var cells_x: int = 0
 var cells_z: int = 0
 ## grid[z][x] = LandUse tag
@@ -18,7 +18,7 @@ var avenue_light_cells: Array[Vector2i] = []
 var _rng := RandomNumberGenerator.new()
 
 
-func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 10) -> void:
+func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28) -> void:
 	cell_size = p_cell_size
 	cells_x = size_x / cell_size
 	cells_z = size_z / cell_size
@@ -46,7 +46,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 10) -> 
 
 
 ## Backward-compatible alias used by older call sites.
-func build_square(size_xz: int, seed_value: int, p_cell_size: int = 10) -> void:
+func build_square(size_xz: int, seed_value: int, p_cell_size: int = 28) -> void:
 	build(size_xz, size_xz, seed_value, p_cell_size)
 
 

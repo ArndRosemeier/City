@@ -36,10 +36,15 @@ func clear_path() -> void:
 
 
 func set_path(world_path: PackedVector3Array) -> void:
+	## Keep current world position — do not teleport onto the first waypoint
+	## (that used to drop idle/spawned peds onto crossing mids).
 	waypoints = world_path
 	path_i = 0
 	if waypoints.is_empty():
 		state = State.STAY
-	else:
-		state = State.WALK
-		position = waypoints[0]
+		return
+	state = State.WALK
+	if waypoints.size() >= 2:
+		var d0 := Vector2(position.x - waypoints[0].x, position.z - waypoints[0].z).length_squared()
+		if d0 < 1.0:
+			path_i = 1
