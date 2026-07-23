@@ -59,6 +59,14 @@ func set_hour(hour: float) -> void:
 	_apply(true)
 
 
+## Flip between midday and midnight (N key).
+func toggle_day_night() -> void:
+	if get_night_factor() >= 0.45:
+		set_hour(12.0)
+	else:
+		set_hour(0.0)
+
+
 func _process(delta: float) -> void:
 	if sun == null or environment == null or sky_material == null:
 		return

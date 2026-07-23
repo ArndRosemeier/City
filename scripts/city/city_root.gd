@@ -94,6 +94,9 @@ func _build_env() -> void:
 	e.fog_enabled = true
 	e.fog_light_color = Color(0.65, 0.72, 0.8)
 	e.fog_density = 0.0016
+	## Keep fog off the sky so clouds/stars stay visible.
+	e.fog_sky_affect = 0.0
+	e.fog_aerial_perspective = 0.0
 	e.glow_enabled = true
 	e.glow_intensity = 0.55
 	e.glow_strength = 0.85
@@ -114,10 +117,13 @@ func _build_env() -> void:
 	_day_night.call("setup", light, moon, e, sky_mat)
 	if _day_night.has_signal("night_factor_changed"):
 		_day_night.connect("night_factor_changed", _on_night_factor_changed)
+	if _day_night.has_method("get_night_factor"):
+		_on_night_factor_changed(float(_day_night.call("get_night_factor")))
 
 
 func _on_night_factor_changed(night_factor: float) -> void:
 	_street_night_factor = clampf(night_factor, 0.0, 1.0)
+	VoxelBlockLibrary.set_glass_lit_night_factor(_street_night_factor)
 	_push_night_factor_to_street_lights()
 
 
@@ -132,6 +138,9 @@ func _push_night_factor_to_street_lights() -> void:
 		if inst.street_props != null and is_instance_valid(inst.street_props):
 			if inst.street_props.has_method("set_night_factor"):
 				inst.street_props.call("set_night_factor", _street_night_factor)
+		if inst.building_lod != null and is_instance_valid(inst.building_lod):
+			if inst.building_lod.has_method("set_night_factor"):
+				inst.building_lod.call("set_night_factor", _street_night_factor)
 
 
 func _build_hud() -> void:
@@ -726,3 +735,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_ESCAPE:
 				get_tree().quit()
+			KEY_N:
+				if _day_night != null and _day_night.has_method("toggle_day_night"):
+					_day_night.call("toggle_day_night")
+				get_viewport().set_input_as_handled()

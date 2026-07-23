@@ -118,6 +118,17 @@ func _benches(min_v: Vector3i, max_v: Vector3i, count: int) -> void:
 
 
 func _tree(x: int, y0: int, z: int) -> void:
+	var recipe := rng.randi() % 3
+	match recipe:
+		0:
+			_tree_round(x, y0, z)
+		1:
+			_tree_tall(x, y0, z)
+		_:
+			_tree_wide(x, y0, z)
+
+
+func _tree_round(x: int, y0: int, z: int) -> void:
 	var trunk_h := 4 + rng.randi() % 3
 	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
 	var canopy_y := y0 + trunk_h
@@ -128,3 +139,47 @@ func _tree(x: int, y0: int, z: int) -> void:
 			brush.set_vox(Vector3i(x + dx, canopy_y, z + dz), VoxelMaterial.LEAVES)
 			if absi(dx) <= 1 and absi(dz) <= 1:
 				brush.set_vox(Vector3i(x + dx, canopy_y + 1, z + dz), VoxelMaterial.LEAVES)
+
+
+func _tree_tall(x: int, y0: int, z: int) -> void:
+	var trunk_h := 6 + rng.randi() % 3
+	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
+	var canopy_y := y0 + trunk_h
+	for layer in range(3):
+		var r := 1 if layer == 2 else 2
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if absi(dx) + absi(dz) > r + 1:
+					continue
+				brush.set_vox(Vector3i(x + dx, canopy_y + layer, z + dz), VoxelMaterial.LEAVES)
+
+
+func _tree_wide(x: int, y0: int, z: int) -> void:
+	var trunk_h := 3 + rng.randi() % 2
+	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
+	var canopy_y := y0 + trunk_h
+	for dz in range(-3, 4):
+		for dx in range(-3, 4):
+			if absi(dx) * absi(dx) + absi(dz) * absi(dz) > 10:
+				continue
+			brush.set_vox(Vector3i(x + dx, canopy_y, z + dz), VoxelMaterial.LEAVES)
+			if absi(dx) <= 1 and absi(dz) <= 1:
+				brush.set_vox(Vector3i(x + dx, canopy_y + 1, z + dz), VoxelMaterial.LEAVES)
+
+
+func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
+	## Cheap far plaza: a couple of trees + one bench stub.
+	var w := max_v.x - min_v.x
+	var d := max_v.z - min_v.z
+	if w < 8 or d < 8:
+		return
+	var cx := (min_v.x + max_v.x) / 2
+	var cz := (min_v.z + max_v.z) / 2
+	_tree_round(cx - 3, ground_y, cz - 2)
+	if w > 14:
+		_tree_tall(cx + 4, ground_y, cz + 3)
+	brush.fill_box(
+		Vector3i(cx, ground_y + 1, cz),
+		Vector3i(cx + 2, ground_y + 2, cz + 1),
+		VoxelMaterial.PLANTER
+	)

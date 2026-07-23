@@ -30,8 +30,9 @@ const LEAVES := 24
 const STONE := 25
 const METAL_PLATE := 26
 const PAINT := 27
+const GLASS_LIT := 28
 
-const COUNT := 28
+const COUNT := 29
 
 
 static func is_solid(id: int) -> bool:
@@ -85,6 +86,8 @@ static func color(id: int) -> Color:
 			return Color(0.38, 0.18, 0.14)
 		GLASS:
 			return Color(0.45, 0.65, 0.82, 0.85)
+		GLASS_LIT:
+			return Color(1.0, 0.85, 0.45, 0.95)
 		PLAZA:
 			return Color(0.72, 0.68, 0.58)
 		TILES:

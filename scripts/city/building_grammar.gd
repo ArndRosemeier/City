@@ -56,12 +56,12 @@ func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 		if u == units - 1:
 			umax.x = bmax.x
 		var floors := rng.randi_range(3, 5)
-		var wall := VoxelMaterial.BRICK if (u % 2 == 0) else VoxelMaterial.BRICK_DARK
-		if rng.randf() < 0.25:
-			wall = VoxelMaterial.PLASTER
+		var wall := _pick_wall_mat(true)
 		_box_floors(umin, umax, floors, wall, facing, true, false)
 		_gable_roof(umin, umax, floors, facing)
 		_stoop(umin, umax, facing)
+		_add_awnings(umin, umax, facing, true)
+		_add_balconies(umin, umax, floors, facing, 0.55)
 		# Chimney
 		if rng.randf() < 0.6:
 			var chx := (umin.x + umax.x) / 2
@@ -73,16 +73,22 @@ func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 func midrise_classic(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -> void:
 	var max_floors := maxi(5, max_height / floor_height)
 	var floors := rng.randi_range(maxi(5, max_floors / 2), max_floors - 2)
-	var wall := VoxelMaterial.BRICK if rng.randf() < 0.5 else VoxelMaterial.PLASTER
+	var wall := _pick_wall_mat(false)
 	var base_mat := VoxelMaterial.STONE if on_plaza else VoxelMaterial.CONCRETE
 	_tripartite(bmin, bmax, floors, base_mat, wall, facing, on_plaza, true)
+	_retail_storefront(bmin, bmax, facing)
+	_add_awnings(bmin, bmax, facing, false)
+	_add_balconies(bmin, bmax, floors, facing, 0.4)
 	_flat_roof_parapet(bmin, bmax, floors, VoxelMaterial.ROOF)
+	_roof_clutter(bmin, bmax, floors)
 
 
 func midrise_modern(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -> void:
 	var max_floors := maxi(5, max_height / floor_height)
 	var floors := rng.randi_range(maxi(5, max_floors / 2), max_floors - 1)
-	var wall := VoxelMaterial.PLASTER if rng.randf() < 0.6 else VoxelMaterial.CONCRETE
+	var wall := VoxelMaterial.PLASTER if rng.randf() < 0.45 else (
+		VoxelMaterial.CONCRETE if rng.randf() < 0.55 else VoxelMaterial.METAL
+	)
 	_box_floors(bmin, bmax, floors, wall, facing, true, true)
 	# Soft upper setbacks
 	if floors > 6:
@@ -100,7 +106,10 @@ func midrise_modern(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool)
 				Vector3i(bmax.x, y0 + fh, bmax.z),
 				VoxelMaterial.AIR
 			)
+	_retail_storefront(bmin, bmax, facing)
+	_add_balconies(bmin, bmax, floors, facing, 0.25)
 	_flat_roof_parapet(bmin, bmax, floors, VoxelMaterial.ROOF)
+	_roof_clutter(bmin, bmax, floors)
 	if on_plaza:
 		_arcade_ground(bmin, bmax, facing)
 
@@ -110,6 +119,7 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 	var shaft_floors := max_height / floor_height - podium_floors
 	# Podium fills lot
 	_box_floors(bmin, bmax, podium_floors, VoxelMaterial.STONE if on_plaza else VoxelMaterial.CONCRETE, facing, true, true)
+	_retail_storefront(bmin, bmax, facing)
 	if on_plaza:
 		_arcade_ground(bmin, bmax, facing)
 	# Shaft stays substantial (~8–12 m): inset scales with lot, not a tiny needle.
@@ -142,11 +152,16 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 		Vector3i(smax.x - 1, top + 2, smax.z - 1),
 		VoxelMaterial.METAL_PLATE
 	)
+	_roof_clutter(
+		Vector3i(smin.x, bmin.y, smin.z),
+		Vector3i(smax.x, bmin.y, smax.z),
+		podium_floors + shaft_floors
+	)
 
 
 func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 	var floors := rng.randi_range(4, mini(8, max_height / floor_height - 2))
-	var wall := VoxelMaterial.BRICK if rng.randf() < 0.6 else VoxelMaterial.PLASTER
+	var wall := _pick_wall_mat(false)
 	_box_floors(bmin, bmax, floors, wall, facing, true, false)
 	# Wing depth ~3–4 m around a central court (euroblock-ish on a single lot).
 	var lot_w := mini(bmax.x - bmin.x, bmax.z - bmin.z)
@@ -163,7 +178,9 @@ func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 				Vector3i(hole_max.x, bmin.y + 1, hole_max.z),
 				VoxelMaterial.PARK
 			)
+	_add_balconies(bmin, bmax, floors, facing, 0.35)
 	_flat_roof_parapet(bmin, bmax, floors, VoxelMaterial.ROOF_CLAY if rng.randf() < 0.4 else VoxelMaterial.ROOF)
+	_roof_clutter(bmin, bmax, floors)
 
 
 func civic_landmark(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
@@ -351,7 +368,9 @@ func _punch_facade_cell(
 		brush.set_vox(Vector3i(x, y, z), VoxelMaterial.AIR)
 		return
 	if _is_window_cell(x, y, z, min_v, max_v, ribbon_windows, is_ground):
-		brush.set_vox(Vector3i(x, y, z), VoxelMaterial.GLASS)
+		## A fraction of panes stay lit at night (emissive glass variant).
+		var glass_id := VoxelMaterial.GLASS_LIT if rng.randf() < 0.28 else VoxelMaterial.GLASS
+		brush.set_vox(Vector3i(x, y, z), glass_id)
 
 
 func _is_door_cell(x: int, y: int, z: int, min_v: Vector3i, max_v: Vector3i, facing: int) -> bool:
@@ -509,3 +528,133 @@ func _grand_steps(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 					Vector3i(bmin.x - s, bmin.y + s + 1, cz + 4 - s),
 					VoxelMaterial.STONE
 				)
+
+
+func _pick_wall_mat(townhouse: bool) -> int:
+	## Per-lot palette variety standing in for albedo tint (Blocky IDs are discrete).
+	var roll := rng.randf()
+	if townhouse:
+		if roll < 0.35:
+			return VoxelMaterial.BRICK
+		if roll < 0.6:
+			return VoxelMaterial.BRICK_DARK
+		if roll < 0.85:
+			return VoxelMaterial.PLASTER
+		return VoxelMaterial.STONE
+	if roll < 0.28:
+		return VoxelMaterial.BRICK
+	if roll < 0.48:
+		return VoxelMaterial.BRICK_DARK
+	if roll < 0.72:
+		return VoxelMaterial.PLASTER
+	if roll < 0.88:
+		return VoxelMaterial.CONCRETE
+	return VoxelMaterial.STONE
+
+
+func _retail_storefront(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
+	## Shallow protruding storefront band + glass on the facing ground floor.
+	if rng.randf() < 0.35:
+		return
+	var y0 := bmin.y + 1
+	var y1 := mini(bmin.y + ground_floor_height - 1, bmin.y + 5)
+	var mat := VoxelMaterial.METAL_PLATE if rng.randf() < 0.4 else VoxelMaterial.STONE
+	match facing:
+		0:
+			brush.fill_box(Vector3i(bmin.x + 1, y0, bmax.z), Vector3i(bmax.x - 1, y1, bmax.z + 1), mat)
+			for x in range(bmin.x + 2, bmax.x - 2, 2):
+				brush.fill_box(Vector3i(x, y0 + 1, bmax.z), Vector3i(x + 1, y1 - 1, bmax.z + 1), VoxelMaterial.GLASS)
+		1:
+			brush.fill_box(Vector3i(bmin.x + 1, y0, bmin.z - 1), Vector3i(bmax.x - 1, y1, bmin.z), mat)
+			for x in range(bmin.x + 2, bmax.x - 2, 2):
+				brush.fill_box(Vector3i(x, y0 + 1, bmin.z - 1), Vector3i(x + 1, y1 - 1, bmin.z), VoxelMaterial.GLASS)
+		2:
+			brush.fill_box(Vector3i(bmax.x, y0, bmin.z + 1), Vector3i(bmax.x + 1, y1, bmax.z - 1), mat)
+			for z in range(bmin.z + 2, bmax.z - 2, 2):
+				brush.fill_box(Vector3i(bmax.x, y0 + 1, z), Vector3i(bmax.x + 1, y1 - 1, z + 1), VoxelMaterial.GLASS)
+		_:
+			brush.fill_box(Vector3i(bmin.x - 1, y0, bmin.z + 1), Vector3i(bmin.x, y1, bmax.z - 1), mat)
+			for z in range(bmin.z + 2, bmax.z - 2, 2):
+				brush.fill_box(Vector3i(bmin.x - 1, y0 + 1, z), Vector3i(bmin.x, y1 - 1, z + 1), VoxelMaterial.GLASS)
+
+
+func _add_awnings(bmin: Vector3i, bmax: Vector3i, facing: int, dense: bool) -> void:
+	if rng.randf() < (0.25 if dense else 0.45):
+		return
+	var y := bmin.y + ground_floor_height - 1
+	var mat := VoxelMaterial.PAINT if rng.randf() < 0.55 else VoxelMaterial.METAL
+	match facing:
+		0:
+			brush.fill_box(Vector3i(bmin.x + 1, y, bmax.z), Vector3i(bmax.x - 1, y + 1, bmax.z + 2), mat)
+		1:
+			brush.fill_box(Vector3i(bmin.x + 1, y, bmin.z - 2), Vector3i(bmax.x - 1, y + 1, bmin.z), mat)
+		2:
+			brush.fill_box(Vector3i(bmax.x, y, bmin.z + 1), Vector3i(bmax.x + 2, y + 1, bmax.z - 1), mat)
+		_:
+			brush.fill_box(Vector3i(bmin.x - 2, y, bmin.z + 1), Vector3i(bmin.x, y + 1, bmax.z - 1), mat)
+
+
+func _add_balconies(bmin: Vector3i, bmax: Vector3i, floors: int, facing: int, chance: float) -> void:
+	if floors < 3 or rng.randf() > chance:
+		return
+	var start_f := 1
+	var end_f := floors - 1
+	var step := 1 if chance > 0.45 else 2
+	for f in range(start_f, end_f, step):
+		if rng.randf() < 0.35:
+			continue
+		var y0 := _floor_y(bmin.y, f) + 1
+		var slab := VoxelMaterial.CONCRETE
+		var rail := VoxelMaterial.METAL
+		var cx := (bmin.x + bmax.x) / 2
+		var cz := (bmin.z + bmax.z) / 2
+		var half := 2 if (bmax.x - bmin.x) > 14 else 1
+		match facing:
+			0:
+				brush.fill_box(Vector3i(cx - half, y0, bmax.z), Vector3i(cx + half + 1, y0 + 1, bmax.z + 2), slab)
+				brush.fill_box(Vector3i(cx - half, y0 + 1, bmax.z + 1), Vector3i(cx + half + 1, y0 + 2, bmax.z + 2), rail)
+			1:
+				brush.fill_box(Vector3i(cx - half, y0, bmin.z - 2), Vector3i(cx + half + 1, y0 + 1, bmin.z), slab)
+				brush.fill_box(Vector3i(cx - half, y0 + 1, bmin.z - 2), Vector3i(cx + half + 1, y0 + 2, bmin.z - 1), rail)
+			2:
+				brush.fill_box(Vector3i(bmax.x, y0, cz - half), Vector3i(bmax.x + 2, y0 + 1, cz + half + 1), slab)
+				brush.fill_box(Vector3i(bmax.x + 1, y0 + 1, cz - half), Vector3i(bmax.x + 2, y0 + 2, cz + half + 1), rail)
+			_:
+				brush.fill_box(Vector3i(bmin.x - 2, y0, cz - half), Vector3i(bmin.x, y0 + 1, cz + half + 1), slab)
+				brush.fill_box(Vector3i(bmin.x - 2, y0 + 1, cz - half), Vector3i(bmin.x - 1, y0 + 2, cz + half + 1), rail)
+
+
+func _roof_clutter(bmin: Vector3i, bmax: Vector3i, floors: int) -> void:
+	var top := _floor_y(bmin.y, floors) + 1
+	var cx := (bmin.x + bmax.x) / 2
+	var cz := (bmin.z + bmax.z) / 2
+	## AC / mechanical boxes
+	if rng.randf() < 0.75:
+		var ox := rng.randi_range(-3, 3)
+		var oz := rng.randi_range(-3, 3)
+		brush.fill_box(
+			Vector3i(cx + ox - 1, top, cz + oz - 1),
+			Vector3i(cx + ox + 2, top + 2, cz + oz + 2),
+			VoxelMaterial.METAL_PLATE
+		)
+	if rng.randf() < 0.45:
+		brush.fill_box(
+			Vector3i(cx - 4, top, cz + 2),
+			Vector3i(cx - 2, top + 1, cz + 4),
+			VoxelMaterial.METAL
+		)
+	## Rail stubs along one parapet edge
+	if rng.randf() < 0.5:
+		brush.fill_box(
+			Vector3i(bmin.x + 2, top + 1, bmin.z + 1),
+			Vector3i(bmax.x - 2, top + 2, bmin.z + 2),
+			VoxelMaterial.METAL
+		)
+	## Water-tower stub on taller buildings
+	if floors >= 8 and rng.randf() < 0.4:
+		brush.fill_box(
+			Vector3i(cx - 1, top, cz - 1),
+			Vector3i(cx + 2, top + 4, cz + 2),
+			VoxelMaterial.METAL_PLATE
+		)
+		brush.column(cx, cz, top + 4, top + 6, VoxelMaterial.METAL)

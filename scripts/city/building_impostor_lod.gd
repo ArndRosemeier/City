@@ -1,9 +1,11 @@
-## Far-building massing LOD: simple colored boxes beyond the voxel mesh radius.
+## Far-building massing LOD: stepped boxes + window-grid shader beyond voxel mesh radius.
 ## Near the camera, VoxelTerrain shows full Blocky detail; farther away only these shells draw.
 ## Uses nearest-face distance + hysteresis so shells don't flicker at the mesh fringe.
 ## Packs only in-frustum shells into MultiMesh visible_instance_count.
 class_name BuildingImpostorLod
 extends Node3D
+
+const IMPOSTOR_SHADER := preload("res://assets/city/shaders/building_impostor.gdshader")
 
 @export var voxel_detail_distance: float = 440.0
 @export var cull_distance: float = 900.0
@@ -11,9 +13,12 @@ extends Node3D
 ## Band (m) where LOD state is sticky. Hide shells well inside the mesh radius;
 ## only bring them back near the outer fringe so voxels and shells overlap briefly.
 @export var lod_hysteresis_m: float = 16.0
+## 0 = day, 1 = night — window emission on impostor glass.
+@export var night_factor: float = 0.0
 
-var _entries: Array = []  # Dictionary: center, size, color
+var _entries: Array = []  # Dictionary: center, size, color, custom
 var _mm: MultiMeshInstance3D
+var _shader_mat: ShaderMaterial
 var _camera: Camera3D
 var _accum: float = 0.0
 var _visible_count: int = 0
@@ -38,10 +43,17 @@ func setup(camera: Camera3D, buildings: Array, detail_distance_m: float) -> void
 	)
 
 
+func set_night_factor(factor: float) -> void:
+	night_factor = clampf(factor, 0.0, 1.0)
+	if _shader_mat != null:
+		_shader_mat.set_shader_parameter("night_factor", night_factor)
+
+
 func clear() -> void:
 	_entries.clear()
 	_impostor_on = PackedByteArray()
 	_visible_count = 0
+	_shader_mat = null
 	if _mm != null and is_instance_valid(_mm):
 		_mm.queue_free()
 	_mm = null
@@ -61,16 +73,16 @@ func _build_multimesh() -> void:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
+	mm.use_custom_data = true
 	mm.instance_count = _entries.size()
 	mm.visible_instance_count = 0
 	var box := BoxMesh.new()
 	box.size = Vector3.ONE
 	mm.mesh = box
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.72
-	mat.metallic = 0.05
-	_mm.material_override = mat
+	_shader_mat = ShaderMaterial.new()
+	_shader_mat.shader = IMPOSTOR_SHADER
+	_shader_mat.set_shader_parameter("night_factor", night_factor)
+	_mm.material_override = _shader_mat
 	_mm.multimesh = mm
 	_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_mm)
@@ -156,6 +168,8 @@ func _refresh(force: bool) -> void:
 		var basis := Basis.from_scale(size * 0.988)
 		mm.set_instance_transform(write_i, Transform3D(basis, center))
 		mm.set_instance_color(write_i, e["color"])
+		var custom: Color = e.get("custom", Color(size.x, size.y, size.z, 0.35))
+		mm.set_instance_custom_data(write_i, custom)
 		write_i += 1
 	mm.visible_instance_count = write_i
 	_visible_count = write_i

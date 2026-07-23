@@ -157,6 +157,17 @@ func _hedge_beds(min_v: Vector3i, max_v: Vector3i) -> void:
 
 
 func _tree(x: int, y0: int, z: int) -> void:
+	var recipe := rng.randi() % 3
+	match recipe:
+		0:
+			_tree_round(x, y0, z)
+		1:
+			_tree_tall(x, y0, z)
+		_:
+			_tree_wide(x, y0, z)
+
+
+func _tree_round(x: int, y0: int, z: int) -> void:
 	var trunk_h := 3 + rng.randi() % 4
 	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
 	var canopy_y := y0 + trunk_h
@@ -167,3 +178,48 @@ func _tree(x: int, y0: int, z: int) -> void:
 			brush.set_vox(Vector3i(x + dx, canopy_y, z + dz), VoxelMaterial.LEAVES)
 			if absi(dx) + absi(dz) <= 2:
 				brush.set_vox(Vector3i(x + dx, canopy_y + 1, z + dz), VoxelMaterial.LEAVES)
+
+
+func _tree_tall(x: int, y0: int, z: int) -> void:
+	## Narrower, taller canopy — street / grove accent.
+	var trunk_h := 5 + rng.randi() % 3
+	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
+	var canopy_y := y0 + trunk_h
+	for layer in range(3):
+		var r := 1 if layer == 2 else 2
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if absi(dx) == r and absi(dz) == r and r > 1:
+					continue
+				if absi(dx) + absi(dz) > r + 1:
+					continue
+				brush.set_vox(Vector3i(x + dx, canopy_y + layer, z + dz), VoxelMaterial.LEAVES)
+
+
+func _tree_wide(x: int, y0: int, z: int) -> void:
+	## Broader, lower leaf mass.
+	var trunk_h := 2 + rng.randi() % 3
+	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
+	var canopy_y := y0 + trunk_h
+	for dz in range(-3, 4):
+		for dx in range(-3, 4):
+			if absi(dx) == 3 and absi(dz) == 3:
+				continue
+			if absi(dx) * absi(dx) + absi(dz) * absi(dz) > 10:
+				continue
+			brush.set_vox(Vector3i(x + dx, canopy_y, z + dz), VoxelMaterial.LEAVES)
+			if absi(dx) <= 2 and absi(dz) <= 2:
+				brush.set_vox(Vector3i(x + dx, canopy_y + 1, z + dz), VoxelMaterial.LEAVES)
+
+
+func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
+	## Cheap far-tile greens: lawn already painted; drop a few canopy blobs only.
+	var w := max_v.x - min_v.x
+	var d := max_v.z - min_v.z
+	if w < 8 or d < 8:
+		return
+	var count := clampi((w * d) / 220, 2, 7)
+	for _i in range(count):
+		var x := rng.randi_range(min_v.x + 2, max_v.x - 3)
+		var z := rng.randi_range(min_v.z + 2, max_v.z - 3)
+		_tree_round(x, ground_y, z)

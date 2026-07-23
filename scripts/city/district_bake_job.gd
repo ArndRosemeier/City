@@ -45,6 +45,7 @@ static func bake(params: Dictionary) -> Dictionary:
 		for cz_f in range(cells_z):
 			for cx_f in range(cells_x):
 				gen.paint_cell_impostor_only(cx_f, cz_f)
+		gen.decorate_open_spaces_far()
 	else:
 		for cz2 in range(cells_z):
 			for cx2 in range(cells_x):

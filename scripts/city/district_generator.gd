@@ -284,6 +284,31 @@ func decorate_open_spaces() -> void:
 		_park.compose_large(pmin, pmax)
 
 
+func decorate_open_spaces_far() -> void:
+	## Sparse trees / benches so distant greens aren't empty until upgrade.
+	if _brush == null or _planner == null or _plaza == null or _park == null:
+		return
+	var g := _planner.grand_plaza
+	if g.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 31)
+		var gmin := Vector3i(g.position.x * cell_size, ground_thickness, g.position.y * cell_size)
+		var gmax := Vector3i(g.end.x * cell_size, ground_thickness + 1, g.end.y * cell_size)
+		_plaza.compose_far_sparse(gmin, gmax)
+	var sat_i := 0
+	for s in _planner.satellite_plazas:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 130 + sat_i)
+		sat_i += 1
+		var smin := Vector3i(s.position.x * cell_size, ground_thickness, s.position.y * cell_size)
+		var smax := Vector3i(s.end.x * cell_size, ground_thickness + 1, s.end.y * cell_size)
+		_plaza.compose_far_sparse(smin, smax)
+	var lp := _planner.large_park
+	if lp.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 32)
+		var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
+		var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
+		_park.compose_far_sparse(pmin, pmax)
+
+
 func open_space_bounds() -> Array[AABB]:
 	## World voxel-space AABBs that decorate_open_spaces() will write.
 	var out: Array[AABB] = []
@@ -651,27 +676,78 @@ func _record_building_impostor(bmin: Vector3i, bmax: Vector3i, height_vox: int, 
 	var w := float(bmax.x - bmin.x) * vs
 	var d := float(bmax.z - bmin.z) * vs
 	var h := float(maxi(height_vox, 8)) * vs
-	var center := Vector3(
-		(float(origin_vox.x + bmin.x) + float(origin_vox.x + bmax.x)) * 0.5 * vs,
-		float(bmin.y) * vs + h * 0.5,
-		(float(origin_vox.z + bmin.z) + float(origin_vox.z + bmax.z)) * 0.5 * vs
-	)
+	var y0 := float(bmin.y) * vs
+	var cx := (float(origin_vox.x + bmin.x) + float(origin_vox.x + bmax.x)) * 0.5 * vs
+	var cz := (float(origin_vox.z + bmin.z) + float(origin_vox.z + bmax.z)) * 0.5 * vs
 	var color := Color(0.62, 0.58, 0.52)
+	var lit := 0.32
 	match zone:
 		LandUse.CORE_LOT:
 			color = Color(0.55, 0.58, 0.62)
+			lit = 0.48
 		LandUse.CIVIC_LOT:
 			color = Color(0.72, 0.70, 0.66)
+			lit = 0.22
 		LandUse.MID_LOT:
 			color = Color(0.66, 0.48, 0.40)
+			lit = 0.38
 		LandUse.TOWN_LOT:
 			color = Color(0.70, 0.55, 0.42)
+			lit = 0.28
 		LandUse.COURTYARD_LOT:
 			color = Color(0.58, 0.52, 0.46)
+			lit = 0.3
 		_:
 			pass
+
+	## Stepped massing where grammar uses podium / shaft / crown.
+	match zone:
+		LandUse.CORE_LOT:
+			var podium_h := clampf(h * 0.14, 6.0, 14.0)
+			var crown_h := clampf(h * 0.12, 4.0, 12.0)
+			var shaft_h := maxf(h - podium_h - crown_h, h * 0.45)
+			var inset := clampf(minf(w, d) * 0.12, 1.5, 6.0)
+			_append_impostor_box(cx, y0, cz, w, podium_h, d, color, lit * 0.7)
+			_append_impostor_box(cx, y0 + podium_h, cz, w - inset * 2.0, shaft_h, d - inset * 2.0, color, lit)
+			_append_impostor_box(
+				cx,
+				y0 + podium_h + shaft_h,
+				cz,
+				maxf(w - inset * 3.2, w * 0.55),
+				crown_h,
+				maxf(d - inset * 3.2, d * 0.55),
+				color * 0.92,
+				lit * 0.55
+			)
+		LandUse.MID_LOT:
+			var base_h := clampf(h * 0.22, 5.0, 10.0)
+			var shaft_h2 := maxf(h - base_h, 4.0)
+			var mid_inset := clampf(minf(w, d) * 0.06, 0.8, 3.0)
+			_append_impostor_box(cx, y0, cz, w, base_h, d, color * 1.05, lit * 0.6)
+			_append_impostor_box(cx, y0 + base_h, cz, w - mid_inset * 2.0, shaft_h2, d - mid_inset * 2.0, color, lit)
+		LandUse.CIVIC_LOT:
+			var plinth := clampf(h * 0.18, 4.0, 8.0)
+			_append_impostor_box(cx, y0, cz, w * 1.02, plinth, d * 1.02, color * 1.08, lit * 0.4)
+			_append_impostor_box(cx, y0 + plinth, cz, w * 0.92, maxf(h - plinth, 4.0), d * 0.92, color, lit)
+		_:
+			_append_impostor_box(cx, y0, cz, w, h, d, color, lit)
+
+
+func _append_impostor_box(
+	cx: float,
+	y0: float,
+	cz: float,
+	w: float,
+	h: float,
+	d: float,
+	color: Color,
+	lit: float
+) -> void:
+	if w < 1.0 or d < 1.0 or h < 1.0:
+		return
 	building_impostors.append({
-		"center": center,
+		"center": Vector3(cx, y0 + h * 0.5, cz),
 		"size": Vector3(w, h, d),
 		"color": color,
+		"custom": Color(w, h, d, clampf(lit, 0.05, 0.85)),
 	})

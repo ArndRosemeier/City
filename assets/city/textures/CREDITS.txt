@@ -23,5 +23,13 @@ Asset IDs used (1K-JPG Color/albedo maps):
 - bark.jpg <- Bark014
 - stone.jpg <- PavingStones128
 
+Normal maps (1K-JPG NormalGL where available):
+- asphalt_normal.jpg <- Asphalt031
+- brick_normal.jpg <- Bricks075A
+- concrete_normal.jpg <- Concrete034
+- plaster_normal.jpg <- Plaster001
+- sidewalk_normal.jpg <- PavingStones037
+- stone_normal.jpg <- PavingStones128
+
 Project-authored (see generate_city_textures.py):
 - glass.jpg, water.jpg, leaves.jpg, curb.jpg, road_line.jpg, crosswalk.jpg

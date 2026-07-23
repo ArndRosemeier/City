@@ -304,6 +304,9 @@ func _stamp_detail_async() -> void:
 			far_impostors = generator.building_impostors
 		## Show shells even near the camera — no voxel buildings on far tiles.
 		building_lod.setup(camera, far_impostors, 0.0)
+		var day_night_far := get_tree().get_first_node_in_group(&"day_night")
+		if day_night_far != null and day_night_far.has_method("get_night_factor"):
+			building_lod.set_night_factor(float(day_night_far.call("get_night_factor")))
 		_pin_data_only()
 		is_ready = true
 		is_busy = false
@@ -376,6 +379,8 @@ func _stamp_detail_async() -> void:
 	if impostors.is_empty():
 		impostors = generator.building_impostors
 	building_lod.setup(camera, impostors, maxf(_player_view_m, 1.0))
+	if day_night != null and day_night.has_method("get_night_factor"):
+		building_lod.set_night_factor(float(day_night.call("get_night_factor")))
 
 	## Player VoxelViewer remeshes the near field; district anchor stays data-only
 	## so whole-tile remesh storms don't tank FPS while other districts generate.

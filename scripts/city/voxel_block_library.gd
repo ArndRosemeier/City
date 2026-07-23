@@ -33,6 +33,8 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			return _mesh_model(id, _mesh_water(), true, false, AABB(Vector3(0.02, 0.15, 0.02), Vector3(0.96, 0.48, 0.96)))
 		VoxelMaterial.GLASS:
 			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3(0.12, 0.1, 0.12), Vector3(0.76, 0.8, 0.76)))
+		VoxelMaterial.GLASS_LIT:
+			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3(0.12, 0.1, 0.12), Vector3(0.76, 0.8, 0.76)))
 		VoxelMaterial.CURB:
 			## Low curb lip (~0.2 m world) so CharacterBody can step/jump it.
 			return _mesh_model(id, _mesh_curb(), false, true, AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.4, 1.0)))
@@ -47,8 +49,8 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 static func _make_cube(id: int) -> VoxelBlockyModelCube:
 	var cube := VoxelBlockyModelCube.new()
 	cube.color = Color(1, 1, 1, 1)
-	cube.set_material_override(0, _material_for(id))
-	if id == VoxelMaterial.GLASS or id == VoxelMaterial.WATER:
+	cube.set_material_override(0, material_for(id))
+	if id == VoxelMaterial.GLASS or id == VoxelMaterial.GLASS_LIT or id == VoxelMaterial.WATER:
 		cube.transparency_index = 1
 	return cube
 
@@ -64,7 +66,7 @@ static func _mesh_model(
 	collide: bool = true
 ) -> VoxelBlockyModelMesh:
 	var model := VoxelBlockyModelMesh.new()
-	var mat := _material_for(id)
+	var mat := material_for(id)
 	if collide:
 		model.mesh = _with_collision_box(visual, mat, collision_aabb)
 		model.collision_aabbs = [collision_aabb]
@@ -314,6 +316,17 @@ static func material_for(id: int) -> StandardMaterial3D:
 	return mat
 
 
+## Drive emissive punched windows with day/night (shared GLASS_LIT material).
+static func set_glass_lit_night_factor(night_factor: float) -> void:
+	var mat := material_for(VoxelMaterial.GLASS_LIT)
+	var n := clampf(night_factor, 0.0, 1.0)
+	var power := smoothstep(0.15, 0.7, n)
+	mat.emission_enabled = power > 0.02
+	mat.emission = Color(1.0, 0.82, 0.4)
+	mat.emission_energy_multiplier = lerpf(0.05, 3.2, power)
+	mat.albedo_color = Color(1.0, 0.9, 0.55, lerpf(0.35, 0.62, power))
+
+
 static func _material_for(id: int) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
@@ -345,6 +358,16 @@ static func _material_for(id: int) -> StandardMaterial3D:
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			mat.roughness = 0.08
 			mat.metallic = 0.2
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		VoxelMaterial.GLASS_LIT:
+			mat.albedo_texture = _tex("glass.jpg")
+			mat.albedo_color = Color(1.0, 0.9, 0.55, 0.35)
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.roughness = 0.12
+			mat.metallic = 0.15
+			mat.emission_enabled = false
+			mat.emission = Color(1.0, 0.82, 0.4)
+			mat.emission_energy_multiplier = 0.05
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		VoxelMaterial.PLAZA:
 			mat.albedo_texture = _tex("plaza.jpg")
@@ -413,9 +436,35 @@ static func _material_for(id: int) -> StandardMaterial3D:
 		_:
 			mat.albedo_color = VoxelMaterial.color(id)
 
-	if mat.albedo_texture == null and id != VoxelMaterial.GLASS and id != VoxelMaterial.WATER:
+	if mat.albedo_texture == null and id != VoxelMaterial.GLASS and id != VoxelMaterial.GLASS_LIT and id != VoxelMaterial.WATER:
 		mat.albedo_color = VoxelMaterial.color(id)
+	_apply_normal_map(mat, id)
 	return mat
+
+
+static func _apply_normal_map(mat: StandardMaterial3D, id: int) -> void:
+	var normal_file := ""
+	match id:
+		VoxelMaterial.BRICK, VoxelMaterial.BRICK_DARK:
+			normal_file = "brick_normal.jpg"
+		VoxelMaterial.ASPHALT, VoxelMaterial.ROAD:
+			normal_file = "asphalt_normal.jpg"
+		VoxelMaterial.CONCRETE:
+			normal_file = "concrete_normal.jpg"
+		VoxelMaterial.PLASTER:
+			normal_file = "plaster_normal.jpg"
+		VoxelMaterial.CURB, VoxelMaterial.SIDEWALK:
+			normal_file = "sidewalk_normal.jpg"
+		VoxelMaterial.STONE:
+			normal_file = "stone_normal.jpg"
+		_:
+			return
+	var ntex := _tex_optional(normal_file)
+	if ntex == null:
+		return
+	mat.normal_enabled = true
+	mat.normal_texture = ntex
+	mat.normal_scale = 0.85
 
 
 static func _tex(file_name: String) -> Texture2D:
@@ -427,3 +476,10 @@ static func _tex(file_name: String) -> Texture2D:
 	if tex == null:
 		push_error("Failed to load city texture: %s" % path)
 	return tex
+
+
+static func _tex_optional(file_name: String) -> Texture2D:
+	var path := TEX_DIR + file_name
+	if not ResourceLoader.exists(path):
+		return null
+	return load(path) as Texture2D
