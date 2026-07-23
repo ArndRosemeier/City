@@ -10,6 +10,7 @@ signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
 const ProportionModifierScript := preload("res://scripts/humans/proportion_modifier.gd")
 const BodyProportionsScript := preload("res://scripts/humans/body_proportions.gd")
+const EyeLaserVfxScript := preload("res://scripts/city/eye_laser_vfx.gd")
 
 const PedOutfitCatalogScript := preload("res://scripts/humans/ped_outfit_catalog.gd")
 const PedOutfitApplierScript := preload("res://scripts/humans/ped_outfit_applier.gd")
@@ -35,6 +36,8 @@ const LIB_NAME := &"quat"
 @export var jump_velocity: float = 6.8
 @export var mouse_sensitivity: float = 0.0022
 @export var turn_speed: float = 10.0
+## A/D keyboard turn rate (radians per second).
+@export var keyboard_turn_rate: float = 2.4
 @export var blast_range: float = 80.0
 ## Dig sphere radius in meters at character_scale 1.0 (intentionally mild).
 @export var dig_radius_at_scale_1: float = 1.45
@@ -44,11 +47,19 @@ const LIB_NAME := &"quat"
 @export var kick_impact_ratio: float = 0.58
 @export var punch_anim: String = "Punch_Cross"
 @export var kick_anim: String = "Kick_Soccerball_m"
+## Left-click laser: click aim, punch/kick carve power, meters.
+@export var laser_range_m: float = 100.0
+@export var laser_cooldown_sec: float = 0.45
+@export var laser_speed_mps: float = 30.0
 @export var pivot_height: float = 1.35
 @export var zoom_min: float = 1.8
 @export var zoom_max: float = 12.0
 @export var zoom_step: float = 0.55
 @export var zoom_default: float = 4.2
+## Page Up/Down pitch rate (radians per second).
+@export var pitch_rate: float = 1.1
+@export var pitch_min: float = -1.55
+@export var pitch_max: float = 0.85
 ## Walk clip is authored near ~1.4 m/s; scale playback to match move speed.
 @export var walk_anim_reference_speed: float = 1.4
 @export var character_scale: float = 1.0
@@ -71,6 +82,9 @@ const SAFE_MARGIN_M := 0.06
 
 var _yaw: float = 0.0
 var _pitch: float = -0.35
+## Camera yaw relative to body while / after RMB look.
+var _cam_yaw_offset: float = 0.0
+var _rmb_looking: bool = false
 var _zoom: float = 4.2
 var _camera: Camera3D
 var _spring: SpringArm3D
@@ -105,6 +119,10 @@ var _melee_strike_token: int = 0
 var _stuck_timer: float = 0.0
 var _unstuck_cooldown: float = 0.0
 var _was_ray_grounded: bool = false
+var _eye_laser: Node
+var _laser_ready_at_msec: int = 0
+var _laser_shot_origin: Vector3 = Vector3.ZERO
+var _footstep_accum: float = 0.0
 
 
 func _ready() -> void:
@@ -161,7 +179,9 @@ func _ready() -> void:
 	_editor.closed.connect(_on_editor_closed)
 
 	_apply_camera_angles()
-	_set_capture(true)
+	## Free cursor — no mouse-look capture.
+	_set_capture(false)
+	_setup_eye_laser()
 
 
 func _spawn_human(female: bool) -> void:
@@ -209,6 +229,9 @@ func _spawn_human(female: bool) -> void:
 		PedOutfitApplierScript.apply_to_body_root(instance, _outfit, female)
 	_setup_animation_player(instance)
 	_apply_proportions()
+	## Only wire lasers once the camera exists (first spawn runs before Camera3D).
+	if _camera != null:
+		_setup_eye_laser()
 	print(
 		"CityWalker body: ",
 		path,
@@ -222,6 +245,7 @@ func _spawn_human(female: bool) -> void:
 
 
 func _clear_body() -> void:
+	_teardown_eye_laser()
 	_anim_player = null
 	_prop_mod = null
 	_mesh = null
@@ -255,6 +279,7 @@ func toggle_character_editor() -> void:
 	if _editor.call("is_open"):
 		_editor.call("close_editor")
 	else:
+		_set_rmb_looking(false)
 		_set_capture(false)
 		_editor.call("open_editor", _proportions, _female)
 
@@ -294,6 +319,8 @@ func set_character_scale(value: float, silent: bool = false) -> void:
 		_apply_proportions()
 		global_position = pos_before
 		return
+	if _eye_laser != null and _eye_laser.has_method("set_character_scale"):
+		_eye_laser.call("set_character_scale", _effective_body_scale())
 	if not silent:
 		print("CityWalker scale=%.2f dig=%.2fm speed×%.2f" % [character_scale, get_dig_radius(), character_scale])
 
@@ -361,7 +388,8 @@ func _on_editor_sex(female: bool) -> void:
 
 
 func _on_editor_closed() -> void:
-	_set_capture(true)
+	## Stay unlocked — gameplay uses a free mouse cursor.
+	_set_capture(false)
 
 
 func _setup_animation_player(body: Node3D) -> void:
@@ -627,6 +655,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				_auto_run = not _auto_run
 				get_viewport().set_input_as_handled()
 				return
+			KEY_O:
+				## Sound on/off.
+				_toggle_sound()
+				get_viewport().set_input_as_handled()
+				return
 			KEY_SPACE:
 				_jump_queued = true
 				get_viewport().set_input_as_handled()
@@ -639,12 +672,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				adjust_character_scale(-1.0)
 				get_viewport().set_input_as_handled()
 				return
-	if event is InputEventMouseMotion and _captured:
+	if event is InputEventMouseMotion and _rmb_looking:
 		var mm := event as InputEventMouseMotion
-		_yaw -= mm.relative.x * mouse_sensitivity
-		_pitch = clampf(_pitch - mm.relative.y * mouse_sensitivity, -1.2, 0.45)
+		_cam_yaw_offset -= mm.relative.x * mouse_sensitivity
+		_pitch = clampf(_pitch - mm.relative.y * mouse_sensitivity, pitch_min, pitch_max)
 		_apply_camera_angles()
-	elif event is InputEventMouseButton:
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			_zoom = clampf(_zoom - zoom_step, zoom_min, zoom_max)
@@ -653,21 +688,27 @@ func _unhandled_input(event: InputEvent) -> void:
 			_zoom = clampf(_zoom + zoom_step, zoom_min, zoom_max)
 			_spring.spring_length = _zoom
 		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			if not _captured:
-				_set_capture(true)
-				return
-			_start_melee_punch()
+			_start_laser_eyes_at_cursor()
 			get_viewport().set_input_as_handled()
-		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
-			if not _captured:
-				_set_capture(true)
-				return
-			_start_melee_kick()
+		elif mb.button_index == MOUSE_BUTTON_RIGHT:
+			if mb.pressed:
+				_set_rmb_looking(true)
+			else:
+				_set_rmb_looking(false)
 			get_viewport().set_input_as_handled()
+
+
+func _set_rmb_looking(on: bool) -> void:
+	_rmb_looking = on
+	## Capture only while aiming the camera; cursor free otherwise.
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
+	_captured = on
 
 
 func _apply_camera_angles() -> void:
-	_pivot.rotation = Vector3(_pitch, _yaw - rotation.y, 0.0)
+	## Body yaw from A/D; extra orbit from RMB look lives in _cam_yaw_offset.
+	_yaw = rotation.y
+	_pivot.rotation = Vector3(_pitch, _cam_yaw_offset, 0.0)
 
 
 func _physics_process(delta: float) -> void:
@@ -699,6 +740,15 @@ func _physics_process(delta: float) -> void:
 		_coyote_left = maxf(_coyote_left - delta, 0.0)
 		velocity.y -= gravity * delta
 
+	## Page Up looks up, Page Down looks down (held = continuous).
+	var pitch_input := 0.0
+	if Input.is_key_pressed(KEY_PAGEUP):
+		pitch_input += 1.0
+	if Input.is_key_pressed(KEY_PAGEDOWN):
+		pitch_input -= 1.0
+	if not is_zero_approx(pitch_input):
+		_pitch = clampf(_pitch + pitch_input * pitch_rate * delta, pitch_min, pitch_max)
+
 	var input_dir := Vector2.ZERO
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP) or _auto_run:
 		input_dir.y -= 1.0
@@ -707,16 +757,23 @@ func _physics_process(delta: float) -> void:
 		## Manual back cancels autorun so you can stop without hunting R.
 		if _auto_run:
 			_auto_run = false
+	## A/D (and arrows) turn in place — no strafe.
+	var turn := 0.0
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
-		input_dir.x -= 1.0
+		turn += 1.0
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
-		input_dir.x += 1.0
-	input_dir = input_dir.normalized()
+		turn -= 1.0
+	if not is_zero_approx(turn):
+		rotation.y += turn * keyboard_turn_rate * delta
 
-	var cam_yaw_basis := Basis.from_euler(Vector3(0.0, _yaw, 0.0))
-	var forward := -cam_yaw_basis.z
-	var right := cam_yaw_basis.x
-	var wish := forward * (-input_dir.y) + right * input_dir.x
+	## Move only along body facing (W/S).
+	var forward := -global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() > 0.0001:
+		forward = forward.normalized()
+	else:
+		forward = Vector3(0.0, 0.0, -1.0)
+	var wish := forward * (-input_dir.y)
 	wish.y = 0.0
 
 	var speed := sprint_speed if Input.is_key_pressed(KEY_SHIFT) else walk_speed
@@ -724,8 +781,6 @@ func _physics_process(delta: float) -> void:
 	_moving = wish.length_squared() > 0.0001
 	if _moving:
 		wish = wish.normalized() * speed
-		var face_yaw := atan2(-wish.x, -wish.z)
-		rotation.y = lerp_angle(rotation.y, face_yaw, clampf(turn_speed * delta, 0.0, 1.0))
 		velocity.x = wish.x
 		velocity.z = wish.z
 	else:
@@ -748,9 +803,6 @@ func _physics_process(delta: float) -> void:
 	if not ray_mode and _moving and is_on_floor() and velocity.y <= 0.0:
 		_try_step_up(delta)
 
-	if _moving:
-		_clamp_wish_to_solid_ground()
-
 	var wish_speed := speed if _moving else 0.0
 	move_and_slide()
 	## Soft wall slide: push out along collision normals in XZ only (no vertical).
@@ -765,11 +817,10 @@ func _physics_process(delta: float) -> void:
 	_update_safety_deck()
 	_apply_camera_angles()
 	_update_locomotion_anim(speed)
+	_update_footstep_sfx(delta, speed)
 
 	if not ray_mode and is_on_floor() and not _feet_aligned and _skeleton != null:
 		_align_soles_to_floor()
-	elif not is_on_floor() and not _was_ray_grounded and velocity.y < -2.0:
-		_rescue_from_void()
 	## Absolute floor — never drop below sidewalk height into Forget voids.
 	if global_position.y < SAFETY_FLOOR_TOP_Y - 0.5:
 		global_position.y = SAFETY_FLOOR_TOP_Y
@@ -790,11 +841,15 @@ func _stabilize_vertical(ray_mode: bool) -> void:
 	if velocity.y > 0.15:
 		_was_ray_grounded = false
 		return
-	var hit := _ray_ground(2.5 * character_scale, 6.0 * character_scale)
+	var hit := _ray_ground(0.0, 6.0 * character_scale)
 	if hit.is_empty():
 		_was_ray_grounded = false
 		return
 	var ground_y: float = hit.position.y
+	## Never stick upward onto a surface above the feet (ceilings / overhangs).
+	if ground_y > global_position.y + 0.35 * character_scale:
+		_was_ray_grounded = false
+		return
 	## Only stick when close to ground (airborne jumps/falls keep physics Y).
 	if global_position.y - ground_y > 1.25 * character_scale and not is_on_floor():
 		_was_ray_grounded = false
@@ -804,10 +859,12 @@ func _stabilize_vertical(ray_mode: bool) -> void:
 	_was_ray_grounded = true
 
 
-func _ray_ground(up_m: float, down_m: float) -> Dictionary:
+func _ray_ground(_up_m: float, down_m: float) -> Dictionary:
+	## Cast from just above the feet downward only. Starting high above used to hit
+	## ceilings / upper floors first and teleport the player onto roofs.
 	var space := get_world_3d().direct_space_state
-	var from := global_position + Vector3(0.0, up_m, 0.0)
-	var to := global_position + Vector3(0.0, -down_m, 0.0)
+	var from := global_position + Vector3(0.0, 0.2 * maxf(character_scale, 1.0), 0.0)
+	var to := global_position + Vector3(0.0, -maxf(down_m, 0.5), 0.0)
 	var q := PhysicsRayQueryParameters3D.create(from, to)
 	q.collision_mask = 1
 	var exclude: Array[RID] = [get_rid()]
@@ -851,41 +908,46 @@ func _update_safety_deck() -> void:
 
 
 func _clamp_wish_to_solid_ground() -> void:
-	## If the next step has no floor within reach below, cancel horizontal motion that way.
-	var step_len := maxf(0.9, 0.35 * character_scale)
-	var step := Vector3(velocity.x, 0.0, velocity.z).normalized() * step_len
-	if step.length_squared() < 0.0001:
-		return
-	var probe_pos := global_position + step
-	var saved := global_position
-	global_position = probe_pos
-	var hit := _ray_ground(2.0 * maxf(character_scale, 1.0), 5.0 * maxf(character_scale, 1.0))
-	global_position = saved
-	if hit.is_empty():
-		velocity.x = 0.0
-		velocity.z = 0.0
-		_moving = false
+	## Disabled: blocked walking/jumping off roofs and ledges.
+	pass
 
 
 func _rescue_from_void() -> void:
 	## Last-resort snap if we somehow fell through checkerboard collision gaps.
-	var hit := _ray_ground(12.0, 50.0)
-	if hit.is_empty():
-		for ox in [-3.0, 0.0, 3.0, -6.0, 6.0]:
-			for oz in [-3.0, 0.0, 3.0, -6.0, 6.0]:
-				var saved := global_position
-				global_position = saved + Vector3(ox, 0.0, oz)
-				hit = _ray_ground(12.0, 50.0)
-				global_position = saved
-				if not hit.is_empty():
-					break
-			if not hit.is_empty():
-				break
+	## Only accept surfaces at or below us — never teleport upward onto a roof.
+	var hit := _find_ground_below(50.0)
 	if hit.is_empty():
 		return
 	global_position = Vector3(hit.position.x, hit.position.y, hit.position.z)
 	velocity = Vector3.ZERO
 	_was_ray_grounded = true
+
+
+func _find_ground_below(down_m: float) -> Dictionary:
+	var offsets: Array[Vector3] = [
+		Vector3.ZERO,
+		Vector3(-3.0, 0.0, 0.0),
+		Vector3(3.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, -3.0),
+		Vector3(0.0, 0.0, 3.0),
+		Vector3(-6.0, 0.0, 0.0),
+		Vector3(6.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, -6.0),
+		Vector3(0.0, 0.0, 6.0),
+	]
+	var origin := global_position
+	for offset in offsets:
+		global_position = origin + offset
+		var hit := _ray_ground(0.0, down_m)
+		global_position = origin
+		if hit.is_empty():
+			continue
+		var p: Vector3 = hit["position"] as Vector3
+		if p.y > origin.y + 0.5:
+			continue
+		hit["position"] = Vector3(origin.x + offset.x, p.y, origin.z + offset.z)
+		return hit
+	return {}
 
 
 func _update_stuck_timer(delta: float, wish_speed: float) -> void:
@@ -983,12 +1045,15 @@ func _can_stand_at(pos: Vector3) -> bool:
 
 
 func _snap_y_to_ground_once() -> void:
-	var up := 2.5 * maxf(character_scale, 1.0)
 	var down := 8.0 * maxf(character_scale, 1.0)
-	var hit := _ray_ground(up, down)
+	var hit := _ray_ground(0.0, down)
 	if hit.is_empty():
 		return
-	global_position.y = hit.position.y
+	var ground_y: float = (hit.position as Vector3).y
+	## Never snap upward onto ceilings / roofs above the current feet.
+	if ground_y > global_position.y + 0.35 * maxf(character_scale, 1.0):
+		return
+	global_position.y = ground_y
 	velocity.y = 0.0
 	_was_ray_grounded = true
 
@@ -1058,6 +1123,161 @@ func _fire_blast() -> void:
 	if hit.is_empty():
 		return
 	blast_requested.emit(hit["position"], hit["collider"], get_dig_radius())
+
+
+func _city_audio() -> Node:
+	return get_tree().get_first_node_in_group(&"city_audio")
+
+
+func _toggle_sound() -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("toggle"):
+		var on: bool = bool(audio.call("toggle"))
+		print("CityAudio: %s" % ("ON" if on else "OFF"))
+
+
+func _update_footstep_sfx(delta: float, move_speed: float) -> void:
+	if not _moving:
+		_footstep_accum = 0.0
+		return
+	var grounded := is_on_floor() or _was_ray_grounded
+	if not grounded:
+		_footstep_accum = 0.0
+		return
+	## Stride interval grows with size so giants don't machine-gun footsteps.
+	var interval := clampf(0.32 * sqrt(character_scale), 0.22, 0.85)
+	var cadence := clampf(move_speed / maxf(walk_speed * character_scale, 0.01), 0.55, 1.6)
+	_footstep_accum += delta * cadence
+	if _footstep_accum < interval:
+		return
+	_footstep_accum = 0.0
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_footstep"):
+		audio.call("play_footstep", global_position, character_scale)
+
+
+func _setup_eye_laser() -> void:
+	_teardown_eye_laser()
+	_eye_laser = EyeLaserVfxScript.new()
+	_eye_laser.name = "EyeLaserVfx"
+	add_child(_eye_laser)
+	_eye_laser.call("setup")
+	_eye_laser.call("set_character_scale", _effective_body_scale())
+	if _eye_laser.has_method("set_obstacle_probe"):
+		_eye_laser.call(
+			"set_obstacle_probe",
+			func(from: Vector3, tip: Vector3) -> float:
+				var root := _city_root()
+				if root == null or not root.has_method("laser_probe_agent_distance"):
+					return -1.0
+				return float(root.call("laser_probe_agent_distance", from, tip))
+		)
+	if _eye_laser.has_signal("impact") and not _eye_laser.is_connected("impact", _on_laser_impact):
+		_eye_laser.connect("impact", _on_laser_impact)
+
+
+func _teardown_eye_laser() -> void:
+	if _eye_laser != null and is_instance_valid(_eye_laser):
+		if _eye_laser.has_signal("impact") and _eye_laser.is_connected("impact", _on_laser_impact):
+			_eye_laser.disconnect("impact", _on_laser_impact)
+		_eye_laser.queue_free()
+	_eye_laser = null
+
+
+func _laser_eye_origin() -> Vector3:
+	## Midpoint between approximate eye sockets (head center, slight forward/up).
+	var head := _bone_world_pos([&"Head", &"head"])
+	if not head.is_finite():
+		head = global_position + Vector3(0.0, 1.55 * character_scale, 0.0)
+	var up := Vector3.UP
+	var fwd := -global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.0001:
+		fwd = Vector3(0.0, 0.0, -1.0)
+	else:
+		fwd = fwd.normalized()
+	var s := character_scale
+	return head + up * (0.015 * s) + fwd * (0.09 * s)
+
+
+func _on_laser_impact(hit_point: Vector3, direction: Vector3) -> void:
+	## Arrive: kill ped / flip car if the shot landed on an agent; else carve voxels.
+	var dir := direction
+	if dir.length_squared() < 0.0001:
+		dir = -global_transform.basis.z
+	else:
+		dir = dir.normalized()
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_laser_impact"):
+		audio.call("play_laser_impact", hit_point, character_scale)
+	var from := _laser_shot_origin
+	if from.length_squared() < 0.0001:
+		from = hit_point - dir * 0.15
+	var root := _city_root()
+	if root != null and root.has_method("apply_laser_agent_hit"):
+		if bool(root.call("apply_laser_agent_hit", from, hit_point, dir)):
+			return
+	## Short march into fabric at the impact — not the full laser range (avoids
+	## hitting agents behind walls).
+	var origin := hit_point - dir * 0.15
+	melee_strike_requested.emit(origin, dir, maxf(2.5, character_scale * 2.0))
+
+
+func _start_laser_eyes_at_cursor() -> void:
+	if _camera == null:
+		return
+	var now := Time.get_ticks_msec()
+	if now < _laser_ready_at_msec:
+		return
+	if _eye_laser != null and bool(_eye_laser.call("is_firing")):
+		return
+
+	var mouse := get_viewport().get_mouse_position()
+	var from := _camera.project_ray_origin(mouse)
+	var ray_dir := _camera.project_ray_normal(mouse)
+	if ray_dir.length_squared() < 0.0001:
+		return
+	ray_dir = ray_dir.normalized()
+	var to := from + ray_dir * laser_range_m
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 1
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var aim_point := to
+	if not hit.is_empty():
+		aim_point = hit["position"] as Vector3
+
+	## Face the click point, then launch one dart from between the eyes.
+	var face := aim_point - global_position
+	face.y = 0.0
+	if face.length_squared() > 0.0001:
+		rotation.y = atan2(-face.x, -face.z)
+		_yaw = rotation.y
+		_apply_camera_angles()
+
+	_laser_ready_at_msec = now + int(maxi(int(laser_cooldown_sec * 1000.0), 50))
+
+	var origin := _laser_eye_origin()
+	_laser_shot_origin = origin
+	## Prefer the camera click ray (crosshair path); eye→wall is a fallback.
+	var root := _city_root()
+	if root != null and root.has_method("resolve_laser_aim"):
+		aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_laser_fire"):
+		audio.call("play_laser_fire", origin, character_scale)
+	if _eye_laser != null and _eye_laser.has_method("fire"):
+		## Pass current body scale so dart length/thickness match the character.
+		_eye_laser.call("fire", origin, aim_point, laser_speed_mps, _effective_body_scale())
+
+
+func _city_root() -> Node:
+	var n: Node = get_parent()
+	while n != null:
+		if n.has_method("resolve_laser_aim") and n.has_method("apply_laser_agent_hit"):
+			return n
+		n = n.get_parent()
+	return null
 
 
 func _start_melee_punch() -> void:

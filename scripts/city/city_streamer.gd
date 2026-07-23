@@ -91,6 +91,23 @@ func get_district(coord: Vector2i) -> DistrictInstance:
 	return _districts.get(coord) as DistrictInstance
 
 
+func for_each_district(cb: Callable) -> void:
+	for key: Variant in _districts.keys():
+		var inst: DistrictInstance = _districts[key]
+		if inst != null and is_instance_valid(inst):
+			cb.call(inst)
+
+
+## Snapshot of currently loaded district instances (may include not-ready tiles).
+func get_loaded_districts() -> Array:
+	var out: Array = []
+	for key: Variant in _districts.keys():
+		var inst: DistrictInstance = _districts[key]
+		if inst != null and is_instance_valid(inst):
+			out.append(inst)
+	return out
+
+
 func is_worker_busy() -> bool:
 	return not _active_jobs.is_empty()
 

@@ -1,4 +1,4 @@
-## Bottom action bar: 6 slots. RMB assigns a Quaternius clip; LMB plays it.
+## Bottom action bar: 6 slots. F1–F6 play; Shift+F1–F6 assign.
 class_name PlayerActionBar
 extends CanvasLayer
 
@@ -44,6 +44,36 @@ func setup(walker: CityWalker) -> void:
 	_refresh_labels()
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		var slot := _slot_for_fkey(event.keycode)
+		if slot < 0:
+			return
+		if event.shift_pressed:
+			_open_assign_menu(slot)
+		else:
+			_play_slot(slot)
+		get_viewport().set_input_as_handled()
+
+
+func _slot_for_fkey(keycode: Key) -> int:
+	match keycode:
+		KEY_F1:
+			return 0
+		KEY_F2:
+			return 1
+		KEY_F3:
+			return 2
+		KEY_F4:
+			return 3
+		KEY_F5:
+			return 4
+		KEY_F6:
+			return 5
+		_:
+			return -1
+
+
 func _build_ui() -> void:
 	for c in get_children():
 		c.queue_free()
@@ -76,7 +106,7 @@ func _build_ui() -> void:
 	bar.add_child(vbox)
 
 	var hint := Label.new()
-	hint.text = "LMB play · RMB assign · Esc frees mouse"
+	hint.text = "F1–F6 play · Shift+F1–F6 assign"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.add_theme_color_override("font_color", Color(0.65, 0.7, 0.75, 0.9))
@@ -94,7 +124,6 @@ func _build_ui() -> void:
 		btn.clip_text = true
 		btn.mouse_filter = Control.MOUSE_FILTER_STOP
 		btn.gui_input.connect(_on_slot_gui_input.bind(i))
-		## Swallow default press so walker never sees these clicks.
 		btn.pressed.connect(func() -> void: pass)
 		row.add_child(btn)
 		_buttons.append(btn)
@@ -121,9 +150,12 @@ func _rebuild_menu() -> void:
 func _refresh_labels() -> void:
 	for i in range(_buttons.size()):
 		var name := _slots[i]
-		_buttons[i].text = _short_label(name) if name != "" else "—"
+		var key := "F%d" % (i + 1)
+		_buttons[i].text = "%s\n%s" % [key, _short_label(name) if name != "" else "—"]
 		_buttons[i].tooltip_text = (
-			"%s\nLMB play · RMB assign" % name if name != "" else "Empty — RMB to assign"
+			"%s\n%s play · Shift+%s assign" % [name, key, key]
+			if name != ""
+			else "Empty — Shift+%s to assign" % key
 		)
 
 
@@ -135,6 +167,7 @@ func _short_label(anim_name: String) -> String:
 
 
 func _on_slot_gui_input(event: InputEvent, slot: int) -> void:
+	## Buttons still work as click shortcuts (don't steal RMB camera).
 	if not (event is InputEventMouseButton):
 		return
 	var mb := event as InputEventMouseButton
@@ -142,9 +175,6 @@ func _on_slot_gui_input(event: InputEvent, slot: int) -> void:
 		return
 	if mb.button_index == MOUSE_BUTTON_LEFT:
 		_play_slot(slot)
-		get_viewport().set_input_as_handled()
-	elif mb.button_index == MOUSE_BUTTON_RIGHT:
-		_open_assign_menu(slot)
 		get_viewport().set_input_as_handled()
 
 

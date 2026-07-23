@@ -9,6 +9,7 @@ const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
 const VoxelCascadeDebrisScript := preload("res://scripts/city/voxel_cascade_debris.gd")
+const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
@@ -24,6 +25,7 @@ var _status: Label
 var _action_bar: Node
 var _debris_root: Node3D
 var _cascade: Node
+var _audio: Node
 var _booting: bool = false
 var _fps_accum: float = 0.0
 
@@ -37,6 +39,9 @@ func _ready() -> void:
 		print("CityRoot: NativeOfflineVoxelVolume ready")
 	else:
 		print("CityRoot: using GDScript OfflineVoxelVolume fallback")
+	_audio = CityAudioScript.new()
+	_audio.name = "CityAudio"
+	add_child(_audio)
 	_build_env()
 	_build_hud()
 	call_deferred("_regenerate")
@@ -366,19 +371,24 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 
 
 func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -> void:
-	## March to the first fabric voxel, then carve a sphere whose diameter (in voxels)
+	## March to the first destructible voxel, then carve a sphere whose diameter (in voxels)
 	## equals character_scale. Below 0.5× the fist/foot is too small to break anything.
 	if _tool == null or _terrain == null or _walker == null:
-		return
-	var scale := float(_walker.get_character_scale())
-	if scale < 0.5:
 		return
 	var dir := direction
 	if dir.length_squared() < 0.0001:
 		return
 	dir = dir.normalized()
+	var max_range := maxf(max_range_m, 0.05)
+	var end := origin + dir * max_range
+	## Pedestrians / cars take priority over voxel fabric along the same strike.
+	if _apply_agent_hit(origin, end, dir):
+		return
+	var scale := float(_walker.get_character_scale())
+	if scale < 0.5:
+		return
 	var local_origin := _terrain.to_local(origin)
-	var max_range_vox := maxf(max_range_m, 0.05) / VOXEL_SIZE
+	var max_range_vox := max_range / VOXEL_SIZE
 	var step := 0.2  ## fraction of a voxel — precision over speed
 	var steps := int(ceil(max_range_vox / step)) + 1
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
@@ -390,7 +400,7 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 		if found and v == hit_vox:
 			continue
 		var id := int(_tool.get_voxel(v))
-		if not VoxelMaterial.is_building_fabric(id):
+		if not VoxelMaterial.is_destructible(id):
 			continue
 		hit_vox = v
 		found = true
@@ -405,7 +415,7 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	var r2 := radius_vox * radius_vox
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.AIR
-	## Collect fabric in the punch sphere, then clear. Cascade must use the TOP of the
+	## Collect destructibles in the punch sphere, then clear. Cascade must use the TOP of the
 	## hole — starting from the bottom found only AIR (sphere already wiped the column).
 	var detached: Array = []
 	var column_max_y: Dictionary = {}  # Vector2i → int
@@ -417,7 +427,7 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 					continue
 				var vox := Vector3i(x, y, z)
 				var mat_id := int(_tool.get_voxel(vox))
-				if not VoxelMaterial.is_building_fabric(mat_id):
+				if not VoxelMaterial.is_destructible(mat_id):
 					continue
 				detached.append({"vox": vox, "mat": mat_id})
 				_tool.do_point(vox)
@@ -429,13 +439,92 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 
 	if _cascade == null:
 		return
-	## Punched voxels become debris (already AIR in the world).
+	## Cleared voxels become debris (already AIR in the world).
 	_cascade.detach_voxels(detached)
-	## Remaining fabric above the hole tumbles down per column.
+	## Remaining destructibles above the hole tumble down per column.
 	for col_key in column_max_y.keys():
 		var xz: Vector2i = col_key
 		var max_y: int = int(column_max_y[col_key])
 		_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
+
+
+## Shorten a laser aim so the dart stops on the nearest ped/car before the wall.
+## Prefer the camera click ray (what the player aimed at); also try eye→wall.
+func resolve_laser_aim(cam_from: Vector3, wall_aim: Vector3, eye_from: Vector3) -> Vector3:
+	var hit := _query_closest_agent_hit(cam_from, wall_aim)
+	if hit.is_empty() and eye_from.distance_squared_to(cam_from) > 0.01:
+		hit = _query_closest_agent_hit(eye_from, wall_aim)
+	if hit.is_empty():
+		return wall_aim
+	return hit["point"] as Vector3
+
+
+## True when a ped died or a car flipped along the segment (no voxel carve).
+func apply_laser_agent_hit(from: Vector3, to: Vector3, direction: Vector3) -> bool:
+	var dir := direction
+	if dir.length_squared() < 0.0001:
+		dir = (to - from)
+	if dir.length_squared() < 0.0001:
+		return false
+	return _apply_agent_hit(from, to, dir.normalized())
+
+
+## Mid-flight probe: distance along from→tip to the nearest agent, or -1.
+func laser_probe_agent_distance(from: Vector3, tip: Vector3) -> float:
+	var hit := _query_closest_agent_hit(from, tip)
+	if hit.is_empty():
+		return -1.0
+	return float(hit["distance"])
+
+
+func _apply_agent_hit(from: Vector3, to: Vector3, direction: Vector3) -> bool:
+	var hit := _query_closest_agent_hit(from, to)
+	if hit.is_empty():
+		return false
+	var kind: String = str(hit.get("kind", ""))
+	if kind == "ped":
+		var crowd: CrowdDirector = hit["crowd"]
+		var agent: PedAgent = hit["agent"]
+		var ped_point: Vector3 = hit["point"]
+		return crowd.kill_agent(agent, ped_point, direction)
+	if kind == "vehicle":
+		var vehicles: VehicleDirector = hit["vehicles"]
+		var v_agent: VehicleAgent = hit["agent"]
+		var point: Vector3 = hit["point"]
+		return vehicles.wreck_agent(v_agent, point, direction)
+	return false
+
+
+func _query_closest_agent_hit(from: Vector3, to: Vector3) -> Dictionary:
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return {}
+	var best: Dictionary = {}
+	var best_dist := INF
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst):
+			continue
+		## Crowd/traffic exist only after full bake (far tiles skip them).
+		if inst.crowd != null and is_instance_valid(inst.crowd):
+			var ped_hit: Dictionary = inst.crowd.query_segment_hit(from, to)
+			if not ped_hit.is_empty():
+				var d: float = float(ped_hit["distance"])
+				if d < best_dist:
+					best_dist = d
+					best = ped_hit.duplicate()
+					best["kind"] = "ped"
+					best["crowd"] = inst.crowd
+		if inst.vehicles != null and is_instance_valid(inst.vehicles):
+			var car_hit: Dictionary = inst.vehicles.query_segment_hit(from, to)
+			if not car_hit.is_empty():
+				var d2: float = float(car_hit["distance"])
+				if d2 < best_dist:
+					best_dist = d2
+					best = car_hit.duplicate()
+					best["kind"] = "vehicle"
+					best["vehicles"] = inst.vehicles
+	return best
 
 
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
@@ -460,10 +549,4 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_ESCAPE:
-				if _walker != null and _walker.is_captured():
-					_walker.release_capture()
-				else:
-					get_tree().quit()
-			KEY_TAB:
-				if _walker != null:
-					_walker.toggle_capture()
+				get_tree().quit()

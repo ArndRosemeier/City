@@ -44,6 +44,15 @@ func sync_pose(world_pos: Vector3, yaw: float) -> void:
 	rotation.y = yaw
 
 
+func body_half_extents() -> Vector3:
+	return Vector3(_body_width * 0.5, _body_height * 0.5, _body_length * 0.5)
+
+
+func body_center_offset() -> Vector3:
+	## Visual origin is on the ground; collision center sits mid-body.
+	return Vector3(0.0, _body_height * 0.5, 0.0)
+
+
 func _clear() -> void:
 	for c in get_children():
 		c.queue_free()

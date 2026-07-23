@@ -1,10 +1,10 @@
 ## After a chisel, drop the vertical fabric column above as tumbling RigidBody cubes.
 ## Spawns bottom→top so the breakdown cascades. Cubes stay marked for later cleanup.
 ## When max_live_debris is reached, oldest cubes are freed to make room.
-## Every active column advances one cube per interval — collapse speed stays constant
-## no matter how many columns are falling at once.
-## Per tick a column may spread (10%) to a neighbor or fizzle (5%) and stop early.
-## Destroying a brick also checks nearby fabric with no support below (50% drop).
+## Each cascade tick removes at most max_removals_per_tick voxels (hard cap),
+## round-robin across active columns — shared with spreads + unsupported drops.
+## Per column advance: chance to spread (10%) or fizzle (15%).
+## Destroying a brick also checks nearby fabric with no support below (30% drop).
 ## When the live cap is full, settle sleeping cubes out gradually and defer new
 ## visuals — never skip the whole mid-cascade or FIFO-wipe the field in one frame.
 class_name VoxelCascadeDebris
@@ -19,14 +19,14 @@ extends Node
 @export var spawn_scatter: float = 0.42
 ## Collision/mesh scale vs voxel size — slightly under-size so cubes slip apart.
 @export var cube_scale: float = 0.9
-## Per column-tick: chance to start an adjacent column collapsing.
+## Hard cap: voxels cleared per cascade tick (columns + spreads + unsupported).
+@export var max_removals_per_tick: int = 10
+## Per column advance: chance to start an adjacent column collapsing.
 @export var spread_chance: float = 0.1
-## Per column-tick: chance to abort the rest of this column.
-@export var fizzle_chance: float = 0.05
+## Per column advance: chance to abort the rest of this column.
+@export var fizzle_chance: float = 0.15
 ## After a brick falls: chance an unsupported neighbor also drops.
-@export var unsupported_drop_chance: float = 0.5
-## Max unsupported drops resolved in one flush (prevents one-frame wipe / stack blowups).
-@export var unsupported_flush_budget: int = 32
+@export var unsupported_drop_chance: float = 0.3
 ## Cap queued columns so chain reactions can't runaway.
 @export var max_active_columns: int = 180
 ## Max settled cubes freed per frame to make room for new cascade visuals.
@@ -54,6 +54,8 @@ var _voxel_size: float = 0.5
 ## Active collapses; each entry is Array of {vox: Vector3i, mat: int} bottom→top.
 var _columns: Array = []
 var _accum: float = 0.0
+## Round-robin index so budgeted ticks don't starve later columns.
+var _column_rr: int = 0
 ## Fabric voxels waiting to drop because their support is gone.
 var _pending_unsupported: Array[Vector3i] = []
 ## Re-entrancy guard — nested flush was blowing the stack and killing cascades.
@@ -64,8 +66,14 @@ var _live_bodies: Array = []
 var _pending_visuals: Array = []
 ## Remaining settled-cube frees allowed this physics frame.
 var _evict_budget: int = 0
+## Stem XZ already had its canopy harvested this collapse (avoid double-drops).
+var _canopy_dropped: Dictionary = {}
 var _phys_mat: PhysicsMaterial
 var _rng := RandomNumberGenerator.new()
+
+## Matches park/plaza tree canopy footprint (±2).
+const _CANOPY_RADIUS := 2
+const _CANOPY_UP := 4
 
 
 func setup(terrain: VoxelTerrain, tool: VoxelTool, debris_root: Node3D, voxel_size: float) -> void:
@@ -84,7 +92,9 @@ func clear_queue() -> void:
 	_columns.clear()
 	_pending_unsupported.clear()
 	_pending_visuals.clear()
+	_canopy_dropped.clear()
 	_accum = 0.0
+	_column_rr = 0
 	_flushing = false
 	_evict_budget = 0
 
@@ -112,18 +122,26 @@ func detach_voxels(entries: Array) -> void:
 	if entries.is_empty() or _debris_root == null:
 		return
 	var column: Array = []
+	var bark_hits: Array[Vector3i] = []
 	for raw in entries:
 		var e: Dictionary = raw
+		var vox: Vector3i = e["vox"]
+		var mat := int(e["mat"])
 		column.append({
-			"vox": e["vox"],
-			"mat": int(e["mat"]),
+			"vox": vox,
+			"mat": mat,
 			"detached": true,
 		})
+		if mat == VoxelMaterial.BARK:
+			bark_hits.append(vox)
 	var first: Dictionary = column.pop_front()
 	_spawn_cube(first["vox"] as Vector3i, int(first["mat"]))
 	_collect_unsupported_neighbors(first["vox"] as Vector3i)
 	if not column.is_empty():
 		_append_column(column)
+	## Hitting a trunk should also drop that tree's leaf canopy.
+	for bark in bark_hits:
+		_drop_canopy_for_bark(bark)
 	if not _flushing:
 		_flush_unsupported_drops()
 
@@ -136,7 +154,7 @@ func _enqueue_column_above(hit_vox: Vector3i, spawn_first: bool) -> bool:
 	while y <= cap:
 		var v := Vector3i(hit_vox.x, y, hit_vox.z)
 		var id := int(_tool.get_voxel(v))
-		if not VoxelMaterial.is_building_fabric(id):
+		if not VoxelMaterial.is_destructible(id):
 			break
 		column.append({"vox": v, "mat": id, "detached": false})
 		y += 1
@@ -174,28 +192,36 @@ func _physics_process(delta: float) -> void:
 	):
 		return
 	_accum += delta
-	while _accum >= cascade_interval_sec and not _columns.is_empty():
+	while _accum >= cascade_interval_sec:
 		_accum -= cascade_interval_sec
-		_spawn_one_from_each_column()
-	## Keep draining unsupported chains even when no columns remain.
-	if not _pending_unsupported.is_empty() and not _flushing:
-		_flush_unsupported_drops()
+		if not _columns.is_empty():
+			_advance_cascade_tick()
+		elif not _pending_unsupported.is_empty():
+			## Same hard cap when only unsupported chains remain.
+			_flush_unsupported_drops(maxi(max_removals_per_tick, 1))
+		else:
+			break
 	_drain_pending_visuals()
 
 
-func _spawn_one_from_each_column() -> void:
-	## Parallel advance: every column drops one brick this tick so N columns
-	## don't make each column N× slower.
+func _advance_cascade_tick() -> void:
+	## Hard cap shared across column advances, spread first-bricks, and unsupported.
+	var budget := maxi(max_removals_per_tick, 1)
 	var spreads: Array[Vector3i] = []
-	var i := 0
-	while i < _columns.size():
-		var col: Array = _columns[i]
+	var visits := 0
+	var visit_limit := _columns.size()
+	while budget > 0 and not _columns.is_empty() and visits < visit_limit:
+		visits += 1
+		if _column_rr >= _columns.size():
+			_column_rr = 0
+		var col: Array = _columns[_column_rr]
 		if col.is_empty():
-			_columns.remove_at(i)
+			_columns.remove_at(_column_rr)
 			continue
 		var entry: Dictionary = col.pop_front()
 		var detached := bool(entry.get("detached", false))
 		_release_and_spawn(entry)
+		budget -= 1
 		## Structural columns only — punch-spray debris doesn't fizzle/spread.
 		if not detached:
 			if _rng.randf() < fizzle_chance:
@@ -206,14 +232,19 @@ func _spawn_one_from_each_column() -> void:
 				if neighbor.x != -2147483648:
 					spreads.append(neighbor)
 		if col.is_empty():
-			_columns.remove_at(i)
-		else:
-			i += 1
-	## Apply spreads after the tick so new columns don't steal this frame's slots.
+			_columns.remove_at(_column_rr)
+		elif not _columns.is_empty():
+			_column_rr = (_column_rr + 1) % _columns.size()
+	## Spreads after column advances; only spend remaining budget on immediate spawn.
 	for hit in spreads:
-		## Enqueue only — flush once below (avoids nested flush recursion).
-		_enqueue_column_above(hit, true)
-	_flush_unsupported_drops()
+		if budget > 0:
+			_enqueue_column_above(hit, true)
+			budget -= 1
+		else:
+			## Queue the stack for later ticks — don't blow past the hard cap.
+			_enqueue_column_above(hit, false)
+	if budget > 0:
+		_flush_unsupported_drops(budget)
 
 
 func _collect_unsupported_neighbors(cleared: Vector3i) -> void:
@@ -225,7 +256,7 @@ func _collect_unsupported_neighbors(cleared: Vector3i) -> void:
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	for offset in _UNSUP_OFFSETS:
 		var n: Vector3i = cleared + offset
-		if not VoxelMaterial.is_building_fabric(int(_tool.get_voxel(n))):
+		if not VoxelMaterial.is_destructible(int(_tool.get_voxel(n))):
 			continue
 		if _has_support_below(n):
 			continue
@@ -251,14 +282,14 @@ func _has_support_below(vox: Vector3i) -> bool:
 	return VoxelMaterial.is_solid(int(_tool.get_voxel(below)))
 
 
-func _flush_unsupported_drops() -> void:
+func _flush_unsupported_drops(budget: int = -1) -> void:
 	## Budgeted, non-reentrant drain — nested flush used to stack-overflow and kill debris.
 	if _flushing:
 		return
 	_flushing = true
-	var budget := maxi(unsupported_flush_budget, 1)
-	while not _pending_unsupported.is_empty() and budget > 0:
-		budget -= 1
+	var left := budget if budget >= 0 else maxi(max_removals_per_tick, 1)
+	while not _pending_unsupported.is_empty() and left > 0:
+		left -= 1
 		var n: Vector3i = _pending_unsupported.pop_front()
 		_try_drop_unsupported(n)
 	_flushing = false
@@ -269,7 +300,7 @@ func _try_drop_unsupported(n: Vector3i) -> void:
 		return
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var id := int(_tool.get_voxel(n))
-	if not VoxelMaterial.is_building_fabric(id):
+	if not VoxelMaterial.is_destructible(id):
 		return
 	## Support may have returned (unlikely) or column already claimed.
 	if _has_support_below(n):
@@ -305,7 +336,7 @@ func _pick_spread_neighbor(from_vox: Vector3i) -> Vector3i:
 		for dy in [0, 1, -1, 2, -2]:
 			var fy: int = from_vox.y + int(dy)
 			var probe := Vector3i(nx, fy, nz)
-			if VoxelMaterial.is_building_fabric(int(_tool.get_voxel(probe))):
+			if VoxelMaterial.is_destructible(int(_tool.get_voxel(probe))):
 				found_y = fy
 				break
 		if found_y == -2147483648:
@@ -334,17 +365,76 @@ func _release_and_spawn(entry: Dictionary) -> void:
 	if bool(entry.get("detached", false)):
 		_spawn_cube(v, mat_id)
 		_collect_unsupported_neighbors(v)
+		if mat_id == VoxelMaterial.BARK:
+			_drop_canopy_for_bark(v)
 		return
 	## Re-check — something else may have cleared it.
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var cur := int(_tool.get_voxel(v))
-	if not VoxelMaterial.is_building_fabric(cur):
+	if not VoxelMaterial.is_destructible(cur):
 		return
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.AIR
 	_tool.do_point(v)
-	_spawn_cube(v, mat_id if mat_id > 0 else cur)
+	var spawn_mat := mat_id if mat_id > 0 else cur
+	_spawn_cube(v, spawn_mat)
 	_collect_unsupported_neighbors(v)
+	if spawn_mat == VoxelMaterial.BARK or cur == VoxelMaterial.BARK:
+		_drop_canopy_for_bark(v)
+
+
+## When a trunk voxel falls, clear the leaf canopy around that stem into the cascade.
+func _drop_canopy_for_bark(bark: Vector3i) -> void:
+	if _tool == null or _debris_root == null:
+		return
+	var stem := Vector2i(bark.x, bark.z)
+	if _canopy_dropped.has(stem):
+		return
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	## Find the top of this bark column (canopy sits on / just above it).
+	var top_y := bark.y
+	for y in range(bark.y, bark.y + 14):
+		var id := int(_tool.get_voxel(Vector3i(bark.x, y, bark.z)))
+		if id == VoxelMaterial.BARK:
+			top_y = y
+		elif y > bark.y:
+			break
+	## Group leaves by XZ so they tumble column-wise like other debris.
+	var by_col: Dictionary = {}  # Vector2i → Array of entries
+	var found_any := false
+	for dz in range(-_CANOPY_RADIUS, _CANOPY_RADIUS + 1):
+		for dx in range(-_CANOPY_RADIUS, _CANOPY_RADIUS + 1):
+			if absi(dx) == _CANOPY_RADIUS and absi(dz) == _CANOPY_RADIUS:
+				continue
+			for y in range(top_y - 1, top_y + _CANOPY_UP + 1):
+				var v := Vector3i(bark.x + dx, y, bark.z + dz)
+				if int(_tool.get_voxel(v)) != VoxelMaterial.LEAVES:
+					continue
+				_tool.mode = VoxelTool.MODE_SET
+				_tool.value = VoxelMaterial.AIR
+				_tool.do_point(v)
+				var key := Vector2i(v.x, v.z)
+				if not by_col.has(key):
+					by_col[key] = []
+				(by_col[key] as Array).append({
+					"vox": v,
+					"mat": VoxelMaterial.LEAVES,
+					"detached": true,
+				})
+				found_any = true
+	if not found_any:
+		return
+	_canopy_dropped[stem] = true
+	for key in by_col.keys():
+		var col: Array = by_col[key]
+		col.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return (a["vox"] as Vector3i).y < (b["vox"] as Vector3i).y
+		)
+		var first: Dictionary = col.pop_front()
+		_spawn_cube(first["vox"] as Vector3i, VoxelMaterial.LEAVES)
+		_collect_unsupported_neighbors(first["vox"] as Vector3i)
+		if not col.is_empty():
+			_append_column(col)
 
 
 func _prune_live_bodies() -> void:
@@ -484,6 +574,13 @@ func _spawn_cube_now(vox: Vector3i, mat_id: int) -> void:
 	)
 	_live_bodies.append(body)
 	body.tree_exited.connect(_on_body_exited.bind(body))
+	_play_debris_sfx(world_center)
+
+
+func _play_debris_sfx(world_pos: Vector3) -> void:
+	var audio := get_tree().get_first_node_in_group(&"city_audio")
+	if audio != null and audio.has_method("play_debris"):
+		audio.call("play_debris", world_pos)
 
 
 func _on_body_exited(body: RigidBody3D) -> void:

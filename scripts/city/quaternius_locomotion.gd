@@ -5,6 +5,7 @@ extends RefCounted
 const LIB_PATH := "res://assets/humans/animations/quaternius/AnimationLibrary_Godot_Standard.gltf"
 const ANIM_IDLE := &"Idle"
 const ANIM_WALK := &"Walk"
+const ANIM_DEATH := &"Death01"
 const ANIM_DRIVING := &"Driving"
 const ANIM_SITTING := &"Sitting_Idle"
 const LIB_NAME := &"quat"
@@ -16,7 +17,10 @@ static var _cached_passenger_library: AnimationLibrary
 static func get_library() -> AnimationLibrary:
 	if _cached_library != null:
 		return _cached_library
-	_cached_library = _build_library([String(ANIM_IDLE), String(ANIM_WALK)])
+	_cached_library = _build_library(
+		[String(ANIM_IDLE), String(ANIM_WALK), String(ANIM_DEATH)],
+		{String(ANIM_DEATH): Animation.LOOP_NONE}
+	)
 	return _cached_library
 
 
@@ -59,6 +63,23 @@ static func play_walk(player: AnimationPlayer, speed: float, reference_speed: fl
 	player.speed_scale = clampf(speed / reference_speed, 0.5, 2.2)
 
 
+static func play_death(player: AnimationPlayer) -> void:
+	if player == null:
+		return
+	var path := "%s/%s" % [LIB_NAME, ANIM_DEATH]
+	if not player.has_animation(path):
+		push_error("QuaterniusLocomotion: Death01 missing on AnimationPlayer")
+		return
+	player.play(path, 0.08)
+	player.speed_scale = 1.0
+
+
+static func is_death_playing(player: AnimationPlayer) -> bool:
+	if player == null:
+		return false
+	return player.current_animation == "%s/%s" % [LIB_NAME, ANIM_DEATH]
+
+
 static func play_driving(player: AnimationPlayer) -> void:
 	if player == null:
 		return
@@ -86,7 +107,10 @@ static func _attach_library(player: AnimationPlayer, library: AnimationLibrary, 
 		player.play("%s/%s" % [LIB_NAME, library.get_animation_list()[0]])
 
 
-static func _build_library(anim_names: Array[String]) -> AnimationLibrary:
+static func _build_library(
+	anim_names: Array[String],
+	loop_overrides: Dictionary = {}
+) -> AnimationLibrary:
 	if not ResourceLoader.exists(LIB_PATH):
 		push_error("QuaterniusLocomotion: missing %s" % LIB_PATH)
 		return null
@@ -106,14 +130,17 @@ static func _build_library(anim_names: Array[String]) -> AnimationLibrary:
 			push_warning("QuaterniusLocomotion: missing '%s'" % anim_name)
 			continue
 		var copy: Animation = src.get_animation(anim_name).duplicate(true) as Animation
-		_prepare_locomotion_clip(copy)
+		var loop_mode := Animation.LOOP_LINEAR
+		if loop_overrides.has(anim_name):
+			loop_mode = int(loop_overrides[anim_name])
+		_prepare_locomotion_clip(copy, loop_mode)
 		library.add_animation(anim_name, copy)
 	root.free()
 	return library
 
 
-static func _prepare_locomotion_clip(anim: Animation) -> void:
-	anim.loop_mode = Animation.LOOP_LINEAR
+static func _prepare_locomotion_clip(anim: Animation, loop_mode: int = Animation.LOOP_LINEAR) -> void:
+	anim.loop_mode = loop_mode
 	for i in range(anim.get_track_count() - 1, -1, -1):
 		var path := str(anim.track_get_path(i))
 		var typ := anim.track_get_type(i)

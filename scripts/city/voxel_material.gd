@@ -52,12 +52,17 @@ static func is_walkable_surface(id: int) -> bool:
 
 
 static func is_building_fabric(id: int) -> bool:
-	## Melee chisel targets: walls/roofs/fixtures — not ground or road surface.
+	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground or road.
 	match id:
 		AIR, BEDROCK, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES:
 			return false
 		_:
 			return id > AIR and id < COUNT
+
+
+static func is_destructible(id: int) -> bool:
+	## Laser / melee carve targets: any solid voxel asset except bedrock and water.
+	return id != AIR and id != BEDROCK and id != WATER and id > AIR and id < COUNT
 
 
 static func color(id: int) -> Color:

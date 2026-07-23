@@ -5,6 +5,7 @@ extends Node3D
 const CrowdPedVisualScript := preload("res://scripts/city/crowd_ped_visual.gd")
 const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
 const PedOutfitScript := preload("res://scripts/humans/ped_outfit.gd")
+const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 
 @export var pedestrian_count: int = 1000
 ## Full body render distance. Beyond this: not drawn.
@@ -62,6 +63,9 @@ func clear_crowd() -> void:
 	_agents.clear()
 	_near_agents.clear()
 	_skinned_count = 0
+	for child in get_children():
+		if child is RigidBody3D and String(child.name).begins_with("Corpse_"):
+			child.queue_free()
 
 
 func agent_count() -> int:
@@ -99,7 +103,11 @@ func collect_positions() -> Array:
 
 
 func agents_for_occupancy() -> Array:
-	return _agents
+	var live: Array = []
+	for agent in _agents:
+		if agent != null and not agent.dead:
+			live.append(agent)
+	return live
 
 
 func count_lod_tiers() -> Vector3i:
@@ -112,6 +120,152 @@ func count_lod_tiers() -> Vector3i:
 		else:
 			culled_n += 1
 	return Vector3i(near_n, 0, culled_n)
+
+
+## Closest living ped along segment [from, to]. Empty if none.
+## Keys: distance (float), point (Vector3), agent (PedAgent), index (int).
+func query_segment_hit(from: Vector3, to: Vector3) -> Dictionary:
+	var best_dist := INF
+	var best: Dictionary = {}
+	var seg := to - from
+	var seg_len := seg.length()
+	if seg_len < 0.05:
+		return best
+	var dir := seg / seg_len
+	## Fat capsule: third-person aim is imprecise; thin AABBs miss constantly.
+	const HIT_RADIUS := 0.85
+	const HIT_HALF_H := 1.05
+	for i in range(_agents.size()):
+		var agent: PedAgent = _agents[i]
+		if agent == null or agent.dead:
+			continue
+		var center := agent.position + Vector3(0.0, HIT_HALF_H * 0.85, 0.0)
+		var hit := _segment_hits_capsule(from, dir, seg_len, center, HIT_RADIUS, HIT_HALF_H)
+		if hit.is_empty():
+			continue
+		var dist: float = float(hit["distance"])
+		if dist >= best_dist:
+			continue
+		best_dist = dist
+		best = {
+			"distance": dist,
+			"point": hit["point"],
+			"agent": agent,
+			"index": i,
+		}
+	return best
+
+
+func kill_agent(agent: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bool:
+	if agent == null or agent.dead:
+		return false
+	agent.dead = true
+	agent.clear_path()
+	agent.next_decision_at = _time + 1.0e9
+	var idx := _agents.find(agent)
+	if idx < 0:
+		return false
+	agent.lod = PedAgent.Lod.NEAR
+	_ensure_visual(idx, agent)
+	var vis := agent.visual as CrowdPedVisual
+	if vis == null or not is_instance_valid(vis):
+		push_error("CrowdDirector: kill_agent missing visual")
+		return false
+	vis.visible = true
+	vis.process_mode = Node.PROCESS_MODE_INHERIT
+	vis.global_position = agent.position
+	vis.rotation.y = agent.yaw
+	vis.play_death()
+	agent.visual = null
+
+	var dir := impulse_dir
+	if dir.length_squared() < 0.0001:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
+
+	var body_h := 1.7 * agent.body_scale
+	var body_r := 0.28 * agent.body_scale
+	var com := Vector3(0.0, body_h * 0.5, 0.0)
+
+	var body := RigidBody3D.new()
+	body.name = "Corpse_%d" % idx
+	body.collision_layer = 2
+	body.collision_mask = 1
+	body.continuous_cd = true
+	body.contact_monitor = false
+	body.linear_damp = 0.4
+	body.angular_damp = 0.5
+	body.mass = 72.0 * agent.body_scale
+	body.center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
+	body.center_of_mass = com
+
+	var shape := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = body_r
+	capsule.height = maxf(body_h - body_r * 2.0, body_r * 2.0)
+	shape.shape = capsule
+	shape.position = com
+	body.add_child(shape)
+
+	var keep_xf: Transform3D = vis.global_transform
+	var parent_node: Node = vis.get_parent()
+	if parent_node != null:
+		parent_node.remove_child(vis)
+	add_child(body)
+	body.global_transform = keep_xf
+	body.add_child(vis)
+	vis.transform = Transform3D.IDENTITY
+
+	## Same dramatic tumble as cars, scaled for a human body.
+	var impulse := dir * 18.0 + Vector3.UP * 12.0
+	var hit_offset := hit_point - body.global_position
+	body.apply_impulse(impulse, hit_offset)
+	var side := dir.cross(Vector3.UP)
+	if side.length_squared() < 1e-6:
+		side = Vector3.RIGHT
+	else:
+		side = side.normalized()
+	body.apply_torque_impulse(side * 14.0 + dir * 6.0)
+	## Upright death pose keeps the root near the ground.
+	body.set_meta("tumble_clearance", 0.08)
+	if get_tree() != null:
+		get_tree().create_timer(4.5).timeout.connect(_freeze_corpse.bind(body))
+	return true
+
+
+func _freeze_corpse(body: RigidBody3D) -> void:
+	if body == null or not is_instance_valid(body):
+		return
+	var clearance := float(body.get_meta("tumble_clearance", 0.08))
+	TumbleSettleScript.freeze_lying_down(body, TumbleSettleScript.Kind.PEDESTRIAN, clearance)
+
+
+## Vertical capsule vs segment. Radius is horizontal; half_height is along Y from center.
+static func _segment_hits_capsule(
+	from: Vector3,
+	dir: Vector3,
+	seg_len: float,
+	center: Vector3,
+	radius: float,
+	half_height: float
+) -> Dictionary:
+	var to_c := center - from
+	var t := to_c.dot(dir)
+	t = clampf(t, 0.0, seg_len)
+	var closest := from + dir * t
+	var delta := closest - center
+	var dy := absf(delta.y)
+	var xz := Vector2(delta.x, delta.z).length()
+	if dy > half_height + radius * 0.35:
+		return {}
+	var y_slack := 0.0
+	if dy > half_height:
+		y_slack = dy - half_height
+	var radial := sqrt(xz * xz + y_slack * y_slack)
+	if radial > radius:
+		return {}
+	return {"point": closest, "distance": t}
 
 
 func _spawn_agents() -> void:
@@ -152,6 +306,8 @@ func _physics_process(delta: float) -> void:
 
 func _simulate_agents(delta: float) -> void:
 	for agent in _agents:
+		if agent.dead:
+			continue
 		if _time >= agent.next_decision_at:
 			_decide(agent)
 		if agent.state != PedAgent.State.WALK:
@@ -255,6 +411,10 @@ func _refresh_lod(force: bool) -> void:
 	var exit_r2 := exit_r * exit_r
 	for i in range(_agents.size()):
 		var agent: PedAgent = _agents[i]
+		if agent.dead:
+			## Visual already reparented onto a RigidBody corpse.
+			agent.lod = PedAgent.Lod.CULLED
+			continue
 		var dx := agent.position.x - cam_pos.x
 		var dz := agent.position.z - cam_pos.z
 		var d2 := dx * dx + dz * dz
@@ -279,6 +439,8 @@ func _update_frustum_visibility() -> void:
 	if _camera == null or not is_instance_valid(_camera):
 		return
 	for agent in _agents:
+		if agent.dead:
+			continue
 		var vis := agent.visual as CrowdPedVisual
 		if vis == null or not is_instance_valid(vis):
 			continue

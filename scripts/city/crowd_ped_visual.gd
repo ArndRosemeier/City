@@ -79,6 +79,8 @@ func unbind_agent() -> void:
 func sync_from_agent(agent: PedAgent) -> void:
 	global_position = agent.position
 	rotation.y = agent.yaw
+	if agent.dead:
+		return
 	if agent.outfit != null and agent.outfit != _outfit:
 		_outfit = agent.outfit
 		ensure_body(agent.female, agent.outfit.scene_path)
@@ -89,6 +91,18 @@ func sync_from_agent(agent: PedAgent) -> void:
 		QuaterniusLocomotion.play_walk(_anim, agent.walk_speed)
 	else:
 		QuaterniusLocomotion.play_idle(_anim)
+
+
+func play_death() -> void:
+	if _anim == null:
+		return
+	## Refresh library so Death01 is present even if this visual was spawned earlier.
+	QuaterniusLocomotion.attach_to(_anim)
+	QuaterniusLocomotion.play_death(_anim)
+
+
+func is_playing_death() -> bool:
+	return QuaterniusLocomotion.is_death_playing(_anim)
 
 
 func _apply_outfit() -> void:
