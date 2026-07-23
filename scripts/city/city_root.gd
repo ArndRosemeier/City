@@ -12,6 +12,7 @@ const VoxelCascadeDebrisScript := preload("res://scripts/city/voxel_cascade_debr
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
 const DayNightCycleScript := preload("res://scripts/city/day_night_cycle.gd")
+const CitySettingsPanelScript := preload("res://scripts/city/city_settings_panel.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
@@ -31,13 +32,18 @@ var _debris_root: Node3D
 var _cascade: Node
 var _audio: Node
 var _day_night: Node
+var _settings_panel: Node
+var _world_env: WorldEnvironment
+var _sun: DirectionalLight3D
+var _player_viewer: VoxelViewer
+var _collision_viewer: VoxelViewer
 var _booting: bool = false
 var _fps_accum: float = 0.0
 var _street_night_factor: float = 0.0
 
-## Visual mesh radius (~90 m). Collisions use a shorter viewer below.
-const PLAYER_VIEW_DISTANCE := 180
-const PLAYER_COLLISION_DISTANCE := 64
+## Visual mesh radius (~90 m at default). Collisions use a shorter viewer below.
+var _voxel_view_vox: int = 100
+var _collision_view_vox: int = 48
 
 
 func _ready() -> void:
@@ -54,16 +60,16 @@ func _ready() -> void:
 
 
 func _build_env() -> void:
-	var light := DirectionalLight3D.new()
-	light.name = "Sun"
-	light.rotation_degrees = Vector3(-50, 40, 0)
-	light.light_energy = 1.3
-	light.light_color = Color(1.0, 0.96, 0.88)
-	light.shadow_enabled = true
+	_sun = DirectionalLight3D.new()
+	_sun.name = "Sun"
+	_sun.rotation_degrees = Vector3(-50, 40, 0)
+	_sun.light_energy = 1.3
+	_sun.light_color = Color(1.0, 0.96, 0.88)
+	_sun.shadow_enabled = true
 	## 4K + dense Blocky voxels: long cascades destroy fill-rate. Keep near-field only.
-	light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	light.directional_shadow_max_distance = 120.0
-	add_child(light)
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	_sun.directional_shadow_max_distance = 120.0
+	add_child(_sun)
 
 	var moon := DirectionalLight3D.new()
 	moon.name = "Moon"
@@ -81,8 +87,8 @@ func _build_env() -> void:
 	sky.process_mode = Sky.PROCESS_MODE_REALTIME
 	sky.radiance_size = Sky.RADIANCE_SIZE_256
 
-	var env := WorldEnvironment.new()
-	env.name = "WorldEnvironment"
+	_world_env = WorldEnvironment.new()
+	_world_env.name = "WorldEnvironment"
 	var e := Environment.new()
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
@@ -107,18 +113,22 @@ func _build_env() -> void:
 	e.ssao_radius = 1.4
 	e.ssao_intensity = 1.6
 	e.ssao_power = 1.5
-	env.environment = e
-	add_child(env)
+	_world_env.environment = e
+	add_child(_world_env)
 
 	_day_night = DayNightCycleScript.new()
 	_day_night.name = "DayNightCycle"
 	_day_night.day_length_sec = day_length_sec
 	add_child(_day_night)
-	_day_night.call("setup", light, moon, e, sky_mat)
+	_day_night.call("setup", _sun, moon, e, sky_mat)
 	if _day_night.has_signal("night_factor_changed"):
 		_day_night.connect("night_factor_changed", _on_night_factor_changed)
 	if _day_night.has_method("get_night_factor"):
 		_on_night_factor_changed(float(_day_night.call("get_night_factor")))
+
+
+func is_settings_open() -> bool:
+	return _settings_panel != null and bool(_settings_panel.call("is_open"))
 
 
 func _on_night_factor_changed(night_factor: float) -> void:
@@ -173,6 +183,79 @@ func _build_hud() -> void:
 	_status.offset_bottom = -40
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(_status)
+
+	_settings_panel = CitySettingsPanelScript.new()
+	_settings_panel.name = "CitySettings"
+	add_child(_settings_panel)
+	_settings_panel.settings_applied.connect(_on_settings_applied)
+	_settings_panel.opened.connect(_on_settings_opened)
+	_settings_panel.closed.connect(_on_settings_closed)
+	## Apply saved / default knobs once the viewport exists.
+	call_deferred("_on_settings_applied", _settings_panel.get_settings())
+
+
+func _on_settings_opened() -> void:
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_settings_closed() -> void:
+	if _walker != null and is_instance_valid(_walker):
+		_walker._set_capture(true)
+
+
+func _on_settings_applied(settings: Dictionary) -> void:
+	var scale := clampf(float(settings.get("render_scale", 0.75)), 0.45, 1.0)
+	get_viewport().scaling_3d_scale = scale
+
+	if _world_env != null and _world_env.environment != null:
+		var e := _world_env.environment
+		e.ssao_enabled = bool(settings.get("ssao", true))
+		e.glow_enabled = bool(settings.get("glow", true))
+		e.fog_enabled = bool(settings.get("fog", true))
+
+	if _sun != null:
+		_sun.shadow_enabled = bool(settings.get("shadows", true))
+		_sun.directional_shadow_max_distance = clampf(float(settings.get("shadow_distance_m", 120.0)), 40.0, 220.0)
+
+	_voxel_view_vox = clampi(int(settings.get("voxel_view_vox", 100)), 80, 280)
+	_collision_view_vox = clampi(int(settings.get("collision_view_vox", 48)), 32, 128)
+	if _player_viewer != null and is_instance_valid(_player_viewer):
+		_player_viewer.view_distance = _voxel_view_vox
+	if _collision_viewer != null and is_instance_valid(_collision_viewer):
+		_collision_viewer.view_distance = _collision_view_vox
+
+	bubble_radius_m = clampf(float(settings.get("bubble_radius_m", 360.0)), 180.0, 520.0)
+	if _streamer != null and is_instance_valid(_streamer):
+		_streamer.bubble_radius_m = bubble_radius_m
+		_streamer.unload_radius_m = bubble_radius_m + 140.0
+		_streamer.voxel_detail_radius_m = minf(bubble_radius_m * 0.45, 140.0)
+		_streamer.player_view_m = float(_voxel_view_vox) * VOXEL_SIZE
+
+	var crowd_m := clampf(float(settings.get("crowd_render_m", 70.0)), 20.0, 160.0)
+	var vehicle_m := clampf(float(settings.get("vehicle_render_m", 120.0)), 40.0, 220.0)
+	var omni := clampi(int(settings.get("max_omni_lights", 12)), 0, 24)
+	_apply_district_runtime_budgets(crowd_m, vehicle_m, omni)
+
+
+func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int) -> void:
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst):
+			continue
+		if inst.crowd != null and is_instance_valid(inst.crowd):
+			inst.crowd.render_distance = crowd_m
+			if inst.crowd.has_method("_refresh_lod"):
+				inst.crowd.call("_refresh_lod", true)
+		if inst.vehicles != null and is_instance_valid(inst.vehicles):
+			inst.vehicles.render_distance = vehicle_m
+		if inst.street_props != null and is_instance_valid(inst.street_props):
+			inst.street_props.max_omni_lights = omni
+			if inst.street_props.has_method("_refresh_lights"):
+				inst.street_props.call("_refresh_lights", true)
 
 
 func _process(delta: float) -> void:
@@ -275,7 +358,7 @@ func _regenerate() -> void:
 		_tool,
 		city_seed,
 		VOXEL_SIZE,
-		float(PLAYER_VIEW_DISTANCE) * VOXEL_SIZE
+		float(_voxel_view_vox) * VOXEL_SIZE
 	)
 	_streamer.status_message.connect(_on_streamer_status)
 	_streamer.spawn_district_ready.connect(_on_spawn_district_ready)
@@ -317,20 +400,20 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.melee_strike_requested.connect(_on_melee_strike)
 	_walker.stomp_requested.connect(_on_stomp)
 	var cam := _walker.get_camera()
-	## Visuals out to ~90 m; collisions only near the player (big 4K/remesh win).
-	var player_viewer := VoxelViewer.new()
-	player_viewer.name = "VoxelViewer"
-	player_viewer.view_distance = PLAYER_VIEW_DISTANCE
-	player_viewer.requires_collisions = false
-	player_viewer.requires_visuals = true
-	cam.add_child(player_viewer)
+	## Visuals out to settings radius; collisions only near the player (big remesh win).
+	_player_viewer = VoxelViewer.new()
+	_player_viewer.name = "VoxelViewer"
+	_player_viewer.view_distance = _voxel_view_vox
+	_player_viewer.requires_collisions = false
+	_player_viewer.requires_visuals = true
+	cam.add_child(_player_viewer)
 
-	var collision_viewer := VoxelViewer.new()
-	collision_viewer.name = "CollisionViewer"
-	collision_viewer.view_distance = PLAYER_COLLISION_DISTANCE
-	collision_viewer.requires_collisions = true
-	collision_viewer.requires_visuals = false
-	cam.add_child(collision_viewer)
+	_collision_viewer = VoxelViewer.new()
+	_collision_viewer.name = "CollisionViewer"
+	_collision_viewer.view_distance = _collision_view_vox
+	_collision_viewer.requires_collisions = true
+	_collision_viewer.requires_visuals = false
+	cam.add_child(_collision_viewer)
 
 	## Extra viewer pinned on spawn so neighborhood meshes + collisions exist
 	## before the walker drops in (player camera may still be far / unset).
@@ -374,6 +457,8 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_action_bar.name = "PlayerActionBar"
 	add_child(_action_bar)
 	_action_bar.setup(_walker)
+	if _settings_panel != null:
+		_on_settings_applied(_settings_panel.get_settings())
 	print("CityRoot: playable — endless stream active at y=%.2f" % floor_y)
 
 

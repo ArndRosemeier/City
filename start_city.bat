@@ -11,12 +11,21 @@ if defined GODOT (
     set "GODOT_EXE=%ROOT%tools\godot\Godot_v4.6-voxel_win64.exe"
 ) else if exist "%ROOT%tools\godot\Godot_v4.6-stable_win64.exe" (
     set "GODOT_EXE=%ROOT%tools\godot\Godot_v4.6-stable_win64.exe"
+) else if exist "%ROOT%tools\ensure_city_deps.ps1" (
+    echo Godot missing - downloading Voxel Tools build...
+    for /f "usebackq delims=" %%L in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%tools\ensure_city_deps.ps1" -Root "%ROOT%."`) do set "GODOT_EXE=%%L"
 ) else if exist "C:\Projekte\InfiniWorld\tools\godot\Godot_v4.6-stable_win64.exe" (
     set "GODOT_EXE=C:\Projekte\InfiniWorld\tools\godot\Godot_v4.6-stable_win64.exe"
 ) else (
     echo ERROR: Voxel Tools Godot not found.
-    echo Download Godot 4.6 + Voxel Tools 1.6 into tools\godot\Godot_v4.6-voxel_win64.exe
+    echo Run install_city.bat or place Godot_v4.6-voxel_win64.exe in tools\godot\
     echo Or set GODOT to that executable.
+    pause
+    exit /b 1
+)
+
+if not exist "%GODOT_EXE%" (
+    echo ERROR: Engine path invalid: "%GODOT_EXE%"
     pause
     exit /b 1
 )

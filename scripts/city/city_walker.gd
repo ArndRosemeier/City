@@ -317,6 +317,13 @@ func is_character_editor_open() -> bool:
 	return _editor != null and _editor.call("is_open")
 
 
+func is_blocking_ui_open() -> bool:
+	if is_character_editor_open():
+		return true
+	var parent := get_parent()
+	return parent != null and parent.has_method("is_settings_open") and bool(parent.call("is_settings_open"))
+
+
 func toggle_character_editor() -> void:
 	if _editor == null:
 		return
@@ -687,7 +694,7 @@ func is_feet_aligned() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _editor != null and _editor.call("is_open"):
+	if is_blocking_ui_open():
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
@@ -801,7 +808,7 @@ func _update_camera_shake(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if _editor != null and _editor.call("is_open"):
+	if is_blocking_ui_open():
 		velocity.x = 0.0
 		velocity.z = 0.0
 		_jump_queued = false

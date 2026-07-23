@@ -29,6 +29,9 @@ tools/vendor/
 # Local Godot voxel engine binary
 tools/godot/
 
+# Portable install / pack output
+dist/
+
 # Mixamo raw FBX (Adobe terms — keep local; bake to mixamo_actions.tres)
 assets/humans/animations/mixamo/raw/*.fbx
 assets/humans/animations/mixamo/raw/*.FBX
