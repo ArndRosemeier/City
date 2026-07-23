@@ -9,6 +9,7 @@ const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityDebugHudScript := preload("res://scripts/city/city_debug_hud.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
+const VoxelCascadeDebrisScript := preload("res://scripts/city/voxel_cascade_debris.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
@@ -23,6 +24,8 @@ var _hud: Label
 var _status: Label
 var _debug_hud: Node
 var _action_bar: Node
+var _debris_root: Node3D
+var _cascade: Node
 var _booting: bool = false
 var _fps_accum: float = 0.0
 
@@ -139,6 +142,18 @@ func _create_terrain() -> void:
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 
 
+func _ensure_cascade_debris() -> void:
+	if _debris_root == null or not is_instance_valid(_debris_root):
+		_debris_root = Node3D.new()
+		_debris_root.name = "DebrisRoot"
+		add_child(_debris_root)
+	if _cascade == null or not is_instance_valid(_cascade):
+		_cascade = VoxelCascadeDebrisScript.new()
+		_cascade.name = "VoxelCascadeDebris"
+		add_child(_cascade)
+	_cascade.setup(_terrain, _tool, _debris_root, VOXEL_SIZE)
+
+
 func _regenerate() -> void:
 	if _booting:
 		return
@@ -160,8 +175,16 @@ func _regenerate() -> void:
 	if _action_bar != null and is_instance_valid(_action_bar):
 		_action_bar.queue_free()
 		_action_bar = null
+	if _cascade != null and is_instance_valid(_cascade):
+		_cascade.clear_debris()
+		_cascade.queue_free()
+		_cascade = null
+	if _debris_root != null and is_instance_valid(_debris_root):
+		_debris_root.queue_free()
+		_debris_root = null
 
 	_create_terrain()
+	_ensure_cascade_debris()
 	await get_tree().process_frame
 	await get_tree().process_frame
 
@@ -380,6 +403,8 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.AIR
 	_tool.do_point(hit_vox)
+	if _cascade != null:
+		_cascade.collapse_column_above(hit_vox)
 
 
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:

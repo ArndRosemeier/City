@@ -301,6 +301,19 @@ static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 	_add_quad(st, Vector3(bmin.x, bmin.y, bmin.z), Vector3(bmax.x, bmin.y, bmin.z), Vector3(bmax.x, bmin.y, bmax.z), Vector3(bmin.x, bmin.y, bmax.z), Vector3(0, -1, 0))
 
 
+## Shared textured materials for debris / impostors (same look as Blocky voxels).
+static var _mat_cache: Dictionary = {}  # int → StandardMaterial3D
+
+
+static func material_for(id: int) -> StandardMaterial3D:
+	var cached: Variant = _mat_cache.get(id)
+	if cached is StandardMaterial3D:
+		return cached
+	var mat := _material_for(id)
+	_mat_cache[id] = mat
+	return mat
+
+
 static func _material_for(id: int) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true

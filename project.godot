@@ -20,6 +20,10 @@ run/main_scene="res://scenes/city_poc.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
+[autoload]
+
+ErrorOverlay="*res://scripts/debug/error_overlay.gd"
+
 [display]
 
 window/size/viewport_width=1280
