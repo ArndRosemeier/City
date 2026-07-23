@@ -5,12 +5,14 @@
 ## no matter how many columns are falling at once.
 ## Per tick a column may spread (10%) to a neighbor or fizzle (5%) and stop early.
 ## Destroying a brick also checks nearby fabric with no support below (50% drop).
+## When the live cap is full, settle sleeping cubes out gradually and defer new
+## visuals — never skip the whole mid-cascade or FIFO-wipe the field in one frame.
 class_name VoxelCascadeDebris
 extends Node
 
 @export var max_cubes_per_collapse: int = 256
 @export var cascade_interval_sec: float = 0.04
-@export var max_live_debris: int = 1200
+@export var max_live_debris: int = 1500
 @export var tumble_spin: float = 9.0
 @export var pop_impulse: float = 2.4
 ## Horizontal spawn jitter as a fraction of voxel size (breaks neat columns).
@@ -27,8 +29,10 @@ extends Node
 @export var unsupported_flush_budget: int = 32
 ## Cap queued columns so chain reactions can't runaway.
 @export var max_active_columns: int = 180
-## When over the live cap, free at most this many oldest cubes per physics frame.
-@export var debris_evict_per_frame: int = 20
+## Max settled cubes freed per frame to make room for new cascade visuals.
+@export var debris_evict_per_frame: int = 48
+## Cleared voxels waiting for a debris cube when the live cap is full.
+@export var max_pending_visuals: int = 2500
 
 ## Fabric cells around a cleared brick to check for missing vertical support.
 const _UNSUP_OFFSETS: Array[Vector3i] = [
@@ -56,6 +60,10 @@ var _pending_unsupported: Array[Vector3i] = []
 var _flushing: bool = false
 ## Oldest → newest. Used for FIFO eviction at the live cap.
 var _live_bodies: Array = []
+## {vox: Vector3i, mat: int} — visuals deferred when the live cap is busy.
+var _pending_visuals: Array = []
+## Remaining settled-cube frees allowed this physics frame.
+var _evict_budget: int = 0
 var _phys_mat: PhysicsMaterial
 var _rng := RandomNumberGenerator.new()
 
@@ -75,8 +83,10 @@ func setup(terrain: VoxelTerrain, tool: VoxelTool, debris_root: Node3D, voxel_si
 func clear_queue() -> void:
 	_columns.clear()
 	_pending_unsupported.clear()
+	_pending_visuals.clear()
 	_accum = 0.0
 	_flushing = false
+	_evict_budget = 0
 
 
 func clear_debris() -> void:
@@ -148,13 +158,20 @@ func _append_column(column: Array) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	## Always trim gradually — never mass-delete on spawn (that wiped the whole field).
-	_trim_debris_gradual()
+	## Fresh eviction budget each frame — free settled cubes slowly to make room
+	## for active cascade visuals (never wipe the whole field in one shot).
+	_evict_budget = maxi(debris_evict_per_frame, 1)
+	_prune_live_bodies()
+	_drain_pending_visuals()
 	if _tool == null or _terrain == null or _debris_root == null:
 		_columns.clear()
 		_pending_unsupported.clear()
 		return
-	if _columns.is_empty() and _pending_unsupported.is_empty():
+	if (
+		_columns.is_empty()
+		and _pending_unsupported.is_empty()
+		and _pending_visuals.is_empty()
+	):
 		return
 	_accum += delta
 	while _accum >= cascade_interval_sec and not _columns.is_empty():
@@ -163,6 +180,7 @@ func _physics_process(delta: float) -> void:
 	## Keep draining unsupported chains even when no columns remain.
 	if not _pending_unsupported.is_empty() and not _flushing:
 		_flush_unsupported_drops()
+	_drain_pending_visuals()
 
 
 func _spawn_one_from_each_column() -> void:
@@ -339,36 +357,71 @@ func _prune_live_bodies() -> void:
 	_live_bodies.resize(write)
 
 
-func _free_oldest_debris() -> bool:
-	while not _live_bodies.is_empty():
-		var old: Variant = _live_bodies.pop_front()
-		if old == null or not is_instance_valid(old):
+func _free_body_at(index: int) -> bool:
+	if index < 0 or index >= _live_bodies.size():
+		return false
+	var old: Variant = _live_bodies[index]
+	_live_bodies.remove_at(index)
+	if old == null or not is_instance_valid(old):
+		return false
+	var body := old as RigidBody3D
+	if body.tree_exited.is_connected(_on_body_exited):
+		body.tree_exited.disconnect(_on_body_exited)
+	body.queue_free()
+	return true
+
+
+func _free_oldest_sleeping_debris() -> bool:
+	## Prefer removing settled piles so active tumbling cubes stay visible.
+	for i in _live_bodies.size():
+		var b: Variant = _live_bodies[i]
+		if b == null or not is_instance_valid(b):
 			continue
-		var body := old as RigidBody3D
-		if body.tree_exited.is_connected(_on_body_exited):
-			body.tree_exited.disconnect(_on_body_exited)
-		body.queue_free()
-		return true
+		var body := b as RigidBody3D
+		if body.sleeping:
+			return _free_body_at(i)
 	return false
 
 
-func _trim_debris_gradual() -> void:
-	## Soft cleanup only — a few oldest cubes per frame when over the cap.
+func _free_oldest_debris() -> bool:
+	while not _live_bodies.is_empty():
+		if _free_body_at(0):
+			return true
+	return false
+
+
+func _make_room_for_spawn() -> bool:
 	_prune_live_bodies()
-	var budget := maxi(debris_evict_per_frame, 1)
-	while _live_bodies.size() > max_live_debris and budget > 0:
-		if not _free_oldest_debris():
-			break
-		budget -= 1
+	if _live_bodies.size() < max_live_debris:
+		return true
+	if _evict_budget <= 0:
+		return false
+	## One settled (or oldest) free per attempt — budgeted so we never mass-wipe.
+	if _free_oldest_sleeping_debris() or _free_oldest_debris():
+		_evict_budget -= 1
+	return _live_bodies.size() < max_live_debris
+
+
+func _drain_pending_visuals() -> void:
+	while not _pending_visuals.is_empty():
+		if not _make_room_for_spawn():
+			return
+		var entry: Dictionary = _pending_visuals.pop_front()
+		_spawn_cube_now(entry["vox"] as Vector3i, int(entry["mat"]))
 
 
 func _spawn_cube(vox: Vector3i, mat_id: int) -> void:
 	if _debris_root == null or _terrain == null:
 		return
-	_prune_live_bodies()
-	## At capacity: keep existing fallen blocks; skip this visual rather than wiping the field.
-	if _live_bodies.size() >= max_live_debris:
+	if not _make_room_for_spawn():
+		## Defer the visual — voxel is already cleared; show the cube when room opens.
+		if _pending_visuals.size() < max_pending_visuals:
+			_pending_visuals.append({"vox": vox, "mat": mat_id})
 		return
+	_spawn_cube_now(vox, mat_id)
+
+
+func _spawn_cube_now(vox: Vector3i, mat_id: int) -> void:
 	var local_center := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
 	var world_center := _terrain.to_global(local_center)
 	## Nudge off the column axis so neighbors don't rest in a perfect stack.

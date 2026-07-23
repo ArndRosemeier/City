@@ -6,7 +6,6 @@ const VOXEL_SIZE := 0.5
 const AirGeneratorScript := preload("res://scripts/city/air_generator.gd")
 const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library.gd")
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
-const CityDebugHudScript := preload("res://scripts/city/city_debug_hud.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
 const VoxelCascadeDebrisScript := preload("res://scripts/city/voxel_cascade_debris.gd")
@@ -22,7 +21,6 @@ var _streamer: Node
 var _walker: CityWalker
 var _hud: Label
 var _status: Label
-var _debug_hud: Node
 var _action_bar: Node
 var _debris_root: Node3D
 var _cascade: Node
@@ -113,10 +111,7 @@ func _process(delta: float) -> void:
 		return
 	_fps_accum = 0.0
 	if _hud != null:
-		var extra := ""
-		if _streamer != null:
-			extra = "  ·  districts %d" % int(_streamer.call("district_count"))
-		_hud.text = "%d FPS%s" % [Engine.get_frames_per_second(), extra]
+		_hud.text = "%d FPS" % Engine.get_frames_per_second()
 
 
 func _create_terrain() -> void:
@@ -175,9 +170,6 @@ func _regenerate() -> void:
 		_streamer.call("clear_all")
 		_streamer.queue_free()
 		_streamer = null
-	if _debug_hud != null and is_instance_valid(_debug_hud):
-		_debug_hud.queue_free()
-		_debug_hud = null
 	if _action_bar != null and is_instance_valid(_action_bar):
 		_action_bar.queue_free()
 		_action_bar = null
@@ -211,11 +203,6 @@ func _regenerate() -> void:
 	)
 	_streamer.status_message.connect(_on_streamer_status)
 	_streamer.spawn_district_ready.connect(_on_spawn_district_ready)
-
-	_debug_hud = CityDebugHudScript.new()
-	_debug_hud.name = "CityDebugHud"
-	add_child(_debug_hud)
-	_debug_hud.setup(_streamer, _terrain)
 
 	_status.text = "Generating spawn district…"
 	_streamer.boot_spawn_district(Vector2i.ZERO)
