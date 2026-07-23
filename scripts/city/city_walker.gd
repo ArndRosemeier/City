@@ -1247,14 +1247,6 @@ func _start_laser_eyes_at_cursor() -> void:
 	if not hit.is_empty():
 		aim_point = hit["position"] as Vector3
 
-	## Face the click point, then launch one dart from between the eyes.
-	var face := aim_point - global_position
-	face.y = 0.0
-	if face.length_squared() > 0.0001:
-		rotation.y = atan2(-face.x, -face.z)
-		_yaw = rotation.y
-		_apply_camera_angles()
-
 	_laser_ready_at_msec = now + int(maxi(int(laser_cooldown_sec * 1000.0), 50))
 
 	var origin := _laser_eye_origin()
