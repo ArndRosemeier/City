@@ -3,6 +3,8 @@ class_name CityWalker
 extends CharacterBody3D
 
 signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
+## Precise single-voxel melee: origin + flat facing direction, range in meters.
+signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
 const ProportionModifierScript := preload("res://scripts/humans/proportion_modifier.gd")
@@ -35,6 +37,12 @@ const LIB_NAME := &"quat"
 @export var blast_range: float = 80.0
 ## Dig sphere radius in meters at character_scale 1.0 (intentionally mild).
 @export var dig_radius_at_scale_1: float = 1.45
+## Melee reach (m at scale 1) — must be close and facing the wall.
+@export var melee_reach_m: float = 1.05
+@export var punch_impact_ratio: float = 0.42
+@export var kick_impact_ratio: float = 0.58
+@export var punch_anim: String = "Punch_Cross"
+@export var kick_anim: String = "Kick_Soccerball_m"
 @export var pivot_height: float = 1.35
 @export var zoom_min: float = 1.8
 @export var zoom_max: float = 12.0
@@ -83,6 +91,7 @@ const SAFETY_FLOOR_TOP_Y := 1.0
 var _action_playing: bool = false
 var _action_anim: String = ""
 var _action_names: PackedStringArray = PackedStringArray()
+var _melee_strike_token: int = 0
 
 
 func _ready() -> void:
@@ -436,20 +445,20 @@ func is_playing_action() -> bool:
 	return _action_playing
 
 
-func play_action(anim_name: String) -> void:
+func play_action(anim_name: String, allow_toggle: bool = true) -> void:
 	if _anim_player == null or anim_name.is_empty():
 		return
 	var path := "%s/%s" % [LIB_NAME, anim_name]
 	if not _anim_player.has_animation(path):
 		push_error("CityWalker: unknown action '%s'" % anim_name)
 		return
-	## Re-click same action cancels back to idle/walk.
-	if _action_playing and _action_anim == anim_name:
+	## Re-click same action cancels back to idle/walk (action bar only).
+	if allow_toggle and _action_playing and _action_anim == anim_name:
 		cancel_action()
 		return
 	_action_playing = true
 	_action_anim = anim_name
-	_anim_player.play(path, 0.15)
+	_anim_player.play(path, 0.12)
 	_anim_player.speed_scale = clampf(1.0 / maxf(character_scale, 0.001), 0.05, 4.0)
 
 
@@ -607,9 +616,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			if not _captured:
 				_set_capture(true)
 				return
-			_fire_blast()
-		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and not _captured:
-			_set_capture(true)
+			_start_melee_punch()
+			get_viewport().set_input_as_handled()
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			if not _captured:
+				_set_capture(true)
+				return
+			_start_melee_kick()
+			get_viewport().set_input_as_handled()
 
 
 func _apply_camera_angles() -> void:
@@ -804,7 +818,8 @@ func _update_locomotion_anim(move_speed: float) -> void:
 	if _anim_player == null:
 		return
 	if _action_playing:
-		if _moving:
+		## One-shots (punch/kick) play out; looping emotes cancel when you walk.
+		if _moving and _action_is_looping():
 			cancel_action()
 		else:
 			return
@@ -824,6 +839,16 @@ func _update_locomotion_anim(move_speed: float) -> void:
 		_anim_player.speed_scale = size_anim
 
 
+func _action_is_looping() -> bool:
+	if _anim_player == null or _action_anim.is_empty():
+		return false
+	var path := "%s/%s" % [LIB_NAME, _action_anim]
+	if not _anim_player.has_animation(path):
+		return false
+	var anim: Animation = _anim_player.get_animation(path)
+	return anim != null and anim.loop_mode != Animation.LOOP_NONE
+
+
 func _fire_blast() -> void:
 	var from := _camera.global_position
 	var dir := -_camera.global_transform.basis.z
@@ -835,6 +860,87 @@ func _fire_blast() -> void:
 	if hit.is_empty():
 		return
 	blast_requested.emit(hit["position"], hit["collider"], get_dig_radius())
+
+
+func _start_melee_punch() -> void:
+	if not has_action_animation(punch_anim):
+		push_error("CityWalker: punch anim missing (%s)" % punch_anim)
+		return
+	play_action(punch_anim, false)
+	_schedule_melee_impact(true, punch_impact_ratio)
+
+
+func _start_melee_kick() -> void:
+	if not has_action_animation(kick_anim):
+		push_error("CityWalker: kick anim missing (%s)" % kick_anim)
+		return
+	play_action(kick_anim, false)
+	_schedule_melee_impact(false, kick_impact_ratio)
+
+
+func _schedule_melee_impact(is_punch: bool, ratio: float) -> void:
+	_melee_strike_token += 1
+	var token := _melee_strike_token
+	var delay := 0.28
+	if _anim_player != null:
+		var path := "%s/%s" % [LIB_NAME, _action_anim]
+		if _anim_player.has_animation(path):
+			var anim: Animation = _anim_player.get_animation(path)
+			if anim != null:
+				delay = maxf(anim.length * clampf(ratio, 0.05, 0.95), 0.05)
+	var tree := get_tree()
+	if tree == null:
+		return
+	tree.create_timer(delay).timeout.connect(
+		func() -> void:
+			if token != _melee_strike_token or not is_instance_valid(self):
+				return
+			_emit_melee_strike(is_punch)
+	)
+
+
+func _emit_melee_strike(is_punch: bool) -> void:
+	var origin := _melee_origin(is_punch)
+	var forward := -global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.0001:
+		forward = Vector3(0.0, 0.0, -1.0)
+	else:
+		forward = forward.normalized()
+	## Slight downward bias for kicks so the foot voxel is preferred.
+	if not is_punch:
+		forward = (forward + Vector3(0.0, -0.12, 0.0)).normalized()
+	var reach := melee_reach_m * character_scale
+	melee_strike_requested.emit(origin, forward, reach)
+
+
+func _melee_origin(is_punch: bool) -> Vector3:
+	## Prefer live bone at impact time so the chisel lines up with the limb.
+	if is_punch:
+		var hand := _bone_world_pos(
+			[&"RightHand", &"LeftHand", &"hand_r", &"hand_l", &"RightLowerArm", &"lowerarm_r"]
+		)
+		if hand.is_finite():
+			return hand
+		return global_position + Vector3(0.0, 1.22 * character_scale, 0.0)
+	var foot := _bone_world_pos(
+		[&"RightFoot", &"LeftFoot", &"RightToes", &"foot_r", &"foot_l", &"ball_r", &"ball_l"]
+	)
+	if foot.is_finite():
+		return foot
+	return global_position + Vector3(0.0, 0.22 * character_scale, 0.0)
+
+
+func _bone_world_pos(names: Array) -> Vector3:
+	if _skeleton == null or not is_instance_valid(_skeleton):
+		return Vector3.INF
+	_skeleton.force_update_all_bone_transforms()
+	for n in names:
+		var idx := _skeleton.find_bone(String(n))
+		if idx < 0:
+			continue
+		return _skeleton.to_global(_skeleton.get_bone_global_pose(idx).origin)
+	return Vector3.INF
 
 
 func set_yaw(yaw: float) -> void:

@@ -222,6 +222,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	## Hold above until collision exists — never enable physics in the void.
 	_walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	_walker.blast_requested.connect(_on_blast)
+	_walker.melee_strike_requested.connect(_on_melee_strike)
 	var cam := _walker.get_camera()
 	## Visuals out to ~90 m; collisions only near the player (big 4K/remesh win).
 	var player_viewer := VoxelViewer.new()
@@ -346,6 +347,39 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
 	_tool.do_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
+
+
+func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -> void:
+	## March in small steps and remove exactly one building voxel under the limb.
+	if _tool == null or _terrain == null:
+		return
+	var dir := direction
+	if dir.length_squared() < 0.0001:
+		return
+	dir = dir.normalized()
+	var local_origin := _terrain.to_local(origin)
+	var max_range_vox := maxf(max_range_m, 0.05) / VOXEL_SIZE
+	var step := 0.2  ## fraction of a voxel — precision over speed
+	var steps := int(ceil(max_range_vox / step)) + 1
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var hit_vox := Vector3i(2147483647, 2147483647, 2147483647)
+	var found := false
+	for i in range(1, steps + 1):
+		var p := local_origin + dir * (float(i) * step)
+		var v := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
+		if found and v == hit_vox:
+			continue
+		var id := int(_tool.get_voxel(v))
+		if not VoxelMaterial.is_building_fabric(id):
+			continue
+		hit_vox = v
+		found = true
+		break
+	if not found:
+		return
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.AIR
+	_tool.do_point(hit_vox)
 
 
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:

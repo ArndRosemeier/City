@@ -51,8 +51,13 @@ static func is_walkable_surface(id: int) -> bool:
 	)
 
 
-static func is_drivable_surface(id: int) -> bool:
-	return id == ASPHALT or id == ROAD or id == ROAD_LINE or id == CROSSWALK
+static func is_building_fabric(id: int) -> bool:
+	## Melee chisel targets: walls/roofs/fixtures — not ground or road surface.
+	match id:
+		AIR, BEDROCK, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES:
+			return false
+		_:
+			return id > AIR and id < COUNT
 
 
 static func color(id: int) -> Color:
