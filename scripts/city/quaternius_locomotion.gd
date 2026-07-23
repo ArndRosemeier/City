@@ -1,10 +1,11 @@
-## Shared Quaternius Idle/Walk/Driving library for player, crowd, and vehicle passengers.
+## Shared Quaternius Idle/Walk/Run/Driving library for player, crowd, and vehicle passengers.
 class_name QuaterniusLocomotion
 extends RefCounted
 
 const LIB_PATH := "res://assets/humans/animations/quaternius/AnimationLibrary_Godot_Standard.gltf"
 const ANIM_IDLE := &"Idle"
 const ANIM_WALK := &"Walk"
+const ANIM_RUN := &"Sprint"
 const ANIM_DEATH := &"Death01"
 const ANIM_DRIVING := &"Driving"
 const ANIM_SITTING := &"Sitting_Idle"
@@ -12,13 +13,17 @@ const LIB_NAME := &"quat"
 
 static var _cached_library: AnimationLibrary
 static var _cached_passenger_library: AnimationLibrary
+static var _library_built: bool = false
 
 
 static func get_library() -> AnimationLibrary:
-	if _cached_library != null:
+	## Build at most once. Never tear down the cache mid-frame — that reloaded the
+	## full Quaternius GLTF for every fleeing ped and tanked FPS to single digits.
+	if _library_built:
 		return _cached_library
+	_library_built = true
 	_cached_library = _build_library(
-		[String(ANIM_IDLE), String(ANIM_WALK), String(ANIM_DEATH)],
+		[String(ANIM_IDLE), String(ANIM_WALK), String(ANIM_RUN), String(ANIM_DEATH)],
 		{String(ANIM_DEATH): Animation.LOOP_NONE}
 	)
 	return _cached_library
@@ -27,7 +32,6 @@ static func get_library() -> AnimationLibrary:
 static func get_passenger_library() -> AnimationLibrary:
 	if _cached_passenger_library != null:
 		return _cached_passenger_library
-	# Prefer Driving; fall back to Sitting_Idle if Driving is missing.
 	_cached_passenger_library = _build_library(
 		[String(ANIM_DRIVING), String(ANIM_SITTING), String(ANIM_IDLE)]
 	)
@@ -61,6 +65,19 @@ static func play_walk(player: AnimationPlayer, speed: float, reference_speed: fl
 	if player.current_animation != path:
 		player.play(path, 0.2)
 	player.speed_scale = clampf(speed / reference_speed, 0.5, 2.2)
+
+
+static func play_run(player: AnimationPlayer, speed: float, reference_speed: float = 4.2) -> void:
+	if player == null:
+		return
+	var run_path := "%s/%s" % [LIB_NAME, ANIM_RUN]
+	if player.has_animation(run_path):
+		if player.current_animation != run_path:
+			player.play(run_path, 0.12)
+		player.speed_scale = clampf(speed / reference_speed, 0.7, 2.4)
+		return
+	## No Sprint on this player — speed up Walk (never reload assets here).
+	play_walk(player, speed, 1.4)
 
 
 static func play_death(player: AnimationPlayer) -> void:

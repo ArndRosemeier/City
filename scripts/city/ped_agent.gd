@@ -21,6 +21,12 @@ var next_decision_at: float = 0.0
 var visual: Node3D = null
 ## Laser/melee kill — stops simulation; Death01 holds on the visual.
 var dead: bool = false
+## True while sprinting away from the player after witnessing destruction.
+var fleeing: bool = false
+## Latest threat point (usually the player) to run away from.
+var flee_from: Vector3 = Vector3.ZERO
+## Avoid duplicate entries in the budgeted flee-repath queue.
+var flee_repath_queued: bool = false
 
 ## Roadmap path in world space; walk toward waypoints[path_i].
 var waypoints: PackedVector3Array = PackedVector3Array()
@@ -29,6 +35,16 @@ var path_i: int = 0
 
 func is_walking() -> bool:
 	return (not dead) and state == State.WALK
+
+
+func is_fleeing() -> bool:
+	return (not dead) and fleeing
+
+
+func move_speed(flee_mul: float = 2.6) -> float:
+	if is_fleeing():
+		return walk_speed * flee_mul
+	return walk_speed
 
 
 func clear_path() -> void:

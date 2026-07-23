@@ -20,6 +20,8 @@ var _female: bool = false
 var _ready_visual: bool = false
 var _outfit: PedOutfit
 var _loaded_path: String = ""
+## Avoid re-selecting the same locomotion clip every sync frame.
+var _locomotion_mode: int = -1  # 0 idle, 1 walk, 2 run
 
 
 func ensure_body(female: bool, scene_path: String = "") -> void:
@@ -53,6 +55,7 @@ func ensure_body(female: bool, scene_path: String = "") -> void:
 	_anim.name = "AnimationPlayer"
 	_body.add_child(_anim)
 	QuaterniusLocomotion.attach_to(_anim)
+	_locomotion_mode = -1
 	_ready_visual = true
 
 
@@ -87,10 +90,23 @@ func sync_from_agent(agent: PedAgent) -> void:
 		_apply_outfit()
 	if _anim == null:
 		return
-	if agent.is_walking():
-		QuaterniusLocomotion.play_walk(_anim, agent.walk_speed)
+	## Only switch clips when the locomotion mode changes; speed_scale updates are cheap.
+	if agent.is_fleeing():
+		if _locomotion_mode != 2:
+			QuaterniusLocomotion.play_run(_anim, agent.move_speed())
+			_locomotion_mode = 2
+		else:
+			_anim.speed_scale = clampf(agent.move_speed() / 4.2, 0.7, 2.4)
+	elif agent.is_walking():
+		if _locomotion_mode != 1:
+			QuaterniusLocomotion.play_walk(_anim, agent.walk_speed)
+			_locomotion_mode = 1
+		else:
+			_anim.speed_scale = clampf(agent.walk_speed / 1.4, 0.5, 2.2)
 	else:
-		QuaterniusLocomotion.play_idle(_anim)
+		if _locomotion_mode != 0:
+			QuaterniusLocomotion.play_idle(_anim)
+			_locomotion_mode = 0
 
 
 func play_death() -> void:
@@ -98,6 +114,7 @@ func play_death() -> void:
 		return
 	## Refresh library so Death01 is present even if this visual was spawned earlier.
 	QuaterniusLocomotion.attach_to(_anim)
+	_locomotion_mode = -1
 	QuaterniusLocomotion.play_death(_anim)
 
 
@@ -123,6 +140,7 @@ func _clear_body() -> void:
 	_anim = null
 	_mesh = null
 	_loaded_path = ""
+	_locomotion_mode = -1
 	if _body != null and is_instance_valid(_body):
 		_body.queue_free()
 	_body = null

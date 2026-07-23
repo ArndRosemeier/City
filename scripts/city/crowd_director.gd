@@ -25,6 +25,16 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 ## Probability that a decision picks WALK (idle is the exception).
 @export var walk_decision_chance: float = 0.92
 @export var lod_hysteresis_m: float = 12.0
+## How far away pedestrians notice destruction and start sprinting away.
+@export var flee_radius_m: float = 32.0
+## Keep fleeing until at least this far from the player.
+@export var flee_clear_distance_m: float = 200.0
+@export var flee_speed_mul: float = 2.65
+@export var flee_goal_min_m: float = 40.0
+@export var flee_goal_max_m: float = 140.0
+## Cap expensive flee repaths per physics frame (graph walks).
+@export var flee_repaths_per_frame: int = 3
+@export var flee_greedy_hops: int = 14
 
 var _agents: Array[PedAgent] = []
 var _near_agents: Array[PedAgent] = []
@@ -35,6 +45,9 @@ var _time: float = 0.0
 var _lod_accum: float = 0.0
 var _ground_y: float = 1.0
 var _skinned_count: int = 0
+var _flee_repath_queue: Array[PedAgent] = []
+var _threat_pos_cache: Vector3 = Vector3.ZERO
+var _threat_pos_frame: int = -1
 
 
 func setup(roadmap: PedRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
@@ -62,6 +75,7 @@ func clear_crowd() -> void:
 		_release_visual(agent)
 	_agents.clear()
 	_near_agents.clear()
+	_flee_repath_queue.clear()
 	_skinned_count = 0
 	for child in get_children():
 		if child is RigidBody3D and String(child.name).begins_with("Corpse_"):
@@ -120,6 +134,102 @@ func count_lod_tiers() -> Vector3i:
 		else:
 			culled_n += 1
 	return Vector3i(near_n, 0, culled_n)
+
+
+## Nearby living peds sprint away along the sidewalk graph.
+func react_to_destruction(world_pos: Vector3, radius_m: float = -1.0) -> void:
+	var radius := radius_m if radius_m > 0.0 else flee_radius_m
+	var r2 := radius * radius
+	var threat := _threat_position(world_pos)
+	for agent in _agents:
+		if agent == null or agent.dead:
+			continue
+		var dx := agent.position.x - world_pos.x
+		var dz := agent.position.z - world_pos.z
+		if dx * dx + dz * dz > r2:
+			continue
+		_start_flee(agent, threat)
+
+
+func _start_flee(agent: PedAgent, danger: Vector3) -> void:
+	agent.fleeing = true
+	agent.flee_from = danger
+	agent.next_decision_at = _time + 600.0
+	## Keep the current route if any — only mark sprint. Repath is budgeted.
+	if agent.state == PedAgent.State.WALK and agent.path_i < agent.waypoints.size():
+		return
+	_enqueue_flee_repath(agent)
+
+
+func _threat_position(fallback: Vector3 = Vector3.ZERO) -> Vector3:
+	## Cache once per frame — hundreds of agents used to query the camera each.
+	var frame := Engine.get_process_frames()
+	if frame == _threat_pos_frame:
+		return _threat_pos_cache
+	_threat_pos_frame = frame
+	if _camera != null and is_instance_valid(_camera):
+		_threat_pos_cache = _camera.global_position
+	else:
+		_threat_pos_cache = fallback
+	return _threat_pos_cache
+
+
+func _enqueue_flee_repath(agent: PedAgent) -> void:
+	if agent == null or agent.dead or agent.flee_repath_queued:
+		return
+	agent.flee_repath_queued = true
+	_flee_repath_queue.append(agent)
+
+
+func _drain_flee_repath_queue() -> void:
+	var budget := maxi(flee_repaths_per_frame, 1)
+	while budget > 0 and not _flee_repath_queue.is_empty():
+		var agent: PedAgent = _flee_repath_queue.pop_front()
+		if agent == null:
+			continue
+		agent.flee_repath_queued = false
+		if agent.dead or not agent.fleeing:
+			continue
+		_assign_flee_path(agent)
+		budget -= 1
+
+
+func _assign_flee_path(agent: PedAgent) -> void:
+	## Cheap greedy hop away from the player — no multi-sample BFS storm.
+	if _roadmap == null or _roadmap.is_empty():
+		return
+	var from_node := _roadmap.nearest_node(agent.position)
+	if from_node < 0:
+		return
+	agent.flee_from = _threat_position(agent.flee_from)
+	var danger := agent.flee_from
+	var path := PackedVector3Array()
+	var node := from_node
+	var prev := -1
+	var hops := maxi(flee_greedy_hops, 4)
+	for _i in hops:
+		var nbrs: PackedInt32Array = _roadmap.neighbors[node]
+		if nbrs.is_empty():
+			break
+		var best := -1
+		var best_d2 := -1.0
+		for n in nbrs:
+			if n == prev:
+				continue
+			var p: Vector3 = _roadmap.positions[n]
+			var d2 := Vector2(p.x - danger.x, p.z - danger.z).length_squared()
+			if d2 > best_d2:
+				best_d2 = d2
+				best = n
+		if best < 0:
+			best = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
+		prev = node
+		node = best
+		path.append(_roadmap.positions[node])
+	if path.is_empty():
+		return
+	agent.set_path(path)
+	agent.next_decision_at = _time + 600.0
 
 
 ## Closest living ped along segment [from, to]. Empty if none.
@@ -295,6 +405,7 @@ func _physics_process(delta: float) -> void:
 	if _agents.is_empty():
 		return
 	_time += delta
+	_drain_flee_repath_queue()
 	_simulate_agents(delta)
 	_lod_accum += delta
 	if _lod_accum >= lod_interval_sec:
@@ -305,9 +416,20 @@ func _physics_process(delta: float) -> void:
 
 
 func _simulate_agents(delta: float) -> void:
+	## Threat position once for the whole tick (not per fleeing agent).
+	var threat := _threat_position()
+	var clear_r2 := flee_clear_distance_m * flee_clear_distance_m
 	for agent in _agents:
 		if agent.dead:
 			continue
+		if agent.fleeing:
+			agent.flee_from = threat
+			var fdx := agent.position.x - threat.x
+			var fdz := agent.position.z - threat.z
+			if fdx * fdx + fdz * fdz >= clear_r2:
+				agent.fleeing = false
+				agent.flee_repath_queued = false
+				agent.next_decision_at = _time + _rng.randf_range(rewalk_min_sec, rewalk_max_sec)
 		if _time >= agent.next_decision_at:
 			_decide(agent)
 		if agent.state != PedAgent.State.WALK:
@@ -324,7 +446,7 @@ func _simulate_agents(delta: float) -> void:
 			if agent.path_i >= agent.waypoints.size():
 				_finish_walk(agent)
 			continue
-		var step := agent.walk_speed * delta
+		var step := agent.move_speed(flee_speed_mul) * delta
 		if dist_sq <= step * step:
 			agent.position = Vector3(target.x, _ground_y, target.z)
 			agent.path_i += 1
@@ -339,7 +461,12 @@ func _simulate_agents(delta: float) -> void:
 
 func _finish_walk(agent: PedAgent) -> void:
 	agent.clear_path()
-	_leave_carriageway_if_needed(agent)
+	## Skip expensive nearest-node scans while sprinting away.
+	if not agent.is_fleeing():
+		_leave_carriageway_if_needed(agent)
+	if agent.is_fleeing():
+		_enqueue_flee_repath(agent)
+		return
 	agent.next_decision_at = _time + _rng.randf_range(rewalk_min_sec, rewalk_max_sec)
 
 
@@ -357,6 +484,10 @@ func _leave_carriageway_if_needed(agent: PedAgent) -> void:
 
 
 func _decide(agent: PedAgent) -> void:
+	if agent.is_fleeing():
+		agent.next_decision_at = _time + 600.0
+		_enqueue_flee_repath(agent)
+		return
 	if _roadmap == null or _roadmap.is_empty():
 		agent.clear_path()
 		agent.next_decision_at = _time + stay_max_sec

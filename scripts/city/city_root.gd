@@ -10,6 +10,7 @@ const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd"
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
 const VoxelCascadeDebrisScript := preload("res://scripts/city/voxel_cascade_debris.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
+const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
@@ -244,6 +245,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	_walker.blast_requested.connect(_on_blast)
 	_walker.melee_strike_requested.connect(_on_melee_strike)
+	_walker.stomp_requested.connect(_on_stomp)
 	var cam := _walker.get_camera()
 	## Visuals out to ~90 m; collisions only near the player (big 4K/remesh win).
 	var player_viewer := VoxelViewer.new()
@@ -368,6 +370,97 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
 	_tool.do_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
+	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
+
+
+## Charged Shift bomb: carve + tumble debris, no column cascades above the hole.
+func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
+	if _tool == null or _terrain == null:
+		return
+	var radius := maxf(radius_m, 0.35)
+	var local := _terrain.to_local(hit_world)
+	## Cap voxel radius so giant characters don't freeze a frame scanning hundreds of thousands of cells.
+	var radius_vox := minf(radius / VOXEL_SIZE, 14.0)
+	var r_i := int(ceil(radius_vox)) + 1
+	var r2 := radius_vox * radius_vox
+	var cx := int(floor(local.x))
+	var cy := int(floor(local.y))
+	var cz := int(floor(local.z))
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.AIR
+	var detached: Array = []
+	const MAX_DEBRIS := 900
+	for z in range(cz - r_i, cz + r_i + 1):
+		for y in range(cy - r_i, cy + r_i + 1):
+			for x in range(cx - r_i, cx + r_i + 1):
+				var center := Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
+				if center.distance_squared_to(local) > r2 + 0.0001:
+					continue
+				var vox := Vector3i(x, y, z)
+				var mat_id := int(_tool.get_voxel(vox))
+				if not VoxelMaterial.is_destructible(mat_id):
+					continue
+				if detached.size() < MAX_DEBRIS:
+					detached.append({"vox": vox, "mat": mat_id})
+	_tool.do_sphere(local, radius_vox)
+	_restore_bedrock_floor(local, radius_vox)
+	if _cascade != null and _cascade.has_method("detach_blast_voxels"):
+		_cascade.call("detach_blast_voxels", detached, hit_world)
+	BlastFlashVfxScript.spawn(self, hit_world, radius)
+	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
+
+
+## Shift+LMB stomp: clear a bowl around the feet and cascade columns above.
+func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
+	if _tool == null or _terrain == null:
+		return
+	var radius := maxf(radius_m, 0.5)
+	var local := _terrain.to_local(feet_position)
+	var radius_vox := minf(radius / VOXEL_SIZE, 16.0)
+	## Flattened bowl: full radius in XZ, shorter in Y so sidewalks crack without a deep shaft.
+	var ry := maxf(radius_vox * 0.55, 1.2)
+	var r_i := int(ceil(radius_vox)) + 1
+	var ry_i := int(ceil(ry)) + 1
+	var cx := int(floor(local.x))
+	var cy := int(floor(local.y))
+	var cz := int(floor(local.z))
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.AIR
+	var detached: Array = []
+	var column_max_y: Dictionary = {}
+	const MAX_DEBRIS := 1100
+	for z in range(cz - r_i, cz + r_i + 1):
+		for y in range(cy - ry_i, cy + ry_i + 1):
+			for x in range(cx - r_i, cx + r_i + 1):
+				var dx := (float(x) + 0.5 - local.x) / radius_vox
+				var dy := (float(y) + 0.5 - local.y) / ry
+				var dz := (float(z) + 0.5 - local.z) / radius_vox
+				if dx * dx + dy * dy + dz * dz > 1.0001:
+					continue
+				var vox := Vector3i(x, y, z)
+				var mat_id := int(_tool.get_voxel(vox))
+				if not VoxelMaterial.is_destructible(mat_id):
+					continue
+				if detached.size() < MAX_DEBRIS:
+					detached.append({"vox": vox, "mat": mat_id})
+				_tool.do_point(vox)
+				var col := Vector2i(x, z)
+				if column_max_y.has(col):
+					column_max_y[col] = maxi(int(column_max_y[col]), y)
+				else:
+					column_max_y[col] = y
+	_restore_bedrock_floor(local, radius_vox)
+	if _cascade != null:
+		if _cascade.has_method("detach_voxels"):
+			_cascade.detach_voxels(detached)
+		for col_key in column_max_y.keys():
+			var xz: Vector2i = col_key
+			var max_y: int = int(column_max_y[col_key])
+			_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
+	BlastFlashVfxScript.spawn(self, feet_position, radius * 0.85)
+	_notify_destruction(feet_position, maxf(radius * 5.0, 36.0))
 
 
 func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -> void:
@@ -447,6 +540,26 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 		var max_y: int = int(column_max_y[col_key])
 		_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
 
+	var hit_world := _terrain.to_global(
+		Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
+	)
+	_notify_destruction(hit_world, 30.0 + 8.0 * scale)
+
+
+func _notify_destruction(world_pos: Vector3, radius_m: float = 32.0) -> void:
+	## Peds sprint and cars floor it away from the blast along their graphs.
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst):
+			continue
+		if inst.crowd != null and is_instance_valid(inst.crowd):
+			inst.crowd.react_to_destruction(world_pos, radius_m)
+		if inst.vehicles != null and is_instance_valid(inst.vehicles):
+			inst.vehicles.react_to_destruction(world_pos, radius_m)
+
 
 ## Shorten a laser aim so the dart stops on the nearest ped/car before the wall.
 ## Prefer the camera click ray (what the player aimed at); also try eye→wall.
@@ -482,17 +595,19 @@ func _apply_agent_hit(from: Vector3, to: Vector3, direction: Vector3) -> bool:
 	if hit.is_empty():
 		return false
 	var kind: String = str(hit.get("kind", ""))
+	var point: Vector3 = hit["point"] as Vector3
+	var ok := false
 	if kind == "ped":
 		var crowd: CrowdDirector = hit["crowd"]
 		var agent: PedAgent = hit["agent"]
-		var ped_point: Vector3 = hit["point"]
-		return crowd.kill_agent(agent, ped_point, direction)
-	if kind == "vehicle":
+		ok = crowd.kill_agent(agent, point, direction)
+	elif kind == "vehicle":
 		var vehicles: VehicleDirector = hit["vehicles"]
 		var v_agent: VehicleAgent = hit["agent"]
-		var point: Vector3 = hit["point"]
-		return vehicles.wreck_agent(v_agent, point, direction)
-	return false
+		ok = vehicles.wreck_agent(v_agent, point, direction)
+	if ok:
+		_notify_destruction(point, 34.0)
+	return ok
 
 
 func _query_closest_agent_hit(from: Vector3, to: Vector3) -> Dictionary:

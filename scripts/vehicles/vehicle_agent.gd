@@ -19,6 +19,22 @@ var stuck_sec: float = 0.0
 var cruise_speed: float = 8.0
 ## Hit by laser/melee — removed from traffic; mesh becomes a physics wreck.
 var wrecked: bool = false
+## True while flooring it away from the player after witnessing destruction.
+var fleeing: bool = false
+## Latest threat point (usually the player) to drive away from.
+var flee_from: Vector3 = Vector3.ZERO
+## Avoid duplicate entries in the budgeted flee-repath queue.
+var flee_repath_queued: bool = false
+
+
+func is_fleeing() -> bool:
+	return (not wrecked) and fleeing
+
+
+func drive_speed(flee_mul: float = 1.85) -> float:
+	if is_fleeing():
+		return cruise_speed * flee_mul
+	return cruise_speed
 
 
 func clear_path() -> void:

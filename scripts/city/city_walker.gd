@@ -6,11 +6,14 @@ signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
 ## Melee strike: origin + flat facing direction, range in meters.
 ## CityRoot scales the carve diameter with character_scale (no break below 0.5×).
 signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
+## Shift+LMB stomp: feet world position + blast radius in meters.
+signal stomp_requested(feet_position: Vector3, radius_m: float)
 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
 const ProportionModifierScript := preload("res://scripts/humans/proportion_modifier.gd")
 const BodyProportionsScript := preload("res://scripts/humans/body_proportions.gd")
 const EyeLaserVfxScript := preload("res://scripts/city/eye_laser_vfx.gd")
+const ChargedBlastVfxScript := preload("res://scripts/city/charged_blast_vfx.gd")
 
 const PedOutfitCatalogScript := preload("res://scripts/humans/ped_outfit_catalog.gd")
 const PedOutfitApplierScript := preload("res://scripts/humans/ped_outfit_applier.gd")
@@ -29,6 +32,7 @@ const QUATERNIUS_LIB := (
 const MIXAMO_LIB := "res://assets/humans/animations/mixamo/mixamo_actions.tres"
 const ANIM_IDLE := &"Idle"
 const ANIM_WALK := &"Walk"
+const ANIM_SPRINT := &"Sprint"
 const LIB_NAME := &"quat"
 
 @export var walk_speed: float = 5.0
@@ -47,10 +51,29 @@ const LIB_NAME := &"quat"
 @export var kick_impact_ratio: float = 0.58
 @export var punch_anim: String = "Punch_Cross"
 @export var kick_anim: String = "Kick_Soccerball_m"
-## Left-click laser: click aim, punch/kick carve power, meters.
+@export var stomp_anim: String = "Stomping_m"
+## Fraction into Stomping when the foot hits and voxels break.
+@export var stomp_impact_ratio: float = 0.48
+@export var stomp_radius_at_scale_1: float = 2.8
+@export var stomp_cooldown_sec: float = 0.85
+@export var stomp_shake_trauma: float = 0.72
+@export var camera_shake_max_offset_m: float = 0.28
+@export var camera_shake_max_roll_deg: float = 4.5
+@export var camera_shake_decay: float = 1.35
+## Ctrl+LMB laser: click aim, punch/kick carve power, meters.
 @export var laser_range_m: float = 100.0
 @export var laser_cooldown_sec: float = 0.45
 @export var laser_speed_mps: float = 30.0
+## Hold LMB to charge the bomb; release to fire. Shift+LMB stomps; Ctrl+LMB fires the laser.
+@export var charged_blast_speed_mps: float = 10.0
+@export var charged_blast_charge_sec: float = 1.6
+@export var charged_blast_radius_min_m: float = 0.9
+@export var charged_blast_radius_max_m: float = 4.2
+@export var charged_blast_cooldown_sec: float = 0.55
+@export var charged_blast_shoot_anim: String = "Spell_Simple_Shoot"
+@export var charged_blast_idle_anim: String = "Spell_Simple_Idle"
+## Fraction into Spell_Simple_Shoot when the orb leaves the hand.
+@export var charged_blast_release_ratio: float = 0.36
 @export var pivot_height: float = 1.35
 @export var zoom_min: float = 1.8
 @export var zoom_max: float = 12.0
@@ -62,6 +85,8 @@ const LIB_NAME := &"quat"
 @export var pitch_max: float = 0.85
 ## Walk clip is authored near ~1.4 m/s; scale playback to match move speed.
 @export var walk_anim_reference_speed: float = 1.4
+## Sprint clip authored near ~4.2 m/s; scale playback to match sprint speed.
+@export var sprint_anim_reference_speed: float = 4.2
 @export var character_scale: float = 1.0
 ## Multiplicative +/- step (0.2×…5× range).
 @export var scale_factor_step: float = 1.15
@@ -116,12 +141,27 @@ var _action_playing: bool = false
 var _action_anim: String = ""
 var _action_names: PackedStringArray = PackedStringArray()
 var _melee_strike_token: int = 0
+var _stomp_token: int = 0
+var _stomp_ready_at_msec: int = 0
+var _shake_trauma: float = 0.0
 var _stuck_timer: float = 0.0
 var _unstuck_cooldown: float = 0.0
 var _was_ray_grounded: bool = false
 var _eye_laser: Node
+var _charged_blast: Node
 var _laser_ready_at_msec: int = 0
 var _laser_shot_origin: Vector3 = Vector3.ZERO
+var _blast_charge: float = 0.0
+var _blast_ready_at_msec: int = 0
+## True while LMB is held for the bomb — charge until release fires it.
+var _blast_charging: bool = false
+var _blast_fire_token: int = 0
+var _blast_pending_aim: Vector3 = Vector3.ZERO
+var _blast_pending_radius: float = 1.0
+var _charge_orb: MeshInstance3D
+var _charge_orb_mesh: SphereMesh
+var _charge_orb_mat: StandardMaterial3D
+var _charge_orb_light: OmniLight3D
 var _footstep_accum: float = 0.0
 
 
@@ -182,6 +222,8 @@ func _ready() -> void:
 	## Free cursor — no mouse-look capture.
 	_set_capture(false)
 	_setup_eye_laser()
+	_setup_charged_blast()
+	_ensure_charge_orb()
 
 
 func _spawn_human(female: bool) -> void:
@@ -232,6 +274,7 @@ func _spawn_human(female: bool) -> void:
 	## Only wire lasers once the camera exists (first spawn runs before Camera3D).
 	if _camera != null:
 		_setup_eye_laser()
+		_setup_charged_blast()
 	print(
 		"CityWalker body: ",
 		path,
@@ -246,6 +289,7 @@ func _spawn_human(female: bool) -> void:
 
 func _clear_body() -> void:
 	_teardown_eye_laser()
+	_teardown_charged_blast()
 	_anim_player = null
 	_prop_mod = null
 	_mesh = null
@@ -432,7 +476,7 @@ func _setup_animation_player(body: Node3D) -> void:
 		var copy: Animation = src.duplicate(true) as Animation
 		_strip_root_translation(copy)
 		## Keep locomotion looping even if import flags slip.
-		if key == String(ANIM_IDLE) or key == String(ANIM_WALK):
+		if key == String(ANIM_IDLE) or key == String(ANIM_WALK) or key == String(ANIM_SPRINT):
 			copy.loop_mode = Animation.LOOP_LINEAR
 		library.add_animation(key, copy)
 		_action_names.append(key)
@@ -674,7 +718,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 	if event is InputEventMouseMotion and _rmb_looking:
 		var mm := event as InputEventMouseMotion
-		_cam_yaw_offset -= mm.relative.x * mouse_sensitivity
+		## Turn the character with look yaw; pitch stays on the camera arm.
+		rotation.y -= mm.relative.x * mouse_sensitivity
 		_pitch = clampf(_pitch - mm.relative.y * mouse_sensitivity, pitch_min, pitch_max)
 		_apply_camera_angles()
 		get_viewport().set_input_as_handled()
@@ -687,8 +732,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 			_zoom = clampf(_zoom + zoom_step, zoom_min, zoom_max)
 			_spring.spring_length = _zoom
-		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			_start_laser_eyes_at_cursor()
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				if Input.is_key_pressed(KEY_CTRL):
+					_blast_charging = false
+					_blast_charge = 0.0
+					_start_laser_eyes_at_cursor()
+				elif Input.is_key_pressed(KEY_SHIFT):
+					_blast_charging = false
+					_blast_charge = 0.0
+					_start_stomp()
+				else:
+					_begin_charged_blast_hold()
+			else:
+				if _blast_charging:
+					_release_charged_blast_at_cursor()
 			get_viewport().set_input_as_handled()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
 			if mb.pressed:
@@ -699,16 +757,47 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _set_rmb_looking(on: bool) -> void:
+	if on and not is_zero_approx(_cam_yaw_offset):
+		## Fold any leftover camera-orbit offset into body facing so look stays coherent.
+		rotation.y += _cam_yaw_offset
+		_cam_yaw_offset = 0.0
 	_rmb_looking = on
 	## Capture only while aiming the camera; cursor free otherwise.
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
 	_captured = on
+	if on:
+		_apply_camera_angles()
 
 
 func _apply_camera_angles() -> void:
-	## Body yaw from A/D; extra orbit from RMB look lives in _cam_yaw_offset.
+	## Body yaw from A/D and RMB look; optional leftover orbit stays in _cam_yaw_offset.
 	_yaw = rotation.y
 	_pivot.rotation = Vector3(_pitch, _cam_yaw_offset, 0.0)
+
+
+func add_camera_shake(trauma: float) -> void:
+	_shake_trauma = clampf(_shake_trauma + maxf(trauma, 0.0), 0.0, 1.0)
+
+
+func _update_camera_shake(delta: float) -> void:
+	if _camera == null:
+		return
+	if _shake_trauma <= 0.001:
+		_shake_trauma = 0.0
+		_camera.position = Vector3.ZERO
+		_camera.rotation = Vector3.ZERO
+		return
+	_shake_trauma = maxf(_shake_trauma - camera_shake_decay * delta, 0.0)
+	var shake := _shake_trauma * _shake_trauma
+	var ox := camera_shake_max_offset_m * shake * _rng.randf_range(-1.0, 1.0)
+	var oy := camera_shake_max_offset_m * shake * _rng.randf_range(-1.0, 1.0) * 0.65
+	var oz := camera_shake_max_offset_m * 0.35 * shake * _rng.randf_range(-1.0, 1.0)
+	_camera.position = Vector3(ox, oy, oz)
+	_camera.rotation = Vector3(
+		deg_to_rad(camera_shake_max_roll_deg * 0.35 * shake * _rng.randf_range(-1.0, 1.0)),
+		deg_to_rad(camera_shake_max_roll_deg * 0.25 * shake * _rng.randf_range(-1.0, 1.0)),
+		deg_to_rad(camera_shake_max_roll_deg * shake * _rng.randf_range(-1.0, 1.0))
+	)
 
 
 func _physics_process(delta: float) -> void:
@@ -776,7 +865,9 @@ func _physics_process(delta: float) -> void:
 	var wish := forward * (-input_dir.y)
 	wish.y = 0.0
 
-	var speed := sprint_speed if Input.is_key_pressed(KEY_SHIFT) else walk_speed
+	var shift_held := Input.is_key_pressed(KEY_SHIFT)
+	var sprinting := shift_held
+	var speed := sprint_speed if sprinting else walk_speed
 	speed *= character_scale
 	_moving = wish.length_squared() > 0.0001
 	if _moving:
@@ -786,6 +877,7 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.x = 0.0
 		velocity.z = 0.0
+		sprinting = false
 
 	var can_jump := _coyote_left > 0.0
 	## Jump always tries a horizontal unstick when you've been blocked — no Y pumping.
@@ -816,8 +908,10 @@ func _physics_process(delta: float) -> void:
 			_stuck_timer = 0.0
 	_update_safety_deck()
 	_apply_camera_angles()
-	_update_locomotion_anim(speed)
+	_update_camera_shake(delta)
+	_update_locomotion_anim(speed, sprinting)
 	_update_footstep_sfx(delta, speed)
+	_update_blast_charge(delta, _blast_charging)
 
 	if not ray_mode and is_on_floor() and not _feet_aligned and _skeleton != null:
 		_align_soles_to_floor()
@@ -1077,7 +1171,7 @@ func _try_step_up(delta: float) -> void:
 	global_position.y += step
 
 
-func _update_locomotion_anim(move_speed: float) -> void:
+func _update_locomotion_anim(move_speed: float, sprinting: bool = false) -> void:
 	if _anim_player == null:
 		return
 	if _action_playing:
@@ -1088,13 +1182,17 @@ func _update_locomotion_anim(move_speed: float) -> void:
 			return
 	var idle_path := "%s/%s" % [LIB_NAME, ANIM_IDLE]
 	var walk_path := "%s/%s" % [LIB_NAME, ANIM_WALK]
+	var sprint_path := "%s/%s" % [LIB_NAME, ANIM_SPRINT]
 	# Bigger → slower playback (long strides / heavy idle). Tiny → snappier.
 	var size_anim := clampf(1.0 / character_scale, 0.05, 4.0)
 	if _moving:
-		if _anim_player.current_animation != walk_path:
-			_anim_player.play(walk_path, 0.2)
+		var use_sprint := sprinting and _anim_player.has_animation(sprint_path)
+		var loco_path := sprint_path if use_sprint else walk_path
+		if _anim_player.current_animation != loco_path:
+			_anim_player.play(loco_path, 0.15 if use_sprint else 0.2)
 		var unscaled_speed := move_speed / maxf(character_scale, 0.001)
-		var cadence := unscaled_speed / walk_anim_reference_speed
+		var ref_speed := sprint_anim_reference_speed if use_sprint else walk_anim_reference_speed
+		var cadence := unscaled_speed / maxf(ref_speed, 0.01)
 		_anim_player.speed_scale = clampf(cadence * size_anim, 0.05, 4.0)
 	else:
 		if _anim_player.current_animation != idle_path:
@@ -1184,6 +1282,154 @@ func _teardown_eye_laser() -> void:
 	_eye_laser = null
 
 
+func _setup_charged_blast() -> void:
+	_teardown_charged_blast()
+	_charged_blast = ChargedBlastVfxScript.new()
+	_charged_blast.name = "ChargedBlastVfx"
+	add_child(_charged_blast)
+	_charged_blast.call("setup")
+	if _charged_blast.has_method("set_obstacle_probe"):
+		_charged_blast.call(
+			"set_obstacle_probe",
+			func(from: Vector3, tip: Vector3) -> float:
+				var root := _city_root()
+				if root == null or not root.has_method("laser_probe_agent_distance"):
+					return -1.0
+				return float(root.call("laser_probe_agent_distance", from, tip))
+		)
+	if _charged_blast.has_signal("impact") and not _charged_blast.is_connected(
+		"impact", _on_charged_blast_impact
+	):
+		_charged_blast.connect("impact", _on_charged_blast_impact)
+
+
+func _teardown_charged_blast() -> void:
+	if _charged_blast != null and is_instance_valid(_charged_blast):
+		if _charged_blast.has_signal("impact") and _charged_blast.is_connected(
+			"impact", _on_charged_blast_impact
+		):
+			_charged_blast.disconnect("impact", _on_charged_blast_impact)
+		_charged_blast.queue_free()
+	_charged_blast = null
+
+
+func _ensure_charge_orb() -> void:
+	if _charge_orb != null and is_instance_valid(_charge_orb):
+		return
+	_charge_orb_mat = StandardMaterial3D.new()
+	_charge_orb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_charge_orb_mat.albedo_color = Color(1.0, 0.2, 0.05, 0.85)
+	_charge_orb_mat.emission_enabled = true
+	_charge_orb_mat.emission = Color(1.0, 0.15, 0.02)
+	_charge_orb_mat.emission_energy_multiplier = 10.0
+	_charge_orb_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_charge_orb_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_charge_orb_mesh = SphereMesh.new()
+	_charge_orb_mesh.radial_segments = 14
+	_charge_orb_mesh.rings = 8
+	_charge_orb = MeshInstance3D.new()
+	_charge_orb.name = "ChargeOrb"
+	_charge_orb.mesh = _charge_orb_mesh
+	_charge_orb.material_override = _charge_orb_mat
+	_charge_orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_charge_orb.visible = false
+	add_child(_charge_orb)
+	_charge_orb_light = OmniLight3D.new()
+	_charge_orb_light.name = "ChargeLight"
+	_charge_orb_light.light_color = Color(1.0, 0.28, 0.05)
+	_charge_orb_light.shadow_enabled = false
+	_charge_orb_light.visible = false
+	_charge_orb.add_child(_charge_orb_light)
+
+
+func _charged_blast_radius() -> float:
+	var scale := maxf(character_scale, 0.05)
+	var t := clampf(_blast_charge / maxf(charged_blast_charge_sec, 0.05), 0.0, 1.0)
+	## Smooth ease-out so early hold grows quickly, then settles toward max.
+	var eased := 1.0 - (1.0 - t) * (1.0 - t)
+	var base := lerpf(charged_blast_radius_min_m, charged_blast_radius_max_m, eased)
+	return base * scale
+
+
+func _update_blast_charge(delta: float, charging_now: bool) -> void:
+	_ensure_charge_orb()
+	if charging_now:
+		_blast_charge = minf(_blast_charge + delta, charged_blast_charge_sec)
+		_ensure_spell_charge_pose()
+	elif not _blast_charging:
+		_blast_charge = maxf(_blast_charge - delta * 2.4, 0.0)
+	## While LMB is held, charge grows; release fires. Frozen charge only if somehow interrupted.
+	var show_orb := _blast_charging and _blast_charge > 0.02
+	if _charge_orb == null:
+		return
+	_charge_orb.visible = show_orb
+	if _charge_orb_light != null:
+		_charge_orb_light.visible = show_orb
+	if not show_orb:
+		return
+	var radius := _charged_blast_radius()
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.012)
+	var orb_r := radius * (0.09 + 0.03 * pulse)
+	if _charge_orb_mesh != null:
+		_charge_orb_mesh.radius = orb_r
+		_charge_orb_mesh.height = orb_r * 2.0
+	_charge_orb.global_position = _spell_hand_origin()
+	if _charge_orb_mat != null:
+		_charge_orb_mat.emission_energy_multiplier = 8.0 + 10.0 * pulse
+	if _charge_orb_light != null:
+		_charge_orb_light.light_energy = 2.0 + 8.0 * (_blast_charge / maxf(charged_blast_charge_sec, 0.05))
+		_charge_orb_light.omni_range = orb_r * 8.0
+
+
+func _ensure_spell_charge_pose() -> void:
+	## Hold the casting pose while charging; Shoot replaces it on release.
+	if _action_playing and _action_anim == charged_blast_idle_anim:
+		return
+	if _action_playing and _action_anim == charged_blast_shoot_anim:
+		return
+	if not has_action_animation(charged_blast_idle_anim):
+		return
+	var path := "%s/%s" % [LIB_NAME, charged_blast_idle_anim]
+	var anim: Animation = _anim_player.get_animation(path)
+	if anim != null:
+		anim.loop_mode = Animation.LOOP_LINEAR
+	play_action(charged_blast_idle_anim, false)
+
+
+func _begin_charged_blast_hold() -> void:
+	_blast_charging = true
+	_blast_charge = maxf(_blast_charge, 0.05)
+	_ensure_spell_charge_pose()
+
+
+func _release_charged_blast_at_cursor() -> void:
+	_blast_charging = false
+	if _charge_orb != null:
+		_charge_orb.visible = false
+	if _charge_orb_light != null:
+		_charge_orb_light.visible = false
+	_start_charged_blast_at_cursor()
+
+
+func _spell_hand_origin() -> Vector3:
+	## Spell_Simple_* casts from the left hand; spawn well in front of the palm.
+	var hand := _bone_world_pos(
+		[&"LeftHand", &"hand_l", &"hand.L", &"LeftLowerArm", &"lowerarm_l"]
+	)
+	var fwd := -global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.0001:
+		fwd = Vector3(0.0, 0.0, -1.0)
+	else:
+		fwd = fwd.normalized()
+	var s := character_scale
+	## ~1 m in front of the hand at human scale (grows with the character).
+	var ahead := 1.0 * s
+	if hand.is_finite():
+		return hand + fwd * ahead + Vector3.UP * (0.05 * s)
+	return global_position + Vector3(0.0, 1.15 * s, 0.0) + fwd * (ahead + 0.35 * s)
+
+
 func _laser_eye_origin() -> Vector3:
 	## Midpoint between approximate eye sockets (head center, slight forward/up).
 	var head := _bone_world_pos([&"Head", &"head"])
@@ -1223,20 +1469,32 @@ func _on_laser_impact(hit_point: Vector3, direction: Vector3) -> void:
 	melee_strike_requested.emit(origin, dir, maxf(2.5, character_scale * 2.0))
 
 
-func _start_laser_eyes_at_cursor() -> void:
-	if _camera == null:
-		return
-	var now := Time.get_ticks_msec()
-	if now < _laser_ready_at_msec:
-		return
-	if _eye_laser != null and bool(_eye_laser.call("is_firing")):
-		return
+func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: float) -> void:
+	var dir := direction
+	if dir.length_squared() < 0.0001:
+		dir = -global_transform.basis.z
+	else:
+		dir = dir.normalized()
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_laser_impact"):
+		audio.call("play_laser_impact", hit_point, character_scale)
+	var root := _city_root()
+	## Agents at the impact still die / flip; the blast itself does not cascade fabric.
+	if root != null and root.has_method("apply_laser_agent_hit"):
+		var from := hit_point - dir * maxf(radius_m, 0.5)
+		root.call("apply_laser_agent_hit", from, hit_point, dir)
+	if root != null and root.has_method("apply_charged_blast"):
+		root.call("apply_charged_blast", hit_point, radius_m)
 
+
+func _aim_point_at_cursor() -> Vector3:
+	if _camera == null:
+		return global_position - global_transform.basis.z * 10.0
 	var mouse := get_viewport().get_mouse_position()
 	var from := _camera.project_ray_origin(mouse)
 	var ray_dir := _camera.project_ray_normal(mouse)
 	if ray_dir.length_squared() < 0.0001:
-		return
+		return from + (-global_transform.basis.z) * laser_range_m
 	ray_dir = ray_dir.normalized()
 	var to := from + ray_dir * laser_range_m
 	var query := PhysicsRayQueryParameters3D.create(from, to)
@@ -1246,15 +1504,106 @@ func _start_laser_eyes_at_cursor() -> void:
 	var aim_point := to
 	if not hit.is_empty():
 		aim_point = hit["position"] as Vector3
+	var origin := _laser_eye_origin()
+	var root := _city_root()
+	if root != null and root.has_method("resolve_laser_aim"):
+		aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
+	return aim_point
 
+
+func _start_charged_blast_at_cursor() -> void:
+	if _camera == null:
+		_blast_charge = 0.0
+		return
+	var now := Time.get_ticks_msec()
+	if now < _blast_ready_at_msec:
+		_blast_charge = 0.0
+		return
+	if _charged_blast != null and bool(_charged_blast.call("is_firing")):
+		_blast_charge = 0.0
+		return
+	## Tap-release still fires a minimum bomb.
+	if _blast_charge < 0.05:
+		_blast_charge = 0.05
+	_blast_pending_radius = _charged_blast_radius()
+	_blast_pending_aim = _aim_point_at_cursor()
+	_blast_charge = 0.0
+	_blast_ready_at_msec = now + int(maxi(int(charged_blast_cooldown_sec * 1000.0), 50))
+	if _charge_orb != null:
+		_charge_orb.visible = false
+	if _charge_orb_light != null:
+		_charge_orb_light.visible = false
+
+	if has_action_animation(charged_blast_shoot_anim):
+		play_action(charged_blast_shoot_anim, false)
+		_schedule_charged_blast_release()
+	else:
+		push_error("CityWalker: charged blast anim missing (%s)" % charged_blast_shoot_anim)
+		_fire_charged_blast_projectile()
+
+
+func _schedule_charged_blast_release() -> void:
+	_blast_fire_token += 1
+	var token := _blast_fire_token
+	var delay := 0.22
+	var speed := 1.0
+	if _anim_player != null:
+		speed = maxf(_anim_player.speed_scale, 0.05)
+		var path := "%s/%s" % [LIB_NAME, charged_blast_shoot_anim]
+		if _anim_player.has_animation(path):
+			var anim: Animation = _anim_player.get_animation(path)
+			if anim != null:
+				delay = maxf(anim.length * clampf(charged_blast_release_ratio, 0.05, 0.95), 0.05)
+	## Wall-clock delay: slower playback (large characters) waits longer for the hand pose.
+	delay /= speed
+	var tree := get_tree()
+	if tree == null:
+		_fire_charged_blast_projectile()
+		return
+	tree.create_timer(delay).timeout.connect(
+		func() -> void:
+			if token != _blast_fire_token or not is_instance_valid(self):
+				return
+			_fire_charged_blast_projectile()
+	)
+
+
+func _fire_charged_blast_projectile() -> void:
+	var origin := _spell_hand_origin()
+	_laser_shot_origin = origin
+	var aim_point := _blast_pending_aim
+	if aim_point.distance_squared_to(origin) < 0.25:
+		var fwd := -global_transform.basis.z
+		if fwd.length_squared() > 0.0001:
+			aim_point = origin + fwd.normalized() * 8.0
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_laser_fire"):
+		audio.call("play_laser_fire", origin, character_scale)
+	if _charged_blast != null and _charged_blast.has_method("fire"):
+		_charged_blast.call(
+			"fire",
+			origin,
+			aim_point,
+			_blast_pending_radius,
+			charged_blast_speed_mps,
+			_effective_body_scale()
+		)
+
+
+func _start_laser_eyes_at_cursor() -> void:
+	if _camera == null:
+		return
+	var now := Time.get_ticks_msec()
+	if now < _laser_ready_at_msec:
+		return
+	if _eye_laser != null and bool(_eye_laser.call("is_firing")):
+		return
+
+	var aim_point := _aim_point_at_cursor()
 	_laser_ready_at_msec = now + int(maxi(int(laser_cooldown_sec * 1000.0), 50))
 
 	var origin := _laser_eye_origin()
 	_laser_shot_origin = origin
-	## Prefer the camera click ray (crosshair path); eye→wall is a fallback.
-	var root := _city_root()
-	if root != null and root.has_method("resolve_laser_aim"):
-		aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
 	var audio := _city_audio()
 	if audio != null and audio.has_method("play_laser_fire"):
 		audio.call("play_laser_fire", origin, character_scale)
@@ -1286,6 +1635,62 @@ func _start_melee_kick() -> void:
 		return
 	play_action(kick_anim, false)
 	_schedule_melee_impact(false, kick_impact_ratio)
+
+
+func _start_stomp() -> void:
+	var now := Time.get_ticks_msec()
+	if now < _stomp_ready_at_msec:
+		return
+	if not has_action_animation(stomp_anim):
+		push_error("CityWalker: stomp anim missing (%s)" % stomp_anim)
+		return
+	_stomp_ready_at_msec = now + int(maxi(int(stomp_cooldown_sec * 1000.0), 50))
+	play_action(stomp_anim, false)
+	_schedule_stomp_impact()
+
+
+func _schedule_stomp_impact() -> void:
+	_stomp_token += 1
+	var token := _stomp_token
+	var delay := 0.35
+	var speed := 1.0
+	if _anim_player != null:
+		speed = maxf(_anim_player.speed_scale, 0.05)
+		var path := "%s/%s" % [LIB_NAME, stomp_anim]
+		if _anim_player.has_animation(path):
+			var anim: Animation = _anim_player.get_animation(path)
+			if anim != null:
+				delay = maxf(anim.length * clampf(stomp_impact_ratio, 0.05, 0.95), 0.05)
+	delay /= speed
+	var tree := get_tree()
+	if tree == null:
+		_emit_stomp()
+		return
+	tree.create_timer(delay).timeout.connect(
+		func() -> void:
+			if token != _stomp_token or not is_instance_valid(self):
+				return
+			_emit_stomp()
+	)
+
+
+func _emit_stomp() -> void:
+	var feet := _stomp_feet_origin()
+	var radius := stomp_radius_at_scale_1 * character_scale
+	add_camera_shake(stomp_shake_trauma * clampf(0.55 + 0.2 * character_scale, 0.55, 1.0))
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_laser_impact"):
+		audio.call("play_laser_impact", feet, character_scale)
+	stomp_requested.emit(feet, radius)
+
+
+func _stomp_feet_origin() -> Vector3:
+	var foot := _bone_world_pos(
+		[&"LeftFoot", &"foot_l", &"RightFoot", &"foot_r", &"ball_l", &"ball_r"]
+	)
+	if foot.is_finite():
+		return Vector3(global_position.x, foot.y, global_position.z)
+	return global_position + Vector3(0.0, 0.08 * character_scale, 0.0)
 
 
 func _schedule_melee_impact(is_punch: bool, ratio: float) -> void:

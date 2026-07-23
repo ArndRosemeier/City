@@ -21,6 +21,15 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 @export var waypoint_reach_m: float = 0.85
 @export var stuck_error_sec: float = 8.0
 @export var crossing_occupancy_interval_sec: float = 0.12
+## How far away cars notice destruction and floor it away.
+@export var flee_radius_m: float = 40.0
+## Keep fleeing until at least this far from the player.
+@export var flee_clear_distance_m: float = 200.0
+@export var flee_speed_mul: float = 1.9
+@export var flee_trip_min_m: float = 60.0
+@export var flee_trip_max_m: float = 200.0
+@export var flee_repaths_per_frame: int = 2
+@export var flee_greedy_hops: int = 16
 
 var _agents: Array[VehicleAgent] = []
 var _near_agents: Array[VehicleAgent] = []
@@ -34,6 +43,9 @@ var _lod_accum: float = 0.0
 var _occupancy_accum: float = 0.0
 var _ground_y: float = 1.0
 var _near_count: int = 0
+var _flee_repath_queue: Array[VehicleAgent] = []
+var _threat_pos_cache: Vector3 = Vector3.ZERO
+var _threat_pos_frame: int = -1
 
 
 func setup(roadmap: CarRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
@@ -80,6 +92,7 @@ func clear_vehicles() -> void:
 		_release_visual(agent)
 	_agents.clear()
 	_near_agents.clear()
+	_flee_repath_queue.clear()
 	_near_count = 0
 	for child in get_children():
 		if child is RigidBody3D and String(child.name).begins_with("Wreck_"):
@@ -106,6 +119,103 @@ func count_lod_tiers() -> Vector3i:
 		else:
 			culled_n += 1
 	return Vector3i(near_n, 0, culled_n)
+
+
+## Nearby live cars accelerate away along the road graph.
+func react_to_destruction(world_pos: Vector3, radius_m: float = -1.0) -> void:
+	var radius := radius_m if radius_m > 0.0 else flee_radius_m
+	var r2 := radius * radius
+	var threat := _threat_position(world_pos)
+	for agent in _agents:
+		if agent == null or agent.wrecked:
+			continue
+		var dx := agent.position.x - world_pos.x
+		var dz := agent.position.z - world_pos.z
+		if dx * dx + dz * dz > r2:
+			continue
+		_start_flee(agent, threat)
+
+
+func _start_flee(agent: VehicleAgent, danger: Vector3) -> void:
+	agent.fleeing = true
+	agent.flee_from = danger
+	## Keep current trip if moving — only floor it. Repath is budgeted.
+	if agent.moving and agent.path_i < agent.waypoints.size():
+		return
+	_enqueue_flee_repath(agent)
+
+
+func _threat_position(fallback: Vector3 = Vector3.ZERO) -> Vector3:
+	var frame := Engine.get_process_frames()
+	if frame == _threat_pos_frame:
+		return _threat_pos_cache
+	_threat_pos_frame = frame
+	if _camera != null and is_instance_valid(_camera):
+		_threat_pos_cache = _camera.global_position
+	else:
+		_threat_pos_cache = fallback
+	return _threat_pos_cache
+
+
+func _enqueue_flee_repath(agent: VehicleAgent) -> void:
+	if agent == null or agent.wrecked or agent.flee_repath_queued:
+		return
+	agent.flee_repath_queued = true
+	_flee_repath_queue.append(agent)
+
+
+func _drain_flee_repath_queue() -> void:
+	var budget := maxi(flee_repaths_per_frame, 1)
+	while budget > 0 and not _flee_repath_queue.is_empty():
+		var agent: VehicleAgent = _flee_repath_queue.pop_front()
+		if agent == null:
+			continue
+		agent.flee_repath_queued = false
+		if agent.wrecked or not agent.fleeing:
+			continue
+		_assign_flee_trip(agent)
+		budget -= 1
+
+
+func _assign_flee_trip(agent: VehicleAgent) -> void:
+	## Greedy hops away from the player — avoids BFS storms when many cars flee.
+	if _roadmap == null or _roadmap.is_empty():
+		agent.clear_path()
+		return
+	var from_node := _roadmap.nearest_node(agent.position)
+	if from_node < 0:
+		agent.clear_path()
+		return
+	agent.flee_from = _threat_position(agent.flee_from)
+	var danger := agent.flee_from
+	var path := PackedVector3Array()
+	var node := from_node
+	var prev := -1
+	var hops := maxi(flee_greedy_hops, 4)
+	for _i in hops:
+		var nbrs: PackedInt32Array = _roadmap.neighbors[node]
+		if nbrs.is_empty():
+			break
+		var best := -1
+		var best_d2 := -1.0
+		for n in nbrs:
+			if n == prev:
+				continue
+			var p: Vector3 = _roadmap.positions[n]
+			var d2 := Vector2(p.x - danger.x, p.z - danger.z).length_squared()
+			if d2 > best_d2:
+				best_d2 = d2
+				best = n
+		if best < 0:
+			best = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
+		prev = node
+		node = best
+		path.append(_roadmap.positions[node])
+	if path.is_empty():
+		agent.clear_path()
+		return
+	agent.set_path(path)
+	agent.stuck_sec = 0.0
 
 
 ## Closest live vehicle along segment. Empty if none.
@@ -307,6 +417,7 @@ func _physics_process(delta: float) -> void:
 	if _agents.is_empty():
 		return
 	_time += delta
+	_drain_flee_repath_queue()
 	_occupancy_accum += delta
 	if _occupancy_accum >= crossing_occupancy_interval_sec:
 		_occupancy_accum = 0.0
@@ -327,6 +438,12 @@ func _refresh_crossing_occupancy() -> void:
 
 
 func _assign_trip(agent: VehicleAgent) -> void:
+	if agent.is_fleeing():
+		## Don't leave a finished path with path_i past the end — that OOB'd simulate.
+		if agent.path_i >= agent.waypoints.size():
+			agent.clear_path()
+		_enqueue_flee_repath(agent)
+		return
 	if _roadmap == null or _roadmap.is_empty():
 		agent.clear_path()
 		return
@@ -350,13 +467,24 @@ func _assign_trip(agent: VehicleAgent) -> void:
 
 func _simulate(delta: float) -> void:
 	var reach_r2 := waypoint_reach_m * waypoint_reach_m
+	var threat := _threat_position()
+	var clear_r2 := flee_clear_distance_m * flee_clear_distance_m
 	for i in range(_agents.size()):
 		var agent: VehicleAgent = _agents[i]
 		if agent.wrecked:
 			continue
+		if agent.fleeing:
+			agent.flee_from = threat
+			var fdx := agent.position.x - threat.x
+			var fdz := agent.position.z - threat.z
+			if fdx * fdx + fdz * fdz >= clear_r2:
+				agent.fleeing = false
+				agent.flee_repath_queued = false
 		if not agent.moving or agent.path_i >= agent.waypoints.size():
+			if agent.path_i >= agent.waypoints.size():
+				agent.clear_path()
 			_assign_trip(agent)
-			if not agent.moving:
+			if not agent.moving or agent.path_i >= agent.waypoints.size():
 				agent.stuck_sec += delta
 				if agent.stuck_sec >= stuck_error_sec:
 					push_error(
@@ -377,11 +505,11 @@ func _simulate(delta: float) -> void:
 				_assign_trip(agent)
 			continue
 
-		# Crossing yield: stop when approaching occupied crosswalks.
+		# Crossing yield: stop when approaching occupied crosswalks (even while fleeing).
 		var yield_now := false
 		if _layers != null:
 			yield_now = _layers.yielding_for_car(agent.position, target)
-		agent.speed = 0.0 if yield_now else agent.cruise_speed
+		agent.speed = 0.0 if yield_now else agent.drive_speed(flee_speed_mul)
 		if yield_now:
 			continue
 

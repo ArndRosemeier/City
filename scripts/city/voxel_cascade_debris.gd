@@ -146,6 +146,77 @@ func detach_voxels(entries: Array) -> void:
 		_flush_unsupported_drops()
 
 
+## Explosion debris only — tumble carved voxels, no column / unsupported cascades.
+func detach_blast_voxels(entries: Array, blast_center_world: Vector3) -> void:
+	if entries.is_empty() or _debris_root == null or _terrain == null:
+		return
+	var local_center := _terrain.to_local(blast_center_world)
+	for raw in entries:
+		var e: Dictionary = raw
+		var vox: Vector3i = e["vox"]
+		var mat := int(e["mat"])
+		_spawn_blast_cube(vox, mat, local_center)
+
+
+func _spawn_blast_cube(vox: Vector3i, mat_id: int, blast_local: Vector3) -> void:
+	if not _make_room_for_spawn():
+		if _pending_visuals.size() < max_pending_visuals:
+			_pending_visuals.append({"vox": vox, "mat": mat_id})
+		return
+	var local_center := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+	var world_center := _terrain.to_global(local_center)
+	var size := Vector3.ONE * (_voxel_size * clampf(cube_scale, 0.7, 1.0))
+
+	var body := RigidBody3D.new()
+	body.name = "BlastCube"
+	body.collision_layer = 4
+	body.collision_mask = 1
+	body.continuous_cd = true
+	body.can_sleep = true
+	body.gravity_scale = 1.0
+	body.mass = clampf(size.x * size.y * size.z * 900.0, 0.35, 12.0)
+	body.physics_material_override = _phys_mat
+	body.set_meta("debris", "cascade_cube")
+	body.set_meta("mat_id", mat_id)
+	body.set_meta("origin_vox", vox)
+
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = size
+	mi.mesh = box
+	mi.material_override = VoxelBlockLibrary.material_for(mat_id)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(mi)
+
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	cs.shape = shape
+	body.add_child(cs)
+
+	_debris_root.add_child(body)
+	body.global_position = world_center
+	body.rotation = Vector3(
+		_rng.randf_range(-0.85, 0.85),
+		_rng.randf_range(0.0, TAU),
+		_rng.randf_range(-0.85, 0.85)
+	)
+	var away := local_center - blast_local
+	if away.length_squared() < 0.0001:
+		away = Vector3(_rng.randf_range(-1.0, 1.0), 0.4, _rng.randf_range(-1.0, 1.0))
+	away = away.normalized()
+	var burst := pop_impulse * _rng.randf_range(1.1, 2.0)
+	body.linear_velocity = away * burst + Vector3.UP * (pop_impulse * _rng.randf_range(0.45, 1.1))
+	body.angular_velocity = Vector3(
+		_rng.randf_range(-tumble_spin, tumble_spin),
+		_rng.randf_range(-tumble_spin, tumble_spin),
+		_rng.randf_range(-tumble_spin, tumble_spin)
+	)
+	_live_bodies.append(body)
+	body.tree_exited.connect(_on_body_exited.bind(body))
+	_play_debris_sfx(world_center)
+
+
 func _enqueue_column_above(hit_vox: Vector3i, spawn_first: bool) -> bool:
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var column: Array = []
