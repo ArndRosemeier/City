@@ -4,13 +4,13 @@
 ## Every active column advances one cube per interval — collapse speed stays constant
 ## no matter how many columns are falling at once.
 ## Per tick a column may spread (10%) to a neighbor or fizzle (5%) and stop early.
-## Destroying a brick also checks nearby fabric with no support below (30% drop).
+## Destroying a brick also checks nearby fabric with no support below (50% drop).
 class_name VoxelCascadeDebris
 extends Node
 
 @export var max_cubes_per_collapse: int = 256
 @export var cascade_interval_sec: float = 0.04
-@export var max_live_debris: int = 1000
+@export var max_live_debris: int = 1200
 @export var tumble_spin: float = 9.0
 @export var pop_impulse: float = 2.4
 ## Horizontal spawn jitter as a fraction of voxel size (breaks neat columns).
@@ -22,11 +22,13 @@ extends Node
 ## Per column-tick: chance to abort the rest of this column.
 @export var fizzle_chance: float = 0.05
 ## After a brick falls: chance an unsupported neighbor also drops.
-@export var unsupported_drop_chance: float = 0.3
+@export var unsupported_drop_chance: float = 0.5
 ## Max unsupported drops resolved in one flush (prevents one-frame wipe / stack blowups).
 @export var unsupported_flush_budget: int = 32
 ## Cap queued columns so chain reactions can't runaway.
 @export var max_active_columns: int = 180
+## When over the live cap, free at most this many oldest cubes per physics frame.
+@export var debris_evict_per_frame: int = 20
 
 ## Fabric cells around a cleared brick to check for missing vertical support.
 const _UNSUP_OFFSETS: Array[Vector3i] = [
@@ -146,6 +148,8 @@ func _append_column(column: Array) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	## Always trim gradually — never mass-delete on spawn (that wiped the whole field).
+	_trim_debris_gradual()
 	if _tool == null or _terrain == null or _debris_root == null:
 		_columns.clear()
 		_pending_unsupported.clear()
@@ -325,8 +329,7 @@ func _release_and_spawn(entry: Dictionary) -> void:
 	_collect_unsupported_neighbors(v)
 
 
-func _ensure_debris_capacity() -> void:
-	## Drop stale refs first so a full list of freed bodies can't block new spawns.
+func _prune_live_bodies() -> void:
 	var write := 0
 	for i in _live_bodies.size():
 		var b: Variant = _live_bodies[i]
@@ -334,8 +337,10 @@ func _ensure_debris_capacity() -> void:
 			_live_bodies[write] = b
 			write += 1
 	_live_bodies.resize(write)
-	## Evict oldest — but never more than needed for one new cube.
-	while _live_bodies.size() >= max_live_debris:
+
+
+func _free_oldest_debris() -> bool:
+	while not _live_bodies.is_empty():
 		var old: Variant = _live_bodies.pop_front()
 		if old == null or not is_instance_valid(old):
 			continue
@@ -343,12 +348,27 @@ func _ensure_debris_capacity() -> void:
 		if body.tree_exited.is_connected(_on_body_exited):
 			body.tree_exited.disconnect(_on_body_exited)
 		body.queue_free()
+		return true
+	return false
+
+
+func _trim_debris_gradual() -> void:
+	## Soft cleanup only — a few oldest cubes per frame when over the cap.
+	_prune_live_bodies()
+	var budget := maxi(debris_evict_per_frame, 1)
+	while _live_bodies.size() > max_live_debris and budget > 0:
+		if not _free_oldest_debris():
+			break
+		budget -= 1
 
 
 func _spawn_cube(vox: Vector3i, mat_id: int) -> void:
 	if _debris_root == null or _terrain == null:
 		return
-	_ensure_debris_capacity()
+	_prune_live_bodies()
+	## At capacity: keep existing fallen blocks; skip this visual rather than wiping the field.
+	if _live_bodies.size() >= max_live_debris:
+		return
 	var local_center := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
 	var world_center := _terrain.to_global(local_center)
 	## Nudge off the column axis so neighbors don't rest in a perfect stack.
