@@ -1,32 +1,66 @@
-## Thin VoxelTool helper shared by planners / composers / grammars.
+## Thin brush: live VoxelTool *or* OfflineVoxelVolume (thread-safe baking).
+## Local district coords; live mode offsets by `origin` into world voxel space.
 class_name CityBrush
 extends RefCounted
 
+const OfflineVoxelVolumeScript := preload("res://scripts/city/offline_voxel_volume.gd")
+
 var tool: VoxelTool
+var origin: Vector3i = Vector3i.ZERO
+## OfflineVoxelVolume when baking off-thread; null in live VoxelTool mode.
+var volume
 
 
-func _init(p_tool: VoxelTool = null) -> void:
+func _init(p_tool: VoxelTool = null, p_origin: Vector3i = Vector3i.ZERO) -> void:
 	tool = p_tool
+	origin = p_origin
 	if tool != null:
 		tool.channel = VoxelBuffer.CHANNEL_TYPE
 		tool.mode = VoxelTool.MODE_SET
 
 
+func use_offline_volume(p_volume = null) -> void:
+	if p_volume == null:
+		volume = OfflineVoxelVolumeScript.new()
+	else:
+		volume = p_volume
+	## Offline paints in local space; origin applied at commit time.
+	origin = Vector3i.ZERO
+
+
 func fill_box(min_v: Vector3i, max_v: Vector3i, material_id: int) -> void:
-	## Inclusive min, exclusive max.
+	## Inclusive min, exclusive max (local — callers use local).
 	if min_v.x >= max_v.x or min_v.y >= max_v.y or min_v.z >= max_v.z:
+		return
+	if volume != null:
+		volume.fill_box(min_v, max_v, material_id)
+		return
+	if tool == null:
+		push_error("CityBrush.fill_box: no tool or volume")
 		return
 	tool.mode = VoxelTool.MODE_SET
 	tool.value = material_id
-	tool.do_box(min_v, max_v - Vector3i.ONE)
+	var a := min_v + origin
+	var b := max_v + origin - Vector3i.ONE
+	tool.do_box(a, b)
 
 
 func set_vox(pos: Vector3i, material_id: int) -> void:
-	tool.set_voxel(pos, material_id)
+	if volume != null:
+		volume.set_vox(pos, material_id)
+		return
+	if tool == null:
+		push_error("CityBrush.set_vox: no tool or volume")
+		return
+	tool.set_voxel(pos + origin, material_id)
 
 
 func get_vox(pos: Vector3i) -> int:
-	return tool.get_voxel(pos)
+	if volume != null:
+		return int(volume.get_vox(pos))
+	if tool == null:
+		return 0
+	return tool.get_voxel(pos + origin)
 
 
 func column(x: int, z: int, y0: int, y1: int, material_id: int) -> void:

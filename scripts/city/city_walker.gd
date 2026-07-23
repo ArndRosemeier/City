@@ -73,6 +73,9 @@ var _feet_aligned: bool = false
 var _rng := RandomNumberGenerator.new()
 var _jump_queued: bool = false
 var _coyote_left: float = 0.0
+var _safety_deck: StaticBody3D
+## Matches district surface top: (ground_thickness+1) * 0.5 m.
+const SAFETY_FLOOR_TOP_Y := 1.0
 
 
 func _ready() -> void:
@@ -91,6 +94,9 @@ func _ready() -> void:
 	_capsule.shape = shape
 	_capsule.position.y = 0.95
 	add_child(_capsule)
+
+	## Always-on safety deck under the player — catches Forget/remesh holes.
+	_ensure_safety_deck()
 
 	_female = _rng.randf() < 0.5
 	_proportions = BodyProportions.identity()
@@ -545,12 +551,99 @@ func _physics_process(delta: float) -> void:
 	if _moving and is_on_floor() and velocity.y <= 0.0:
 		_try_step_up(delta)
 
+	## Soft void gate: don't walk off stamped/meshed ground into empty air.
+	if _moving:
+		_clamp_wish_to_solid_ground()
+
 	move_and_slide()
+	_update_safety_deck()
 	_apply_camera_angles()
 	_update_locomotion_anim(speed)
 
 	if is_on_floor() and not _feet_aligned and _skeleton != null:
 		_align_soles_to_floor()
+	elif not is_on_floor() and velocity.y < -2.0:
+		_rescue_from_void()
+	## Absolute floor — never drop below sidewalk height into Forget voids.
+	if global_position.y < SAFETY_FLOOR_TOP_Y - 0.5:
+		global_position.y = SAFETY_FLOOR_TOP_Y + 0.15 * character_scale
+		velocity.y = 0.0
+
+
+func _ensure_safety_deck() -> void:
+	if _safety_deck != null and is_instance_valid(_safety_deck):
+		return
+	_safety_deck = StaticBody3D.new()
+	_safety_deck.name = "SafetyDeck"
+	_safety_deck.collision_layer = 1
+	_safety_deck.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(64.0, 0.8, 64.0)
+	shape.shape = box
+	_safety_deck.add_child(shape)
+
+
+func _update_safety_deck() -> void:
+	if _safety_deck == null or not is_instance_valid(_safety_deck):
+		return
+	var host := get_parent()
+	if host == null:
+		return
+	if _safety_deck.get_parent() != host:
+		if _safety_deck.get_parent() != null:
+			_safety_deck.get_parent().remove_child(_safety_deck)
+		host.add_child(_safety_deck)
+	_safety_deck.global_position = Vector3(
+		global_position.x,
+		SAFETY_FLOOR_TOP_Y - 0.4,
+		global_position.z
+	)
+
+
+func _clamp_wish_to_solid_ground() -> void:
+	## If the next step has no floor within ~2 m below, cancel horizontal motion that way.
+	var space := get_world_3d().direct_space_state
+	var step := Vector3(velocity.x, 0.0, velocity.z).normalized() * 0.9
+	if step.length_squared() < 0.0001:
+		return
+	var probe := global_position + step + Vector3(0.0, 1.2, 0.0)
+	var q := PhysicsRayQueryParameters3D.create(probe, probe + Vector3(0.0, -4.0, 0.0))
+	q.collision_mask = 1
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		velocity.x = 0.0
+		velocity.z = 0.0
+		_moving = false
+
+
+func _rescue_from_void() -> void:
+	## Last-resort snap if we somehow fell through checkerboard collision gaps.
+	var space := get_world_3d().direct_space_state
+	var from := global_position + Vector3(0.0, 8.0, 0.0)
+	var to := global_position + Vector3(0.0, -40.0, 0.0)
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = 1
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		## Search nearby for any floor.
+		for ox in [-3.0, 0.0, 3.0, -6.0, 6.0]:
+			for oz in [-3.0, 0.0, 3.0, -6.0, 6.0]:
+				var f2 := global_position + Vector3(ox, 8.0, oz)
+				var q2 := PhysicsRayQueryParameters3D.create(f2, f2 + Vector3(0.0, -40.0, 0.0))
+				q2.collision_mask = 1
+				q2.exclude = [get_rid()]
+				hit = space.intersect_ray(q2)
+				if not hit.is_empty():
+					break
+			if not hit.is_empty():
+				break
+	if hit.is_empty():
+		return
+	global_position = hit.position + Vector3(0.0, 0.15, 0.0)
+	velocity = Vector3.ZERO
 
 
 func _try_step_up(delta: float) -> void:

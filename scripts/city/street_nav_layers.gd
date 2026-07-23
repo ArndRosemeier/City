@@ -21,6 +21,7 @@ var cell_size: int = 10
 var voxel_size: float = 0.5
 var ground_thickness: int = 1
 var ground_y: float = 1.0
+var origin_vox: Vector3i = Vector3i.ZERO
 
 
 func is_ready() -> bool:
@@ -32,11 +33,13 @@ func build(
 	tool: VoxelTool,
 	p_cell_size: int,
 	p_ground_thickness: int,
-	vs: float
+	vs: float,
+	p_origin_vox: Vector3i = Vector3i.ZERO
 ) -> void:
 	cell_size = p_cell_size
 	ground_thickness = p_ground_thickness
 	voxel_size = vs
+	origin_vox = p_origin_vox
 	ground_y = float(ground_thickness + 1) * vs
 	crossings.clear()
 	crossing_ped_count.clear()
@@ -198,12 +201,12 @@ func _rebuild_crossing_grid() -> void:
 
 
 func _cell_origin_vox(cx: int, cz: int) -> Vector2i:
-	return Vector2i(cx * cell_size, cz * cell_size)
+	return Vector2i(origin_vox.x + cx * cell_size, origin_vox.z + cz * cell_size)
 
 
 func _cell_center(cx: int, cz: int) -> Vector3:
-	var ox := float(cx * cell_size) + float(cell_size) * 0.5
-	var oz := float(cz * cell_size) + float(cell_size) * 0.5
+	var ox := float(origin_vox.x + cx * cell_size) + float(cell_size) * 0.5
+	var oz := float(origin_vox.z + cz * cell_size) + float(cell_size) * 0.5
 	return Vector3(ox * voxel_size, ground_y, oz * voxel_size)
 
 

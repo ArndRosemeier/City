@@ -1,4 +1,4 @@
-## Procedural district: planner → plazas/parks → building grammars → VoxelTool.
+## Procedural district: planner → plazas/parks → building grammars → brush (live or offline).
 class_name DistrictGenerator
 extends RefCounted
 
@@ -34,27 +34,64 @@ var _park: ParkComposer
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {center, size, color}.
 var building_impostors: Array = []
+## World voxel origin of this district tile (local paint stays 0..size).
+var origin_vox: Vector3i = Vector3i.ZERO
+var district_coord: Vector2i = Vector2i.ZERO
 
 
-func generate(tool: VoxelTool, seed_value: int = -1) -> void:
-	## One-shot stamp — requires the full district AABB to already be editable.
-	begin_generate(tool, seed_value)
+func generate(tool: VoxelTool, seed_value: int = -1, p_origin: Vector3i = Vector3i.ZERO, p_coord: Vector2i = Vector2i.ZERO) -> void:
+	## One-shot stamp — requires the district AABB to already be editable.
+	begin_generate(tool, seed_value, p_origin, p_coord)
 	paint_tile(0, 0, size_x, size_z)
-	## Multi-cell plazas/parks must decorate *after* the cell loop: each paint_tile
-	## cell clears its AABB to air first, which would wipe a compose done mid-loop.
 	decorate_open_spaces()
 	end_generate()
 
 
-func begin_generate(tool: VoxelTool, seed_value: int = -1) -> void:
+func begin_generate(
+	tool: VoxelTool,
+	seed_value: int = -1,
+	p_origin: Vector3i = Vector3i.ZERO,
+	p_coord: Vector2i = Vector2i.ZERO
+) -> void:
+	origin_vox = p_origin
+	district_coord = p_coord
+	## `seed_value` is the per-district seed (DistrictCoord.district_seed(world, coord)).
 	if seed_value >= 0:
 		city_seed = seed_value
 	_rng.seed = city_seed
 	size_xz = maxi(size_x, size_z)
 	building_impostors.clear()
-	_brush = CityBrushScript.new(tool)
+	_brush = CityBrushScript.new(tool, origin_vox)
+	_setup_composers()
+
+
+func begin_generate_offline(
+	seed_value: int,
+	p_origin: Vector3i,
+	p_coord: Vector2i
+) -> void:
+	## Thread-safe path: paint into an OfflineVoxelVolume (no VoxelTool).
+	origin_vox = p_origin
+	district_coord = p_coord
+	city_seed = seed_value
+	_rng.seed = city_seed
+	size_xz = maxi(size_x, size_z)
+	building_impostors.clear()
+	_brush = CityBrushScript.new(null, Vector3i.ZERO)
+	_brush.use_offline_volume()
+	_setup_composers()
+
+
+func get_offline_volume():
+	## Returns OfflineVoxelVolume when baking off-thread; otherwise null.
+	if _brush == null:
+		return null
+	return _brush.volume
+
+
+func _setup_composers() -> void:
 	_planner = DistrictPlannerScript.new()
-	_planner.build(size_x, size_z, city_seed, cell_size)
+	_planner.build(size_x, size_z, city_seed, cell_size, district_coord)
 
 	_plaza = PlazaComposerScript.new()
 	_plaza.brush = _brush
@@ -75,6 +112,11 @@ func begin_generate(tool: VoxelTool, seed_value: int = -1) -> void:
 	_grammar.park = _park
 
 
+func _reseed_cell(cx: int, cz: int) -> void:
+	## Order-independent randomness — same cell always gets the same rolls.
+	_rng.seed = DistrictCoord.cell_seed(city_seed, cx, cz)
+
+
 func paint_tile(min_x: int, min_z: int, max_x: int, max_z: int) -> void:
 	## Clear + paint planner cells whose origins lie inside [min,max). Tile bounds must be editable.
 	## Multi-cell plaza/park *decoration* is deferred to decorate_open_spaces().
@@ -91,18 +133,94 @@ func paint_tile(min_x: int, min_z: int, max_x: int, max_z: int) -> void:
 	var cz0 := min_z / cell_size
 	var cx1 := (max_x - 1) / cell_size
 	var cz1 := (max_z - 1) / cell_size
-	var top := max_building_height_vox + 8
+	paint_district_ground_slab()
 	for cz in range(cz0, cz1 + 1):
 		for cx in range(cx0, cx1 + 1):
-			var cmin := Vector3i(cx * cell_size, 0, cz * cell_size)
-			var cmax := Vector3i((cx + 1) * cell_size, top, (cz + 1) * cell_size)
-			_brush.fill_box(cmin, cmax, VoxelMaterial.AIR)
-			_brush.fill_box(
-				Vector3i(cmin.x, 0, cmin.z),
-				Vector3i(cmax.x, ground_thickness, cmax.z),
-				VoxelMaterial.BEDROCK
-			)
-			_paint_cell(cx, cz)
+			paint_cell_ground(cx, cz)
+	for cz2 in range(cz0, cz1 + 1):
+		for cx2 in range(cx0, cx1 + 1):
+			paint_cell_structures(cx2, cz2)
+
+
+func paint_cell(cx: int, cz: int) -> void:
+	## Full cell (ground + structures). Prefer the split APIs when streaming.
+	## Do not blanket-fill AIR — that materializes empty sky into the voxel stream.
+	if _brush == null or _planner == null:
+		return
+	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:
+		return
+	_brush.fill_box(
+		Vector3i(cx * cell_size, 0, cz * cell_size),
+		Vector3i((cx + 1) * cell_size, ground_thickness, (cz + 1) * cell_size),
+		VoxelMaterial.BEDROCK
+	)
+	_brush.fill_box(
+		Vector3i(cx * cell_size, ground_thickness, cz * cell_size),
+		Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size),
+		VoxelMaterial.SIDEWALK
+	)
+	paint_cell_ground(cx, cz)
+	paint_cell_structures(cx, cz)
+
+
+func paint_district_ground_slab() -> void:
+	## One-shot walkable slab for the whole tile — avoids cell-by-cell air holes.
+	if _brush == null:
+		return
+	_brush.fill_box(
+		Vector3i(0, 0, 0),
+		Vector3i(size_x, ground_thickness, size_z),
+		VoxelMaterial.BEDROCK
+	)
+	_brush.fill_box(
+		Vector3i(0, ground_thickness, 0),
+		Vector3i(size_x, ground_thickness + 1, size_z),
+		VoxelMaterial.SIDEWALK
+	)
+
+
+func paint_cell_ground(cx: int, cz: int) -> void:
+	## Surface materials only (streets / plaza / park). Assumes bedrock+sidewalk slab exists.
+	if _brush == null or _planner == null:
+		return
+	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:
+		return
+	_reseed_cell(cx, cz)
+	var tag := _planner.tag_at(cx, cz)
+	var smin := Vector3i(cx * cell_size, ground_thickness, cz * cell_size)
+	var smax := Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size)
+	match tag:
+		LandUse.AVENUE:
+			_paint_street_cell(smin, smax, cx, cz, true)
+		LandUse.ROAD:
+			_paint_street_cell(smin, smax, cx, cz, false)
+		LandUse.PLAZA:
+			_brush.fill_box(smin, smax, VoxelMaterial.PLAZA)
+		LandUse.PARK:
+			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
+		_:
+			pass  ## Sidewalk already from slab.
+
+
+func paint_cell_structures(cx: int, cz: int) -> void:
+	## Buildings / vertical detail. Ground slab is left intact.
+	## Never AIR-fill the sky column — AirGenerator already provides empty space, and
+	## writing AIR would allocate sparse blocks for nothing (huge RAM cost).
+	if _brush == null or _planner == null:
+		return
+	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:
+		return
+	_reseed_cell(cx, cz)
+	var tag := _planner.tag_at(cx, cz)
+	var smin := Vector3i(cx * cell_size, ground_thickness, cz * cell_size)
+	var smax := Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size)
+	match tag:
+		LandUse.AVENUE, LandUse.ROAD:
+			pass  ## Surface already complete.
+		LandUse.PLAZA, LandUse.PARK:
+			pass  ## Fancy open-space decorate runs after all cells.
+		_:
+			_paint_lot(smin, smax, cx, cz, tag, _grammar)
 
 
 func decorate_open_spaces() -> void:
@@ -111,39 +229,46 @@ func decorate_open_spaces() -> void:
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 1)
 		var gmin := Vector3i(g.position.x * cell_size, ground_thickness, g.position.y * cell_size)
 		var gmax := Vector3i(g.end.x * cell_size, ground_thickness + 1, g.end.y * cell_size)
 		_plaza.compose_grand(gmin, gmax)
+	var sat_i := 0
 	for s in _planner.satellite_plazas:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 100 + sat_i)
+		sat_i += 1
 		var smin := Vector3i(s.position.x * cell_size, ground_thickness, s.position.y * cell_size)
 		var smax := Vector3i(s.end.x * cell_size, ground_thickness + 1, s.end.y * cell_size)
 		_plaza.compose_satellite(smin, smax)
 	var lp := _planner.large_park
 	if lp.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 2)
 		var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
 		var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
 		_park.compose_large(pmin, pmax)
 
 
 func open_space_bounds() -> Array[AABB]:
-	## Voxel-space AABBs that decorate_open_spaces() will write (for streaming waits).
+	## World voxel-space AABBs that decorate_open_spaces() will write.
 	var out: Array[AABB] = []
 	if _planner == null:
 		return out
 	var y0 := float(ground_thickness)
 	var yh := 12.0
+	var ox := float(origin_vox.x)
+	var oz := float(origin_vox.z)
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
 		out.append(
 			AABB(
-				Vector3(g.position.x * cell_size, y0, g.position.y * cell_size),
+				Vector3(ox + g.position.x * cell_size, y0, oz + g.position.y * cell_size),
 				Vector3(g.size.x * cell_size, yh, g.size.y * cell_size)
 			)
 		)
 	for s in _planner.satellite_plazas:
 		out.append(
 			AABB(
-				Vector3(s.position.x * cell_size, y0, s.position.y * cell_size),
+				Vector3(ox + s.position.x * cell_size, y0, oz + s.position.y * cell_size),
 				Vector3(s.size.x * cell_size, yh, s.size.y * cell_size)
 			)
 		)
@@ -151,7 +276,7 @@ func open_space_bounds() -> Array[AABB]:
 	if lp.size.x > 0:
 		out.append(
 			AABB(
-				Vector3(lp.position.x * cell_size, y0, lp.position.y * cell_size),
+				Vector3(ox + lp.position.x * cell_size, y0, oz + lp.position.y * cell_size),
 				Vector3(lp.size.x * cell_size, yh, lp.size.y * cell_size)
 			)
 		)
@@ -191,7 +316,7 @@ func build_street_nav(tool: VoxelTool) -> StreetNavLayers:
 		push_error("DistrictGenerator.build_street_nav: planner missing — call generate() first")
 		return null
 	var layers: StreetNavLayers = StreetNavLayersScript.new()
-	layers.build(_planner, tool, cell_size, ground_thickness, voxel_size)
+	layers.build(_planner, tool, cell_size, ground_thickness, voxel_size, origin_vox)
 	return layers
 
 
@@ -217,7 +342,7 @@ func collect_walkable_world_positions(tool: VoxelTool, stride: int = 2) -> Packe
 
 func find_spawn_world(tool: VoxelTool) -> Vector3:
 	## Feet slightly above the top of the ground voxel so we don't clip/tunnel.
-	_brush = CityBrushScript.new(tool)
+	_brush = CityBrushScript.new(tool, origin_vox)
 	var vs := voxel_size
 	var floor_top_y := float(ground_thickness + 1) * vs
 	var spawn_y := floor_top_y + 0.85
@@ -240,9 +365,17 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 						and _brush.get_vox(Vector3i(x, ground_thickness + 3, z)) == VoxelMaterial.AIR
 					):
 						_brush = null
-						return Vector3((float(x) + 0.5) * vs, spawn_y, (float(z) + 0.5) * vs)
+						return Vector3(
+							(float(origin_vox.x + x) + 0.5) * vs,
+							spawn_y,
+							(float(origin_vox.z + z) + 0.5) * vs
+						)
 	_brush = null
-	return Vector3(float(cx) * vs, spawn_y, float(cz) * vs)
+	return Vector3(
+		(float(origin_vox.x + cx) + 0.5) * vs,
+		spawn_y,
+		(float(origin_vox.z + cz) + 0.5) * vs
+	)
 
 
 func _sidewalk_depth_vox() -> int:
@@ -483,9 +616,9 @@ func _record_building_impostor(bmin: Vector3i, bmax: Vector3i, height_vox: int, 
 	var d := float(bmax.z - bmin.z) * vs
 	var h := float(maxi(height_vox, 8)) * vs
 	var center := Vector3(
-		(float(bmin.x) + float(bmax.x)) * 0.5 * vs,
+		(float(origin_vox.x + bmin.x) + float(origin_vox.x + bmax.x)) * 0.5 * vs,
 		float(bmin.y) * vs + h * 0.5,
-		(float(bmin.z) + float(bmax.z)) * 0.5 * vs
+		(float(origin_vox.z + bmin.z) + float(origin_vox.z + bmax.z)) * 0.5 * vs
 	)
 	var color := Color(0.62, 0.58, 0.52)
 	match zone:

@@ -28,7 +28,8 @@ func place_from_planner(
 	cell_size: int,
 	voxel_size: float,
 	ground_thickness: int,
-	camera: Camera3D
+	camera: Camera3D,
+	origin_vox: Vector3i = Vector3i.ZERO
 ) -> void:
 	clear_props()
 	_camera = camera
@@ -37,15 +38,16 @@ func place_from_planner(
 	var gy := float(ground_thickness + 1) * voxel_size
 	var step_cells := 3
 	var placed := 0
-	var max_poles := 160
+	var max_poles := 80
+	var oxw := float(origin_vox.x) * voxel_size
+	var ozw := float(origin_vox.z) * voxel_size
 	for cell in planner.avenue_light_cells:
 		if (cell.x + cell.y) % step_cells != 0:
 			continue
 		if placed >= max_poles:
 			break
-		var wx := (float(cell.x) + 0.5) * float(cell_size) * voxel_size
-		var wz := (float(cell.y) + 0.5) * float(cell_size) * voxel_size
-		# Offset toward sidewalk edge of the cell.
+		var wx := oxw + (float(cell.x) + 0.5) * float(cell_size) * voxel_size
+		var wz := ozw + (float(cell.y) + 0.5) * float(cell_size) * voxel_size
 		var ox := 1.6 if (cell.x % 2) == 0 else -1.6
 		var oz := 1.6 if (cell.y % 2) == 0 else -1.6
 		_spawn_pole(Vector3(wx + ox, gy, wz + oz))

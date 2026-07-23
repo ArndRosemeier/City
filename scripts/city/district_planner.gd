@@ -2,6 +2,8 @@
 class_name DistrictPlanner
 extends RefCounted
 
+const WorldArterialsScript := preload("res://scripts/city/world_arterials.gd")
+
 var cell_size: int = 28
 var cells_x: int = 0
 var cells_z: int = 0
@@ -18,7 +20,7 @@ var avenue_light_cells: Array[Vector2i] = []
 var _rng := RandomNumberGenerator.new()
 
 
-func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28) -> void:
+func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, district_coord: Vector2i = Vector2i.ZERO) -> void:
 	cell_size = p_cell_size
 	cells_x = size_x / cell_size
 	cells_z = size_z / cell_size
@@ -35,7 +37,8 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28) -> 
 	avenue_light_cells.clear()
 	civic_lot = Vector2i(-1, -1)
 
-	_stamp_organic_roads()
+	_stamp_world_arterials(district_coord)
+	_stamp_organic_interior_roads()
 	_stamp_grand_plaza()
 	_stamp_satellite_plazas()
 	_stamp_large_park()
@@ -102,40 +105,38 @@ func street_facing(cx: int, cz: int) -> int:
 	return _rng.randi() % 4
 
 
-func _stamp_organic_roads() -> void:
-	# Horizontal avenues (full-width rows), jittered spacing 5–9 cells, double-wide.
-	var z := 2 + _rng.randi() % 3
-	while z < cells_z - 2:
-		_stamp_row(z, LandUse.AVENUE)
-		if z + 1 < cells_z - 1:
-			_stamp_row(z + 1, LandUse.AVENUE)
-		z += _rng.randi_range(5, 9)
-	# Vertical avenues, jittered, double-wide.
-	var x := 2 + _rng.randi() % 3
-	while x < cells_x - 2:
-		_stamp_col(x, LandUse.AVENUE)
-		if x + 1 < cells_x - 1:
-			_stamp_col(x + 1, LandUse.AVENUE)
-		x += _rng.randi_range(6, 10)
-	# Secondary horizontal streets between avenues.
-	z = 3
-	while z < cells_z - 2:
-		if not LandUse.is_road(tag_at(0, z)):
+func _stamp_world_arterials(district_coord: Vector2i) -> void:
+	## Fixed world avenues so adjacent districts share edge openings.
+	var base_cx := district_coord.x * cells_x
+	var base_cz := district_coord.y * cells_z
+	for lz in range(cells_z):
+		var wcz := base_cz + lz
+		if WorldArterialsScript.is_arterial_row(wcz):
+			_stamp_row(lz, LandUse.AVENUE)
+	for lx in range(cells_x):
+		var wcx := base_cx + lx
+		if WorldArterialsScript.is_arterial_col(wcx):
+			_stamp_col(lx, LandUse.AVENUE)
+
+
+func _stamp_organic_interior_roads() -> void:
+	## Secondary streets stay off the outer ring so edge seams stay arterial-only.
+	var z := 3
+	while z < cells_z - 3:
+		if not LandUse.is_road(tag_at(cells_x / 2, z)):
 			if _rng.randf() < 0.85:
-				_stamp_row(z, LandUse.ROAD)
+				_stamp_row_interior(z, LandUse.ROAD)
 			z += _rng.randi_range(3, 6)
 		else:
 			z += 1
-	# Secondary vertical streets.
-	x = 3
-	while x < cells_x - 2:
-		if not LandUse.is_road(tag_at(x, 0)):
+	var x := 3
+	while x < cells_x - 3:
+		if not LandUse.is_road(tag_at(x, cells_z / 2)):
 			if _rng.randf() < 0.85:
-				_stamp_col(x, LandUse.ROAD)
+				_stamp_col_interior(x, LandUse.ROAD)
 			x += _rng.randi_range(3, 7)
 		else:
 			x += 1
-	# A few T-stubs / short connectors for organic feel.
 	for _k in range(maxi(4, cells_x / 10)):
 		var cx := _rng.randi_range(3, cells_x - 4)
 		var cz := _rng.randi_range(3, cells_z - 4)
@@ -144,16 +145,49 @@ func _stamp_organic_roads() -> void:
 		var len_cells := _rng.randi_range(2, 5)
 		if _rng.randf() < 0.5:
 			for i in range(len_cells):
-				if cx + i >= cells_x - 1:
+				if cx + i >= cells_x - 2:
 					break
 				if not LandUse.is_road(grid[cz][cx + i]):
 					grid[cz][cx + i] = LandUse.ROAD
 		else:
 			for i in range(len_cells):
-				if cz + i >= cells_z - 1:
+				if cz + i >= cells_z - 2:
 					break
 				if not LandUse.is_road(grid[cz + i][cx]):
 					grid[cz + i][cx] = LandUse.ROAD
+
+
+func _stamp_row_interior(z: int, tag: int) -> void:
+	if z < 1 or z >= cells_z - 1:
+		return
+	for x in range(1, cells_x - 1):
+		if grid[z][x] != LandUse.AVENUE:
+			grid[z][x] = tag
+
+
+func _stamp_col_interior(x: int, tag: int) -> void:
+	if x < 1 or x >= cells_x - 1:
+		return
+	for z in range(1, cells_z - 1):
+		if grid[z][x] != LandUse.AVENUE:
+			grid[z][x] = tag
+
+
+func _stamp_organic_roads() -> void:
+	## Legacy single-district path (no world seams). Kept for tests.
+	var z := 2 + _rng.randi() % 3
+	while z < cells_z - 2:
+		_stamp_row(z, LandUse.AVENUE)
+		if z + 1 < cells_z - 1:
+			_stamp_row(z + 1, LandUse.AVENUE)
+		z += _rng.randi_range(5, 9)
+	var x := 2 + _rng.randi() % 3
+	while x < cells_x - 2:
+		_stamp_col(x, LandUse.AVENUE)
+		if x + 1 < cells_x - 1:
+			_stamp_col(x + 1, LandUse.AVENUE)
+		x += _rng.randi_range(6, 10)
+	_stamp_organic_interior_roads()
 
 
 func _stamp_row(z: int, tag: int) -> void:

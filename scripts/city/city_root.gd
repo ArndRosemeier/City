@@ -1,49 +1,32 @@
-## City POC on godot_voxel: district stamp, FPS walk, sphere dig, crowd + traffic.
+## Endless city POC: spawn-district boot, then bubble streaming with view priority.
 class_name CityRoot
 extends Node3D
 
 const VOXEL_SIZE := 0.5
 const AirGeneratorScript := preload("res://scripts/city/air_generator.gd")
 const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library.gd")
-const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
-const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
-const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
-const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
+const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
+const CityDebugHudScript := preload("res://scripts/city/city_debug_hud.gd")
 
 @export var city_seed: int = 42
-@export var crowd_count: int = 1000
-@export var vehicle_count: int = 48
+@export var crowd_per_district: int = 48
+@export var vehicles_per_district: int = 6
+@export var bubble_radius_m: float = 460.0
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
-var _preload_viewer: VoxelViewer
-var _generator: DistrictGenerator
+var _streamer: Node
 var _walker: CityWalker
-var _crowd: CrowdDirector
-var _vehicles: VehicleDirector
-var _street_props: StreetPropPlacer
-var _building_lod: BuildingImpostorLod
 var _hud: Label
 var _status: Label
-var _generating: bool = false
+var _debug_hud: Node
+var _booting: bool = false
 var _fps_accum: float = 0.0
 
-## Player voxel mesh radius (2× the previous 220 default).
-const PLAYER_VIEW_DISTANCE := 440
+const PLAYER_VIEW_DISTANCE := 280
 
 
 func _ready() -> void:
-	_generator = DistrictGenerator.new()
-	# ~14 m lots/streets; district sized so one center viewer can keep all edits loaded
-	# (without a VoxelStream, unloaded blocks are regenerated as air).
-	_generator.size_x = 784
-	_generator.size_z = 560
-	_generator.size_xz = 784
-	_generator.cell_size = 28
-	_generator.floor_height_vox = 6
-	_generator.max_building_height_vox = 200
-	_generator.voxel_size = VOXEL_SIZE
-
 	_build_env()
 	_build_hud()
 	call_deferred("_regenerate")
@@ -110,13 +93,13 @@ func _process(delta: float) -> void:
 		return
 	_fps_accum = 0.0
 	if _hud != null:
-		_hud.text = "%d FPS" % Engine.get_frames_per_second()
+		var extra := ""
+		if _streamer != null:
+			extra = "  ·  districts %d" % int(_streamer.call("district_count"))
+		_hud.text = "%d FPS%s" % [Engine.get_frames_per_second(), extra]
 
 
 func _create_terrain() -> void:
-	if _preload_viewer != null and is_instance_valid(_preload_viewer):
-		_preload_viewer.queue_free()
-		_preload_viewer = null
 	if _terrain != null and is_instance_valid(_terrain):
 		_terrain.queue_free()
 		_terrain = null
@@ -124,127 +107,30 @@ func _create_terrain() -> void:
 
 	_terrain = VoxelTerrain.new()
 	_terrain.name = "VoxelTerrain"
+	add_child(_terrain)
 	_terrain.scale = Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE)
-	_terrain.generate_collisions = true
-	_terrain.collision_layer = 1
-	_terrain.collision_mask = 1
-	# Must cover district half-diagonal so edits stay resident (no stream → unload = air).
-	_terrain.max_view_distance = 512
-	var sx := float(_generator.size_x)
-	var sz := float(_generator.size_z)
-	var height := float(_generator.max_building_height_vox + 16)
-	_terrain.bounds = AABB(Vector3(0, 0, 0), Vector3(sx, height, sz))
 
 	var mesher := VoxelMesherBlocky.new()
 	mesher.library = VoxelBlockLibraryScript.build()
 	_terrain.mesher = mesher
 	_terrain.generator = AirGeneratorScript.new()
-
-	add_child(_terrain)
+	## No VoxelStreamMemory — modified blocks exist only while a VoxelViewer holds them.
+	## Leaving the bubble drops the district anchor → data is discarded (and regenerated
+	## from the deterministic district seed if you return). Storing every visited tile
+	## forever was the multi‑GB leak.
+	## Soft large bounds — streamer loads tiles inside the bubble.
+	_terrain.bounds = AABB(Vector3(-20000, 0, -20000), Vector3(40000, 220, 40000))
+	## VoxelTerrain clamps viewers to this (internal practical cap ~512).
+	_terrain.max_view_distance = 512
+	_terrain.generate_collisions = true
 	_tool = _terrain.get_voxel_tool()
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 
 
-func _ensure_district_anchor_viewer() -> void:
-	## Permanent center viewer keeps stamped voxel *data* loaded without meshing the whole city.
-	## Player viewer meshes nearby full detail; BuildingImpostorLod draws far massing.
-	if _preload_viewer != null and is_instance_valid(_preload_viewer):
-		_preload_viewer.queue_free()
-	_preload_viewer = VoxelViewer.new()
-	_preload_viewer.name = "DistrictAnchorViewer"
-	_preload_viewer.view_distance = 512
-	_preload_viewer.requires_visuals = false
-	_preload_viewer.requires_collisions = true
-	add_child(_preload_viewer)
-	_preload_viewer.global_position = Vector3(
-		float(_generator.size_x) * 0.5 * VOXEL_SIZE,
-		float(_generator.max_building_height_vox) * 0.5 * VOXEL_SIZE,
-		float(_generator.size_z) * 0.5 * VOXEL_SIZE
-	)
-
-
-func _wait_district_editable() -> bool:
-	var size := Vector3(
-		float(_generator.size_x),
-		float(_generator.max_building_height_vox + 8),
-		float(_generator.size_z)
-	)
-	var box := AABB(Vector3.ZERO, size)
-	var max_frames := 3600
-	var guard := 0
-	while not _tool.is_area_editable(box) and guard < max_frames:
-		guard += 1
-		if guard % 45 == 0:
-			_status.text = "Loading voxels… %d / %d" % [guard, max_frames]
-		await get_tree().process_frame
-	return _tool.is_area_editable(box)
-
-
-func _wait_area_meshed(area_vox: AABB, label: String, max_frames: int = 900) -> bool:
-	var guard := 0
-	while not _terrain.is_area_meshed(area_vox) and guard < max_frames:
-		guard += 1
-		if guard % 30 == 0:
-			_status.text = "%s (%d)" % [label, guard]
-		await get_tree().process_frame
-	return _terrain.is_area_meshed(area_vox)
-
-
-func _spawn_neighborhood_aabb(spawn_world: Vector3, radius_vox: float = 48.0) -> AABB:
-	## Voxel-space box around a world spawn so we only wait on nearby collisions.
-	var local := _terrain.to_local(spawn_world)
-	var r := radius_vox
-	var min_v := Vector3(
-		maxf(local.x - r, 0.0),
-		0.0,
-		maxf(local.z - r, 0.0)
-	)
-	var max_v := Vector3(
-		minf(local.x + r, float(_generator.size_x)),
-		12.0,
-		minf(local.z + r, float(_generator.size_z))
-	)
-	return AABB(min_v, max_v - min_v)
-
-
-func _settle_walker_on_floor(spawn: Vector3) -> void:
-	if _walker == null or not is_instance_valid(_walker):
-		return
-	_status.text = "Settling player…"
-	var space := _walker.get_world_3d().direct_space_state
-	var floor_y := spawn.y
-	var found := false
-	var guard := 0
-	while guard < 180:
-		guard += 1
-		var from := spawn + Vector3(0.0, 2.0, 0.0)
-		var to := spawn + Vector3(0.0, -8.0, 0.0)
-		var q := PhysicsRayQueryParameters3D.create(from, to)
-		q.collision_mask = 1
-		q.exclude = [_walker.get_rid()]
-		var hit := space.intersect_ray(q)
-		if not hit.is_empty():
-			floor_y = float(hit.position.y)
-			found = true
-			break
-		await get_tree().physics_frame
-	if found:
-		_walker.global_position = Vector3(spawn.x, floor_y + 0.12, spawn.z)
-	else:
-		push_warning("CityRoot: no floor ray hit at spawn; using raised spawn Y")
-		_walker.global_position = spawn
-	_walker.velocity = Vector3.ZERO
-	_walker.set_physics_process(true)
-	await get_tree().physics_frame
-	if is_instance_valid(_walker) and not _walker.is_on_floor():
-		_walker.global_position.y += 0.5
-		_walker.velocity = Vector3.ZERO
-
-
 func _regenerate() -> void:
-	if _generating:
+	if _booting:
 		return
-	_generating = true
+	_booting = true
 	_status.visible = true
 	_status.text = "Setting up VoxelTerrain…"
 	await get_tree().process_frame
@@ -252,54 +138,73 @@ func _regenerate() -> void:
 	if _walker != null and is_instance_valid(_walker):
 		_walker.queue_free()
 		_walker = null
-	if _crowd != null and is_instance_valid(_crowd):
-		_crowd.clear_crowd()
-		_crowd.queue_free()
-		_crowd = null
-	if _vehicles != null and is_instance_valid(_vehicles):
-		_vehicles.clear_vehicles()
-		_vehicles.queue_free()
-		_vehicles = null
-	if _street_props != null and is_instance_valid(_street_props):
-		_street_props.clear_props()
-		_street_props.queue_free()
-		_street_props = null
-	if _building_lod != null and is_instance_valid(_building_lod):
-		_building_lod.clear()
-		_building_lod.queue_free()
-		_building_lod = null
+	if _streamer != null and is_instance_valid(_streamer):
+		_streamer.call("clear_all")
+		_streamer.queue_free()
+		_streamer = null
+	if _debug_hud != null and is_instance_valid(_debug_hud):
+		_debug_hud.queue_free()
+		_debug_hud = null
 
 	_create_terrain()
-	_ensure_district_anchor_viewer()
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	_status.text = "Loading voxel blocks…"
-	var editable := await _wait_district_editable()
-	if not editable:
-		_status.text = "ERROR: district area never became editable"
-		push_error("CityRoot: VoxelTool.is_area_editable failed for district bounds")
-		_generating = false
+	_streamer = CityStreamerScript.new()
+	_streamer.name = "CityStreamer"
+	_streamer.bubble_radius_m = bubble_radius_m
+	_streamer.unload_radius_m = bubble_radius_m + 180.0
+	_streamer.crowd_per_district = crowd_per_district
+	_streamer.vehicles_per_district = vehicles_per_district
+	add_child(_streamer)
+	_streamer.setup(
+		_terrain,
+		_tool,
+		city_seed,
+		VOXEL_SIZE,
+		float(PLAYER_VIEW_DISTANCE) * VOXEL_SIZE
+	)
+	_streamer.status_message.connect(_on_streamer_status)
+	_streamer.spawn_district_ready.connect(_on_spawn_district_ready)
+
+	_debug_hud = CityDebugHudScript.new()
+	_debug_hud.name = "CityDebugHud"
+	add_child(_debug_hud)
+	_debug_hud.setup(_streamer, _terrain)
+
+	_status.text = "Generating spawn district…"
+	_streamer.boot_spawn_district(Vector2i.ZERO)
+
+
+func _on_streamer_status(text: String) -> void:
+	if _status != null and _status.visible:
+		_status.text = text
+
+
+func _on_spawn_district_ready(inst: Node) -> void:
+	if inst == null or not inst.get("generator"):
+		_status.text = "ERROR: spawn district missing generator"
+		_booting = false
 		return
+	_status.text = "Finding spawn…"
+	var gen: DistrictGenerator = inst.generator
+	var spawn: Vector3 = gen.find_spawn_world(_tool)
+	## Verify stamped ground exists under spawn (voxel data, not just mesh flag).
+	if not _has_solid_ground_at(spawn):
+		_status.text = "Waiting for stamped ground…"
+		var gguard := 0
+		while not _has_solid_ground_at(spawn) and gguard < 600:
+			gguard += 1
+			await get_tree().process_frame
+		spawn = gen.find_spawn_world(_tool)
 
-	_status.text = "Generating city…"
-	await get_tree().process_frame
-	_generator.generate(_tool, city_seed)
-
-	var spawn := _generator.find_spawn_world(_tool)
-	# Keep district anchor at center so distant stamped voxels are not unloaded → air.
-
-	_status.text = "Waiting for ground collisions…"
-	var spawn_area := _spawn_neighborhood_aabb(spawn, 56.0)
-	var meshed := await _wait_area_meshed(spawn_area, "Meshing spawn…", 1200)
-	if not meshed:
-		push_warning("CityRoot: spawn neighborhood still not fully meshed; spawning anyway")
-
+	_status.text = "Spawning player…"
 	_walker = CityWalker.new()
 	_walker.name = "Walker"
 	add_child(_walker)
 	_walker.set_physics_process(false)
-	_walker.global_position = spawn
+	## Hold above until collision exists — never enable physics in the void.
+	_walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	_walker.blast_requested.connect(_on_blast)
 	var cam := _walker.get_camera()
 	var player_viewer := VoxelViewer.new()
@@ -309,72 +214,101 @@ func _regenerate() -> void:
 	player_viewer.requires_visuals = true
 	cam.add_child(player_viewer)
 
-	await _settle_walker_on_floor(spawn)
+	## Extra collision viewer pinned on spawn so the neighborhood is forced resident.
+	var spawn_viewer := VoxelViewer.new()
+	spawn_viewer.name = "SpawnCollisionViewer"
+	spawn_viewer.view_distance = 96
+	spawn_viewer.requires_collisions = true
+	spawn_viewer.requires_visuals = true
+	add_child(spawn_viewer)
+	spawn_viewer.global_position = spawn + Vector3(0.0, 2.0, 0.0)
 
-	var half_x := float(_generator.size_x) * VOXEL_SIZE * 0.5
-	var half_z := float(_generator.size_z) * VOXEL_SIZE * 0.5
-	var to := Vector3(half_x, _walker.global_position.y, half_z) - _walker.global_position
-	if to.length_squared() > 0.01:
-		_walker.set_yaw(atan2(-to.x, -to.z))
+	_streamer.call("bind_player", _walker, cam)
 
-	_status.text = "Building street navigation…"
-	await get_tree().process_frame
-	var nav_layers := _generator.build_street_nav(_tool)
-	if nav_layers == null or not nav_layers.is_ready():
-		push_error("CityRoot: StreetNavLayers failed — crowd/traffic disabled")
-		_status.visible = false
-		_generating = false
+	_status.text = "Waiting for ground collisions…"
+	var floor_y := await _wait_floor_collision(spawn, 2400)
+	if is_nan(floor_y):
+		_status.text = "ERROR: no ground collision at spawn"
+		push_error("CityRoot: floor ray never hit — refusing to enable walker physics")
+		_booting = false
 		return
 
-	var ped_map := PedRoadMap.new()
-	ped_map.bind_graph(nav_layers.ped, nav_layers)
-	var car_map := CarRoadMap.new()
-	car_map.bind_graph(nav_layers.road, nav_layers)
+	_walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
+	_walker.velocity = Vector3.ZERO
+	_walker.set_physics_process(true)
+	await get_tree().physics_frame
+	if is_instance_valid(_walker) and not _walker.is_on_floor():
+		_walker.global_position.y += 0.4
+		_walker.velocity = Vector3.ZERO
 
-	_status.text = "Spawning crowd…"
-	await get_tree().process_frame
-	_crowd = CrowdDirectorScript.new()
-	_crowd.name = "Crowd"
-	_crowd.pedestrian_count = crowd_count
-	add_child(_crowd)
-	_crowd.setup(ped_map, cam, city_seed)
+	if is_instance_valid(spawn_viewer):
+		spawn_viewer.queue_free()
 
-	_status.text = "Spawning traffic…"
-	await get_tree().process_frame
-	_vehicles = VehicleDirectorScript.new()
-	_vehicles.name = "Traffic"
-	_vehicles.vehicle_count = vehicle_count
-	add_child(_vehicles)
-	_vehicles.setup(car_map, cam, city_seed)
-	_vehicles.bind_crowd(_crowd)
-
-	_status.text = "Placing street lights…"
-	await get_tree().process_frame
-	_street_props = StreetPropPlacerScript.new()
-	_street_props.name = "StreetProps"
-	add_child(_street_props)
-	var planner := _generator.get_planner()
-	_street_props.place_from_planner(
-		planner,
-		_generator.cell_size,
-		VOXEL_SIZE,
-		_generator.ground_thickness,
-		cam
-	)
-
-	_status.text = "Building far LOD…"
-	await get_tree().process_frame
-	_building_lod = BuildingImpostorLodScript.new()
-	_building_lod.name = "BuildingImpostors"
-	add_child(_building_lod)
-	_building_lod.setup(cam, _generator.building_impostors, float(PLAYER_VIEW_DISTANCE) * VOXEL_SIZE)
+	var look: Vector3 = inst.call("world_aabb_center") - _walker.global_position
+	look.y = 0.0
+	if look.length_squared() > 0.01:
+		_walker.set_yaw(atan2(-look.x, -look.z))
 
 	_status.visible = false
-	_generating = false
+	_booting = false
+	print("CityRoot: playable — endless stream active at y=%.2f" % floor_y)
+
+
+func _has_solid_ground_at(world: Vector3) -> bool:
+	if _tool == null:
+		return false
+	var vx := int(floor(world.x / VOXEL_SIZE))
+	var vz := int(floor(world.z / VOXEL_SIZE))
+	for y in range(0, 8):
+		var mat := int(_tool.get_voxel(Vector3i(vx, y, vz)))
+		if mat != VoxelMaterial.AIR and VoxelMaterial.is_solid(mat):
+			return true
+	return false
+
+
+func _wait_floor_collision(spawn: Vector3, max_frames: int = 1800) -> float:
+	## Returns floor Y, or NAN if never found. Physics stays disabled until this succeeds.
+	var guard := 0
+	while guard < max_frames:
+		guard += 1
+		if _walker == null or not is_instance_valid(_walker):
+			return NAN
+		var space := _walker.get_world_3d().direct_space_state
+		var from := spawn + Vector3(0.0, 8.0, 0.0)
+		var to := spawn + Vector3(0.0, -20.0, 0.0)
+		var q := PhysicsRayQueryParameters3D.create(from, to)
+		q.collision_mask = 1
+		q.exclude = [_walker.get_rid()]
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			return float(hit.position.y)
+		if guard % 45 == 0 and _status != null:
+			_status.text = "Waiting for ground collisions… (%d)" % guard
+		await get_tree().physics_frame
+	return NAN
+
+
+func _wait_area_meshed(area_vox: AABB, label: String, max_frames: int = 900) -> bool:
+	var guard := 0
+	while not _terrain.is_area_meshed(area_vox) and guard < max_frames:
+		guard += 1
+		if guard % 30 == 0 and _status != null:
+			_status.text = "%s (%d)" % [label, guard]
+		await get_tree().process_frame
+	return _terrain.is_area_meshed(area_vox)
+
+
+func _spawn_neighborhood_aabb(spawn_world: Vector3, radius_vox: float = 48.0) -> AABB:
+	var local := _terrain.to_local(spawn_world)
+	var r := radius_vox
+	return AABB(
+		Vector3(local.x - r, 0.0, local.z - r),
+		Vector3(r * 2.0, 12.0, r * 2.0)
+	)
 
 
 func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> void:
-	if _tool == null or _terrain == null or _generator == null:
+	if _tool == null or _terrain == null:
 		return
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	_tool.mode = VoxelTool.MODE_SET
@@ -383,22 +317,24 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
 	_tool.do_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
-	# TODO: dig-time StreetNavLayers rebuild — cars/peds still use pre-blast planner graphs.
 
 
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
-	var thickness := maxi(_generator.ground_thickness, 1)
+	var thickness := 1
 	var r := int(ceil(radius_vox)) + 1
-	var min_x := clampi(int(floor(center_vox.x)) - r, 0, _generator.size_x - 1)
-	var max_x := clampi(int(ceil(center_vox.x)) + r, 0, _generator.size_x - 1)
-	var min_z := clampi(int(floor(center_vox.z)) - r, 0, _generator.size_z - 1)
-	var max_z := clampi(int(ceil(center_vox.z)) + r, 0, _generator.size_z - 1)
+	var cx := int(floor(center_vox.x))
+	var cz := int(floor(center_vox.z))
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.BEDROCK
-	_tool.do_box(
-		Vector3i(min_x, 0, min_z),
-		Vector3i(max_x, thickness - 1, max_z)
-	)
+	for z in range(cz - r, cz + r + 1):
+		for x in range(cx - r, cx + r + 1):
+			var dx := float(x) + 0.5 - center_vox.x
+			var dz := float(z) + 0.5 - center_vox.z
+			if dx * dx + dz * dz > radius_vox * radius_vox:
+				continue
+			for y in range(0, thickness):
+				_tool.do_point(Vector3i(x, y, z))
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -415,9 +351,3 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_R:
 				city_seed = randi()
 				_regenerate()
-			KEY_F9:
-				if _crowd != null and is_instance_valid(_crowd):
-					_crowd.adjust_near_distance(-1.0)
-			KEY_F10:
-				if _crowd != null and is_instance_valid(_crowd):
-					_crowd.adjust_near_distance(1.0)
