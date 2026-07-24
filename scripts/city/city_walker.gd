@@ -101,11 +101,34 @@ const LIB_NAME := &"quat"
 @export var stuck_time_sec: float = 0.55
 ## Above this scale, Y is ray-locked to the ground (no capsule/voxel bob).
 @export var ray_ground_scale: float = 1.35
+## Mixamo climb loops (baked as *_m).
+@export var climb_up_anim: String = "Climbing_m"
+@export var climb_down_anim: String = "Climbing_Down_m"
+## Vertical climb speed at character_scale 1.0.
+@export var climb_speed: float = 1.15
+@export var climb_anim_speed: float = 1.2
+## Sideways climb speed along the facade (A/D) at character_scale 1.0.
+@export var climb_strafe_speed: float = 1.15
+## Keep the capsule lightly pressed into the wall while climbing.
+@export var climb_wall_stick: float = 0.28
+## Extra clearance beyond capsule radius — too tight buries the spring arm in the facade.
+@export var climb_standoff_m: float = 0.34
+## How long forward motion must be blocked before a non-sprint wall-run starts climbing.
+@export var climb_start_stuck_sec: float = 0.1
+## Wall must still register this far above the chest (filters curbs).
+@export var climb_min_wall_m: float = 1.15
+## Backward drop depth that triggers climb-down (meters).
+@export var climb_drop_depth_m: float = 0.85
+@export var climb_probe_m: float = 0.85
 
 ## Capsule sole sits this far above the CharacterBody origin — constant at every size.
 const CAPSULE_FOOT_CLEARANCE := 0.05
 const FLOOR_SNAP_M := 0.2
 const SAFE_MARGIN_M := 0.06
+const SPRING_MARGIN_DEFAULT := 0.2
+const SPRING_MARGIN_CLIMB := 0.55
+
+enum ClimbMode { NONE, UP, DOWN }
 
 var _yaw: float = 0.0
 var _pitch: float = -0.35
@@ -166,6 +189,18 @@ var _charge_orb_mesh: SphereMesh
 var _charge_orb_mat: StandardMaterial3D
 var _charge_orb_light: OmniLight3D
 var _footstep_accum: float = 0.0
+var _climb_mode: ClimbMode = ClimbMode.NONE
+## Outward wall normal (flattened) while climbing.
+var _climb_wall_n: Vector3 = Vector3.ZERO
+## After starting climb-down, ignore ground so the roof lip doesn't cancel the hang.
+var _climb_ignore_ground_sec: float = 0.0
+## Brief forgiveness when a wall ray misses between voxel faces.
+var _climb_wall_grace_sec: float = 0.0
+## Body mesh Y + foot-align flag captured before climb (climb crouch must not bake in).
+var _pre_climb_body_y: float = 0.0
+var _pre_climb_feet_aligned: bool = false
+## After climb, force zero-blend locomotion so Mixamo bone leans don't persist.
+var _climb_pose_clear_sec: float = 0.0
 
 
 func _ready() -> void:
@@ -202,7 +237,7 @@ func _ready() -> void:
 	_spring = SpringArm3D.new()
 	_spring.name = "SpringArm"
 	_spring.spring_length = _zoom
-	_spring.margin = 0.2
+	_spring.margin = SPRING_MARGIN_DEFAULT
 	_spring.collision_mask = 1
 	_pivot.add_child(_spring)
 
@@ -333,6 +368,8 @@ func set_game_over_locked(on: bool) -> void:
 	_game_over_locked = on
 	if on:
 		_jump_queued = false
+		if _climb_mode != ClimbMode.NONE:
+			_end_climb(false)
 		_auto_run = false
 		_set_rmb_looking(false)
 		_set_capture(false)
@@ -543,10 +580,13 @@ func _merge_mixamo_actions(library: AnimationLibrary) -> void:
 		_strip_root_translation(copy)
 		## Also strip Hips translation (Mixamo often roots on Hips).
 		_strip_hips_translation(copy)
+		## Climb loops are driven by locomotion, not the action bar.
+		if key.begins_with("Climbing"):
+			copy.loop_mode = Animation.LOOP_LINEAR
 		if library.has_animation(key):
 			library.remove_animation(key)
 		library.add_animation(key, copy)
-		if _action_names.find(key) < 0:
+		if not key.begins_with("Climbing") and _action_names.find(key) < 0:
 			_action_names.append(key)
 		added += 1
 	if added > 0:
@@ -587,6 +627,8 @@ func is_playing_action() -> bool:
 
 
 func play_action(anim_name: String, allow_toggle: bool = true) -> void:
+	if _climb_mode != ClimbMode.NONE:
+		return
 	if _anim_player == null or anim_name.is_empty():
 		return
 	var path := "%s/%s" % [LIB_NAME, anim_name]
@@ -636,6 +678,13 @@ func _align_soles_to_floor() -> void:
 	## Match lowest sole to the capsule contact plane — only valid after grounding.
 	if _body_root == null or _skeleton == null or not is_on_floor():
 		return
+	## Never measure from a crouched climb pose — that ducks the mesh permanently.
+	if _climb_mode != ClimbMode.NONE:
+		return
+	if _anim_player != null:
+		var cur := String(_anim_player.current_animation)
+		if cur.contains("Climbing"):
+			return
 	_skeleton.force_update_all_bone_transforms()
 	var contact_y := _capsule_bottom_world_y()
 	var sole_y := _lowest_sole_world_y()
@@ -857,14 +906,6 @@ func _physics_process(delta: float) -> void:
 	## Large bodies: no floor-snap — Y is owned by the ground ray after the slide.
 	floor_snap_length = 0.0 if ray_mode else FLOOR_SNAP_M
 
-	if is_on_floor() or _was_ray_grounded:
-		_coyote_left = coyote_time_sec
-		if velocity.y < 0.0:
-			velocity.y = 0.0
-	else:
-		_coyote_left = maxf(_coyote_left - delta, 0.0)
-		velocity.y -= gravity * delta
-
 	## Page Up looks up, Page Down looks down (held = continuous).
 	var pitch_input := 0.0
 	if Input.is_key_pressed(KEY_PAGEUP):
@@ -874,21 +915,13 @@ func _physics_process(delta: float) -> void:
 	if not is_zero_approx(pitch_input):
 		_pitch = clampf(_pitch + pitch_input * pitch_rate * delta, pitch_min, pitch_max)
 
-	var input_dir := Vector2.ZERO
-	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP) or _auto_run:
-		input_dir.y -= 1.0
-	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
-		input_dir.y += 1.0
-		## Manual back cancels autorun so you can stop without hunting R.
-		if _auto_run:
-			_auto_run = false
-	## A/D (and arrows) turn in place — no strafe.
+	## A/D turn on ground; while climbing they strafe along the wall.
 	var turn := 0.0
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
 		turn += 1.0
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
 		turn -= 1.0
-	if not is_zero_approx(turn):
+	if not is_zero_approx(turn) and _climb_mode == ClimbMode.NONE:
 		rotation.y += turn * keyboard_turn_rate * delta
 
 	## Move only along body facing (W/S).
@@ -898,6 +931,34 @@ func _physics_process(delta: float) -> void:
 		forward = forward.normalized()
 	else:
 		forward = Vector3(0.0, 0.0, -1.0)
+
+	var forward_held := (
+		Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP) or _auto_run
+	)
+	var back_held := Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)
+	if back_held and _auto_run:
+		_auto_run = false
+
+	if _climb_mode != ClimbMode.NONE:
+		## A = left (−), D = right (+) relative to facing the wall.
+		var strafe := -turn
+		_physics_climb(delta, forward, forward_held, back_held, strafe)
+		return
+
+	if is_on_floor() or _was_ray_grounded:
+		_coyote_left = coyote_time_sec
+		if velocity.y < 0.0:
+			velocity.y = 0.0
+	else:
+		_coyote_left = maxf(_coyote_left - delta, 0.0)
+		velocity.y -= gravity * delta
+
+	var input_dir := Vector2.ZERO
+	if forward_held:
+		input_dir.y -= 1.0
+	if back_held:
+		input_dir.y += 1.0
+
 	var wish := forward * (-input_dir.y)
 	wish.y = 0.0
 
@@ -927,6 +988,13 @@ func _physics_process(delta: float) -> void:
 	else:
 		_jump_queued = false
 
+	## Climb-down must arm BEFORE we walk off the lip — otherwise we only fall.
+	if not ray_mode and back_held and not forward_held:
+		if _try_begin_climb_down(forward):
+			_apply_camera_angles()
+			_update_camera_shake(delta)
+			return
+
 	## Human-scale curb step only — giants walk over curbs via radius, no Y pops.
 	if not ray_mode and _moving and is_on_floor() and velocity.y <= 0.0:
 		_try_step_up(delta)
@@ -942,9 +1010,24 @@ func _physics_process(delta: float) -> void:
 	if _stuck_timer >= stuck_time_sec:
 		if _unstuck_horizontal():
 			_stuck_timer = 0.0
+
+	## Climb-up after this frame's stuck/slide state is known.
+	## Air-grab climb-down if we already stepped off while holding S.
+	if not ray_mode:
+		if forward_held and not back_held and _try_begin_climb_up(forward, sprinting):
+			_apply_camera_angles()
+			_update_camera_shake(delta)
+			return
+		if back_held and not forward_held and _try_begin_climb_down(forward):
+			_apply_camera_angles()
+			_update_camera_shake(delta)
+			return
+
 	_update_safety_deck()
 	_apply_camera_angles()
 	_update_camera_shake(delta)
+	if _climb_pose_clear_sec > 0.0:
+		_climb_pose_clear_sec = maxf(_climb_pose_clear_sec - delta, 0.0)
 	_update_locomotion_anim(speed, sprinting)
 	_update_footstep_sfx(delta, speed)
 	_update_blast_charge(delta, _blast_charging)
@@ -958,6 +1041,460 @@ func _physics_process(delta: float) -> void:
 		_was_ray_grounded = true
 	if _unstuck_cooldown > 0.0:
 		_unstuck_cooldown = maxf(_unstuck_cooldown - delta, 0.0)
+
+
+func _physics_climb(
+	delta: float,
+	_forward: Vector3,
+	forward_held: bool,
+	back_held: bool,
+	strafe: float
+) -> void:
+	## Space cancels off the wall.
+	if _jump_queued:
+		_jump_queued = false
+		_end_climb(true)
+		_apply_camera_angles()
+		_update_camera_shake(delta)
+		return
+
+	_climb_ignore_ground_sec = maxf(_climb_ignore_ground_sec - delta, 0.0)
+
+	var into := -_climb_wall_n
+	into.y = 0.0
+	if into.length_squared() > 0.0001:
+		into = into.normalized()
+	else:
+		into = -_forward
+
+	## Character right while facing the wall — A/D slide along the facade.
+	var right := into.cross(Vector3.UP)
+	right.y = 0.0
+	if right.length_squared() > 0.0001:
+		right = right.normalized()
+	else:
+		right = Vector3.RIGHT
+
+	var climb_v := climb_speed * character_scale
+	var strafe_v := climb_strafe_speed * character_scale * strafe
+	var vel := Vector3(into.x * climb_wall_stick, 0.0, into.z * climb_wall_stick)
+	vel += right * strafe_v
+
+	if _climb_mode == ClimbMode.UP:
+		## Keep climbing while holding forward; release to hang/slide slowly.
+		if forward_held or _auto_run:
+			vel.y = climb_v
+		elif back_held:
+			## S while climbing up switches to climb-down on the same face.
+			_climb_mode = ClimbMode.DOWN
+			_climb_ignore_ground_sec = maxf(_climb_ignore_ground_sec, 0.2)
+			_play_climb_anim()
+			vel.y = -climb_v
+		else:
+			vel.y = 0.0
+	else:
+		## Climbing down: S continues, W switches back to up.
+		if back_held:
+			vel.y = -climb_v
+		elif forward_held or _auto_run:
+			_climb_mode = ClimbMode.UP
+			_play_climb_anim()
+			vel.y = climb_v
+		else:
+			vel.y = 0.0
+
+	velocity = vel
+	_moving = absf(vel.y) > 0.05 or absf(strafe) > 0.01
+	floor_snap_length = 0.0
+	move_and_slide()
+
+	## Prefer wall contact slightly toward the strafe so corners wrap cleanly.
+	var probe_dir := into
+	if absf(strafe) > 0.01:
+		probe_dir = (into + right * strafe * 0.35).normalized()
+	var fresh := _probe_wall(probe_dir, 0.85 * character_scale, climb_probe_m + 0.45)
+	if fresh.is_empty():
+		fresh = _probe_wall(into, 0.4 * character_scale, climb_probe_m + 0.45)
+	if not fresh.is_empty():
+		var n: Vector3 = fresh.normal
+		n.y = 0.0
+		if n.length_squared() > 0.0001:
+			_climb_wall_n = n.normalized()
+			_face_into_wall(_climb_wall_n)
+		_climb_wall_grace_sec = 0.28
+		## Hold a clear standoff — hard-snapping to radius+ε buries the spring in the wall.
+		var hit_pos: Vector3 = fresh.position
+		var desired := hit_pos + _climb_wall_n * _climb_hold_distance()
+		## Soft XZ pull so we track the face without vibrating into voxels.
+		global_position.x = lerpf(global_position.x, desired.x, 0.45)
+		global_position.z = lerpf(global_position.z, desired.z, 0.45)
+	else:
+		_climb_wall_grace_sec = maxf(_climb_wall_grace_sec - delta, 0.0)
+		if _climb_wall_grace_sec <= 0.0 and not _climb_has_wall_contact(into):
+			_end_climb(true)
+			_apply_camera_angles()
+			_update_camera_shake(delta)
+			return
+
+	if _climb_mode == ClimbMode.UP and _try_mount_ledge(into):
+		_apply_camera_angles()
+		_update_camera_shake(delta)
+		return
+
+	if (
+		_climb_mode == ClimbMode.DOWN
+		and _climb_ignore_ground_sec <= 0.0
+		and _climb_reached_ground()
+	):
+		_end_climb(false)
+		_apply_camera_angles()
+		_update_camera_shake(delta)
+		return
+
+	_update_safety_deck()
+	_apply_camera_angles()
+	_update_camera_shake(delta)
+	_play_climb_anim()
+	_update_blast_charge(delta, false)
+	if global_position.y < SAFETY_FLOOR_TOP_Y - 0.5:
+		global_position.y = SAFETY_FLOOR_TOP_Y
+		_end_climb(false)
+
+
+func _try_begin_climb_up(forward: Vector3, sprinting: bool) -> bool:
+	if _climb_mode != ClimbMode.NONE:
+		return false
+	if character_scale >= ray_ground_scale:
+		return false
+	if not (is_on_floor() or _was_ray_grounded):
+		return false
+	## Running into a wall, or pressing into it long enough to stick.
+	if not sprinting and _stuck_timer < climb_start_stuck_sec:
+		return false
+	var wall := _find_climb_wall(forward)
+	if wall.is_empty():
+		return false
+	_start_climb(ClimbMode.UP, wall["normal"] as Vector3)
+	return true
+
+
+func _try_begin_climb_down(forward: Vector3) -> bool:
+	if _climb_mode != ClimbMode.NONE:
+		return false
+	if character_scale >= ray_ground_scale:
+		return false
+	## Must be high enough that a drop exists (not sidewalk / curb).
+	if global_position.y < SAFETY_FLOOR_TOP_Y + climb_drop_depth_m * 0.75:
+		return false
+
+	var grounded := is_on_floor() or _was_ray_grounded
+	## Allow a short air-grab after stepping off, or while falling beside a facade.
+	var air_ok := (not grounded) and (_coyote_left > 0.0 or velocity.y <= 0.35)
+	if not grounded and not air_ok:
+		return false
+
+	var back := -forward
+	var r := _capsule_radius()
+	## Confirm there is a real drop behind the feet (or already in the air over void).
+	if grounded:
+		if not _has_climb_drop_behind(back, r):
+			return false
+
+	var wall := _find_climb_down_wall(forward, back, r)
+	if wall.is_empty():
+		return false
+	var n: Vector3 = wall["normal"] as Vector3
+	var hit_pos: Vector3 = wall["position"] as Vector3
+	_start_climb(ClimbMode.DOWN, n)
+	## Hang outside the facade with real clearance (not flush) so the camera spring is free.
+	var hang := hit_pos + n * _climb_hold_distance()
+	hang.y = minf(global_position.y - 0.35 * character_scale, hit_pos.y)
+	hang.y = minf(hang.y, global_position.y - 0.15 * character_scale)
+	global_position = hang
+	_climb_ignore_ground_sec = 0.45
+	_climb_wall_grace_sec = 0.35
+	## Drift outward slightly, not into the wall.
+	velocity = Vector3(n.x * 0.35, -climb_speed * character_scale, n.z * 0.35)
+	return true
+
+
+func _climb_hold_distance() -> float:
+	return _capsule_radius() + climb_standoff_m * maxf(character_scale, 1.0)
+
+
+func _has_climb_drop_behind(back: Vector3, radius: float) -> bool:
+	## Several probes past the heels — any deep void/step counts as a climbable drop.
+	var offsets: Array[float] = [radius + 0.2, radius + 0.45, radius + 0.75]
+	for dist in offsets:
+		var probe := global_position + back * dist + Vector3(0.0, 0.25 * character_scale, 0.0)
+		var down := _ray_query(probe, probe + Vector3(0.0, -(climb_drop_depth_m + 1.25), 0.0))
+		if down.is_empty():
+			return true
+		var drop := global_position.y - (down.position as Vector3).y
+		if drop >= climb_drop_depth_m:
+			return true
+	return false
+
+
+func _find_climb_down_wall(forward: Vector3, back: Vector3, radius: float) -> Dictionary:
+	## The facade sits BELOW the roof lip. Cast from over the void back into the building
+	## at several heights so we hit the vertical face, not the rooftop slab.
+	var cast_dists: Array[float] = [
+		radius + 0.15,
+		radius + 0.4,
+		radius + 0.7,
+		radius + 1.05,
+	]
+	var y_below: Array[float] = [
+		0.15 * character_scale,
+		0.4 * character_scale,
+		0.75 * character_scale,
+		1.15 * character_scale,
+		1.6 * character_scale,
+	]
+	for dist in cast_dists:
+		for y_off in y_below:
+			var from := global_position + back * dist + Vector3(0.0, -y_off, 0.0)
+			## Toward the building (forward).
+			var to := from + forward * (climb_probe_m + radius + 0.55)
+			var hit := _ray_query(from, to)
+			if hit.is_empty():
+				## Angle slightly down in case the lip sits between samples.
+				to = from + (forward * (climb_probe_m + radius + 0.4) + Vector3(0.0, -0.35, 0.0))
+				hit = _ray_query(from, to)
+			if hit.is_empty():
+				continue
+			var n: Vector3 = hit.normal
+			n.y = 0.0
+			if n.length_squared() < 0.0001:
+				continue
+			n = n.normalized()
+			## Outward normal should point roughly toward the drop (back).
+			if n.dot(back) < 0.2:
+				continue
+			## Reject near-horizontal hits (roof tops).
+			var raw_n: Vector3 = hit.normal
+			if absf(raw_n.y) > 0.55:
+				continue
+			return {"normal": n, "position": hit.position as Vector3}
+	return {}
+
+
+func _start_climb(mode: ClimbMode, wall_n: Vector3) -> void:
+	cancel_action()
+	_blast_charging = false
+	_climb_mode = mode
+	_climb_wall_n = wall_n
+	_climb_wall_n.y = 0.0
+	if _climb_wall_n.length_squared() > 0.0001:
+		_climb_wall_n = _climb_wall_n.normalized()
+	_stuck_timer = 0.0
+	_coyote_left = 0.0
+	_was_ray_grounded = false
+	_jump_queued = false
+	## Remember standing height — never re-align soles from the crouched climb pose.
+	_pre_climb_body_y = _body_root.position.y if _body_root != null else _body_base_y
+	_pre_climb_feet_aligned = _feet_aligned
+	_climb_wall_grace_sec = 0.3
+	if mode == ClimbMode.DOWN:
+		_climb_ignore_ground_sec = maxf(_climb_ignore_ground_sec, 0.35)
+	else:
+		_climb_ignore_ground_sec = 0.0
+	_face_into_wall(_climb_wall_n)
+	velocity = Vector3.ZERO
+	_set_climb_camera_margin(true)
+	_play_climb_anim()
+
+
+func _end_climb(push_off: bool) -> void:
+	var n := _climb_wall_n
+	_climb_mode = ClimbMode.NONE
+	_climb_wall_n = Vector3.ZERO
+	_climb_ignore_ground_sec = 0.0
+	_climb_wall_grace_sec = 0.0
+	_moving = false
+	_set_climb_camera_margin(false)
+	_restore_body_after_climb()
+	if push_off and n.length_squared() > 0.0001:
+		## Small outward hop so we don't immediately re-stick.
+		velocity = n.normalized() * (1.6 * character_scale) + Vector3(0.0, 0.6 * character_scale, 0.0)
+	else:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if velocity.y > 0.0:
+			velocity.y = 0.0
+	## Hard-cut climb pose — Mixamo keys bones Quaternius loco may not overwrite.
+	_play_post_climb_locomotion()
+
+
+func _set_climb_camera_margin(climbing: bool) -> void:
+	if _spring == null:
+		return
+	## Extra margin while on a facade — flush hangs made the spring length chatter.
+	_spring.margin = SPRING_MARGIN_CLIMB if climbing else SPRING_MARGIN_DEFAULT
+
+
+func _restore_body_after_climb() -> void:
+	## Climbing leaves knees bent; sole-align from that pose ducks the mesh permanently.
+	if _body_root != null:
+		_body_root.position.y = _pre_climb_body_y
+	_body_base_y = _pre_climb_body_y
+	_feet_aligned = _pre_climb_feet_aligned
+
+
+func _play_post_climb_locomotion() -> void:
+	if _anim_player == null:
+		return
+	## Drop climb immediately (no blend keep-state), then restore bind pose for any
+	## bones Idle/Walk don't key — otherwise hips/spine lean sticks forever.
+	_anim_player.stop()
+	if _skeleton != null:
+		_skeleton.reset_bone_poses()
+	var idle_path := "%s/%s" % [LIB_NAME, ANIM_IDLE]
+	var walk_path := "%s/%s" % [LIB_NAME, ANIM_WALK]
+	var path := walk_path if _moving and _anim_player.has_animation(walk_path) else idle_path
+	if not _anim_player.has_animation(path):
+		if _anim_player.has_animation(idle_path):
+			path = idle_path
+		else:
+			_climb_pose_clear_sec = 0.25
+			return
+	_anim_player.play(path, 0.0)
+	_anim_player.seek(0.0, true)
+	_anim_player.speed_scale = clampf(1.0 / maxf(character_scale, 0.001), 0.05, 4.0)
+	if _skeleton != null:
+		_skeleton.force_update_all_bone_transforms()
+	_climb_pose_clear_sec = 0.35
+
+
+func _face_into_wall(wall_n: Vector3) -> void:
+	## Face the wall (forward = into the facade = -outward normal).
+	var look := -wall_n
+	look.y = 0.0
+	if look.length_squared() < 0.0001:
+		return
+	look = look.normalized()
+	rotation.y = atan2(-look.x, -look.z)
+
+
+func _play_climb_anim() -> void:
+	if _anim_player == null:
+		return
+	## Climb-down uses the up clip reversed — the dedicated down clip looks off.
+	var path := "%s/%s" % [LIB_NAME, climb_up_anim]
+	if not _anim_player.has_animation(path):
+		path = "%s/%s" % [LIB_NAME, &"Jump_Loop"]
+		if not _anim_player.has_animation(path):
+			return
+	var going_down := _climb_mode == ClimbMode.DOWN
+	if _anim_player.current_animation != path:
+		## from_end so reverse starts at the top of the cycle.
+		_anim_player.play(path, 0.12, 1.0, going_down)
+	var size_anim := clampf(1.0 / maxf(character_scale, 0.001), 0.05, 4.0)
+	var moving_scale := climb_anim_speed if _moving else climb_anim_speed * 0.15
+	var signed := moving_scale * size_anim
+	## Negative playback = climb down.
+	_anim_player.speed_scale = (-signed if going_down else signed)
+
+
+func _find_climb_wall(forward: Vector3) -> Dictionary:
+	var chest_y := 0.95 * character_scale
+	var hit := _probe_wall(forward, chest_y, climb_probe_m)
+	if hit.is_empty():
+		hit = _probe_wall(forward, 0.55 * character_scale, climb_probe_m)
+	if hit.is_empty():
+		return {}
+	var n: Vector3 = hit.normal
+	n.y = 0.0
+	if n.length_squared() < 0.0001:
+		return {}
+	n = n.normalized()
+	## Wall must face the player (we're running into it).
+	if n.dot(forward) > -0.35:
+		return {}
+	## Tall enough that curb-step won't handle it.
+	var head_y := chest_y + maxf(climb_min_wall_m, max_step_height * 2.8)
+	var head := _probe_wall(forward, head_y, climb_probe_m + 0.1)
+	if head.is_empty():
+		return {}
+	return {"normal": n, "hit": hit}
+
+
+func _probe_wall(dir: Vector3, from_y: float, dist: float) -> Dictionary:
+	var d := dir
+	d.y = 0.0
+	if d.length_squared() < 0.0001:
+		return {}
+	d = d.normalized()
+	var from := global_position + Vector3(0.0, from_y, 0.0)
+	return _ray_query(from, from + d * dist)
+
+
+func _ray_query(from: Vector3, to: Vector3) -> Dictionary:
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(from, to)
+	q.collision_mask = 1
+	var exclude: Array[RID] = [get_rid()]
+	if _safety_deck != null and is_instance_valid(_safety_deck):
+		exclude.append(_safety_deck.get_rid())
+	q.exclude = exclude
+	return space.intersect_ray(q)
+
+
+func _climb_has_wall_contact(into: Vector3) -> bool:
+	for y_off in [0.35, 0.85, 1.25]:
+		var hit := _probe_wall(into, y_off * character_scale, climb_probe_m + 0.35)
+		if not hit.is_empty():
+			return true
+	## Also accept capsule slide contacts that are near-vertical.
+	for i in get_slide_collision_count():
+		var col := get_slide_collision(i)
+		var n := col.get_normal()
+		if absf(n.y) < 0.45 and n.length_squared() > 0.0001:
+			return true
+	return false
+
+
+func _try_mount_ledge(into: Vector3) -> bool:
+	var r := _capsule_radius()
+	## Sample just past the facade lip, above current feet.
+	var over := global_position + into * (r + 0.5) + Vector3(0.0, 0.65 * character_scale, 0.0)
+	var ground := _ray_query(
+		over + Vector3(0.0, 0.9 * character_scale, 0.0),
+		over + Vector3(0.0, -1.8 * character_scale, 0.0)
+	)
+	if ground.is_empty():
+		return false
+	var gy: float = (ground.position as Vector3).y
+	## Ledge should be near mid-body — not far below (still climbing) or way above.
+	if gy < global_position.y + 0.15 * character_scale:
+		return false
+	if gy > global_position.y + 1.35 * character_scale:
+		return false
+	## Waist-forward should be clear of wall (we've cleared the lip).
+	var waist := _probe_wall(into, 0.55 * character_scale, r + 0.55)
+	if not waist.is_empty():
+		## Still blocked at waist — keep climbing unless ground is clearly standable ahead
+		## and head is free.
+		var head := _probe_wall(into, 1.35 * character_scale, r + 0.4)
+		if not head.is_empty():
+			return false
+	## Mount onto the ledge.
+	global_position = Vector3(over.x, gy, over.z)
+	velocity = Vector3.ZERO
+	_was_ray_grounded = true
+	_end_climb(false)
+	return true
+
+
+func _climb_reached_ground() -> bool:
+	if is_on_floor():
+		return true
+	var hit := _ray_ground(0.0, 0.55 * character_scale)
+	if hit.is_empty():
+		return false
+	var gy: float = (hit.position as Vector3).y
+	return global_position.y - gy <= 0.28 * character_scale
 
 
 func _stabilize_vertical(ray_mode: bool) -> void:
@@ -1210,6 +1747,9 @@ func _try_step_up(delta: float) -> void:
 func _update_locomotion_anim(move_speed: float, sprinting: bool = false) -> void:
 	if _anim_player == null:
 		return
+	if _climb_mode != ClimbMode.NONE:
+		_play_climb_anim()
+		return
 	if _action_playing:
 		## One-shots (punch/kick) play out; looping emotes cancel when you walk.
 		if _moving and _action_is_looping():
@@ -1221,18 +1761,22 @@ func _update_locomotion_anim(move_speed: float, sprinting: bool = false) -> void
 	var sprint_path := "%s/%s" % [LIB_NAME, ANIM_SPRINT]
 	# Bigger → slower playback (long strides / heavy idle). Tiny → snappier.
 	var size_anim := clampf(1.0 / character_scale, 0.05, 4.0)
+	## Right after climb: zero blend so Mixamo leans can't soften back in.
+	var just_climbed := _climb_pose_clear_sec > 0.0
+	var blend_loco := 0.0 if just_climbed else (0.15 if sprinting else 0.2)
+	var blend_idle := 0.0 if just_climbed else 0.25
 	if _moving:
 		var use_sprint := sprinting and _anim_player.has_animation(sprint_path)
 		var loco_path := sprint_path if use_sprint else walk_path
 		if _anim_player.current_animation != loco_path:
-			_anim_player.play(loco_path, 0.15 if use_sprint else 0.2)
+			_anim_player.play(loco_path, blend_loco)
 		var unscaled_speed := move_speed / maxf(character_scale, 0.001)
 		var ref_speed := sprint_anim_reference_speed if use_sprint else walk_anim_reference_speed
 		var cadence := unscaled_speed / maxf(ref_speed, 0.01)
 		_anim_player.speed_scale = clampf(cadence * size_anim, 0.05, 4.0)
 	else:
 		if _anim_player.current_animation != idle_path:
-			_anim_player.play(idle_path, 0.25)
+			_anim_player.play(idle_path, blend_idle)
 		_anim_player.speed_scale = size_anim
 
 

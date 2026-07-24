@@ -52,7 +52,7 @@ func _edge_planters(min_v: Vector3i, max_v: Vector3i) -> void:
 			if (x + z) % 3 != 0:
 				continue
 			brush.set_vox(Vector3i(x, y0 + 1, z), VoxelMaterial.PLANTER)
-			brush.set_vox(Vector3i(x, y0 + 2, z), VoxelMaterial.PARK)
+			brush.set_vox(Vector3i(x, y0 + 2, z), VoxelMaterial.LEAVES)
 
 
 func _fountain(min_v: Vector3i, max_v: Vector3i, grand: bool) -> void:

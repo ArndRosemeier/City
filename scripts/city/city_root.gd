@@ -1324,15 +1324,16 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 		side = side.normalized()
 	var local := _terrain.to_local(contact_world)
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	## March into the wall a few meters to find the outer facade column.
+	## March into the wall; scan tall so floor-slab edges still register after the shell is gone.
 	var hit := Vector3i(2147483647, 2147483647, 2147483647)
 	var found := false
-	for step in range(0, 14):
+	for step in range(0, 18):
 		var p := local + into * (float(step) * 0.55)
 		var v := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
-		## Probe a short vertical range so we still catch mid-facade from street contact.
-		for dy in range(-2, 8):
+		for dy in range(-4, 56):
 			var probe := Vector3i(v.x, v.y + dy, v.z)
+			if probe.y < 1:
+				continue
 			var id := int(_tool.get_voxel(probe))
 			if not VoxelMaterial.is_undead_structure_target(id):
 				continue
@@ -1343,12 +1344,11 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 			break
 	if not found:
 		return 0
-	## Strip width along the walk + 1–2 voxels deep into the building.
+	## Strip width along the walk + a couple voxels deep into the building.
 	var along_half := 2
 	var depth_vox := 2
 	var ix := Vector3i(int(round(into.x)), 0, int(round(into.z)))
 	if ix == Vector3i.ZERO:
-		## Diagonal inward — pick dominant axis.
 		if absf(into.x) >= absf(into.z):
 			ix = Vector3i(1 if into.x >= 0.0 else -1, 0, 0)
 		else:
@@ -1358,33 +1358,19 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 		sx = Vector3i(-ix.z, 0, ix.x)
 	var detached: Array = []
 	const MAX_DEBRIS := 160
-	const MAX_HEIGHT_SCAN := 96
+	## Peel every structure voxel in the column band — floor slabs have air gaps between them.
+	var y_lo := maxi(1, hit.y - 8)
+	var y_hi := hit.y + 72
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.AIR
 	var removed := 0
-	## Tip-kill any infection heads in this scrape volume before carving.
 	var scrape_center := Vector3(float(hit.x) + 0.5, float(hit.y) + 0.5, float(hit.z) + 0.5)
-	_tip_kill_leads_in_sphere(scrape_center, 6.0)
+	_tip_kill_leads_in_sphere(scrape_center, 8.0)
 	for a in range(-along_half, along_half + 1):
 		for d in range(0, depth_vox):
 			var col_x := hit.x + sx.x * a + ix.x * d
 			var col_z := hit.z + sx.z * a + ix.z * d
-			## Find contiguous structure height in this column (street → roof).
-			var y_min := hit.y
-			var y_max := hit.y
-			for y in range(hit.y, hit.y - MAX_HEIGHT_SCAN, -1):
-				if y < 1:
-					break
-				var id_down := int(_tool.get_voxel(Vector3i(col_x, y, col_z)))
-				if not VoxelMaterial.is_undead_structure_target(id_down):
-					break
-				y_min = y
-			for y2 in range(hit.y, hit.y + MAX_HEIGHT_SCAN):
-				var id_up := int(_tool.get_voxel(Vector3i(col_x, y2, col_z)))
-				if not VoxelMaterial.is_undead_structure_target(id_up):
-					break
-				y_max = y2
-			for y3 in range(y_min, y_max + 1):
+			for y3 in range(y_lo, y_hi + 1):
 				var vox := Vector3i(col_x, y3, col_z)
 				var mat_id := int(_tool.get_voxel(vox))
 				if not VoxelMaterial.is_undead_structure_target(mat_id):
@@ -1400,7 +1386,6 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 		Vector3(float(hit.x) + 0.5, float(hit.y) + 0.5, float(hit.z) + 0.5)
 	)
 	if _cascade != null and is_instance_valid(_cascade):
-		## Tumble the peeled face — no full-column cascade (that would drop whole towers).
 		if _cascade.has_method("detach_blast_voxels") and not detached.is_empty():
 			_cascade.call("detach_blast_voxels", detached, world_hit)
 	_notify_destruction(world_hit, 36.0)
@@ -1443,15 +1428,16 @@ func _find_building_vox_near(from: Vector3, max_dist: float) -> Vector3i:
 	var oz := int(floor(local.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var best := SENTINEL
-	var best_d2 := max_dist * max_dist
-	## Prefer facade voxels a bit above street level; spiral outward in XZ.
+	var best_score := -1.0e30
+	## Prefer exposed edges (air beside them) so peeled shells still yield floor-slab lips.
 	for r in range(0, max_vox + 1):
 		var found_this_ring := false
 		for dz in range(-r, r + 1):
 			for dx in range(-r, r + 1):
 				if r > 0 and absi(dx) != r and absi(dz) != r:
 					continue
-				for dy in range(0, 10):
+				## Tall scan — floors sit well above street after the outer wall is gone.
+				for dy in range(0, 48):
 					var v := Vector3i(ox + dx, oy + dy, oz + dz)
 					var id := int(_tool.get_voxel(v))
 					if not VoxelMaterial.is_undead_structure_target(id):
@@ -1459,14 +1445,29 @@ func _find_building_vox_near(from: Vector3, max_dist: float) -> Vector3i:
 					var center := _terrain.to_global(
 						Vector3(float(v.x) + 0.5, float(v.y) + 0.5, float(v.z) + 0.5)
 					)
-					var world_d2 := center.distance_squared_to(from)
-					if world_d2 > best_d2:
+					var world_d := center.distance_to(from)
+					if world_d > max_dist:
 						continue
-					best_d2 = world_d2
+					## Exposed if any horizontal neighbor is air / non-structure.
+					var exposed := 0
+					var nbrs: Array[Vector3i] = [
+						Vector3i(1, 0, 0),
+						Vector3i(-1, 0, 0),
+						Vector3i(0, 0, 1),
+						Vector3i(0, 0, -1),
+					]
+					for off in nbrs:
+						var nid := int(_tool.get_voxel(v + off))
+						if not VoxelMaterial.is_undead_structure_target(nid):
+							exposed += 1
+					## Buried interior cores score poorly; open floor edges / walls win.
+					var score := float(exposed) * 40.0 - world_d
+					if score <= best_score:
+						continue
+					best_score = score
 					best = v
 					found_this_ring = true
-		if found_this_ring and r >= 1:
-			## First ring with a hit is close enough — stop expanding.
+		if found_this_ring and r >= 2:
 			break
 	return best
 

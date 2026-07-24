@@ -545,12 +545,13 @@ func _paint_avenue_median(min_v: Vector3i, max_v: Vector3i, horiz: bool) -> void
 		var mz := (min_v.z + max_v.z) / 2
 		for x in range(min_v.x + 3, max_v.x - 3, 4):
 			_brush.set_vox(Vector3i(x, y, mz), VoxelMaterial.PLANTER)
-			_brush.set_vox(Vector3i(x, y + 1, mz), VoxelMaterial.PARK)
+			## LEAVES is walk-through — PARK cubes were solid snags on the median.
+			_brush.set_vox(Vector3i(x, y + 1, mz), VoxelMaterial.LEAVES)
 	else:
 		var mx := (min_v.x + max_v.x) / 2
 		for z in range(min_v.z + 3, max_v.z - 3, 4):
 			_brush.set_vox(Vector3i(mx, y, z), VoxelMaterial.PLANTER)
-			_brush.set_vox(Vector3i(mx, y + 1, z), VoxelMaterial.PARK)
+			_brush.set_vox(Vector3i(mx, y + 1, z), VoxelMaterial.LEAVES)
 
 
 func _should_crosswalk(cx: int, cz: int) -> bool:

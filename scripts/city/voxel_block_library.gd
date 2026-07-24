@@ -78,6 +78,7 @@ static func _mesh_model(
 	else:
 		model.mesh = visual
 		model.collision_aabbs = []
+		model.collision_mask = 0
 		model.set_material_override(0, mat)
 		model.set_mesh_collision_enabled(0, false)
 	model.culls_neighbors = culls_neighbors

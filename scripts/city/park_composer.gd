@@ -60,7 +60,7 @@ func compose_courtyard_garden(hole_min: Vector3i, hole_max: Vector3i) -> void:
 		VoxelMaterial.GRAVEL
 	)
 	brush.set_vox(Vector3i(cx, ground_y + 1, cz), VoxelMaterial.PLANTER)
-	brush.set_vox(Vector3i(cx, ground_y + 2, cz), VoxelMaterial.PARK)
+	brush.set_vox(Vector3i(cx, ground_y + 2, cz), VoxelMaterial.LEAVES)
 	_tree(cx - 2, ground_y, cz - 2)
 
 

@@ -31,6 +31,8 @@ const GIANT_BUILDING_QUERY_SEC := 0.45
 ## Stand-off from the facade while scraping (meters).
 const GIANT_SCRAPE_DIST_M := 3.6
 const GIANT_APPROACH_DIST_M := 5.5
+## Give up on a dead face after this many empty scrapes (floor stubs / hollow shell).
+const GIANT_SCRAPE_MISS_LIMIT := 2
 const HIT_SCORE_NORMAL := 50
 const HIT_SCORE_GIANT := 1000
 ## Collision stays walkable — full 10× body scale on the capsule embeds in buildings.
@@ -74,6 +76,8 @@ var _stomp_target: Vector3 = Vector3.INF
 var _stomp_seek_cd: float = 0.0
 var _scrape_tangent: Vector3 = Vector3.ZERO
 var _scrape_misses: int = 0
+var _scrape_flip_used: bool = false
+var _scrape_stall_sec: float = 0.0
 
 
 func setup(p_role: Role, director: Node, city: Node, world_pos: Vector3) -> void:
@@ -444,22 +448,25 @@ func _tick_growing(delta: float) -> void:
 		_play_anim(["Idle", "Idle_A", "idle"])
 
 
-func _tick_stomp(_delta: float) -> void:
+func _tick_stomp(delta: float) -> void:
 	## Approach a facade, then walk parallel while peeling full-height strips.
 	if _stomp_seek_cd <= 0.0 or _stomp_target == Vector3.INF:
 		_stomp_seek_cd = GIANT_BUILDING_QUERY_SEC
 		_stomp_target = _nearest_building_pos(GIANT_BUILDING_SEEK_M)
 		if _stomp_target != Vector3.INF:
 			_scrape_misses = 0
+			_scrape_flip_used = false
+			_scrape_stall_sec = 0.0
+			_scrape_tangent = Vector3.ZERO
 	if _stomp_target == Vector3.INF:
 		_scrape_tangent = Vector3.ZERO
-		_wander(_delta)
+		_wander(delta)
 		return
 	var to_wall := _stomp_target - global_position
 	to_wall.y = 0.0
 	var dist := to_wall.length()
 	if dist < 0.05:
-		_stomp_target = Vector3.INF
+		_abandon_scrape_face(true)
 		return
 	var inward := to_wall / dist
 	## Still closing distance — walk straight at the wall.
@@ -494,20 +501,51 @@ func _tick_stomp(_delta: float) -> void:
 		removed = int(_city.call("undead_giant_scrape_at", contact, inward, _scrape_tangent))
 	if removed <= 0:
 		_scrape_misses += 1
-		if _scrape_misses >= 3:
-			## Dead end / finished this face — reverse or retarget.
-			_scrape_tangent = -_scrape_tangent
-			_scrape_misses = 0
-			_stomp_target = Vector3.INF
-			_stomp_seek_cd = 0.15
+		_scrape_stall_sec += SCRAPE_INTERVAL_SEC
+		if _scrape_misses >= GIANT_SCRAPE_MISS_LIMIT or _scrape_stall_sec >= 1.2:
+			_on_scrape_face_dead()
 	else:
 		_scrape_misses = 0
+		_scrape_stall_sec = 0.0
 		## Nudge the aim point along the wall so we keep peeling the next strip.
 		_stomp_target = _stomp_target + _scrape_tangent * 1.6
 
 
+func _on_scrape_face_dead() -> void:
+	## Hollow shell / floor stubs — reverse once, then abandon for a fresh building.
+	if not _scrape_flip_used and _scrape_tangent.length_squared() > 0.01:
+		_scrape_tangent = -_scrape_tangent
+		_scrape_flip_used = true
+		_scrape_misses = 0
+		_scrape_stall_sec = 0.0
+		_stomp_target = global_position + _scrape_tangent * 4.0 + _wish_dir * 0.1
+		return
+	_abandon_scrape_face(true)
+
+
+func _abandon_scrape_face(step_out: bool) -> void:
+	_scrape_misses = 0
+	_scrape_stall_sec = 0.0
+	_scrape_flip_used = false
+	_scrape_tangent = Vector3.ZERO
+	_stomp_target = Vector3.INF
+	_stomp_seek_cd = 0.55
+	if step_out:
+		## Back off the hollow facade so the next seek doesn't re-lock the same stubs.
+		var back := -_wish_dir
+		back.y = 0.0
+		if back.length_squared() < 0.01:
+			back = Vector3(-sin(_yaw), 0.0, -cos(_yaw))
+		else:
+			back = back.normalized()
+		global_position += back * 2.4
+		_wish_dir = back
+		velocity.x = back.x * _move_speed()
+		velocity.z = back.z * _move_speed()
+
+
 func _do_stomp(_toward_wish: bool) -> void:
-	## Stuck recovery: peel whatever facade is in front instead of a foot-sphere.
+	## Stuck recovery: peel whatever is ahead, then change course off this face.
 	_stomp_cd = SCRAPE_INTERVAL_SEC
 	var ahead := _wish_dir
 	if ahead.length_squared() < 0.01:
@@ -517,6 +555,7 @@ func _do_stomp(_toward_wish: bool) -> void:
 	contact.y = global_position.y + 1.2
 	if _city != null and _city.has_method("undead_giant_scrape_at"):
 		_city.call("undead_giant_scrape_at", contact, ahead, Vector3(-ahead.z, 0.0, ahead.x))
+	_abandon_scrape_face(true)
 
 
 func _fire_orb(toward: Vector3) -> void:
@@ -651,9 +690,10 @@ func _update_stuck(delta: float) -> void:
 	if _stuck_timer < STUCK_TIME_SEC:
 		return
 	_stuck_timer = 0.0
-	## Giants may carve free; everyone else only relocates to a tested free footprint.
+	## Giants peel then abandon the face; everyone else relocates to a free footprint.
 	if role == Role.GIANT or character_scale >= 2.0:
 		_do_stomp(true)
+		return
 	if not _unstuck_horizontal():
 		## Soft pivot if no free cell — keep moving, don't hop into solids.
 		var side := Vector3(-_wish_dir.z, 0.0, _wish_dir.x)
