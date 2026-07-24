@@ -67,8 +67,17 @@ static func is_building_fabric(id: int) -> bool:
 
 
 static func is_destructible(id: int) -> bool:
-	## Laser / melee carve targets: any solid voxel asset except bedrock and water.
-	return id != AIR and id != BEDROCK and id != WATER and id > AIR and id < COUNT
+	## Laser / melee / blast carve targets. Infection body + meteor rock are immune;
+	## only the glowing tip (INFECTION_LEAD) stays player-killable.
+	if id == AIR or id == BEDROCK or id == WATER:
+		return false
+	if id == METEOR_ROCK or id == INFECTION:
+		return false
+	return id > AIR and id < COUNT
+
+
+static func is_player_carve_immune(id: int) -> bool:
+	return id == METEOR_ROCK or id == INFECTION or id == BEDROCK or id == WATER or id == AIR
 
 
 static func is_infection(id: int) -> bool:
@@ -76,9 +85,7 @@ static func is_infection(id: int) -> bool:
 
 
 static func is_infectable(id: int) -> bool:
-	## Tendrils crawl into fabric first; ground/road only as a last resort is handled by the director.
-	if id == AIR or id == BEDROCK or id == WATER:
-		return false
+	## Tendrils crawl into normal fabric/ground — never into infection or meteor rock.
 	if is_infection(id) or id == METEOR_ROCK:
 		return false
 	return is_destructible(id)

@@ -8,7 +8,7 @@ signal tendril_spawned(tendril_id: int)
 
 @export var tick_interval_sec: float = 0.12
 @export var tips_per_tick: int = 2
-@export var max_tendrils: int = 24
+@export var max_tendrils: int = 10
 ## Soft preference for steps that move farther from the seed.
 @export var expand_prefer_chance: float = 0.25
 ## Mild pull toward the current general heading (kept low so shuffle jiggle wins).
@@ -61,12 +61,30 @@ func active_tendril_count() -> int:
 	return _tendrils.size()
 
 
+## Snapshot for HUD: ordered rows of {id, mass} (mass = converted voxel count).
+func get_tendril_hud_rows() -> Array:
+	var rows: Array = []
+	for tid in _rr_ids:
+		if not _tendrils.has(tid):
+			continue
+		var t: Dictionary = _tendrils[tid]
+		var cells: Dictionary = t.get("cells", {})
+		rows.append({"id": int(tid), "mass": cells.size()})
+	return rows
+
+
 ## Seed a new tendril. prev_mat is restored if the lead is killed.
 ## heading: general crawl direction (away from impact); empty → random.
-func spawn_tendril_at_vox(vox: Vector3i, prev_mat: int = -1, heading: Vector3 = Vector3.ZERO) -> int:
+## force: skip soft rejection (meteor seeds always plant when capacity allows).
+func spawn_tendril_at_vox(
+	vox: Vector3i, prev_mat: int = -1, heading: Vector3 = Vector3.ZERO, force: bool = false
+) -> int:
 	if _tool == null:
 		return -1
 	if _tendrils.size() >= max_tendrils:
+		return -1
+	## Don't double-bind the same lead cell to two tendrils.
+	if _lead_at.has(vox):
 		return -1
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var current := int(_tool.get_voxel(vox))
@@ -76,14 +94,17 @@ func spawn_tendril_at_vox(vox: Vector3i, prev_mat: int = -1, heading: Vector3 = 
 			stored_prev = VoxelMaterial.METEOR_ROCK
 		else:
 			stored_prev = current
-	if (
-		current != VoxelMaterial.INFECTION_LEAD
-		and current != VoxelMaterial.AIR
-		and not VoxelMaterial.is_infectable(current)
-		and current != VoxelMaterial.METEOR_ROCK
-	):
-		if not VoxelMaterial.is_destructible(current):
-			return -1
+	if not force:
+		if (
+			current != VoxelMaterial.INFECTION_LEAD
+			and current != VoxelMaterial.AIR
+			and not VoxelMaterial.is_infectable(current)
+			and current != VoxelMaterial.METEOR_ROCK
+		):
+			if not VoxelMaterial.is_destructible(current):
+				return -1
+	elif current == VoxelMaterial.BEDROCK or current == VoxelMaterial.WATER:
+		return -1
 
 	var tid := _next_id
 	_next_id += 1
@@ -98,6 +119,8 @@ func spawn_tendril_at_vox(vox: Vector3i, prev_mat: int = -1, heading: Vector3 = 
 		"alive": true,
 		"heading": _normalize_heading(heading),
 		"steps_until_reaim": _roll_reaim_steps(),
+		## New tips get several failed advance ticks before inert retire.
+		"fail_streak": 0,
 	}
 	_lead_at[vox] = tid
 	_rr_ids.append(tid)
@@ -107,13 +130,13 @@ func spawn_tendril_at_vox(vox: Vector3i, prev_mat: int = -1, heading: Vector3 = 
 
 ## Seed a new tendril at world-space tip.
 func spawn_tendril_at_world(
-	world_pos: Vector3, prev_mat: int = -1, heading: Vector3 = Vector3.ZERO
+	world_pos: Vector3, prev_mat: int = -1, heading: Vector3 = Vector3.ZERO, force: bool = false
 ) -> int:
 	if _tool == null or _terrain == null:
 		return -1
 	if _tendrils.size() >= max_tendrils:
 		return -1
-	return spawn_tendril_at_vox(_world_to_vox(world_pos), prev_mat, heading)
+	return spawn_tendril_at_vox(_world_to_vox(world_pos), prev_mat, heading, force)
 
 
 ## Returns true if a tendril was killed.
@@ -206,6 +229,8 @@ func _advance_tendril(tid: int) -> bool:
 	var cells: Dictionary = t["cells"]
 	var nxt := _pick_infect_neighbor(tid, lead)
 	if nxt.x < 2147483646:
+		t["fail_streak"] = 0
+		_tendrils[tid] = t
 		_infect_step(tid, lead, nxt)
 		return true
 	## Backtrace: walk parent chain for another frontier.
@@ -221,12 +246,19 @@ func _advance_tendril(tid: int) -> bool:
 			break
 		var alt := _pick_infect_neighbor(tid, parent)
 		if alt.x < 2147483646:
+			t["fail_streak"] = 0
+			_tendrils[tid] = t
 			## Move lead to parent first (demote current lead), then infect outward.
 			_move_lead(tid, lead, parent)
 			_infect_step(tid, parent, alt)
 			return true
 		cursor = parent
-	## Dead end — leave body infected, remove lead glow.
+	## Grace: don't inert-retire brand-new tips stuck on crater rock for a few ticks.
+	var fails := int(t.get("fail_streak", 0)) + 1
+	t["fail_streak"] = fails
+	_tendrils[tid] = t
+	if fails < 16:
+		return false
 	_retire_tendril_inert(tid)
 	return false
 

@@ -108,6 +108,31 @@ func clear_debris() -> void:
 	_live_bodies.clear()
 
 
+## Drop tumbling cubes that still wear infection materials (tendril tip-kill cleanup).
+func clear_infection_debris() -> void:
+	_prune_live_bodies()
+	var kill: Array = []
+	for b in _live_bodies:
+		if b == null or not is_instance_valid(b):
+			continue
+		var mid := int(b.get_meta("mat_id", -1))
+		if VoxelMaterial.is_infection(mid):
+			kill.append(b)
+	for body in kill:
+		_live_bodies.erase(body)
+		if is_instance_valid(body):
+			body.queue_free()
+	## Pending visuals that never spawned yet.
+	if not _pending_visuals.is_empty():
+		var kept: Array = []
+		for entry in _pending_visuals:
+			var mat := int(entry.get("mat", -1))
+			if VoxelMaterial.is_infection(mat):
+				continue
+			kept.append(entry)
+		_pending_visuals = kept
+
+
 func collapse_column_above(hit_vox: Vector3i) -> void:
 	if _tool == null or _terrain == null:
 		return

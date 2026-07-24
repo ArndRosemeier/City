@@ -7,12 +7,16 @@ signal impacted(world_pos: Vector3, seed_world_positions: Array)
 const VOXEL_SIZE := 0.5
 ## Authored blob was ~1 voxel radius; 3× → solid rock sphere of this radius.
 const BLOB_RADIUS: int = 3
-## Glowing tips stamped on the outer shell (spread around the sphere).
-const SEED_COUNT: int = 8
+## Tips per meteor — always plant in this inclusive range when capacity allows.
+const SEED_COUNT_MIN: int = 2
+const SEED_COUNT_MAX: int = 3
 
 @export var fall_speed_mps: float = 42.0
 @export var spawn_height_m: float = 55.0
 @export var glow_pulse_hz: float = 3.5
+@export var sky_beam_linger_sec: float = 11.0
+
+const SkyBeamScript := preload("res://scripts/city/infection_sky_beam_vfx.gd")
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
@@ -22,6 +26,7 @@ var _mm_rock: MultiMeshInstance3D
 var _mm_glow: MultiMeshInstance3D
 var _glow_mat: StandardMaterial3D
 var _light: OmniLight3D
+var _sky_beam: Node
 var _alive: bool = false
 var _age: float = 0.0
 var _impacted: bool = false
@@ -59,8 +64,16 @@ func begin(terrain: VoxelTerrain, tool: VoxelTool, aim_hit: Vector3, spawn_heigh
 		dist = 1.0
 	_velocity = to.normalized() * fall_speed_mps
 	_build_visuals()
+	_spawn_sky_beam()
 	_alive = true
 	_impacted = false
+
+
+func _spawn_sky_beam() -> void:
+	var host := get_parent()
+	if host == null:
+		return
+	_sky_beam = SkyBeamScript.attach_to_meteor(host, self)
 
 
 func _build_blob() -> Array[Dictionary]:
@@ -80,22 +93,22 @@ func _build_blob() -> Array[Dictionary]:
 				## Outer shell candidates for glowing seeds.
 				if d2 >= float((r - 1) * (r - 1)):
 					seed_slots.append(o)
-	## Pick spread-out seed cells (avoid clustering).
+	## Prefer well-spaced shell seeds so each tip lands on a distinct cell.
 	if not seed_slots.is_empty():
 		seed_slots.shuffle()
 		var picked: Array[Vector3i] = []
-		var want := mini(SEED_COUNT, seed_slots.size())
+		var want := SEED_COUNT_MAX
+		var min_sep2 := 5
 		for slot in seed_slots:
 			if picked.size() >= want:
 				break
 			var ok := true
 			for p in picked:
-				if (slot - p).length_squared() < 4:
+				if (slot - p).length_squared() < min_sep2:
 					ok = false
 					break
 			if ok:
 				picked.append(slot)
-		## If spacing was too strict, fill remaining.
 		for slot2 in seed_slots:
 			if picked.size() >= want:
 				break
@@ -219,39 +232,180 @@ func _do_impact(hit_pos: Vector3) -> void:
 			base.y = 1
 		_tool.channel = VoxelBuffer.CHANNEL_TYPE
 		_tool.mode = VoxelTool.MODE_SET
+		## Stamp rock body.
 		for cell in _blob:
 			var o: Vector3i = cell["o"]
 			var mid: int = int(cell["m"])
+			if mid == VoxelMaterial.INFECTION_LEAD:
+				continue
 			var vox: Vector3i = base + o
 			var existing := int(_tool.get_voxel(vox))
 			if existing == VoxelMaterial.BEDROCK or existing == VoxelMaterial.WATER:
 				continue
-			if mid == VoxelMaterial.INFECTION_LEAD:
-				## Prefer attaching to fabric: if this cell is air, try one below.
-				if existing == VoxelMaterial.AIR:
-					var below := vox + Vector3i(0, -1, 0)
-					var below_id := int(_tool.get_voxel(below))
-					if (
-						VoxelMaterial.is_infectable(below_id)
-						or VoxelMaterial.is_building_fabric(below_id)
-					):
-						vox = below
-						existing = below_id
-				var prev_for_seed := existing
-				if prev_for_seed == VoxelMaterial.AIR:
-					prev_for_seed = VoxelMaterial.METEOR_ROCK
-				_tool.value = VoxelMaterial.INFECTION_LEAD
-				_tool.do_point(vox)
-				seeds.append({
-					"world": _terrain.to_global(
-						Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
-					),
-					"vox": vox,
-					"prev_mat": prev_for_seed,
-				})
-			else:
-				_tool.value = VoxelMaterial.METEOR_ROCK
-				_tool.do_point(vox)
+			_tool.value = VoxelMaterial.METEOR_ROCK
+			_tool.do_point(vox)
+		var want := _rng.randi_range(SEED_COUNT_MIN, SEED_COUNT_MAX)
+		seeds = _plant_guaranteed_seeds(base, want)
 
 	impacted.emit(hit_pos, seeds)
+	## Hand the sky beam off — pins permanently at the crater as a far-field marker.
+	if _sky_beam != null and is_instance_valid(_sky_beam):
+		_sky_beam.call("start_lingering", hit_pos)
+		_sky_beam = null
 	queue_free()
+
+
+## Always return `want` unique seed tips on infectable city fabric around the crater.
+func _plant_guaranteed_seeds(base: Vector3i, want: int) -> Array:
+	var seeds: Array = []
+	var used: Dictionary = {}
+	var candidates: Array[Vector3i] = _collect_seed_candidates(base)
+	## Prefer sites with room to crawl (infectable neighbor after claim).
+	var ranked: Array[Vector3i] = []
+	var fallback: Array[Vector3i] = []
+	for c in candidates:
+		if _count_infectable_neighbors(c) >= 1:
+			ranked.append(c)
+		else:
+			fallback.append(c)
+	_shuffle_vox_array(ranked)
+	_shuffle_vox_array(fallback)
+	for site in ranked:
+		if seeds.size() >= want:
+			break
+		_try_plant_seed_at(site, used, seeds, true)
+	for site2 in fallback:
+		if seeds.size() >= want:
+			break
+		_try_plant_seed_at(site2, used, seeds, true)
+	## Absolute last resort: plant just outside the rock blob even on meteor rock /
+	## sidewalk air column, as long as cells stay unique.
+	if seeds.size() < want:
+		var ring := BLOB_RADIUS + 1
+		while seeds.size() < want and ring <= BLOB_RADIUS + 12:
+			var ring_sites: Array[Vector3i] = []
+			for z in range(-ring, ring + 1):
+				for x in range(-ring, ring + 1):
+					if maxi(absi(x), absi(z)) != ring:
+						continue
+					for dy in range(-1, 4):
+						ring_sites.append(base + Vector3i(x, dy, z))
+			_shuffle_vox_array(ring_sites)
+			for site3 in ring_sites:
+				if seeds.size() >= want:
+					break
+				_try_plant_seed_at(site3, used, seeds, false)
+			ring += 1
+	return seeds
+
+
+func _collect_seed_candidates(base: Vector3i) -> Array[Vector3i]:
+	## Annulus outside the rock sphere so tips start on city fabric, not the crater.
+	var out: Array[Vector3i] = []
+	var seen: Dictionary = {}
+	var r0 := BLOB_RADIUS + 1
+	var r1 := BLOB_RADIUS + 10
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	for z in range(-r1, r1 + 1):
+		for x in range(-r1, r1 + 1):
+			var d2 := x * x + z * z
+			if d2 < r0 * r0 or d2 > r1 * r1:
+				continue
+			for dy in range(-2, 5):
+				var v := base + Vector3i(x, dy, z)
+				if v.y < 0 or seen.has(v):
+					continue
+				var id := int(_tool.get_voxel(v))
+				if VoxelMaterial.is_infectable(id):
+					seen[v] = true
+					out.append(v)
+					continue
+				if id == VoxelMaterial.AIR:
+					var below := v + Vector3i(0, -1, 0)
+					if below.y < 0 or seen.has(below):
+						continue
+					var bid := int(_tool.get_voxel(below))
+					if VoxelMaterial.is_infectable(bid):
+						seen[below] = true
+						out.append(below)
+	return out
+
+
+func _count_infectable_neighbors(vox: Vector3i) -> int:
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var n := 0
+	for off in [
+		Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+		Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+	]:
+		if VoxelMaterial.is_infectable(int(_tool.get_voxel(vox + off))):
+			n += 1
+	return n
+
+
+func _shuffle_vox_array(arr: Array[Vector3i]) -> void:
+	for i in range(arr.size() - 1, 0, -1):
+		var j := _rng.randi_range(0, i)
+		var tmp: Vector3i = arr[i]
+		arr[i] = arr[j]
+		arr[j] = tmp
+
+
+func _try_plant_seed_at(
+	vox: Vector3i, used: Dictionary, seeds: Array, require_infectable_start: bool
+) -> bool:
+	if used.has(vox) or vox.y < 0:
+		return false
+	## Keep tips spaced so they don't immediately braid.
+	for u in used.keys():
+		if (vox - (u as Vector3i)).length_squared() < 4:
+			return false
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var existing := int(_tool.get_voxel(vox))
+	if existing == VoxelMaterial.BEDROCK or existing == VoxelMaterial.WATER:
+		return false
+	if existing == VoxelMaterial.INFECTION_LEAD or existing == VoxelMaterial.INFECTION:
+		return false
+	if require_infectable_start and not VoxelMaterial.is_infectable(existing):
+		## Allow air→infectable below.
+		if existing == VoxelMaterial.AIR:
+			var below := vox + Vector3i(0, -1, 0)
+			if below.y < 0 or used.has(below):
+				return false
+			var below_id := int(_tool.get_voxel(below))
+			if not VoxelMaterial.is_infectable(below_id):
+				return false
+			vox = below
+			existing = below_id
+		else:
+			return false
+	elif existing == VoxelMaterial.AIR:
+		var below2 := vox + Vector3i(0, -1, 0)
+		if below2.y >= 0 and not used.has(below2):
+			var below_id2 := int(_tool.get_voxel(below2))
+			if (
+				below_id2 != VoxelMaterial.BEDROCK
+				and below_id2 != VoxelMaterial.WATER
+				and below_id2 != VoxelMaterial.AIR
+				and below_id2 != VoxelMaterial.INFECTION_LEAD
+				and below_id2 != VoxelMaterial.INFECTION
+			):
+				vox = below2
+				existing = below_id2
+	if used.has(vox):
+		return false
+	var prev_for_seed := existing
+	if prev_for_seed == VoxelMaterial.AIR:
+		prev_for_seed = VoxelMaterial.METEOR_ROCK
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.INFECTION_LEAD
+	_tool.do_point(vox)
+	used[vox] = true
+	seeds.append({
+		"world": _terrain.to_global(
+			Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+		),
+		"vox": vox,
+		"prev_mat": prev_for_seed,
+	})
+	return true
