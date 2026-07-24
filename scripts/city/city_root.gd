@@ -13,6 +13,8 @@ const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
 const DayNightCycleScript := preload("res://scripts/city/day_night_cycle.gd")
 const CitySettingsPanelScript := preload("res://scripts/city/city_settings_panel.gd")
+const InfectionDirectorScript := preload("res://scripts/city/infection_director.gd")
+const InfectionMeteorScript := preload("res://scripts/city/infection_meteor.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
@@ -30,6 +32,7 @@ var _status: Label
 var _action_bar: Node
 var _debris_root: Node3D
 var _cascade: Node
+var _infection: Node
 var _audio: Node
 var _day_night: Node
 var _settings_panel: Node
@@ -39,6 +42,7 @@ var _player_viewer: VoxelViewer
 var _collision_viewer: VoxelViewer
 var _booting: bool = false
 var _fps_accum: float = 0.0
+var _infection_stream_accum: float = 0.0
 var _street_night_factor: float = 0.0
 
 ## Visual mesh radius (~90 m at default). Collisions use a shorter viewer below.
@@ -260,6 +264,10 @@ func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int
 
 func _process(delta: float) -> void:
 	_fps_accum += delta
+	_infection_stream_accum += delta
+	if _infection_stream_accum >= 0.5:
+		_infection_stream_accum = 0.0
+		_invalidate_infection_outside_bubble()
 	if _fps_accum < 0.25:
 		return
 	_fps_accum = 0.0
@@ -312,6 +320,15 @@ func _ensure_cascade_debris() -> void:
 		_cascade.name = "VoxelCascadeDebris"
 		add_child(_cascade)
 	_cascade.setup(_terrain, _tool, _debris_root, VOXEL_SIZE)
+	_ensure_infection_director()
+
+
+func _ensure_infection_director() -> void:
+	if _infection == null or not is_instance_valid(_infection):
+		_infection = InfectionDirectorScript.new()
+		_infection.name = "InfectionDirector"
+		add_child(_infection)
+	_infection.call("setup", _terrain, _tool, VOXEL_SIZE)
 
 
 func _regenerate() -> void:
@@ -332,6 +349,10 @@ func _regenerate() -> void:
 	if _action_bar != null and is_instance_valid(_action_bar):
 		_action_bar.queue_free()
 		_action_bar = null
+	if _infection != null and is_instance_valid(_infection):
+		_infection.call("clear_all")
+		_infection.queue_free()
+		_infection = null
 	if _cascade != null and is_instance_valid(_cascade):
 		_cascade.clear_debris()
 		_cascade.queue_free()
@@ -399,6 +420,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.blast_requested.connect(_on_blast)
 	_walker.melee_strike_requested.connect(_on_melee_strike)
 	_walker.stomp_requested.connect(_on_stomp)
+	_walker.meteor_requested.connect(_on_meteor_requested)
 	var cam := _walker.get_camera()
 	## Visuals out to settings radius; collisions only near the player (big remesh win).
 	_player_viewer = VoxelViewer.new()
@@ -459,7 +481,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_action_bar.setup(_walker)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
-	print("CityRoot: playable — endless stream active at y=%.2f" % floor_y)
+	print("CityRoot: playable — endless stream active at y=%.2f (M = infection meteor)" % floor_y)
 
 
 func _has_solid_ground_at(world: Vector3) -> bool:
@@ -523,6 +545,7 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	_tool.value = VoxelMaterial.AIR
 	var local := _terrain.to_local(hit_position)
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
+	_notify_infection_sphere_carved(local, radius_vox)
 	_tool.do_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
@@ -558,6 +581,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 					continue
 				if detached.size() < MAX_DEBRIS:
 					detached.append({"vox": vox, "mat": mat_id})
+	_notify_infection_leads_in(detached)
 	_tool.do_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
 	if _cascade != null and _cascade.has_method("detach_blast_voxels"):
@@ -600,12 +624,16 @@ func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
 					continue
 				if detached.size() < MAX_DEBRIS:
 					detached.append({"vox": vox, "mat": mat_id})
-				_tool.do_point(vox)
 				var col := Vector2i(x, z)
 				if column_max_y.has(col):
 					column_max_y[col] = maxi(int(column_max_y[col]), y)
 				else:
 					column_max_y[col] = y
+	## Tip-kill before carve so lineage restore wins over stomp AIR.
+	_notify_infection_leads_in(detached)
+	for entry in detached:
+		var vox2: Vector3i = entry["vox"]
+		_tool.do_point(vox2)
 	_restore_bedrock_floor(local, radius_vox)
 	if _cascade != null:
 		if _cascade.has_method("detach_voxels"):
@@ -656,6 +684,15 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	if not found:
 		return
 
+	## Tip kill: destroying INFECTION_LEAD reverts the whole tendril (no carve).
+	if int(_tool.get_voxel(hit_vox)) == VoxelMaterial.INFECTION_LEAD:
+		if _infection != null and bool(_infection.call("try_kill_lead_at_vox", hit_vox)):
+			var tip_world := _terrain.to_global(
+				Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
+			)
+			_notify_destruction(tip_world, 18.0)
+			return
+
 	## Diameter = 1 voxel per human scale → radius = scale/2.
 	var radius_vox := scale * 0.5
 	var hit_center := Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
@@ -678,12 +715,15 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 				if not VoxelMaterial.is_destructible(mat_id):
 					continue
 				detached.append({"vox": vox, "mat": mat_id})
-				_tool.do_point(vox)
 				var col := Vector2i(x, z)
 				if column_max_y.has(col):
 					column_max_y[col] = maxi(int(column_max_y[col]), y)
 				else:
 					column_max_y[col] = y
+
+	_notify_infection_leads_in(detached)
+	for entry in detached:
+		_tool.do_point(entry["vox"] as Vector3i)
 
 	if _cascade == null:
 		return
@@ -699,6 +739,92 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 		Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
 	)
 	_notify_destruction(hit_world, 30.0 + 8.0 * scale)
+
+
+func _on_meteor_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
+	if _terrain == null or _tool == null:
+		return
+	_ensure_infection_director()
+	## Connect before begin so a same-frame impact cannot miss the handler.
+	var meteor: Node = InfectionMeteorScript.new()
+	meteor.name = "InfectionMeteor"
+	add_child(meteor)
+	meteor.connect("impacted", _on_meteor_impacted)
+	meteor.call("begin", _terrain, _tool, hit_point, 55.0)
+
+
+func _on_meteor_impacted(world_pos: Vector3, seeds: Array) -> void:
+	BlastFlashVfxScript.spawn(self, world_pos, 7.5)
+	if _infection == null or _terrain == null:
+		return
+	var local := _terrain.to_local(world_pos)
+	var impact_vox := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
+	var seen: Dictionary = {}
+	for entry in seeds:
+		if entry is Dictionary:
+			var vox: Vector3i = entry.get("vox", Vector3i.ZERO)
+			var prev_mat := int(entry.get("prev_mat", -1))
+			var key := "%d,%d,%d" % [vox.x, vox.y, vox.z]
+			if seen.has(key):
+				continue
+			seen[key] = true
+			## General direction: away from impact crater.
+			var away := Vector3(
+				float(vox.x - impact_vox.x),
+				float(vox.y - impact_vox.y) * 0.35,
+				float(vox.z - impact_vox.z)
+			)
+			if away.length_squared() < 0.25:
+				away = Vector3(randf_range(-1.0, 1.0), 0.1, randf_range(-1.0, 1.0))
+			_infection.call("spawn_tendril_at_vox", vox, prev_mat, away)
+		elif entry is Vector3:
+			_infection.call("spawn_tendril_at_world", entry as Vector3)
+
+
+func _notify_infection_leads_in(vox_entries: Array) -> void:
+	## Full tip-kill + lineage restore for any lead in the carve set (before AIR write).
+	if _infection == null or not is_instance_valid(_infection):
+		return
+	_infection.call("notify_voxels_carved", vox_entries)
+
+
+func _notify_infection_sphere_carved(local_center: Vector3, radius_vox: float) -> void:
+	if _infection == null or not is_instance_valid(_infection) or _tool == null:
+		return
+	var r_i := int(ceil(radius_vox)) + 1
+	var r2 := radius_vox * radius_vox
+	var cx := int(floor(local_center.x))
+	var cy := int(floor(local_center.y))
+	var cz := int(floor(local_center.z))
+	var leads: Array = []
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	for z in range(cz - r_i, cz + r_i + 1):
+		for y in range(cy - r_i, cy + r_i + 1):
+			for x in range(cx - r_i, cx + r_i + 1):
+				var center := Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
+				if center.distance_squared_to(local_center) > r2 + 0.0001:
+					continue
+				var vox := Vector3i(x, y, z)
+				if int(_tool.get_voxel(vox)) == VoxelMaterial.INFECTION_LEAD:
+					leads.append(vox)
+	if not leads.is_empty():
+		_infection.call("notify_voxels_carved", leads)
+
+
+func _invalidate_infection_outside_bubble() -> void:
+	if _infection == null or not is_instance_valid(_infection):
+		return
+	if _walker == null or not is_instance_valid(_walker):
+		return
+	var center := _walker.global_position
+	var detail_m := 140.0
+	if _streamer != null:
+		detail_m = float(_streamer.get("voxel_detail_radius_m"))
+		if detail_m < 40.0:
+			detail_m = 40.0
+	var half := Vector3(detail_m, 80.0, detail_m)
+	var aabb := AABB(center - half, half * 2.0)
+	_infection.call("invalidate_outside_aabb", aabb)
 
 
 func _notify_destruction(world_pos: Vector3, radius_m: float = 32.0) -> void:

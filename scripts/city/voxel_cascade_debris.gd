@@ -184,7 +184,7 @@ func _spawn_blast_cube(vox: Vector3i, mat_id: int, blast_local: Vector3) -> void
 	var box := BoxMesh.new()
 	box.size = size
 	mi.mesh = box
-	mi.material_override = VoxelBlockLibrary.material_for(mat_id)
+	mi.material_override = VoxelBlockLibrary.block_material_for(mat_id)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	body.add_child(mi)
 
@@ -609,7 +609,7 @@ func _spawn_cube_now(vox: Vector3i, mat_id: int) -> void:
 	var box := BoxMesh.new()
 	box.size = size
 	mi.mesh = box
-	mi.material_override = VoxelBlockLibrary.material_for(mat_id)
+	mi.material_override = VoxelBlockLibrary.block_material_for(mat_id)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	body.add_child(mi)
 

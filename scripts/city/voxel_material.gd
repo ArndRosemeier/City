@@ -31,8 +31,11 @@ const STONE := 25
 const METAL_PLATE := 26
 const PAINT := 27
 const GLASS_LIT := 28
+const METEOR_ROCK := 29
+const INFECTION := 30
+const INFECTION_LEAD := 31
 
-const COUNT := 29
+const COUNT := 32
 
 
 static func is_solid(id: int) -> bool:
@@ -57,6 +60,8 @@ static func is_building_fabric(id: int) -> bool:
 	match id:
 		AIR, BEDROCK, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES:
 			return false
+		METEOR_ROCK, INFECTION, INFECTION_LEAD:
+			return true
 		_:
 			return id > AIR and id < COUNT
 
@@ -64,6 +69,19 @@ static func is_building_fabric(id: int) -> bool:
 static func is_destructible(id: int) -> bool:
 	## Laser / melee carve targets: any solid voxel asset except bedrock and water.
 	return id != AIR and id != BEDROCK and id != WATER and id > AIR and id < COUNT
+
+
+static func is_infection(id: int) -> bool:
+	return id == INFECTION or id == INFECTION_LEAD
+
+
+static func is_infectable(id: int) -> bool:
+	## Tendrils crawl into fabric first; ground/road only as a last resort is handled by the director.
+	if id == AIR or id == BEDROCK or id == WATER:
+		return false
+	if is_infection(id) or id == METEOR_ROCK:
+		return false
+	return is_destructible(id)
 
 
 static func color(id: int) -> Color:
@@ -118,5 +136,11 @@ static func color(id: int) -> Color:
 			return Color(0.58, 0.56, 0.52)
 		PAINT:
 			return Color(0.7, 0.35, 0.32)
+		METEOR_ROCK:
+			return Color(0.22, 0.2, 0.18)
+		INFECTION:
+			return Color(0.35, 0.72, 0.28)
+		INFECTION_LEAD:
+			return Color(0.55, 1.0, 0.35)
 		_:
 			return Color(1, 0, 1)

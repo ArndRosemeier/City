@@ -8,6 +8,8 @@ signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
 signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
 ## Shift+LMB stomp: feet world position + blast radius in meters.
 signal stomp_requested(feet_position: Vector3, radius_m: float)
+## M-key: aim a voxel infection meteor at hit_point (surface normal for VFX only).
+signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
 const ProportionModifierScript := preload("res://scripts/humans/proportion_modifier.gd")
@@ -721,6 +723,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 			KEY_MINUS, KEY_KP_SUBTRACT:
 				adjust_character_scale(-1.0)
+				get_viewport().set_input_as_handled()
+				return
+			KEY_M:
+				_request_infection_meteor()
 				get_viewport().set_input_as_handled()
 				return
 	if event is InputEventMouseMotion and _rmb_looking:
@@ -1495,13 +1501,19 @@ func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: 
 
 
 func _aim_point_at_cursor() -> Vector3:
+	return _aim_ray_at_cursor()["point"] as Vector3
+
+
+## Camera/crosshair ray: point + normal (UP if miss / far clip).
+func _aim_ray_at_cursor() -> Dictionary:
 	if _camera == null:
-		return global_position - global_transform.basis.z * 10.0
+		var fallback := global_position - global_transform.basis.z * 10.0
+		return {"point": fallback, "normal": Vector3.UP}
 	var mouse := get_viewport().get_mouse_position()
 	var from := _camera.project_ray_origin(mouse)
 	var ray_dir := _camera.project_ray_normal(mouse)
 	if ray_dir.length_squared() < 0.0001:
-		return from + (-global_transform.basis.z) * laser_range_m
+		ray_dir = -global_transform.basis.z
 	ray_dir = ray_dir.normalized()
 	var to := from + ray_dir * laser_range_m
 	var query := PhysicsRayQueryParameters3D.create(from, to)
@@ -1509,13 +1521,20 @@ func _aim_point_at_cursor() -> Vector3:
 	query.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	var aim_point := to
+	var aim_normal := Vector3.UP
 	if not hit.is_empty():
 		aim_point = hit["position"] as Vector3
+		aim_normal = hit["normal"] as Vector3
 	var origin := _laser_eye_origin()
 	var root := _city_root()
 	if root != null and root.has_method("resolve_laser_aim"):
 		aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
-	return aim_point
+	return {"point": aim_point, "normal": aim_normal}
+
+
+func _request_infection_meteor() -> void:
+	var aim := _aim_ray_at_cursor()
+	meteor_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
 func _start_charged_blast_at_cursor() -> void:

@@ -49,7 +49,7 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 static func _make_cube(id: int) -> VoxelBlockyModelCube:
 	var cube := VoxelBlockyModelCube.new()
 	cube.color = Color(1, 1, 1, 1)
-	cube.set_material_override(0, material_for(id))
+	cube.set_material_override(0, block_material_for(id))
 	if id == VoxelMaterial.GLASS or id == VoxelMaterial.GLASS_LIT or id == VoxelMaterial.WATER:
 		cube.transparency_index = 1
 	return cube
@@ -66,7 +66,7 @@ static func _mesh_model(
 	collide: bool = true
 ) -> VoxelBlockyModelMesh:
 	var model := VoxelBlockyModelMesh.new()
-	var mat := material_for(id)
+	var mat := block_material_for(id)
 	if collide:
 		model.mesh = _with_collision_box(visual, mat, collision_aabb)
 		model.collision_aabbs = [collision_aabb]
@@ -305,6 +305,49 @@ static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 
 ## Shared textured materials for debris / impostors (same look as Blocky voxels).
 static var _mat_cache: Dictionary = {}  # int → StandardMaterial3D
+static var _infection_mat_cache: Dictionary = {}  # bool is_lead → ShaderMaterial
+
+
+## Terrain block material (may be ShaderMaterial for infection).
+static func block_material_for(id: int) -> Material:
+	if id == VoxelMaterial.INFECTION or id == VoxelMaterial.INFECTION_LEAD:
+		return infection_material(id == VoxelMaterial.INFECTION_LEAD)
+	return material_for(id)
+
+
+## Animated infection look — GPU TIME/noise only; shared across all infected voxels.
+static func infection_material(is_lead: bool) -> ShaderMaterial:
+	var cached: Variant = _infection_mat_cache.get(is_lead)
+	if cached is ShaderMaterial:
+		return cached
+	var shader: Shader = load("res://assets/city/shaders/infection_alive.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var leaves: Texture2D = _tex("leaves.jpg")
+	if leaves != null:
+		mat.set_shader_parameter("albedo_tex", leaves)
+	if is_lead:
+		mat.set_shader_parameter("base_color", Color(0.4, 0.85, 0.28, 1.0))
+		mat.set_shader_parameter("vein_color", Color(0.75, 1.0, 0.35, 1.0))
+		mat.set_shader_parameter("pulse_color", Color(0.95, 1.0, 0.55, 1.0))
+		mat.set_shader_parameter("emission_base", 1.6)
+		mat.set_shader_parameter("emission_peak", 5.5)
+		mat.set_shader_parameter("pulse_hz", 1.8)
+		mat.set_shader_parameter("flow_speed", 0.95)
+		mat.set_shader_parameter("lead_boost", 1.0)
+		mat.set_shader_parameter("texture_mix", 0.35)
+	else:
+		mat.set_shader_parameter("base_color", Color(0.22, 0.48, 0.18, 1.0))
+		mat.set_shader_parameter("vein_color", Color(0.45, 0.92, 0.28, 1.0))
+		mat.set_shader_parameter("pulse_color", Color(0.7, 1.0, 0.4, 1.0))
+		mat.set_shader_parameter("emission_base", 0.45)
+		mat.set_shader_parameter("emission_peak", 2.1)
+		mat.set_shader_parameter("pulse_hz", 1.05)
+		mat.set_shader_parameter("flow_speed", 0.55)
+		mat.set_shader_parameter("lead_boost", 0.0)
+		mat.set_shader_parameter("texture_mix", 0.5)
+	_infection_mat_cache[is_lead] = mat
+	return mat
 
 
 static func material_for(id: int) -> StandardMaterial3D:
@@ -433,6 +476,24 @@ static func _material_for(id: int) -> StandardMaterial3D:
 		VoxelMaterial.PAINT:
 			mat.albedo_texture = _tex("paint.jpg")
 			mat.roughness = 0.7
+		VoxelMaterial.METEOR_ROCK:
+			mat.albedo_texture = _tex("rock.jpg")
+			mat.albedo_color = Color(0.55, 0.5, 0.45)
+			mat.roughness = 0.95
+		VoxelMaterial.INFECTION:
+			mat.albedo_texture = _tex("leaves.jpg")
+			mat.albedo_color = Color(0.45, 0.95, 0.35)
+			mat.roughness = 0.55
+			mat.emission_enabled = true
+			mat.emission = Color(0.25, 0.85, 0.2)
+			mat.emission_energy_multiplier = 0.85
+		VoxelMaterial.INFECTION_LEAD:
+			mat.albedo_texture = _tex("leaves.jpg")
+			mat.albedo_color = Color(0.7, 1.0, 0.4)
+			mat.roughness = 0.35
+			mat.emission_enabled = true
+			mat.emission = Color(0.55, 1.0, 0.25)
+			mat.emission_energy_multiplier = 4.5
 		_:
 			mat.albedo_color = VoxelMaterial.color(id)
 
