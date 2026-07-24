@@ -1,6 +1,6 @@
 @echo off
 REM City — install a portable copy + Desktop / Start Menu shortcuts.
-REM Downloads Godot 4.6 + Voxel Tools when missing; optionally builds city_voxel.dll.
+REM Downloads Godot 4.6 + Voxel Tools when missing. Ships city_voxel.dll from the repo.
 REM
 REM Usage:
 REM   install_city.bat
@@ -189,7 +189,7 @@ type "%TEMP%\city_ensure_deps_out.txt"
 exit /b 0
 
 :ensure_native
-REM Engine already present — still try to fetch/build optional native DLL.
+REM Engine already present — still run deps helper (warns if DLL somehow missing).
 if exist "%ROOT%\tools\ensure_city_deps.ps1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\ensure_city_deps.ps1" -Root "%ROOT%" >nul
 )

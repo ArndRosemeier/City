@@ -20,7 +20,8 @@ Double-click **`install_city.bat`** to copy a portable build into
 If `tools\godot\Godot_v4.6-voxel_win64.exe` is missing, the installer
 **downloads** Godot 4.6 + Voxel Tools 1.6 from the official
 [Zylann/godot_voxel](https://github.com/Zylann/godot_voxel/releases/tag/v1.6) release.
-If `city_voxel.dll` is missing, it tries a local Rust build (optional; GDScript bake fallback works without it).
+`addons/city_voxel/bin/city_voxel.dll` is shipped in the repo (rebuild with
+`tools\build_city_voxel.ps1` only when changing the native crate).
 
 ```
 install_city.bat

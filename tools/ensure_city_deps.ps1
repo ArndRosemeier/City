@@ -1,8 +1,8 @@
-# Ensures City runtime deps are present (Godot + Voxel Tools engine, optional native bake DLL).
+# Ensures City runtime deps are present (Godot + Voxel Tools engine).
+# city_voxel.dll is shipped in-repo under addons/city_voxel/bin/.
 # Safe to call repeatedly. Used by install_city.bat / pack scripts.
 param(
-	[string]$Root = "",
-	[switch]$RequireNativeDll
+	[string]$Root = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,42 +80,19 @@ function Install-GodotVoxel {
 }
 
 
-function Install-NativeDll {
+function Assert-NativeDll {
 	if ((Test-Path $NativeDll) -and ((Get-Item $NativeDll).Length -gt 10KB)) {
 		Write-Step ("Native city_voxel.dll OK: " + $NativeDll)
-		return $true
+		return
 	}
-
-	$buildScript = Join-Path $PSScriptRoot "build_city_voxel.ps1"
-	if (-not (Test-Path $buildScript)) {
-		Write-Step "WARNING: city_voxel.dll missing and build script not found (GDScript bake fallback)."
-		return (-not $RequireNativeDll.IsPresent)
-	}
-
-	Write-Step "city_voxel.dll missing - trying local Rust build (optional, faster baking)..."
-	try {
-		& powershell -NoProfile -ExecutionPolicy Bypass -File $buildScript
-		if ((Test-Path $NativeDll) -and ((Get-Item $NativeDll).Length -gt 10KB)) {
-			Write-Step ("Built native DLL -> " + $NativeDll)
-			return $true
-		}
-	}
-	catch {
-		Write-Step ("WARNING: native build failed: " + $_.Exception.Message)
-	}
-
-	Write-Step "Continuing without city_voxel.dll (GDScript OfflineVoxelVolume fallback)."
-	if ($RequireNativeDll.IsPresent) {
-		return $false
-	}
-	return $true
+	Write-Step ("WARNING: city_voxel.dll missing at " + $NativeDll)
+	Write-Step "Rebuild with tools\build_city_voxel.ps1 if you need the fast native bake path."
+	Write-Step "Game still runs with the GDScript OfflineVoxelVolume fallback."
 }
 
 
 $exePath = Install-GodotVoxel
-if (-not (Install-NativeDll)) {
-	exit 2
-}
+Assert-NativeDll
 
 # Emit path for batch callers: last line is the engine path.
 Write-Output $exePath
