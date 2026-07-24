@@ -5,9 +5,11 @@ extends Node
 
 signal tendril_killed(tendril_id: int)
 signal tendril_spawned(tendril_id: int)
+## Any removal path (tip-kill, inert retire, stream unload).
+signal tendril_ended(tendril_id: int)
+signal player_score_changed(score: int)
 
 @export var tick_interval_sec: float = 0.12
-@export var tips_per_tick: int = 2
 @export var max_tendrils: int = 10
 ## Soft preference for steps that move farther from the seed.
 @export var expand_prefer_chance: float = 0.25
@@ -17,6 +19,7 @@ signal tendril_spawned(tendril_id: int)
 @export var pick_jiggle: float = 2.4
 ## Max steps before a tendril re-rolls its general heading (actual = rnd * this).
 @export var heading_reaim_max_steps: int = 100
+const TENDRIL_START_VALUE: int = 1000
 
 const _NEIGHBORS: Array[Vector3i] = [
 	Vector3i(1, 0, 0),
@@ -31,16 +34,15 @@ const _NO_VOX := Vector3i(2147483647, 0, 0)
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
 var _voxel_size: float = 0.5
-var _accum: float = 0.0
 var _next_id: int = 1
 var _rng := RandomNumberGenerator.new()
 ## tendril_id → Dictionary
 var _tendrils: Dictionary = {}
 ## Vector3i → tendril_id (for lead lookup)
 var _lead_at: Dictionary = {}
-## Round-robin across tendril ids.
+## Spawn order (HUD + stable iteration).
 var _rr_ids: Array[int] = []
-var _rr_i: int = 0
+var player_score: int = 0
 
 
 func setup(terrain: VoxelTerrain, tool: VoxelTool, voxel_size: float) -> void:
@@ -51,25 +53,39 @@ func setup(terrain: VoxelTerrain, tool: VoxelTool, voxel_size: float) -> void:
 
 
 func clear_all() -> void:
+	var tids: Array = _tendrils.keys()
+	for tid in tids:
+		_stop_tendril_sfx(int(tid))
 	_tendrils.clear()
 	_lead_at.clear()
 	_rr_ids.clear()
-	_rr_i = 0
+	var audio := _city_audio()
+	if audio != null and audio.has_method("stop_all_tendril_voices"):
+		audio.call("stop_all_tendril_voices")
+
+
+func get_player_score() -> int:
+	return player_score
+
+
+func reset_player_score() -> void:
+	player_score = 0
+	player_score_changed.emit(player_score)
 
 
 func active_tendril_count() -> int:
 	return _tendrils.size()
 
 
-## Snapshot for HUD: ordered rows of {id, mass} (mass = converted voxel count).
+## Snapshot for HUD: ordered rows of {id, value} (remaining tip value).
 func get_tendril_hud_rows() -> Array:
 	var rows: Array = []
 	for tid in _rr_ids:
 		if not _tendrils.has(tid):
 			continue
 		var t: Dictionary = _tendrils[tid]
-		var cells: Dictionary = t.get("cells", {})
-		rows.append({"id": int(tid), "mass": cells.size()})
+		var value := int(t.get("value", 0))
+		rows.append({"id": int(tid), "value": value, "depleted": value <= 0})
 	return rows
 
 
@@ -121,9 +137,13 @@ func spawn_tendril_at_vox(
 		"steps_until_reaim": _roll_reaim_steps(),
 		## New tips get several failed advance ticks before inert retire.
 		"fail_streak": 0,
+		## Per-tendril clock — staggered so tips don't lockstep, but never share budget.
+		"tick_accum": _rng.randf() * tick_interval_sec,
+		"value": TENDRIL_START_VALUE,
 	}
 	_lead_at[vox] = tid
 	_rr_ids.append(tid)
+	_start_tendril_sfx(tid, vox)
 	tendril_spawned.emit(tid)
 	return tid
 
@@ -198,27 +218,21 @@ func invalidate_outside_aabb(world_aabb: AABB) -> void:
 func _physics_process(delta: float) -> void:
 	if _tool == null or _tendrils.is_empty():
 		return
-	_accum += delta
-	if _accum < tick_interval_sec:
-		return
-	_accum = 0.0
-	var budget := maxi(tips_per_tick, 1)
-	if _rr_ids.is_empty():
-		return
-	var checked := 0
-	var n := _rr_ids.size()
-	while budget > 0 and checked < n:
-		if _rr_ids.is_empty():
-			break
-		_rr_i = _rr_i % _rr_ids.size()
-		var tid := _rr_ids[_rr_i]
-		_rr_i += 1
-		checked += 1
+	## Each tip advances on its own timer at full speed — no shared round-robin budget.
+	var ids := _rr_ids.duplicate()
+	for tid in ids:
 		if not _tendrils.has(tid):
 			_rr_ids.erase(tid)
 			continue
-		if _advance_tendril(tid):
-			budget -= 1
+		var t: Dictionary = _tendrils[tid]
+		var accum := float(t.get("tick_accum", 0.0)) + delta
+		if accum < tick_interval_sec:
+			t["tick_accum"] = accum
+			_tendrils[tid] = t
+			continue
+		t["tick_accum"] = accum - tick_interval_sec
+		_tendrils[tid] = t
+		_advance_tendril(tid)
 
 
 func _advance_tendril(tid: int) -> bool:
@@ -286,6 +300,24 @@ func _infect_step(tid: int, from_lead: Vector3i, target: Vector3i) -> void:
 		t["steps_until_reaim"] = left
 	_lead_at[target] = tid
 	_tendrils[tid] = t
+	_apply_digest_score(tid)
+	_sfx_tendril_transmuted(tid, target)
+
+
+func _apply_digest_score(tid: int) -> void:
+	if not _tendrils.has(tid):
+		return
+	var t: Dictionary = _tendrils[tid]
+	var value := int(t.get("value", 0))
+	if value > 0:
+		t["value"] = value - 1
+		_tendrils[tid] = t
+		return
+	## Depleted tip: each further conversion taxes the player.
+	t["value"] = 0
+	_tendrils[tid] = t
+	player_score -= 1
+	player_score_changed.emit(player_score)
 
 
 func _move_lead(tid: int, old_lead: Vector3i, new_lead: Vector3i) -> void:
@@ -299,6 +331,7 @@ func _move_lead(tid: int, old_lead: Vector3i, new_lead: Vector3i) -> void:
 		t["lead"] = new_lead
 		_lead_at[new_lead] = tid
 		_tendrils[tid] = t
+		_move_tendril_sfx(tid, new_lead)
 
 
 func _pick_infect_neighbor(tid: int, vox: Vector3i) -> Vector3i:
@@ -406,6 +439,10 @@ func _retire_tendril_inert(tid: int) -> void:
 
 
 func _forget_tendril(tid: int) -> void:
+	if not _tendrils.has(tid) and not _rr_ids.has(tid):
+		## Already gone — avoid double-ended for callers that erase first.
+		return
+	_stop_tendril_sfx(tid)
 	_tendrils.erase(tid)
 	_rr_ids.erase(tid)
 	## Clean any stale lead map entries for this id.
@@ -415,6 +452,43 @@ func _forget_tendril(tid: int) -> void:
 			stale.append(vox)
 	for v in stale:
 		_lead_at.erase(v)
+	tendril_ended.emit(tid)
+
+
+func _city_audio() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	return tree.get_first_node_in_group(&"city_audio")
+
+
+func _start_tendril_sfx(tid: int, vox: Vector3i) -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("start_tendril_voice"):
+		audio.call("start_tendril_voice", tid, _vox_to_world(vox))
+
+
+func _move_tendril_sfx(tid: int, vox: Vector3i) -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("move_tendril_voice"):
+		audio.call("move_tendril_voice", tid, _vox_to_world(vox))
+
+
+func _sfx_tendril_transmuted(tid: int, vox: Vector3i) -> void:
+	var world := _vox_to_world(vox)
+	var audio := _city_audio()
+	if audio == null:
+		return
+	if audio.has_method("move_tendril_voice"):
+		audio.call("move_tendril_voice", tid, world)
+	if audio.has_method("play_tendril_transmute"):
+		audio.call("play_tendril_transmute", world)
+
+
+func _stop_tendril_sfx(tid: int) -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("stop_tendril_voice"):
+		audio.call("stop_tendril_voice", tid)
 
 
 func _set_voxel(vox: Vector3i, mat_id: int) -> void:

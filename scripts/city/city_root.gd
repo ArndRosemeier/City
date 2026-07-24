@@ -35,6 +35,14 @@ var _debris_root: Node3D
 var _cascade: Node
 var _infection: Node
 var _tendril_hud: Node
+## Per-meteor crater sites: rock stays immune + purple beam until that site's tendrils end.
+var _meteor_sites: Dictionary = {}  # site_id → {tendrils, beam, impact_vox}
+var _tendril_to_meteor_site: Dictionary = {}  # tendril_id → site_id
+var _next_meteor_site_id: int = 1
+var _spawn_meteors_enabled: bool = false
+var _meteor_spawn_accum: float = 0.0
+var _meteor_spawn_interval_sec: float = 120.0
+var _player_score: int = 0
 var _audio: Node
 var _day_night: Node
 var _settings_panel: Node
@@ -200,9 +208,27 @@ func _build_hud() -> void:
 	_settings_panel.settings_applied.connect(_on_settings_applied)
 	_settings_panel.opened.connect(_on_settings_opened)
 	_settings_panel.closed.connect(_on_settings_closed)
+	if _settings_panel.has_signal("spawn_meteors_toggled"):
+		_settings_panel.spawn_meteors_toggled.connect(_on_spawn_meteors_toggled)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
 
+
+func _on_spawn_meteors_toggled(enabled: bool) -> void:
+	_spawn_meteors_enabled = enabled
+	if enabled:
+		_meteor_spawn_accum = 0.0
+		_try_auto_spawn_meteor()
+		_roll_meteor_spawn_interval()
+		print("CityRoot: auto meteor spawns ON (next in %.0fs)" % _meteor_spawn_interval_sec)
+	else:
+		_meteor_spawn_accum = 0.0
+		print("CityRoot: auto meteor spawns OFF")
+
+
+func _roll_meteor_spawn_interval() -> void:
+	## Random 1–5 minutes between auto impacts.
+	_meteor_spawn_interval_sec = randf_range(60.0, 300.0)
 
 func _on_settings_opened() -> void:
 	if _walker != null and is_instance_valid(_walker):
@@ -274,6 +300,12 @@ func _process(delta: float) -> void:
 	if _infection_stream_accum >= 0.5:
 		_infection_stream_accum = 0.0
 		_invalidate_infection_outside_bubble()
+	if _spawn_meteors_enabled and _walker != null and is_instance_valid(_walker):
+		_meteor_spawn_accum += delta
+		if _meteor_spawn_accum >= _meteor_spawn_interval_sec:
+			_meteor_spawn_accum = 0.0
+			_roll_meteor_spawn_interval()
+			_try_auto_spawn_meteor()
 	if _fps_accum < 0.25:
 		return
 	_fps_accum = 0.0
@@ -284,7 +316,11 @@ func _process(delta: float) -> void:
 			var hh := int(floor(h)) % 24
 			var mm := int(floor(fposmod(h, 1.0) * 60.0))
 			clock = "  %02d:%02d" % [hh, mm]
-		_hud.text = "%d FPS%s" % [Engine.get_frames_per_second(), clock]
+		var score := _player_score
+		if _infection != null and is_instance_valid(_infection) and _infection.has_method("get_player_score"):
+			score = int(_infection.call("get_player_score"))
+			_player_score = score
+		_hud.text = "%d FPS%s  Score: %d" % [Engine.get_frames_per_second(), clock, score]
 
 
 func _create_terrain() -> void:
@@ -336,17 +372,33 @@ func _ensure_infection_director() -> void:
 		add_child(_infection)
 	_infection.call("setup", _terrain, _tool, VOXEL_SIZE)
 	if _infection.has_signal("tendril_killed"):
-		var cb := Callable(self, "_on_tendril_killed")
-		if not _infection.is_connected("tendril_killed", cb):
-			_infection.connect("tendril_killed", cb)
+		var cb_kill := Callable(self, "_on_tendril_killed")
+		if not _infection.is_connected("tendril_killed", cb_kill):
+			_infection.connect("tendril_killed", cb_kill)
+	if _infection.has_signal("tendril_ended"):
+		var cb_end := Callable(self, "_on_tendril_ended")
+		if not _infection.is_connected("tendril_ended", cb_end):
+			_infection.connect("tendril_ended", cb_end)
+	if _infection.has_signal("player_score_changed"):
+		var cb_score := Callable(self, "_on_player_score_changed")
+		if not _infection.is_connected("player_score_changed", cb_score):
+			_infection.connect("player_score_changed", cb_score)
 	if _tendril_hud != null and is_instance_valid(_tendril_hud):
 		_tendril_hud.call("bind_director", _infection)
+
+
+func _on_player_score_changed(score: int) -> void:
+	_player_score = score
 
 
 func _on_tendril_killed(_tendril_id: int) -> void:
 	## Tip-kill restores terrain; vanish any loose infection-textured debris too.
 	if _cascade != null and is_instance_valid(_cascade) and _cascade.has_method("clear_infection_debris"):
 		_cascade.call("clear_infection_debris")
+
+
+func _on_tendril_ended(tendril_id: int) -> void:
+	_release_tendril_from_meteor_site(tendril_id)
 
 
 func _regenerate() -> void:
@@ -371,6 +423,11 @@ func _regenerate() -> void:
 		_infection.call("clear_all")
 		_infection.queue_free()
 		_infection = null
+	_player_score = 0
+	_clear_all_meteor_sites()
+	_meteor_spawn_accum = 0.0
+	if _spawn_meteors_enabled:
+		_roll_meteor_spawn_interval()
 	if _tendril_hud != null and is_instance_valid(_tendril_hud):
 		_tendril_hud.call("clear_display")
 	if _cascade != null and is_instance_valid(_cascade):
@@ -565,10 +622,8 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	_tool.value = VoxelMaterial.AIR
 	var local := _terrain.to_local(hit_position)
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
-	## Tip-kill alone — don't carve a debris crater through the restored tendril.
-	if _tip_kill_leads_in_sphere(local, radius_vox):
-		_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
-		return
+	## Revert any tip in the blast first; restored fabric then takes the carve normally.
+	_tip_kill_leads_in_sphere(local, radius_vox)
 	_carve_destructible_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
@@ -582,11 +637,8 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	var local := _terrain.to_local(hit_world)
 	## Cap voxel radius so giant characters don't freeze a frame scanning hundreds of thousands of cells.
 	var radius_vox := minf(radius / VOXEL_SIZE, 14.0)
-	## Hitting a lead tip only reverts that tendril — no explosion debris blob of restored bricks.
-	if _tip_kill_leads_in_sphere(local, radius_vox):
-		BlastFlashVfxScript.spawn(self, hit_world, minf(radius * 0.45, 2.2))
-		_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
-		return
+	## Tip-kill first so restored bricks/concrete in the sphere can explode with the blast.
+	_tip_kill_leads_in_sphere(local, radius_vox)
 	var r_i := int(ceil(radius_vox)) + 1
 	var r2 := radius_vox * radius_vox
 	var cx := int(floor(local.x))
@@ -626,6 +678,8 @@ func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
 	var radius_vox := minf(radius / VOXEL_SIZE, 16.0)
 	## Flattened bowl: full radius in XZ, shorter in Y so sidewalks crack without a deep shaft.
 	var ry := maxf(radius_vox * 0.55, 1.2)
+	## Revert tips before collecting — restored fabric in the bowl explodes with the stomp.
+	_tip_kill_leads_in_sphere(local, radius_vox)
 	var r_i := int(ceil(radius_vox)) + 1
 	var ry_i := int(ceil(ry)) + 1
 	var cx := int(floor(local.x))
@@ -656,10 +710,6 @@ func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
 					column_max_y[col] = maxi(int(column_max_y[col]), y)
 				else:
 					column_max_y[col] = y
-	if _tip_kill_leads_in_entries(detached):
-		BlastFlashVfxScript.spawn(self, feet_position, minf(radius * 0.4, 2.0))
-		_notify_destruction(feet_position, maxf(radius * 5.0, 36.0))
-		return
 	for entry in detached:
 		var vox2: Vector3i = entry["vox"]
 		_tool.do_point(vox2)
@@ -713,18 +763,11 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	if not found:
 		return
 
-	## Tip kill: destroying INFECTION_LEAD reverts the whole tendril (no carve).
-	if int(_tool.get_voxel(hit_vox)) == VoxelMaterial.INFECTION_LEAD:
-		if _infection != null and bool(_infection.call("try_kill_lead_at_vox", hit_vox)):
-			var tip_world := _terrain.to_global(
-				Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
-			)
-			_notify_destruction(tip_world, 18.0)
-			return
-
 	## Diameter = 1 voxel per human scale → radius = scale/2.
 	var radius_vox := scale * 0.5
 	var hit_center := Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
+	## Revert tips in the punch sphere first; then the strike carves restored fabric as usual.
+	_tip_kill_leads_in_sphere(hit_center, radius_vox)
 	var r_i := int(ceil(radius_vox))
 	var r2 := radius_vox * radius_vox
 	_tool.mode = VoxelTool.MODE_SET
@@ -750,13 +793,6 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 				else:
 					column_max_y[col] = y
 
-	## If a lead sat in the punch sphere, tip-kill only — no debris crater.
-	if _tip_kill_leads_in_entries(detached):
-		var tip_world2 := _terrain.to_global(
-			Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
-		)
-		_notify_destruction(tip_world2, 18.0)
-		return
 	for entry in detached:
 		_tool.do_point(entry["vox"] as Vector3i)
 
@@ -777,6 +813,19 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 
 
 func _on_meteor_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
+	_spawn_meteor_at(hit_point)
+
+
+func _try_auto_spawn_meteor() -> void:
+	var aim := _pick_ground_meteor_target()
+	if aim == Vector3.INF:
+		## No clear ground this beat — try again soon instead of waiting another full interval.
+		_meteor_spawn_interval_sec = minf(_meteor_spawn_interval_sec, 20.0)
+		return
+	_spawn_meteor_at(aim)
+
+
+func _spawn_meteor_at(hit_point: Vector3) -> void:
 	if _terrain == null or _tool == null:
 		return
 	_ensure_infection_director()
@@ -788,12 +837,50 @@ func _on_meteor_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
 	meteor.call("begin", _terrain, _tool, hit_point, 55.0)
 
 
-func _on_meteor_impacted(world_pos: Vector3, seeds: Array) -> void:
+## Random outdoor ground deck near the player — never building fabric.
+func _pick_ground_meteor_target() -> Vector3:
+	if _terrain == null or _tool == null or _walker == null or not is_instance_valid(_walker):
+		return Vector3.INF
+	var origin := _walker.global_position
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	for _attempt in range(28):
+		var ang := randf() * TAU
+		var dist := randf_range(36.0, 120.0)
+		var wx := origin.x + cos(ang) * dist
+		var wz := origin.z + sin(ang) * dist
+		var local := _terrain.to_local(Vector3(wx, origin.y, wz))
+		var lx := int(floor(local.x))
+		var lz := int(floor(local.z))
+		var found_y := -1
+		for y in range(56, 0, -1):
+			var vox := Vector3i(lx, y, lz)
+			var id := int(_tool.get_voxel(vox))
+			if id == VoxelMaterial.AIR:
+				continue
+			if VoxelMaterial.is_building_fabric(id):
+				found_y = -1
+				break
+			if VoxelMaterial.is_ground_surface(id):
+				found_y = y
+				break
+			## Non-ground solid (water / bedrock / odd) — skip this column.
+			found_y = -1
+			break
+		if found_y < 1:
+			continue
+		return _terrain.to_global(Vector3(float(lx) + 0.5, float(found_y) + 0.95, float(lz) + 0.5))
+	return Vector3.INF
+
+
+func _on_meteor_impacted(world_pos: Vector3, seeds: Array, sky_beam: Node = null) -> void:
 	BlastFlashVfxScript.spawn(self, world_pos, 7.5)
 	if _infection == null or _terrain == null:
 		return
 	var local := _terrain.to_local(world_pos)
 	var impact_vox := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
+	var site_id := _next_meteor_site_id
+	_next_meteor_site_id += 1
+	var site_tendrils: Dictionary = {}
 	var seen: Dictionary = {}
 	var spawned := 0
 	for entry in seeds:
@@ -816,6 +903,8 @@ func _on_meteor_impacted(world_pos: Vector3, seeds: Array) -> void:
 		var tid := int(_infection.call("spawn_tendril_at_vox", vox, prev_mat, away, true))
 		if tid >= 0:
 			spawned += 1
+			site_tendrils[tid] = true
+			_tendril_to_meteor_site[tid] = site_id
 	## If capacity/plant glitches left us short, force more tips on nearby fabric.
 	var want_min := 2
 	if spawned < want_min and _infection.has_method("spawn_tendril_at_vox"):
@@ -846,7 +935,77 @@ func _on_meteor_impacted(world_pos: Vector3, seeds: Array) -> void:
 					var tid2 := int(_infection.call("spawn_tendril_at_vox", v2, id, away2, true))
 					if tid2 >= 0:
 						spawned += 1
+						site_tendrils[tid2] = true
+						_tendril_to_meteor_site[tid2] = site_id
 
+	_meteor_sites[site_id] = {
+		"tendrils": site_tendrils,
+		"beam": sky_beam,
+		"impact_vox": impact_vox,
+	}
+	## No tips planted → rock is immediately fair game and the beam collapses.
+	if site_tendrils.is_empty():
+		_clear_meteor_site(site_id)
+
+
+func _release_tendril_from_meteor_site(tendril_id: int) -> void:
+	if not _tendril_to_meteor_site.has(tendril_id):
+		return
+	var site_id := int(_tendril_to_meteor_site[tendril_id])
+	_tendril_to_meteor_site.erase(tendril_id)
+	if not _meteor_sites.has(site_id):
+		return
+	var site: Dictionary = _meteor_sites[site_id]
+	var tids: Dictionary = site.get("tendrils", {})
+	tids.erase(tendril_id)
+	site["tendrils"] = tids
+	_meteor_sites[site_id] = site
+	if tids.is_empty():
+		_clear_meteor_site(site_id)
+
+
+func _clear_meteor_site(site_id: int) -> void:
+	if not _meteor_sites.has(site_id):
+		return
+	var site: Dictionary = _meteor_sites[site_id]
+	_meteor_sites.erase(site_id)
+	var tids: Dictionary = site.get("tendrils", {})
+	for tid in tids.keys():
+		_tendril_to_meteor_site.erase(int(tid))
+	var beam: Variant = site.get("beam", null)
+	if beam is Node and is_instance_valid(beam):
+		if beam.has_method("begin_fade_out"):
+			beam.call("begin_fade_out", 1.2)
+		else:
+			beam.queue_free()
+	var impact_vox: Vector3i = site.get("impact_vox", Vector3i.ZERO)
+	_unlock_meteor_rock_at(impact_vox)
+
+
+func _clear_all_meteor_sites() -> void:
+	var ids: Array = _meteor_sites.keys()
+	for site_id in ids:
+		_clear_meteor_site(int(site_id))
+	_meteor_sites.clear()
+	_tendril_to_meteor_site.clear()
+
+
+## Crater rock becomes normal destructible stone once its tendrils are gone.
+func _unlock_meteor_rock_at(impact_vox: Vector3i) -> void:
+	if _tool == null:
+		return
+	var r: int = 4
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.STONE
+	for z in range(-r, r + 1):
+		for y in range(-r, r + 1):
+			for x in range(-r, r + 1):
+				if x * x + y * y + z * z > r * r + 1:
+					continue
+				var vox := impact_vox + Vector3i(x, y, z)
+				if int(_tool.get_voxel(vox)) == VoxelMaterial.METEOR_ROCK:
+					_tool.do_point(vox)
 
 
 func _notify_infection_leads_in(vox_entries: Array) -> void:

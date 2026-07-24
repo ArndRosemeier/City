@@ -1,5 +1,5 @@
 ## Slim 100 m sinister beam — infection energy transmitting into space.
-## After impact the beam stays permanently as a crater marker (no fade / no free).
+## After impact the beam stays planted at the crater until that meteor's tendrils end.
 extends Node3D
 
 const HEIGHT_M := 100.0
@@ -19,6 +19,10 @@ var _planted: bool = false
 var _age: float = 0.0
 var _planted_age: float = 0.0
 var _intensity: float = 1.0
+var _fading: bool = false
+var _fade_sec: float = 0.0
+var _fade_elapsed: float = 0.0
+var _fade_from: float = 1.0
 
 
 static func attach_to_meteor(host: Node, meteor: Node3D) -> Node:
@@ -43,11 +47,12 @@ func start_following(target: Node3D) -> void:
 	_snap_to_follow()
 
 
-## Pin the beam at the crater forever.
+## Pin the beam at the crater while that meteor's tendrils remain active.
 func start_lingering(world_pos: Vector3, _duration_sec: float = -1.0) -> void:
 	_ensure_mesh()
 	_follow = null
 	_planted = true
+	_fading = false
 	_planted_age = 0.0
 	global_position = world_pos
 	global_rotation = Vector3.ZERO
@@ -57,8 +62,30 @@ func start_lingering(world_pos: Vector3, _duration_sec: float = -1.0) -> void:
 	_apply_intensity(_intensity)
 
 
+## Collapse the beam when the meteor's last tendril dies.
+func begin_fade_out(duration_sec: float = 1.15) -> void:
+	_ensure_mesh()
+	_follow = null
+	_fading = true
+	_fade_sec = maxf(duration_sec, 0.05)
+	_fade_elapsed = 0.0
+	_fade_from = maxf(_intensity, 0.2)
+	set_process(true)
+
+
 func _process(delta: float) -> void:
 	_age += delta
+	if _fading:
+		_fade_elapsed += delta
+		var t := clampf(_fade_elapsed / _fade_sec, 0.0, 1.0)
+		## Ease-out collapse — energy drains upward visually via intensity only.
+		var drained := _fade_from * (1.0 - t * t)
+		_intensity = drained
+		_apply_intensity(_intensity)
+		if t >= 1.0:
+			queue_free()
+		return
+
 	if _follow != null and is_instance_valid(_follow):
 		_snap_to_follow()
 		var pulse := 0.55 + 0.45 * sin(_age * TAU * follow_pulse_hz)
@@ -67,7 +94,7 @@ func _process(delta: float) -> void:
 		return
 
 	if not _planted:
-		## Follow target gone without planting — keep last pose, still pulse forever.
+		## Follow target gone without planting — keep last pose until site clears.
 		_planted = true
 		_planted_age = 0.0
 
@@ -77,7 +104,6 @@ func _process(delta: float) -> void:
 		var surge_t := clampf(_planted_age / maxf(impact_surge_sec, 0.05), 0.0, 1.0)
 		surge = sin(surge_t * PI) * 1.8
 	var pulse2 := 0.55 + 0.45 * sin(_age * TAU * planted_pulse_hz)
-	## Never fade to zero — steady permanent marker.
 	_intensity = lerpf(1.05, 1.45, pulse2) + surge
 	_apply_intensity(_intensity)
 

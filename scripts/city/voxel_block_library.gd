@@ -306,13 +306,41 @@ static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 ## Shared textured materials for debris / impostors (same look as Blocky voxels).
 static var _mat_cache: Dictionary = {}  # int → StandardMaterial3D
 static var _infection_mat_cache: Dictionary = {}  # bool is_lead → ShaderMaterial
+static var _meteor_rock_mat: ShaderMaterial = null
 
 
-## Terrain block material (may be ShaderMaterial for infection).
+## Terrain block material (may be ShaderMaterial for infection / meteor rock).
 static func block_material_for(id: int) -> Material:
 	if id == VoxelMaterial.INFECTION or id == VoxelMaterial.INFECTION_LEAD:
 		return infection_material(id == VoxelMaterial.INFECTION_LEAD)
+	if id == VoxelMaterial.METEOR_ROCK:
+		return meteor_rock_material()
 	return material_for(id)
+
+
+## Dark rock with red glowing veins only (emission masked to cracks).
+static func meteor_rock_material() -> ShaderMaterial:
+	if _meteor_rock_mat != null:
+		return _meteor_rock_mat
+	var shader: Shader = load("res://assets/city/shaders/meteor_rock_veins.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var rock: Texture2D = _tex("rock.jpg")
+	if rock != null:
+		mat.set_shader_parameter("albedo_tex", rock)
+	mat.set_shader_parameter("rock_tint", Color(0.48, 0.4, 0.35, 1.0))
+	mat.set_shader_parameter("vein_color", Color(1.0, 0.16, 0.04, 1.0))
+	mat.set_shader_parameter("vein_hot", Color(1.0, 0.5, 0.1, 1.0))
+	mat.set_shader_parameter("texture_mix", 0.82)
+	mat.set_shader_parameter("vein_emission", 4.2)
+	mat.set_shader_parameter("flow_speed", 0.32)
+	mat.set_shader_parameter("vein_scale", 1.9)
+	mat.set_shader_parameter("vein_threshold", 0.64)
+	mat.set_shader_parameter("vein_width", 0.1)
+	mat.set_shader_parameter("pulse_hz", 0.5)
+	_meteor_rock_mat = mat
+	return mat
+
 
 
 ## Animated infection look — GPU TIME/noise only; shared across all infected voxels.

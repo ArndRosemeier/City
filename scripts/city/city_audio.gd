@@ -6,6 +6,7 @@ extends Node
 const GROUP_NAME := &"city_audio"
 const POOL_SIZE := 12
 const MAX_DEBRIS_PER_SEC := 14.0
+const MAX_TENDRIL_VOICES := 10
 
 const FOOTSTEP_DIR := "res://assets/audio/footstep"
 const DEBRIS_DIR := "res://assets/audio/debris"
@@ -20,12 +21,20 @@ var _laser_fire_streams: Array[AudioStream] = []
 var _laser_impact_streams: Array[AudioStream] = []
 var _ui_on: AudioStream
 var _ui_off: AudioStream
+var _meteor_whine_stream: AudioStream
+var _meteor_crash_stream: AudioStream
+var _tendril_drone_stream: AudioStream
+var _tendril_tick_stream: AudioStream
 
 var _pool: Array[AudioStreamPlayer3D] = []
 var _pool_i: int = 0
 var _rng := RandomNumberGenerator.new()
 var _debris_budget: float = 0.0
 var _ui_player: AudioStreamPlayer
+var _whine_player: AudioStreamPlayer3D
+var _whine_follow: Node3D
+var _crash_player: AudioStreamPlayer3D
+var _tendril_voices: Dictionary = {}  # tendril_id → AudioStreamPlayer3D
 
 
 func _ready() -> void:
@@ -44,10 +53,21 @@ func _ready() -> void:
 	_ui_player.name = "UiSfx"
 	_ui_player.bus = &"Master"
 	add_child(_ui_player)
+	_whine_player = _make_dedicated_player("MeteorWhine", 420.0, 18.0)
+	_crash_player = _make_dedicated_player("MeteorCrash", 720.0, 42.0)
+	_crash_player.attenuation_filter_cutoff_hz = 5000.0
 
 
 func _process(delta: float) -> void:
 	_debris_budget = minf(_debris_budget + MAX_DEBRIS_PER_SEC * delta, MAX_DEBRIS_PER_SEC)
+	if _whine_follow != null and is_instance_valid(_whine_follow) and _whine_player.playing:
+		_whine_player.global_position = _whine_follow.global_position
+		## Pitch climbs as it drops — incoming scream.
+		var height := maxf(_whine_follow.global_position.y, 0.0)
+		_whine_player.pitch_scale = clampf(lerpf(1.55, 0.82, height / 60.0), 0.75, 1.7)
+	elif _whine_player.playing and (_whine_follow == null or not is_instance_valid(_whine_follow)):
+		_whine_player.stop()
+		_whine_follow = null
 
 
 func toggle() -> bool:
@@ -56,6 +76,7 @@ func toggle() -> bool:
 		_play_ui(_ui_on)
 	else:
 		_play_ui(_ui_off)
+		_stop_infection_sfx()
 	return enabled
 
 
@@ -123,9 +144,121 @@ func play_laser_impact(world_pos: Vector3, character_scale: float = 1.0) -> void
 	p.play()
 
 
+## Falling meteor scream — follows the body until impact / stop.
+func play_meteor_whine(follow: Node3D) -> void:
+	if not enabled or follow == null:
+		return
+	if _meteor_whine_stream == null:
+		return
+	_whine_follow = follow
+	_whine_player.stream = _meteor_whine_stream
+	_whine_player.global_position = follow.global_position
+	_whine_player.pitch_scale = 0.9
+	_whine_player.volume_db = -2.0
+	_whine_player.play()
+
+
+func stop_meteor_whine() -> void:
+	_whine_follow = null
+	if _whine_player != null and _whine_player.playing:
+		_whine_player.stop()
+
+
+## City-wide impact boom at the crater.
+func play_meteor_crash(world_pos: Vector3) -> void:
+	if not enabled:
+		return
+	if _meteor_crash_stream == null:
+		return
+	stop_meteor_whine()
+	_crash_player.stream = _meteor_crash_stream
+	_crash_player.global_position = world_pos
+	_crash_player.pitch_scale = _rng.randf_range(0.92, 1.06)
+	_crash_player.volume_db = 3.5
+	_crash_player.play()
+
+
+## Looping sick alien drone on an active spearhead tip.
+func start_tendril_voice(tendril_id: int, world_pos: Vector3) -> void:
+	if not enabled:
+		return
+	if _tendril_drone_stream == null:
+		return
+	if _tendril_voices.has(tendril_id):
+		move_tendril_voice(tendril_id, world_pos)
+		return
+	if _tendril_voices.size() >= MAX_TENDRIL_VOICES:
+		return
+	var p := _make_dedicated_player("TendrilVoice_%d" % tendril_id, 55.0, 6.0)
+	p.stream = _tendril_drone_stream
+	p.global_position = world_pos
+	p.pitch_scale = _rng.randf_range(0.88, 1.14)
+	p.volume_db = -7.5
+	p.play()
+	_tendril_voices[tendril_id] = p
+
+
+func move_tendril_voice(tendril_id: int, world_pos: Vector3) -> void:
+	var p: Variant = _tendril_voices.get(tendril_id, null)
+	if p is AudioStreamPlayer3D and is_instance_valid(p):
+		(p as AudioStreamPlayer3D).global_position = world_pos
+
+
+## Wet conversion click when a tip eats a voxel.
+func play_tendril_transmute(world_pos: Vector3) -> void:
+	if not enabled:
+		return
+	if _tendril_tick_stream == null:
+		return
+	var p := _next_player()
+	p.stream = _tendril_tick_stream
+	p.global_position = world_pos
+	p.max_distance = 70.0
+	p.unit_size = 5.0
+	p.pitch_scale = _rng.randf_range(0.78, 1.22)
+	p.volume_db = _rng.randf_range(-11.0, -6.0)
+	p.play()
+
+
+func stop_tendril_voice(tendril_id: int) -> void:
+	var p: Variant = _tendril_voices.get(tendril_id, null)
+	_tendril_voices.erase(tendril_id)
+	if p is AudioStreamPlayer3D and is_instance_valid(p):
+		var player := p as AudioStreamPlayer3D
+		player.stop()
+		player.queue_free()
+
+
+func stop_all_tendril_voices() -> void:
+	var ids: Array = _tendril_voices.keys()
+	for tid in ids:
+		stop_tendril_voice(int(tid))
+
+
+func _stop_infection_sfx() -> void:
+	stop_meteor_whine()
+	if _crash_player != null and _crash_player.playing:
+		_crash_player.stop()
+	stop_all_tendril_voices()
+
+
+func _make_dedicated_player(node_name: String, max_distance: float, unit_size: float) -> AudioStreamPlayer3D:
+	var p := AudioStreamPlayer3D.new()
+	p.name = node_name
+	p.max_distance = max_distance
+	p.unit_size = unit_size
+	p.bus = &"Master"
+	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	add_child(p)
+	return p
+
+
 func _next_player() -> AudioStreamPlayer3D:
 	var p := _pool[_pool_i]
 	_pool_i = (_pool_i + 1) % _pool.size()
+	## Reset pool defaults in case a one-shot temporarily widened range.
+	p.max_distance = 80.0
+	p.unit_size = 4.0
 	return p
 
 
@@ -170,6 +303,12 @@ func _load_banks() -> void:
 		_ui_on = _build_tone(880.0, 0.08, 0.35)
 	if _ui_off == null:
 		_ui_off = _build_tone(220.0, 0.08, 0.35)
+
+	## Infection set is always procedural (no Kenney pack for this mood).
+	_meteor_whine_stream = _build_meteor_whine()
+	_meteor_crash_stream = _build_meteor_crash()
+	_tendril_drone_stream = _build_tendril_drone()
+	_tendril_tick_stream = _build_tendril_tick()
 
 
 func _load_dir(dir_path: String, prefixes: Array[String]) -> Array[AudioStream]:
@@ -238,6 +377,72 @@ func _build_laser_impact() -> AudioStreamWAV:
 		var boom := sin(TAU * 55.0 * t) * 0.7 + sin(TAU * 90.0 * t) * 0.35
 		var noise := (_rng.randf() * 2.0 - 1.0) * 0.45 * exp(-t * 12.0)
 		return (crack + boom + noise) * env
+	)
+
+
+func _build_meteor_whine() -> AudioStreamWAV:
+	## Long metallic descending scream with dissonant beating.
+	return _synthesize(3.2, func(t: float, _i: int) -> float:
+		var fade_in := smoothstep(0.0, 0.18, t)
+		var fade_out := 1.0 - smoothstep(2.6, 3.2, t)
+		var env := fade_in * fade_out
+		var prog := clampf(t / 3.2, 0.0, 1.0)
+		var base_hz := lerpf(620.0, 140.0, prog * prog)
+		var scream := sin(TAU * base_hz * t)
+		var overtone := sin(TAU * base_hz * 1.97 * t + sin(TAU * 3.1 * t) * 0.7) * 0.55
+		var beat := sin(TAU * (base_hz * 1.07) * t) * 0.4
+		var grit := (_rng.randf() * 2.0 - 1.0) * 0.18 * (0.35 + prog)
+		var sub := sin(TAU * (base_hz * 0.25) * t) * 0.35
+		return (scream * 0.55 + overtone + beat + sub + grit) * env * 0.85
+	)
+
+
+func _build_meteor_crash() -> AudioStreamWAV:
+	## Wide low boom + stone shatter — meant to carry across the district.
+	return _synthesize(1.45, func(t: float, _i: int) -> float:
+		var env := exp(-t * 2.8) * smoothstep(0.0, 0.02, t)
+		var boom := sin(TAU * 38.0 * t) * 0.85 + sin(TAU * 62.0 * t) * 0.45
+		var slab := sin(TAU * 95.0 * t) * exp(-t * 6.0) * 0.55
+		var crack := sin(TAU * 780.0 * t) * exp(-t * 28.0)
+		var rubble := (_rng.randf() * 2.0 - 1.0) * 0.7 * exp(-t * 4.5)
+		var rumble := sin(TAU * 22.0 * t + sin(TAU * 7.0 * t)) * 0.4 * exp(-t * 1.6)
+		return (boom + slab + crack * 0.65 + rubble + rumble) * env
+	)
+
+
+func _build_tendril_drone() -> AudioStreamWAV:
+	## Looping wet alien horror bed for active spearheads.
+	var stream := _synthesize(1.85, func(t: float, i: int) -> float:
+		var wobble := sin(TAU * 0.55 * t)
+		var a := sin(TAU * 73.0 * t + wobble * 1.8)
+		var b := sin(TAU * 97.5 * t - wobble * 2.4) * 0.7
+		var c := sin(TAU * 141.0 * t + sin(TAU * 2.3 * t) * 3.0) * 0.45
+		var wet := sin(TAU * 210.0 * t) * sin(TAU * 5.5 * t) * 0.35
+		var breath := sin(TAU * 1.7 * t) * 0.5 + 0.5
+		var hiss := (_rng.randf() * 2.0 - 1.0) * 0.22 * breath
+		## Soft loop seam — duck near ends so LOOP_FORWARD isn't clicky.
+		var seam := 1.0
+		if t < 0.06:
+			seam = smoothstep(0.0, 0.06, t)
+		elif t > 1.79:
+			seam = 1.0 - smoothstep(1.79, 1.85, t)
+		var pulse := 0.65 + 0.35 * sin(TAU * 2.8 * t + float(i % 17) * 0.1)
+		return (a * 0.4 + b * 0.35 + c + wet + hiss) * seam * pulse * 0.7
+	)
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_begin = 0
+	stream.loop_end = int(1.85 * 22050.0)
+	return stream
+
+
+func _build_tendril_tick() -> AudioStreamWAV:
+	## Short sick conversion spit when a voxel is eaten.
+	return _synthesize(0.16, func(t: float, _i: int) -> float:
+		var env := exp(-t * 18.0) * smoothstep(0.0, 0.01, t)
+		var squelch := sin(TAU * lerpf(340.0, 90.0, t / 0.16) * t)
+		var chirp := sin(TAU * lerpf(880.0, 220.0, clampf(t / 0.08, 0.0, 1.0)) * t) * exp(-t * 30.0)
+		var wet := (_rng.randf() * 2.0 - 1.0) * 0.55 * exp(-t * 14.0)
+		return (squelch * 0.45 + chirp * 0.55 + wet) * env
 	)
 
 

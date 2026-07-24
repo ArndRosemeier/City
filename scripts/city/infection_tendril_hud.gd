@@ -1,4 +1,4 @@
-## Stacked HUD: one sickly glowing line per active tendril, mass number centered.
+## Stacked HUD: one sickly glowing line per active tendril, remaining value centered.
 extends CanvasLayer
 
 @export var refresh_sec: float = 0.12
@@ -68,7 +68,8 @@ func _rebuild_from_director() -> void:
 		if not (entry is Dictionary):
 			continue
 		var tid := int(entry.get("id", -1))
-		var mass := int(entry.get("mass", 0))
+		var value := int(entry.get("value", entry.get("mass", 0)))
+		var depleted := bool(entry.get("depleted", value <= 0))
 		if tid < 0:
 			continue
 		alive[tid] = true
@@ -77,7 +78,7 @@ func _rebuild_from_director() -> void:
 			row = _make_row(tid)
 			_rows[tid] = row
 			_stack.add_child(row)
-		_set_row_mass(row, mass)
+		_set_row_value(row, value, depleted)
 	## Drop rows for dead tendrils (preserve stack order of survivors).
 	var dead: Array[int] = []
 	for tid2 in _rows.keys():
@@ -105,7 +106,8 @@ func _make_row(tendril_id: int) -> Control:
 	row.size = Vector2(line_width_px, row_height_px)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.set_meta("tendril_id", tendril_id)
-	row.set_meta("mass", 1)
+	row.set_meta("value", 1000)
+	row.set_meta("depleted", false)
 	row.set_meta("pulse", 0.0)
 
 	var glow := ColorRect.new()
@@ -127,7 +129,7 @@ func _make_row(tendril_id: int) -> Control:
 	row.add_child(core)
 
 	var label := Label.new()
-	label.name = "Mass"
+	label.name = "Value"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -135,21 +137,30 @@ func _make_row(tendril_id: int) -> Control:
 	label.add_theme_color_override("font_color", Color(0.85, 1.0, 0.55, 1.0))
 	label.add_theme_color_override("font_outline_color", Color(0.08, 0.22, 0.05, 0.95))
 	label.add_theme_constant_override("outline_size", 6)
-	label.text = "1"
+	label.text = "1000"
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(label)
 	return row
 
 
-func _set_row_mass(row: Control, mass: int) -> void:
-	row.set_meta("mass", mass)
-	var label := row.get_node_or_null("Mass") as Label
+func _set_row_value(row: Control, value: int, depleted: bool) -> void:
+	row.set_meta("value", value)
+	row.set_meta("depleted", depleted)
+	var label := row.get_node_or_null("Value") as Label
+	if label == null:
+		label = row.get_node_or_null("Mass") as Label
 	if label != null:
-		label.text = str(maxi(mass, 0))
+		label.text = str(maxi(value, 0))
+		if depleted:
+			label.add_theme_color_override("font_color", Color(1.0, 0.45, 0.38, 1.0))
+			label.add_theme_color_override("font_outline_color", Color(0.35, 0.05, 0.05, 0.95))
+		else:
+			label.add_theme_color_override("font_color", Color(0.85, 1.0, 0.55, 1.0))
+			label.add_theme_color_override("font_outline_color", Color(0.08, 0.22, 0.05, 0.95))
 
 
 func _pulse_rows() -> void:
-	## Soft sickly throb so the stack reads as living infection, not plain UI.
+	## Soft throb — sickly green while valued, warning red when depleted.
 	var i := 0
 	for tid in _rows.keys():
 		var row: Control = _rows[tid]
@@ -157,10 +168,17 @@ func _pulse_rows() -> void:
 			continue
 		var glow := row.get_node_or_null("Glow") as ColorRect
 		var core := row.get_node_or_null("Core") as ColorRect
+		var depleted := bool(row.get_meta("depleted", false))
 		var phase := _pulse_age * 2.4 + float(i) * 0.7
 		var pulse := 0.55 + 0.45 * sin(phase)
-		if glow != null:
-			glow.color = Color(0.3, 0.9, 0.22, lerpf(0.12, 0.34, pulse))
-		if core != null:
-			core.color = Color(0.5, 1.0, 0.32, lerpf(0.55, 0.95, pulse))
+		if depleted:
+			if glow != null:
+				glow.color = Color(0.95, 0.18, 0.12, lerpf(0.16, 0.42, pulse))
+			if core != null:
+				core.color = Color(1.0, 0.28, 0.2, lerpf(0.6, 1.0, pulse))
+		else:
+			if glow != null:
+				glow.color = Color(0.3, 0.9, 0.22, lerpf(0.12, 0.34, pulse))
+			if core != null:
+				core.color = Color(0.5, 1.0, 0.32, lerpf(0.55, 0.95, pulse))
 		i += 1

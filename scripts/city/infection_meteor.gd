@@ -2,7 +2,8 @@
 class_name InfectionMeteor
 extends Node3D
 
-signal impacted(world_pos: Vector3, seed_world_positions: Array)
+## sky_beam: planted crater beam to keep/fade with this meteor's tendril site.
+signal impacted(world_pos: Vector3, seed_world_positions: Array, sky_beam: Node)
 
 const VOXEL_SIZE := 0.5
 ## Authored blob was ~1 voxel radius; 3× → solid rock sphere of this radius.
@@ -65,8 +66,32 @@ func begin(terrain: VoxelTerrain, tool: VoxelTool, aim_hit: Vector3, spawn_heigh
 	_velocity = to.normalized() * fall_speed_mps
 	_build_visuals()
 	_spawn_sky_beam()
+	_start_fall_sfx()
 	_alive = true
 	_impacted = false
+
+
+func _city_audio() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	return tree.get_first_node_in_group(&"city_audio")
+
+
+func _start_fall_sfx() -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_meteor_whine"):
+		audio.call("play_meteor_whine", self)
+
+
+func _play_impact_sfx(hit_pos: Vector3) -> void:
+	var audio := _city_audio()
+	if audio == null:
+		return
+	if audio.has_method("stop_meteor_whine"):
+		audio.call("stop_meteor_whine")
+	if audio.has_method("play_meteor_crash"):
+		audio.call("play_meteor_crash", hit_pos)
 
 
 func _spawn_sky_beam() -> void:
@@ -133,11 +158,7 @@ func _build_visuals() -> void:
 			rock_cells.append(o)
 
 	_mm_rock = _make_mm("RockCells", rock_cells.size())
-	var rock_mat := StandardMaterial3D.new()
-	rock_mat.albedo_color = Color(0.28, 0.24, 0.2)
-	rock_mat.roughness = 0.95
-	rock_mat.vertex_color_use_as_albedo = true
-	_mm_rock.material_override = rock_mat
+	_mm_rock.material_override = VoxelBlockLibrary.meteor_rock_material()
 	_place_cells(_mm_rock, rock_cells, Color(0.45, 0.4, 0.35))
 
 	_mm_glow = _make_mm("GlowCells", glow_cells.size())
@@ -247,11 +268,13 @@ func _do_impact(hit_pos: Vector3) -> void:
 		var want := _rng.randi_range(SEED_COUNT_MIN, SEED_COUNT_MAX)
 		seeds = _plant_guaranteed_seeds(base, want)
 
-	impacted.emit(hit_pos, seeds)
-	## Hand the sky beam off — pins permanently at the crater as a far-field marker.
+	_play_impact_sfx(hit_pos)
+	var beam: Node = null
 	if _sky_beam != null and is_instance_valid(_sky_beam):
-		_sky_beam.call("start_lingering", hit_pos)
+		beam = _sky_beam
+		beam.call("start_lingering", hit_pos)
 		_sky_beam = null
+	impacted.emit(hit_pos, seeds, beam)
 	queue_free()
 
 

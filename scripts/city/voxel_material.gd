@@ -55,6 +55,15 @@ static func is_walkable_surface(id: int) -> bool:
 	)
 
 
+static func is_ground_surface(id: int) -> bool:
+	## Outdoor ground / road deck — meteor auto-spawns land here, never on buildings.
+	match id:
+		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES:
+			return true
+		_:
+			return false
+
+
 static func is_building_fabric(id: int) -> bool:
 	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground or road.
 	match id:

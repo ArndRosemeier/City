@@ -5,12 +5,14 @@ extends CanvasLayer
 signal closed
 signal opened
 signal settings_applied(settings: Dictionary)
+signal spawn_meteors_toggled(enabled: bool)
 
 const CONFIG_PATH := "user://city_graphics.cfg"
 ## Bump when defaults change so old user configs pick up the new baseline.
 const CONFIG_VERSION := 2
 
 var _btn: Button
+var _spawn_meteors_check: CheckBox
 var _panel: PanelContainer
 var _dim: ColorRect
 var _open: bool = false
@@ -36,6 +38,10 @@ func is_open() -> bool:
 
 func get_settings() -> Dictionary:
 	return _settings.duplicate(true)
+
+
+func is_spawn_meteors_enabled() -> bool:
+	return _spawn_meteors_check != null and _spawn_meteors_check.button_pressed
 
 
 func open_panel() -> void:
@@ -126,17 +132,34 @@ func apply_preset(name: String) -> void:
 
 
 func _build_ui() -> void:
+	var top_bar := HBoxContainer.new()
+	top_bar.name = "TopBar"
+	top_bar.focus_mode = Control.FOCUS_NONE
+	top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	top_bar.offset_left = -360.0
+	top_bar.offset_top = 12.0
+	top_bar.offset_right = -16.0
+	top_bar.offset_bottom = 44.0
+	top_bar.add_theme_constant_override("separation", 10)
+	top_bar.alignment = BoxContainer.ALIGNMENT_END
+	add_child(top_bar)
+
+	_spawn_meteors_check = CheckBox.new()
+	_spawn_meteors_check.name = "SpawnMeteorsCheck"
+	_spawn_meteors_check.text = "Spawn meteors"
+	_spawn_meteors_check.focus_mode = Control.FOCUS_NONE
+	_spawn_meteors_check.button_pressed = false
+	_spawn_meteors_check.toggled.connect(_on_spawn_meteors_toggled)
+	top_bar.add_child(_spawn_meteors_check)
+
 	_btn = Button.new()
 	_btn.name = "SettingsButton"
 	_btn.text = "Settings"
 	_btn.focus_mode = Control.FOCUS_NONE
-	_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_btn.offset_left = -128.0
-	_btn.offset_top = 12.0
-	_btn.offset_right = -16.0
-	_btn.offset_bottom = 44.0
+	_btn.custom_minimum_size = Vector2(112, 0)
 	_btn.pressed.connect(toggle_panel)
-	add_child(_btn)
+	top_bar.add_child(_btn)
 
 	_dim = ColorRect.new()
 	_dim.name = "Dim"
@@ -293,6 +316,10 @@ func _on_check(key: String, on: bool) -> void:
 		return
 	_settings[key] = on
 	_emit_applied()
+
+
+func _on_spawn_meteors_toggled(on: bool) -> void:
+	spawn_meteors_toggled.emit(on)
 
 
 func _emit_applied() -> void:
