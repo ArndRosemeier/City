@@ -25,6 +25,11 @@ var fleeing: bool = false
 var flee_from: Vector3 = Vector3.ZERO
 ## Avoid duplicate entries in the budgeted flee-repath queue.
 var flee_repath_queued: bool = false
+## Graph node we must not reverse into on the next trip (anti-U-turn).
+var avoid_next_node: int = -1
+## Net-progress stuck detection (circling short loops still "moves").
+var progress_anchor: Vector3 = Vector3.ZERO
+var progress_timer: float = 0.0
 
 
 func is_fleeing() -> bool:
@@ -47,6 +52,8 @@ func set_path(world_path: PackedVector3Array) -> void:
 	## Assign a route without teleporting — keep current world position.
 	waypoints = world_path
 	path_i = 0
+	progress_anchor = position
+	progress_timer = 0.0
 	if waypoints.is_empty():
 		moving = false
 		return
@@ -56,3 +63,11 @@ func set_path(world_path: PackedVector3Array) -> void:
 		var d0 := Vector2(position.x - waypoints[0].x, position.z - waypoints[0].z).length_squared()
 		if d0 < 1.0:
 			path_i = 1
+
+
+func remember_arrival_edge(path_nodes: PackedInt32Array) -> void:
+	## After finishing a route, forbid reversing the last edge on the next trip.
+	if path_nodes.size() >= 2:
+		avoid_next_node = path_nodes[path_nodes.size() - 2]
+	else:
+		avoid_next_node = -1

@@ -72,6 +72,24 @@ func random_goal_node(from_node: int, min_m: float, max_m: float, rng: RandomNum
 	return _graph.random_goal_node(from_node, min_m, max_m, rng)
 
 
+func random_goal_by_path_length(
+	from_node: int,
+	min_m: float,
+	max_m: float,
+	rng: RandomNumberGenerator,
+	avoid_first_hop: int = -1
+) -> int:
+	if _graph == null:
+		return -1
+	return _graph.random_goal_by_path_length(from_node, min_m, max_m, rng, avoid_first_hop)
+
+
+func path_length_m(path_nodes: PackedInt32Array) -> float:
+	if _graph == null:
+		return 0.0
+	return _graph.path_length_m(path_nodes)
+
+
 func find_path(from_node: int, to_node: int) -> PackedInt32Array:
 	if _graph == null:
 		return PackedInt32Array()

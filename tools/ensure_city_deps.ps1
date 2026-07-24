@@ -22,7 +22,8 @@ $NativeDll = Join-Path $Root "addons\city_voxel\bin\city_voxel.dll"
 
 
 function Write-Step([string]$msg) {
-	Write-Host $msg
+	# stderr so batch callers can parse stdout as the engine path only
+	[Console]::Error.WriteLine($msg)
 }
 
 

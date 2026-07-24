@@ -12,24 +12,34 @@ crosswalks, and street lights. Showcase scene still available via `start.bat`.
 
 Double-click **`start_city.bat`** — endless streamed districts.
 
-### Install (Windows)
+### Install (Windows) — for players
 
-Double-click **`install_city.bat`** to copy a portable build into
-`%LOCALAPPDATA%\Programs\City` and add Desktop / Start Menu shortcuts.
+Double-click **`install_city.bat`** on a machine that already has this project
+(or an unzipped City package). It copies the game into
+`%LOCALAPPDATA%\Programs\City` and adds Desktop / Start Menu shortcuts.
 
-If `tools\godot\Godot_v4.6-voxel_win64.exe` is missing, the installer
-**downloads** Godot 4.6 + Voxel Tools 1.6 from the official
+If `tools\godot\Godot_v4.6-voxel_win64.exe` is missing, it **downloads**
+Godot 4.6 + Voxel Tools 1.6 from the official
 [Zylann/godot_voxel](https://github.com/Zylann/godot_voxel/releases/tag/v1.6) release.
-`addons/city_voxel/bin/city_voxel.dll` is shipped in the repo (rebuild with
-`tools\build_city_voxel.ps1` only when changing the native crate).
+`addons/city_voxel/bin/city_voxel.dll` is shipped in the repo.
 
 ```
 install_city.bat
 install_city.bat /D "D:\Games\City"
-install_city.bat /S /D "%LOCALAPPDATA%\Programs\City"
 ```
 
-To build a shareable folder: **`tools\pack_city_portable.bat`** → `dist\CityPortable\`.
+### Make a shareable package — for you (developer)
+
+From the repo root, double-click **`make_installer.bat`**.
+
+That builds:
+
+- `dist\CityPortable\` — full playable folder (includes engine)
+- `dist\City-Windows.zip` — zip that folder and send it to others
+
+Recipients unzip, then run **`City.bat`** (play) or **`install_city.bat`** (install + shortcuts).
+
+(`tools\pack_city_portable.bat` is the older folder-only helper; prefer `make_installer.bat`.)
 
 Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **N** day/night · **Settings** (top-right) for quality.
 

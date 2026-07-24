@@ -108,6 +108,9 @@ if exist "%ROOT%\tools\ensure_city_deps.ps1" (
 call :write_launcher "%INSTALL_DIR%\City.bat"
 call :write_uninstall "%INSTALL_DIR%\Uninstall_City.bat"
 
+REM Skip Desktop/Start Menu shortcuts in silent mode (used by make_installer staging).
+if "%SILENT%"=="1" goto after_shortcuts
+
 set "SHORTCUT_PS=%TEMP%\city_install_shortcuts_%RANDOM%.ps1"
 (
 echo $install = '%INSTALL_DIR%'
@@ -137,6 +140,7 @@ if not "%SC_ERR%"=="0" (
     echo WARNING: Shortcuts could not be created. You can still run City.bat in the install folder.
 )
 
+:after_shortcuts
 echo.
 echo Installed to: %INSTALL_DIR%
 echo Launch with Desktop / Start Menu "City", or:
@@ -179,7 +183,9 @@ if errorlevel 1 (
     type "%TEMP%\city_ensure_deps_out.txt"
     exit /b 1
 )
-for /f "usebackq delims=" %%L in ("%TEMP%\city_ensure_deps_out.txt") do set "GODOT_EXE=%%L"
+for /f "usebackq delims=" %%L in ("%TEMP%\city_ensure_deps_out.txt") do (
+    echo %%L | findstr /I /E ".exe" >nul && set "GODOT_EXE=%%L"
+)
 if not exist "%GODOT_EXE%" (
     echo ERROR: ensure_city_deps.ps1 did not produce a Godot executable.
     type "%TEMP%\city_ensure_deps_out.txt"

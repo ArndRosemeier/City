@@ -217,6 +217,81 @@ func nearest_sidewalk_node(world: Vector3) -> int:
 	return nearest_node(world)
 
 
+func path_length_m(path_nodes: PackedInt32Array) -> float:
+	var total := 0.0
+	for i in range(path_nodes.size() - 1):
+		total += positions[path_nodes[i]].distance_to(positions[path_nodes[i + 1]])
+	return total
+
+
+## Pick a goal whose BFS path length (meters along edges) is in [min_m, max_m].
+## Optional avoid_first_hop blocks immediate U-turns when the previous trip ended.
+func random_goal_by_path_length(
+	from_node: int,
+	min_m: float,
+	max_m: float,
+	rng: RandomNumberGenerator,
+	avoid_first_hop: int = -1
+) -> int:
+	if node_count == 0 or from_node < 0 or from_node >= node_count:
+		return -1
+	var min_d := maxf(min_m, 0.0)
+	var max_d := maxf(max_m, min_d + 1.0)
+	var dist_m: PackedFloat32Array = PackedFloat32Array()
+	dist_m.resize(node_count)
+	dist_m.fill(-1.0)
+	var first_hop: PackedInt32Array = PackedInt32Array()
+	first_hop.resize(node_count)
+	first_hop.fill(-1)
+	var queue: PackedInt32Array = PackedInt32Array()
+	queue.append(from_node)
+	dist_m[from_node] = 0.0
+	var head := 0
+	var preferred: Array[int] = []
+	var any_ok: Array[int] = []
+	while head < queue.size():
+		var cur: int = queue[head]
+		head += 1
+		var cur_d: float = dist_m[cur]
+		if cur_d > max_d:
+			continue
+		if cur != from_node and cur_d >= min_d and cur_d <= max_d:
+			any_ok.append(cur)
+			if first_hop[cur] != avoid_first_hop:
+				preferred.append(cur)
+		if cur_d >= max_d:
+			continue
+		var nbrs: PackedInt32Array = neighbors[cur]
+		for n in nbrs:
+			if dist_m[n] >= 0.0:
+				continue
+			var edge := positions[cur].distance_to(positions[n])
+			var nd := cur_d + edge
+			if nd > max_d + 0.01:
+				continue
+			dist_m[n] = nd
+			if cur == from_node:
+				first_hop[n] = n
+			else:
+				first_hop[n] = first_hop[cur]
+			queue.append(n)
+	var pool: Array[int] = preferred if not preferred.is_empty() else any_ok
+	if pool.is_empty():
+		## Soften: any node reached beyond min_d (ignore max) preferring non-U-turn.
+		var soft_pref: Array[int] = []
+		var soft_any: Array[int] = []
+		for i in range(node_count):
+			if i == from_node or dist_m[i] < min_d:
+				continue
+			soft_any.append(i)
+			if first_hop[i] != avoid_first_hop:
+				soft_pref.append(i)
+		pool = soft_pref if not soft_pref.is_empty() else soft_any
+	if pool.is_empty():
+		return -1
+	return pool[rng.randi_range(0, pool.size() - 1)]
+
+
 func find_path(from_node: int, to_node: int) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	if from_node < 0 or to_node < 0 or from_node >= node_count or to_node >= node_count:

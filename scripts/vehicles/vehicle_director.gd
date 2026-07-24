@@ -12,22 +12,25 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 ## Full vehicle render distance. Beyond this: not drawn.
 @export var render_distance: float = 120.0
 @export var lod_hysteresis_m: float = 18.0
-@export var trip_min_m: float = 20.0
-@export var trip_max_m: float = 180.0
+@export var trip_min_m: float = 70.0
+@export var trip_max_m: float = 240.0
 @export var lod_interval_sec: float = 0.5
 @export var cruise_speed_min: float = 7.0
 @export var cruise_speed_max: float = 12.0
 @export var turn_rate: float = 3.5
 @export var waypoint_reach_m: float = 0.85
 @export var stuck_error_sec: float = 8.0
+## If a car moves less than this over progress_check_sec, force a new long trip.
+@export var progress_check_sec: float = 5.0
+@export var progress_min_m: float = 12.0
 @export var crossing_occupancy_interval_sec: float = 0.12
 ## How far away cars notice destruction and floor it away.
 @export var flee_radius_m: float = 40.0
 ## Keep fleeing until at least this far from the player.
 @export var flee_clear_distance_m: float = 200.0
 @export var flee_speed_mul: float = 1.9
-@export var flee_trip_min_m: float = 60.0
-@export var flee_trip_max_m: float = 200.0
+@export var flee_trip_min_m: float = 80.0
+@export var flee_trip_max_m: float = 260.0
 @export var flee_repaths_per_frame: int = 2
 @export var flee_greedy_hops: int = 16
 
@@ -178,7 +181,7 @@ func _drain_flee_repath_queue() -> void:
 
 
 func _assign_flee_trip(agent: VehicleAgent) -> void:
-	## Greedy hops away from the player — avoids BFS storms when many cars flee.
+	## Drive to a far node away from the threat (path-length band), not a ring of greedy hops.
 	if _roadmap == null or _roadmap.is_empty():
 		agent.clear_path()
 		return
@@ -188,34 +191,54 @@ func _assign_flee_trip(agent: VehicleAgent) -> void:
 		return
 	agent.flee_from = _threat_position(agent.flee_from)
 	var danger := agent.flee_from
-	var path := PackedVector3Array()
+	var best_node := -1
+	var best_score := -INF
+	for _attempt in range(12):
+		var cand := _roadmap.random_goal_by_path_length(
+			from_node, flee_trip_min_m, flee_trip_max_m, _rng, agent.avoid_next_node
+		)
+		if cand < 0 or cand == from_node:
+			continue
+		var p: Vector3 = _roadmap.positions[cand]
+		var away := Vector2(p.x - danger.x, p.z - danger.z).length()
+		if away > best_score:
+			best_score = away
+			best_node = cand
+	var nodes := PackedInt32Array()
+	if best_node >= 0:
+		nodes = _roadmap.find_path(from_node, best_node)
+	if nodes.size() < 2:
+		## Fallback: short anti-U-turn hop chain still better than freezing.
+		nodes = _fallback_local_path(from_node, agent.avoid_next_node, maxi(flee_greedy_hops, 8))
+	if nodes.size() < 2:
+		agent.clear_path()
+		return
+	agent.set_path(_roadmap.path_to_world(nodes))
+	agent.stuck_sec = 0.0
+	## Remember the arrival edge for the next repath.
+	if nodes.size() >= 2:
+		agent.avoid_next_node = nodes[nodes.size() - 2]
+
+
+func _fallback_local_path(from_node: int, avoid_next: int, hops: int) -> PackedInt32Array:
+	var nodes := PackedInt32Array()
+	nodes.append(from_node)
 	var node := from_node
-	var prev := -1
-	var hops := maxi(flee_greedy_hops, 4)
+	var prev := avoid_next
 	for _i in hops:
 		var nbrs: PackedInt32Array = _roadmap.neighbors[node]
 		if nbrs.is_empty():
 			break
-		var best := -1
-		var best_d2 := -1.0
+		var choices: Array[int] = []
 		for n in nbrs:
-			if n == prev:
-				continue
-			var p: Vector3 = _roadmap.positions[n]
-			var d2 := Vector2(p.x - danger.x, p.z - danger.z).length_squared()
-			if d2 > best_d2:
-				best_d2 = d2
-				best = n
-		if best < 0:
-			best = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
+			if n != prev:
+				choices.append(n)
+		if choices.is_empty():
+			choices.append(nbrs[_rng.randi_range(0, nbrs.size() - 1)])
 		prev = node
-		node = best
-		path.append(_roadmap.positions[node])
-	if path.is_empty():
-		agent.clear_path()
-		return
-	agent.set_path(path)
-	agent.stuck_sec = 0.0
+		node = choices[_rng.randi_range(0, choices.size() - 1)]
+		nodes.append(node)
+	return nodes
 
 
 ## Closest live vehicle along segment. Empty if none.
@@ -451,16 +474,29 @@ func _assign_trip(agent: VehicleAgent) -> void:
 	if from_node < 0:
 		agent.clear_path()
 		return
-	var to_node := _roadmap.random_goal_node(from_node, trip_min_m, trip_max_m, _rng)
 	var nodes := PackedInt32Array()
-	if to_node >= 0 and to_node != from_node:
+	for _attempt in range(8):
+		var to_node := _roadmap.random_goal_by_path_length(
+			from_node, trip_min_m, trip_max_m, _rng, agent.avoid_next_node
+		)
+		if to_node < 0 or to_node == from_node:
+			continue
 		nodes = _roadmap.find_path(from_node, to_node)
+		if nodes.size() < 2:
+			continue
+		## Reject tiny loops even if sampling slipped.
+		if _roadmap.path_length_m(nodes) + 0.01 < trip_min_m * 0.85:
+			continue
+		if nodes.size() >= 2 and nodes[1] == agent.avoid_next_node:
+			continue
+		break
 	if nodes.size() < 2:
-		var nbrs: PackedInt32Array = _roadmap.neighbors[from_node]
-		if nbrs.is_empty():
-			agent.clear_path()
-			return
-		nodes = PackedInt32Array([from_node, nbrs[_rng.randi_range(0, nbrs.size() - 1)]])
+		nodes = _fallback_local_path(from_node, agent.avoid_next_node, 6)
+	if nodes.size() < 2:
+		agent.clear_path()
+		return
+	if nodes.size() >= 2:
+		agent.avoid_next_node = nodes[nodes.size() - 2]
 	agent.set_path(_roadmap.path_to_world(nodes))
 	agent.stuck_sec = 0.0
 
@@ -469,6 +505,7 @@ func _simulate(delta: float) -> void:
 	var reach_r2 := waypoint_reach_m * waypoint_reach_m
 	var threat := _threat_position()
 	var clear_r2 := flee_clear_distance_m * flee_clear_distance_m
+	var progress_need := progress_min_m * progress_min_m
 	for i in range(_agents.size()):
 		var agent: VehicleAgent = _agents[i]
 		if agent.wrecked:
@@ -528,6 +565,17 @@ func _simulate(delta: float) -> void:
 			agent.path_i += 1
 		agent.position = next_pos
 		agent.stuck_sec = 0.0
+		## Circling a small plaquette still advances waypoints — catch no net progress.
+		agent.progress_timer += delta
+		if agent.progress_timer >= progress_check_sec:
+			var pdx := agent.position.x - agent.progress_anchor.x
+			var pdz := agent.position.z - agent.progress_anchor.z
+			if pdx * pdx + pdz * pdz < progress_need:
+				agent.clear_path()
+				_assign_trip(agent)
+			else:
+				agent.progress_anchor = agent.position
+				agent.progress_timer = 0.0
 		_agents[i] = agent
 
 
