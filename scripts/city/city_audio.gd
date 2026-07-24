@@ -1,4 +1,4 @@
-## City SFX. Off by default; toggle with O.
+## City SFX. On by default; toggle with O.
 ## Prefers Kenney CC0 clips under res://assets/audio/; procedural fallback if missing.
 class_name CityAudio
 extends Node
@@ -13,7 +13,7 @@ const DEBRIS_DIR := "res://assets/audio/debris"
 const LASER_FIRE_DIR := "res://assets/audio/laser"
 const UI_DIR := "res://assets/audio/ui"
 
-var enabled: bool = false
+var enabled: bool = true
 
 var _foot_streams: Array[AudioStream] = []
 var _debris_streams: Array[AudioStream] = []

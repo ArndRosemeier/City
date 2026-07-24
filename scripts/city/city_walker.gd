@@ -118,6 +118,7 @@ var _spring: SpringArm3D
 var _pivot: Node3D
 var _capsule: CollisionShape3D
 var _captured: bool = false
+var _game_over_locked: bool = false
 var _body_root: Node3D
 var _skeleton: Skeleton3D
 var _mesh: MeshInstance3D
@@ -320,10 +321,28 @@ func is_character_editor_open() -> bool:
 
 
 func is_blocking_ui_open() -> bool:
+	if _game_over_locked:
+		return true
 	if is_character_editor_open():
 		return true
 	var parent := get_parent()
 	return parent != null and parent.has_method("is_settings_open") and bool(parent.call("is_settings_open"))
+
+
+func set_game_over_locked(on: bool) -> void:
+	_game_over_locked = on
+	if on:
+		_jump_queued = false
+		_auto_run = false
+		_set_rmb_looking(false)
+		_set_capture(false)
+		velocity = Vector3.ZERO
+		## Stop combat VFX mid-flight so death doesn't feel like a soft lock.
+		if _eye_laser != null and is_instance_valid(_eye_laser) and _eye_laser.has_method("cancel"):
+			_eye_laser.call("cancel")
+		if _charged_blast != null and is_instance_valid(_charged_blast) and _charged_blast.has_method("cancel"):
+			_charged_blast.call("cancel")
+		_blast_charge = 0.0
 
 
 func toggle_character_editor() -> void:
@@ -727,6 +746,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 			KEY_M:
 				_request_infection_meteor()
+				get_viewport().set_input_as_handled()
+				return
+			KEY_U:
+				_request_undead_radar()
 				get_viewport().set_input_as_handled()
 				return
 	if event is InputEventMouseMotion and _rmb_looking:
@@ -1535,6 +1558,20 @@ func _aim_ray_at_cursor() -> Dictionary:
 func _request_infection_meteor() -> void:
 	var aim := _aim_ray_at_cursor()
 	meteor_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+
+
+func _request_undead_radar() -> void:
+	var root := _city_root()
+	if root == null:
+		push_error("CityWalker: undead radar — no CityRoot parent")
+		return
+	if root.has_method("request_undead_radar"):
+		var ok: bool = bool(root.call("request_undead_radar"))
+		if not ok:
+			## Cooldown / boot / game-over — still feedback via HUD timer when cooling.
+			pass
+	else:
+		push_error("CityWalker: CityRoot missing request_undead_radar")
 
 
 func _start_charged_blast_at_cursor() -> void:

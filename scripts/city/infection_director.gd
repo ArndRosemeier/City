@@ -165,21 +165,17 @@ func try_kill_lead_at_world(world_pos: Vector3) -> bool:
 
 
 func try_kill_lead_at_vox(vox: Vector3i) -> bool:
-	if not _lead_at.has(vox):
-		## Also accept any infection cell that is somehow the lead key mismatch.
-		_tool.channel = VoxelBuffer.CHANNEL_TYPE
-		if int(_tool.get_voxel(vox)) != VoxelMaterial.INFECTION_LEAD:
-			return false
-		## Scan tendrils for this lead.
-		for tid in _tendrils.keys():
-			var t: Dictionary = _tendrils[tid]
-			if t.get("lead") == vox:
-				_kill_tendril(int(tid))
-				return true
+	var tid := _tendril_id_for_lead_vox(vox)
+	if tid >= 0:
+		_kill_tendril(tid)
+		return true
+	## Orphan glowing tip (planted but never registered / forgotten without restore).
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	if int(_tool.get_voxel(vox)) != VoxelMaterial.INFECTION_LEAD:
 		return false
-	var tid2 := int(_lead_at[vox])
-	_kill_tendril(tid2)
-	return true
+	## No lineage to restore — at least clear the dead tip so it can't fake a killable head.
+	_set_voxel(vox, VoxelMaterial.AIR)
+	return false
 
 
 ## If any lead sits in the carved set, kill those tendrils (full revert).
@@ -193,26 +189,42 @@ func notify_voxels_carved(vox_list: Array) -> void:
 			vox = item
 		else:
 			continue
-		if not _lead_at.has(vox):
+		var tid := _tendril_id_for_lead_vox(vox)
+		if tid < 0:
 			continue
-		var tid := int(_lead_at[vox])
 		if seen.has(tid):
 			continue
 		seen[tid] = true
 		_kill_tendril(tid)
 
 
+func _tendril_id_for_lead_vox(vox: Vector3i) -> int:
+	if _lead_at.has(vox):
+		return int(_lead_at[vox])
+	## Fallback when map desynced — still match by tendril lead cell.
+	for tid in _tendrils.keys():
+		var t: Dictionary = _tendrils[tid]
+		if t.get("lead") == vox:
+			return int(tid)
+	return -1
+
+
 func invalidate_outside_aabb(world_aabb: AABB) -> void:
-	## Drop tendrils whose lead left the loaded detail bubble.
-	var kill: Array[int] = []
+	## Pause tips that left the loaded detail bubble — do NOT forget them.
+	## Forgetting dropped lineage + _lead_at while leaving glowing LEAD voxels in the world,
+	## so growth stopped and tip-kill could no longer revert (common when meteors land near
+	## the detail edge or the player walks toward a far undead wave).
 	for tid in _tendrils.keys():
 		var t: Dictionary = _tendrils[tid]
 		var lead: Vector3i = t["lead"]
 		var w := _vox_to_world(lead)
-		if not world_aabb.has_point(w):
-			kill.append(int(tid))
-	for tid2 in kill:
-		_forget_tendril(tid2)
+		var inside := world_aabb.has_point(w)
+		var was_suspended := bool(t.get("suspended", false))
+		if inside and was_suspended:
+			## Resuming — clear fail streak so a brief unload doesn't inert-retire.
+			t["fail_streak"] = 0
+		t["suspended"] = not inside
+		_tendrils[tid] = t
 
 
 func _physics_process(delta: float) -> void:
@@ -225,6 +237,8 @@ func _physics_process(delta: float) -> void:
 			_rr_ids.erase(tid)
 			continue
 		var t: Dictionary = _tendrils[tid]
+		if bool(t.get("suspended", false)):
+			continue
 		var accum := float(t.get("tick_accum", 0.0)) + delta
 		if accum < tick_interval_sec:
 			t["tick_accum"] = accum
@@ -239,6 +253,12 @@ func _advance_tendril(tid: int) -> bool:
 	var t: Dictionary = _tendrils[tid]
 	if not bool(t.get("alive", true)):
 		return false
+	## If something carved the tip without tip-kill (e.g. old undead stomps), replant it
+	## so growth continues and the player can still kill-to-revert.
+	_repair_lead_voxel(tid)
+	if not _tendrils.has(tid):
+		return false
+	t = _tendrils[tid]
 	var lead: Vector3i = t["lead"]
 	var cells: Dictionary = t["cells"]
 	var nxt := _pick_infect_neighbor(tid, lead)
@@ -275,6 +295,21 @@ func _advance_tendril(tid: int) -> bool:
 		return false
 	_retire_tendril_inert(tid)
 	return false
+
+
+func _repair_lead_voxel(tid: int) -> void:
+	if not _tendrils.has(tid) or _tool == null:
+		return
+	var t: Dictionary = _tendrils[tid]
+	var lead: Vector3i = t["lead"]
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var id := int(_tool.get_voxel(lead))
+	if id == VoxelMaterial.INFECTION_LEAD:
+		_lead_at[lead] = tid
+		return
+	## Tip voxel missing or demoted — restore a killable glowing head on the lineage tip.
+	_set_voxel(lead, VoxelMaterial.INFECTION_LEAD)
+	_lead_at[lead] = tid
 
 
 func _infect_step(tid: int, from_lead: Vector3i, target: Vector3i) -> void:
@@ -414,6 +449,11 @@ func _kill_tendril(tid: int) -> void:
 	if not _tendrils.has(tid):
 		return
 	var t: Dictionary = _tendrils[tid]
+	## Bank whatever value is left — kill early for the full 1000.
+	var remaining := maxi(int(t.get("value", 0)), 0)
+	if remaining > 0:
+		player_score += remaining
+		player_score_changed.emit(player_score)
 	var cells: Dictionary = t["cells"]
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	_tool.mode = VoxelTool.MODE_SET

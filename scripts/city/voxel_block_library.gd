@@ -1,6 +1,6 @@
 ## Builds a VoxelBlockyLibrary with city albedo textures.
-## Most types stay cubes. Detail types use VoxelBlockyModelMesh visuals with a
-## hidden unit-cube collision surface (CharacterBody physics treats them as solid blocks).
+## Most types stay cubes. Detail types use VoxelBlockyModelMesh visuals.
+## Park props (bark / leaves / planters / flowers) are visual-only — no collision.
 class_name VoxelBlockLibrary
 extends RefCounted
 
@@ -21,13 +21,14 @@ static func build() -> VoxelBlockyLibrary:
 static func _make_model(id: int) -> VoxelBlockyModel:
 	match id:
 		VoxelMaterial.PLANTER:
-			## Collision matches the low rim — not a full cell wall.
-			return _mesh_model(id, _mesh_planter(), false, false, AABB(Vector3(0.05, 0.0, 0.05), Vector3(0.9, 0.34, 0.9)))
+			## Visual only — park benches / planter rims must not snag giants or walkers.
+			return _mesh_model(id, _mesh_planter(), false, false, AABB(), false)
 		VoxelMaterial.LEAVES:
 			## Walk-through foliage.
 			return _mesh_model(id, _mesh_leaves(), false, false, AABB(), false)
 		VoxelMaterial.BARK:
-			return _mesh_model(id, _mesh_trunk(), false, false, AABB(Vector3(0.28, 0.0, 0.28), Vector3(0.44, 1.0, 0.44)))
+			## Trunk visuals only — dense groves were trapping large CharacterBodies.
+			return _mesh_model(id, _mesh_trunk(), false, false, AABB(), false)
 		VoxelMaterial.WATER:
 			## Pool surface only — don't trap the player in an invisible full cell.
 			return _mesh_model(id, _mesh_water(), true, false, AABB(Vector3(0.02, 0.15, 0.02), Vector3(0.96, 0.48, 0.96)))

@@ -140,6 +140,7 @@ func count_lod_tiers() -> Vector3i:
 func react_to_destruction(world_pos: Vector3, radius_m: float = -1.0) -> void:
 	var radius := radius_m if radius_m > 0.0 else flee_radius_m
 	var r2 := radius * radius
+	## Destruction panic still treats the player as the lasting threat to clear from.
 	var threat := _threat_position(world_pos)
 	for agent in _agents:
 		if agent == null or agent.dead:
@@ -148,15 +149,47 @@ func react_to_destruction(world_pos: Vector3, radius_m: float = -1.0) -> void:
 		var dz := agent.position.z - world_pos.z
 		if dx * dx + dz * dz > r2:
 			continue
-		_start_flee(agent, threat)
+		_start_flee(agent, threat, flee_clear_distance_m)
 
 
-func _start_flee(agent: PedAgent, danger: Vector3) -> void:
+## Scare peds near undead mages. threats = Array of Vector3.
+## force_away_path: always budget a flee repath (mages) instead of only sprinting the current walk.
+func scare_from_threats(threats: Array, trigger_m: float, clear_m: float) -> void:
+	if threats.is_empty():
+		return
+	var trigger_r2 := trigger_m * trigger_m
+	for agent in _agents:
+		if agent == null or agent.dead:
+			continue
+		var best := Vector3.INF
+		var best_d2 := trigger_r2
+		for t in threats:
+			var tp: Vector3 = t as Vector3
+			var dx := agent.position.x - tp.x
+			var dz := agent.position.z - tp.z
+			var d2 := dx * dx + dz * dz
+			if d2 > best_d2:
+				continue
+			best_d2 = d2
+			best = tp
+		if best == Vector3.INF:
+			continue
+		## First panic: path away. Already fleeing: refresh threat, keep current flee route.
+		var force_path := not agent.fleeing
+		_start_flee(agent, best, clear_m, force_path)
+
+
+func _start_flee(agent: PedAgent, danger: Vector3, clear_m: float = -1.0, force_away_path: bool = false) -> void:
 	agent.fleeing = true
 	agent.flee_from = danger
+	agent.flee_clear_m = clear_m if clear_m > 0.0 else flee_clear_distance_m
 	agent.next_decision_at = _time + 600.0
-	## Keep the current route if any — only mark sprint. Repath is budgeted.
-	if agent.state == PedAgent.State.WALK and agent.path_i < agent.waypoints.size():
+	## Destruction panic: keep current route and only sprint. Mage scare: path away.
+	if (
+		not force_away_path
+		and agent.state == PedAgent.State.WALK
+		and agent.path_i < agent.waypoints.size()
+	):
 		return
 	_enqueue_flee_repath(agent)
 
@@ -195,13 +228,12 @@ func _drain_flee_repath_queue() -> void:
 
 
 func _assign_flee_path(agent: PedAgent) -> void:
-	## Cheap greedy hop away from the player — no multi-sample BFS storm.
+	## Cheap greedy hop away from the stored threat — no multi-sample BFS storm.
 	if _roadmap == null or _roadmap.is_empty():
 		return
 	var from_node := _roadmap.nearest_node(agent.position)
 	if from_node < 0:
 		return
-	agent.flee_from = _threat_position(agent.flee_from)
 	var danger := agent.flee_from
 	var path := PackedVector3Array()
 	var node := from_node
@@ -264,6 +296,37 @@ func query_segment_hit(from: Vector3, to: Vector3) -> Dictionary:
 			"index": i,
 		}
 	return best
+
+
+## Nearest living ped within max_dist (XZ). Empty if none.
+func find_nearest_agent(world_pos: Vector3, max_dist: float) -> Dictionary:
+	var best: Dictionary = {}
+	var best_d2 := max_dist * max_dist
+	for i in range(_agents.size()):
+		var agent: PedAgent = _agents[i]
+		if agent == null or agent.dead:
+			continue
+		var d2 := Vector2(agent.position.x - world_pos.x, agent.position.z - world_pos.z).length_squared()
+		if d2 > best_d2:
+			continue
+		best_d2 = d2
+		best = {"agent": agent, "index": i, "position": agent.position}
+	return best
+
+
+## Remove a ped with no corpse (undead conversion). Returns former world position.
+func convert_agent_silent(agent: PedAgent) -> Vector3:
+	if agent == null or agent.dead:
+		return Vector3.INF
+	var pos := agent.position
+	agent.dead = true
+	agent.clear_path()
+	agent.next_decision_at = _time + 1.0e9
+	if agent.visual != null and is_instance_valid(agent.visual):
+		agent.visual.queue_free()
+	agent.visual = null
+	agent.lod = PedAgent.Lod.CULLED
+	return pos
 
 
 func kill_agent(agent: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bool:
@@ -416,16 +479,14 @@ func _physics_process(delta: float) -> void:
 
 
 func _simulate_agents(delta: float) -> void:
-	## Threat position once for the whole tick (not per fleeing agent).
-	var threat := _threat_position()
-	var clear_r2 := flee_clear_distance_m * flee_clear_distance_m
 	for agent in _agents:
 		if agent.dead:
 			continue
 		if agent.fleeing:
-			agent.flee_from = threat
-			var fdx := agent.position.x - threat.x
-			var fdz := agent.position.z - threat.z
+			var clear_m := agent.flee_clear_m if agent.flee_clear_m > 0.0 else flee_clear_distance_m
+			var clear_r2 := clear_m * clear_m
+			var fdx := agent.position.x - agent.flee_from.x
+			var fdz := agent.position.z - agent.flee_from.z
 			if fdx * fdx + fdz * fdz >= clear_r2:
 				agent.fleeing = false
 				agent.flee_repath_queued = false

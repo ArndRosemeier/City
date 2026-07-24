@@ -63,6 +63,25 @@ func visible_count() -> int:
 	return _visible_count
 
 
+## Footprints for minimap (XZ boxes). Only entries whose center is within radius.
+func get_footprints_near(origin: Vector3, radius_m: float) -> Array:
+	var out: Array = []
+	var r2 := radius_m * radius_m
+	for e in _entries:
+		if not (e is Dictionary):
+			continue
+		var center: Vector3 = e.get("center", Vector3.ZERO) as Vector3
+		var dx := center.x - origin.x
+		var dz := center.z - origin.z
+		if dx * dx + dz * dz > r2:
+			continue
+		out.append({
+			"center": center,
+			"size": e.get("size", Vector3(4, 4, 4)) as Vector3,
+		})
+	return out
+
+
 func _build_multimesh() -> void:
 	if DisplayServer.get_name() == "headless":
 		return

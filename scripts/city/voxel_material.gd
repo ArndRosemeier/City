@@ -75,6 +75,22 @@ static func is_building_fabric(id: int) -> bool:
 			return id > AIR and id < COUNT
 
 
+## Walls/props undead may stomp or nibble — never infection, meteor rock, or park trees.
+static func is_undead_structure_target(id: int) -> bool:
+	if is_infection(id) or id == METEOR_ROCK:
+		return false
+	if is_vegetation(id):
+		return false
+	if not is_building_fabric(id):
+		return false
+	return is_destructible(id)
+
+
+## Park / plaza greenery — giants and minions should ignore these.
+static func is_vegetation(id: int) -> bool:
+	return id == BARK or id == LEAVES or id == PLANTER
+
+
 static func is_destructible(id: int) -> bool:
 	## Laser / melee / blast carve targets. Infection body + meteor rock are immune;
 	## only the glowing tip (INFECTION_LEAD) stays player-killable.

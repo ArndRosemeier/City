@@ -21,10 +21,12 @@ var next_decision_at: float = 0.0
 var visual: Node3D = null
 ## Laser/melee kill — stops simulation; Death01 holds on the visual.
 var dead: bool = false
-## True while sprinting away from the player after witnessing destruction.
+## True while sprinting away from a threat (player destruction or undead mage).
 var fleeing: bool = false
-## Latest threat point (usually the player) to run away from.
+## Latest threat point to run away from.
 var flee_from: Vector3 = Vector3.ZERO
+## Stop fleeing once at least this far from flee_from.
+var flee_clear_m: float = 200.0
 ## Avoid duplicate entries in the budgeted flee-repath queue.
 var flee_repath_queued: bool = false
 

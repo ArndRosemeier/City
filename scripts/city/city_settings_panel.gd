@@ -6,6 +6,7 @@ signal closed
 signal opened
 signal settings_applied(settings: Dictionary)
 signal spawn_meteors_toggled(enabled: bool)
+signal undead_invasion_toggled(enabled: bool)
 
 const CONFIG_PATH := "user://city_graphics.cfg"
 ## Bump when defaults change so old user configs pick up the new baseline.
@@ -13,6 +14,7 @@ const CONFIG_VERSION := 2
 
 var _btn: Button
 var _spawn_meteors_check: CheckBox
+var _undead_invasion_check: CheckBox
 var _panel: PanelContainer
 var _dim: ColorRect
 var _open: bool = false
@@ -42,6 +44,10 @@ func get_settings() -> Dictionary:
 
 func is_spawn_meteors_enabled() -> bool:
 	return _spawn_meteors_check != null and _spawn_meteors_check.button_pressed
+
+
+func is_undead_invasion_enabled() -> bool:
+	return _undead_invasion_check != null and _undead_invasion_check.button_pressed
 
 
 func open_panel() -> void:
@@ -137,7 +143,7 @@ func _build_ui() -> void:
 	top_bar.focus_mode = Control.FOCUS_NONE
 	top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	top_bar.offset_left = -360.0
+	top_bar.offset_left = -520.0
 	top_bar.offset_top = 12.0
 	top_bar.offset_right = -16.0
 	top_bar.offset_bottom = 44.0
@@ -152,6 +158,14 @@ func _build_ui() -> void:
 	_spawn_meteors_check.button_pressed = false
 	_spawn_meteors_check.toggled.connect(_on_spawn_meteors_toggled)
 	top_bar.add_child(_spawn_meteors_check)
+
+	_undead_invasion_check = CheckBox.new()
+	_undead_invasion_check.name = "UndeadInvasionCheck"
+	_undead_invasion_check.text = "Undead invasion"
+	_undead_invasion_check.focus_mode = Control.FOCUS_NONE
+	_undead_invasion_check.button_pressed = false
+	_undead_invasion_check.toggled.connect(_on_undead_invasion_toggled)
+	top_bar.add_child(_undead_invasion_check)
 
 	_btn = Button.new()
 	_btn.name = "SettingsButton"
@@ -320,6 +334,10 @@ func _on_check(key: String, on: bool) -> void:
 
 func _on_spawn_meteors_toggled(on: bool) -> void:
 	spawn_meteors_toggled.emit(on)
+
+
+func _on_undead_invasion_toggled(on: bool) -> void:
+	undead_invasion_toggled.emit(on)
 
 
 func _emit_applied() -> void:

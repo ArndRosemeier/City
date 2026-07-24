@@ -16,6 +16,9 @@ const CitySettingsPanelScript := preload("res://scripts/city/city_settings_panel
 const InfectionDirectorScript := preload("res://scripts/city/infection_director.gd")
 const InfectionMeteorScript := preload("res://scripts/city/infection_meteor.gd")
 const InfectionTendrilHudScript := preload("res://scripts/city/infection_tendril_hud.gd")
+const UndeadInvasionDirectorScript := preload("res://scripts/city/undead_invasion_director.gd")
+const UndeadInvasionHudScript := preload("res://scripts/city/undead_invasion_hud.gd")
+const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
 
 @export var city_seed: int = 42
 @export var crowd_per_district: int = 96
@@ -35,6 +38,11 @@ var _debris_root: Node3D
 var _cascade: Node
 var _infection: Node
 var _tendril_hud: Node
+var _undead_hud: Node
+var _minimap: Node
+var _game_over_layer: CanvasLayer
+var _game_over_title: Label
+var _game_over_detail: Label
 ## Per-meteor crater sites: rock stays immune + purple beam until that site's tendrils end.
 var _meteor_sites: Dictionary = {}  # site_id → {tendrils, beam, impact_vox}
 var _tendril_to_meteor_site: Dictionary = {}  # tendril_id → site_id
@@ -42,7 +50,15 @@ var _next_meteor_site_id: int = 1
 var _spawn_meteors_enabled: bool = false
 var _meteor_spawn_accum: float = 0.0
 var _meteor_spawn_interval_sec: float = 120.0
+var _undead_invasion_enabled: bool = false
+var _undead: Node
 var _player_score: int = 0
+var _game_over: bool = false
+var _radar_cooldown_left: float = 0.0
+var _radar_reveal_left: float = 0.0
+const RADAR_COOLDOWN_SEC := 30.0
+## How long all undead stay painted on the minimap after U.
+const RADAR_REVEAL_SEC := 12.0
 var _audio: Node
 var _day_night: Node
 var _settings_panel: Node
@@ -193,14 +209,27 @@ func _build_hud() -> void:
 	_tendril_hud.name = "InfectionTendrilHud"
 	add_child(_tendril_hud)
 
+	_undead_hud = UndeadInvasionHudScript.new()
+	_undead_hud.name = "UndeadInvasionHud"
+	add_child(_undead_hud)
+
+	_minimap = CityMinimapScript.new()
+	_minimap.name = "CityMinimap"
+	add_child(_minimap)
+	_minimap.call("bind_city", self)
+
 	_status = Label.new()
 	_status.add_theme_font_size_override("font_size", 20)
 	_status.add_theme_color_override("font_color", Color(1, 0.92, 0.55))
 	_status.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_status.offset_left = -420.0
+	_status.offset_right = 420.0
 	_status.offset_top = -72
 	_status.offset_bottom = -40
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(_status)
+
+	_build_game_over_overlay()
 
 	_settings_panel = CitySettingsPanelScript.new()
 	_settings_panel.name = "CitySettings"
@@ -210,8 +239,61 @@ func _build_hud() -> void:
 	_settings_panel.closed.connect(_on_settings_closed)
 	if _settings_panel.has_signal("spawn_meteors_toggled"):
 		_settings_panel.spawn_meteors_toggled.connect(_on_spawn_meteors_toggled)
+	if _settings_panel.has_signal("undead_invasion_toggled"):
+		_settings_panel.undead_invasion_toggled.connect(_on_undead_invasion_toggled)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
+
+
+func _build_game_over_overlay() -> void:
+	_game_over_layer = CanvasLayer.new()
+	_game_over_layer.name = "GameOverOverlay"
+	_game_over_layer.layer = 40
+	_game_over_layer.visible = false
+	add_child(_game_over_layer)
+
+	var dim := ColorRect.new()
+	dim.name = "Dim"
+	dim.color = Color(0.02, 0.01, 0.04, 0.72)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_game_over_layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_game_over_layer.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 14)
+	center.add_child(box)
+
+	_game_over_title = Label.new()
+	_game_over_title.text = "GAME OVER"
+	_game_over_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_game_over_title.add_theme_font_size_override("font_size", 64)
+	_game_over_title.add_theme_color_override("font_color", Color(1.0, 0.35, 0.32))
+	_game_over_title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_game_over_title.add_theme_constant_override("outline_size", 8)
+	box.add_child(_game_over_title)
+
+	_game_over_detail = Label.new()
+	_game_over_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_game_over_detail.add_theme_font_size_override("font_size", 22)
+	_game_over_detail.add_theme_color_override("font_color", Color(0.95, 0.95, 0.92))
+	_game_over_detail.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_game_over_detail.add_theme_constant_override("outline_size", 4)
+	box.add_child(_game_over_detail)
+
+	var hint := Label.new()
+	hint.text = "Press Enter to retry"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 20)
+	hint.add_theme_color_override("font_color", Color(0.75, 0.95, 0.85))
+	hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
+	hint.add_theme_constant_override("outline_size", 3)
+	box.add_child(hint)
 
 
 func _on_spawn_meteors_toggled(enabled: bool) -> void:
@@ -226,9 +308,21 @@ func _on_spawn_meteors_toggled(enabled: bool) -> void:
 		print("CityRoot: auto meteor spawns OFF")
 
 
+func _on_undead_invasion_toggled(enabled: bool) -> void:
+	_undead_invasion_enabled = enabled
+	_ensure_undead_director()
+	if _undead != null and _undead.has_method("set_enabled"):
+		_undead.call("set_enabled", enabled)
+	if _undead_hud != null and is_instance_valid(_undead_hud):
+		if enabled:
+			_undead_hud.call("bind_director", _undead)
+		else:
+			_undead_hud.call("clear_display")
+
+
 func _roll_meteor_spawn_interval() -> void:
-	## Random 1–5 minutes between auto impacts.
-	_meteor_spawn_interval_sec = randf_range(60.0, 300.0)
+	## Random 1–3 minutes between auto impacts.
+	_meteor_spawn_interval_sec = randf_range(60.0, 180.0)
 
 func _on_settings_opened() -> void:
 	if _walker != null and is_instance_valid(_walker):
@@ -297,6 +391,10 @@ func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int
 func _process(delta: float) -> void:
 	_fps_accum += delta
 	_infection_stream_accum += delta
+	if _radar_cooldown_left > 0.0:
+		_radar_cooldown_left = maxf(0.0, _radar_cooldown_left - delta)
+	if _radar_reveal_left > 0.0:
+		_radar_reveal_left = maxf(0.0, _radar_reveal_left - delta)
 	if _infection_stream_accum >= 0.5:
 		_infection_stream_accum = 0.0
 		_invalidate_infection_outside_bubble()
@@ -320,7 +418,14 @@ func _process(delta: float) -> void:
 		if _infection != null and is_instance_valid(_infection) and _infection.has_method("get_player_score"):
 			score = int(_infection.call("get_player_score"))
 			_player_score = score
-		_hud.text = "%d FPS%s  Score: %d" % [Engine.get_frames_per_second(), clock, score]
+		var radar := ""
+		if _radar_reveal_left > 0.05:
+			radar = "  Radar: LIVE %.0fs" % _radar_reveal_left
+		elif _radar_cooldown_left > 0.05:
+			radar = "  Radar: %.0fs" % _radar_cooldown_left
+		else:
+			radar = "  Radar: ready (U)"
+		_hud.text = "%d FPS%s  Score: %d%s" % [Engine.get_frames_per_second(), clock, score, radar]
 
 
 func _create_terrain() -> void:
@@ -391,6 +496,177 @@ func _on_player_score_changed(score: int) -> void:
 	_player_score = score
 
 
+func adjust_player_score(delta: int) -> void:
+	var score := _player_score
+	if _infection != null and is_instance_valid(_infection) and _infection.has_method("get_player_score"):
+		score = int(_infection.call("get_player_score"))
+	score += delta
+	_player_score = score
+	if _infection != null and is_instance_valid(_infection):
+		_infection.player_score = score
+		if _infection.has_signal("player_score_changed"):
+			_infection.player_score_changed.emit(score)
+
+
+func get_player_position() -> Vector3:
+	if _walker != null and is_instance_valid(_walker) and not _game_over:
+		return _walker.global_position
+	return Vector3.INF
+
+
+func is_player_alive() -> bool:
+	return not _game_over and _walker != null and is_instance_valid(_walker)
+
+
+func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
+	var origin := Vector3.ZERO
+	var yaw := 0.0
+	if _walker != null and is_instance_valid(_walker):
+		origin = _walker.global_position
+		yaw = _walker.rotation.y
+	var buildings: Array = []
+	if _streamer != null and _streamer.has_method("get_loaded_districts"):
+		var districts: Array = _streamer.call("get_loaded_districts") as Array
+		for entry in districts:
+			var inst: DistrictInstance = entry as DistrictInstance
+			if inst == null or not is_instance_valid(inst) or inst.building_lod == null:
+				continue
+			if not inst.building_lod.has_method("get_footprints_near"):
+				continue
+			var more: Array = inst.building_lod.call("get_footprints_near", origin, range_m) as Array
+			for b in more:
+				buildings.append(b)
+	var undead: Array = []
+	var radar_on := _radar_reveal_left > 0.0
+	var range_r2 := range_m * range_m
+	if _undead != null and is_instance_valid(_undead) and _undead.has_method("get_alive_units"):
+		var units: Array = _undead.call("get_alive_units") as Array
+		for u in units:
+			if u == null or not is_instance_valid(u):
+				continue
+			var pos: Vector3 = (u as Node3D).global_position
+			var dx := pos.x - origin.x
+			var dz := pos.z - origin.z
+			var d2 := dx * dx + dz * dz
+			var outside := d2 > range_r2
+			## Nearby undead always paint; beyond-range only while radar is live.
+			if outside and not radar_on:
+				continue
+			var kind := "mage"
+			if bool(u.call("is_giant")):
+				kind = "giant"
+			elif int(u.get("role")) == 1:  ## UndeadUnit.Role.MINION
+				kind = "minion"
+			undead.append({"pos": pos, "kind": kind, "edge": outside})
+	var meteors: Array = []
+	for c in get_children():
+		if c == null or not is_instance_valid(c):
+			continue
+		if not str(c.name).begins_with("InfectionMeteor"):
+			continue
+		var mp: Vector3 = (c as Node3D).global_position
+		var mdx := mp.x - origin.x
+		var mdz := mp.z - origin.z
+		if mdx * mdx + mdz * mdz > range_m * range_m:
+			continue
+		meteors.append(mp)
+	if _terrain != null:
+		for site_id in _meteor_sites.keys():
+			var site: Dictionary = _meteor_sites[site_id]
+			var iv: Variant = site.get("impact_vox", null)
+			if iv == null:
+				continue
+			var vox: Vector3i = iv as Vector3i
+			var wp := _terrain.to_global(
+				Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+			)
+			var sdx := wp.x - origin.x
+			var sdz := wp.z - origin.z
+			if sdx * sdx + sdz * sdz > range_m * range_m:
+				continue
+			meteors.append(wp)
+	return {
+		"origin": origin,
+		"yaw": yaw,
+		"range_m": range_m,
+		"buildings": buildings,
+		"undead": undead,
+		"meteors": meteors,
+		"radar_active": radar_on,
+	}
+
+
+func get_player_target_position() -> Vector3:
+	## Chest-ish aim point so orbs track like a standing pedestrian.
+	if not is_player_alive():
+		return Vector3.INF
+	var s := float(_walker.get_character_scale())
+	return _walker.global_position + Vector3(0.0, 1.05 * s, 0.0)
+
+
+func trigger_game_over(reason: String = "Converted by undead") -> void:
+	if _game_over:
+		return
+	_game_over = true
+	_spawn_meteors_enabled = false
+	if _undead != null and is_instance_valid(_undead) and _undead.has_method("halt_waves"):
+		_undead.call("halt_waves")
+	if _walker != null and is_instance_valid(_walker):
+		if _walker.has_method("set_game_over_locked"):
+			_walker.call("set_game_over_locked", true)
+		_walker.velocity = Vector3.ZERO
+		_walker.release_capture()
+	if _game_over_detail != null:
+		_game_over_detail.text = reason
+	if _game_over_layer != null:
+		_game_over_layer.visible = true
+	_status.visible = false
+	print("CityRoot: GAME OVER — %s" % reason)
+
+
+func _hide_game_over_overlay() -> void:
+	if _game_over_layer != null:
+		_game_over_layer.visible = false
+
+
+func _retry_after_game_over() -> void:
+	if not _game_over or _booting:
+		return
+	## Clear immediately so double-Enter / _input+_unhandled can't double-regen.
+	_game_over = false
+	var want_undead := _undead_invasion_enabled
+	if _settings_panel != null and _settings_panel.has_method("is_undead_invasion_enabled"):
+		want_undead = bool(_settings_panel.call("is_undead_invasion_enabled"))
+	_undead_invasion_enabled = want_undead
+	if _settings_panel != null and _settings_panel.has_method("is_spawn_meteors_enabled"):
+		_spawn_meteors_enabled = bool(_settings_panel.call("is_spawn_meteors_enabled"))
+	_hide_game_over_overlay()
+	call_deferred("_regenerate")
+
+
+func _ensure_undead_director() -> void:
+	if _undead == null or not is_instance_valid(_undead):
+		_undead = UndeadInvasionDirectorScript.new()
+		_undead.name = "UndeadInvasion"
+		add_child(_undead)
+	_undead.call("setup", self)
+	if _undead_hud != null and is_instance_valid(_undead_hud) and _undead_invasion_enabled:
+		_undead_hud.call("bind_director", _undead)
+
+
+func request_undead_radar() -> bool:
+	if _game_over or _booting:
+		return false
+	if _radar_cooldown_left > 0.0:
+		return false
+	if _walker == null or not is_instance_valid(_walker):
+		return false
+	## Paint every living undead on the minimap (edge dots past 100 m). No world light pulse.
+	_radar_reveal_left = RADAR_REVEAL_SEC
+	_radar_cooldown_left = RADAR_COOLDOWN_SEC
+	return true
+
+
 func _on_tendril_killed(_tendril_id: int) -> void:
 	## Tip-kill restores terrain; vanish any loose infection-textured debris too.
 	if _cascade != null and is_instance_valid(_cascade) and _cascade.has_method("clear_infection_debris"):
@@ -405,6 +681,8 @@ func _regenerate() -> void:
 	if _booting:
 		return
 	_booting = true
+	_game_over = false
+	_hide_game_over_overlay()
 	_status.visible = true
 	_status.text = "Setting up VoxelTerrain…"
 	await get_tree().process_frame
@@ -423,13 +701,23 @@ func _regenerate() -> void:
 		_infection.call("clear_all")
 		_infection.queue_free()
 		_infection = null
+	if _undead != null and is_instance_valid(_undead):
+		_undead.call("clear_all")
+		_undead.queue_free()
+		_undead = null
 	_player_score = 0
+	_radar_cooldown_left = 0.0
+	_radar_reveal_left = 0.0
 	_clear_all_meteor_sites()
 	_meteor_spawn_accum = 0.0
 	if _spawn_meteors_enabled:
 		_roll_meteor_spawn_interval()
 	if _tendril_hud != null and is_instance_valid(_tendril_hud):
 		_tendril_hud.call("clear_display")
+	if _undead_hud != null and is_instance_valid(_undead_hud):
+		_undead_hud.call("clear_display")
+	if _minimap != null and is_instance_valid(_minimap):
+		_minimap.call("bind_city", self)
 	if _cascade != null and is_instance_valid(_cascade):
 		_cascade.clear_debris()
 		_cascade.queue_free()
@@ -558,6 +846,11 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_action_bar.setup(_walker)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
+	if _undead_invasion_enabled:
+		_ensure_undead_director()
+		_undead.call("set_enabled", true)
+		if _undead_hud != null and is_instance_valid(_undead_hud):
+			_undead_hud.call("bind_director", _undead)
 	print("CityRoot: playable — endless stream active at y=%.2f (M = infection meteor)" % floor_y)
 
 
@@ -839,13 +1132,31 @@ func _spawn_meteor_at(hit_point: Vector3) -> void:
 
 ## Random outdoor ground deck near the player — never building fabric.
 func _pick_ground_meteor_target() -> Vector3:
+	return _pick_ground_ring_target(50.0, 150.0)
+
+
+func pick_undead_spawn_point() -> Vector3:
+	return _pick_ground_ring_target(50.0, 150.0)
+
+
+func _pick_ground_ring_target(min_m: float, max_m: float) -> Vector3:
 	if _terrain == null or _tool == null or _walker == null or not is_instance_valid(_walker):
 		return Vector3.INF
+	## Keep impacts/spawns inside the infection detail bubble so tips aren't suspended on arrival.
+	var detail_m := 140.0
+	if _streamer != null:
+		detail_m = float(_streamer.get("voxel_detail_radius_m"))
+		if detail_m < 40.0:
+			detail_m = 40.0
+	var capped_max := minf(max_m, detail_m * 0.9)
+	var capped_min := minf(min_m, capped_max - 15.0)
+	if capped_min < 20.0:
+		capped_min = minf(20.0, capped_max * 0.35)
 	var origin := _walker.global_position
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	for _attempt in range(28):
 		var ang := randf() * TAU
-		var dist := randf_range(36.0, 120.0)
+		var dist := randf_range(capped_min, capped_max)
 		var wx := origin.x + cos(ang) * dist
 		var wz := origin.z + sin(ang) * dist
 		var local := _terrain.to_local(Vector3(wx, origin.y, wz))
@@ -870,6 +1181,320 @@ func _pick_ground_meteor_target() -> Vector3:
 			continue
 		return _terrain.to_global(Vector3(float(lx) + 0.5, float(found_y) + 0.95, float(lz) + 0.5))
 	return Vector3.INF
+
+
+func find_nearest_grow_pad(from: Vector3, max_dist: float) -> Node3D:
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return null
+	var best: Node3D = null
+	var best_d2 := max_dist * max_dist
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst) or inst.scale_pads == null:
+			continue
+		for pad in inst.scale_pads.get_children():
+			if pad == null or not is_instance_valid(pad):
+				continue
+			if not (pad is ScalePad):
+				continue
+			var sp := pad as ScalePad
+			if sp.kind != ScalePad.Kind.GROW:
+				continue
+			var d2 := Vector2(sp.global_position.x - from.x, sp.global_position.z - from.z).length_squared()
+			if d2 > best_d2:
+				continue
+			best_d2 = d2
+			best = sp
+	return best
+
+
+func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
+	var best := Vector3.INF
+	var best_d2 := max_dist * max_dist
+	## Player counts as a pedestrian target for mage aim.
+	if is_player_alive():
+		var ppos := get_player_target_position()
+		var pd2 := Vector2(ppos.x - from.x, ppos.z - from.z).length_squared()
+		if pd2 <= best_d2:
+			best_d2 = pd2
+			best = ppos
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return best
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
+			continue
+		var hit: Dictionary = inst.crowd.find_nearest_agent(from, max_dist)
+		if hit.is_empty():
+			continue
+		var pos: Vector3 = hit["position"] as Vector3
+		var d2 := Vector2(pos.x - from.x, pos.z - from.z).length_squared()
+		if d2 > best_d2:
+			continue
+		best_d2 = d2
+		best = pos
+	return best
+
+
+## Panic pedestrians near undead mages (trigger / clear distances in meters).
+func scare_crowd_from_mages(threats: Array, trigger_m: float, clear_m: float) -> void:
+	if threats.is_empty():
+		return
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
+			continue
+		inst.crowd.scare_from_threats(threats, trigger_m, clear_m)
+
+
+## Hit player or convert nearest ped near world_pos. Returns former position or null.
+func try_orb_hit_player(world_pos: Vector3, radius: float) -> bool:
+	if not is_player_alive():
+		return false
+	var ppos := get_player_target_position()
+	var hit_r := radius + 0.45 * float(_walker.get_character_scale())
+	if world_pos.distance_squared_to(ppos) > hit_r * hit_r:
+		return false
+	trigger_game_over("Undead conversion orb")
+	return true
+
+
+func try_convert_ped_near(world_pos: Vector3, radius: float) -> Variant:
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return null
+	var best_crowd: CrowdDirector = null
+	var best_agent: PedAgent = null
+	var best_d2 := radius * radius
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst: DistrictInstance = entry as DistrictInstance
+		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
+			continue
+		var hit: Dictionary = inst.crowd.find_nearest_agent(world_pos, radius)
+		if hit.is_empty():
+			continue
+		var pos: Vector3 = hit["position"] as Vector3
+		var d2 := pos.distance_squared_to(world_pos)
+		if d2 > best_d2:
+			continue
+		best_d2 = d2
+		best_crowd = inst.crowd
+		best_agent = hit["agent"] as PedAgent
+	if best_crowd == null or best_agent == null:
+		return null
+	var former: Vector3 = best_crowd.convert_agent_silent(best_agent)
+	if former == Vector3.INF:
+		return null
+	return former
+
+
+func undead_stomp_at(world_pos: Vector3, radius_m: float) -> void:
+	if _terrain == null or _tool == null:
+		return
+	## Cap carve size — giant scale used to push huge radii and melt remeshing.
+	var radius_vox := clampf(radius_m / VOXEL_SIZE, 1.5, 8.0)
+	var local := _terrain.to_local(world_pos)
+	var removed := _carve_building_sphere_counted(local, radius_vox)
+	if removed <= 0:
+		return
+	adjust_player_score(-removed)
+	_notify_destruction(world_pos, 28.0 + radius_vox)
+
+
+## Giant facade brush: peel full-height structure strips and tumble the debris.
+## inward = toward the wall, along = walk direction parallel to the facade.
+func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vector3) -> int:
+	if _terrain == null or _tool == null:
+		return 0
+	var into := inward
+	into.y = 0.0
+	if into.length_squared() < 0.0001:
+		return 0
+	into = into.normalized()
+	var side := along
+	side.y = 0.0
+	if side.length_squared() < 0.0001:
+		side = Vector3(-into.z, 0.0, into.x)
+	else:
+		side = side.normalized()
+	var local := _terrain.to_local(contact_world)
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	## March into the wall a few meters to find the outer facade column.
+	var hit := Vector3i(2147483647, 2147483647, 2147483647)
+	var found := false
+	for step in range(0, 14):
+		var p := local + into * (float(step) * 0.55)
+		var v := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
+		## Probe a short vertical range so we still catch mid-facade from street contact.
+		for dy in range(-2, 8):
+			var probe := Vector3i(v.x, v.y + dy, v.z)
+			var id := int(_tool.get_voxel(probe))
+			if not VoxelMaterial.is_undead_structure_target(id):
+				continue
+			hit = probe
+			found = true
+			break
+		if found:
+			break
+	if not found:
+		return 0
+	## Strip width along the walk + 1–2 voxels deep into the building.
+	var along_half := 2
+	var depth_vox := 2
+	var ix := Vector3i(int(round(into.x)), 0, int(round(into.z)))
+	if ix == Vector3i.ZERO:
+		## Diagonal inward — pick dominant axis.
+		if absf(into.x) >= absf(into.z):
+			ix = Vector3i(1 if into.x >= 0.0 else -1, 0, 0)
+		else:
+			ix = Vector3i(0, 0, 1 if into.z >= 0.0 else -1)
+	var sx := Vector3i(int(round(side.x)), 0, int(round(side.z)))
+	if sx == Vector3i.ZERO:
+		sx = Vector3i(-ix.z, 0, ix.x)
+	var detached: Array = []
+	const MAX_DEBRIS := 160
+	const MAX_HEIGHT_SCAN := 96
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.AIR
+	var removed := 0
+	## Tip-kill any infection heads in this scrape volume before carving.
+	var scrape_center := Vector3(float(hit.x) + 0.5, float(hit.y) + 0.5, float(hit.z) + 0.5)
+	_tip_kill_leads_in_sphere(scrape_center, 6.0)
+	for a in range(-along_half, along_half + 1):
+		for d in range(0, depth_vox):
+			var col_x := hit.x + sx.x * a + ix.x * d
+			var col_z := hit.z + sx.z * a + ix.z * d
+			## Find contiguous structure height in this column (street → roof).
+			var y_min := hit.y
+			var y_max := hit.y
+			for y in range(hit.y, hit.y - MAX_HEIGHT_SCAN, -1):
+				if y < 1:
+					break
+				var id_down := int(_tool.get_voxel(Vector3i(col_x, y, col_z)))
+				if not VoxelMaterial.is_undead_structure_target(id_down):
+					break
+				y_min = y
+			for y2 in range(hit.y, hit.y + MAX_HEIGHT_SCAN):
+				var id_up := int(_tool.get_voxel(Vector3i(col_x, y2, col_z)))
+				if not VoxelMaterial.is_undead_structure_target(id_up):
+					break
+				y_max = y2
+			for y3 in range(y_min, y_max + 1):
+				var vox := Vector3i(col_x, y3, col_z)
+				var mat_id := int(_tool.get_voxel(vox))
+				if not VoxelMaterial.is_undead_structure_target(mat_id):
+					continue
+				if detached.size() < MAX_DEBRIS:
+					detached.append({"vox": vox, "mat": mat_id})
+				_tool.do_point(vox)
+				removed += 1
+	if removed <= 0:
+		return 0
+	adjust_player_score(-removed)
+	var world_hit := _terrain.to_global(
+		Vector3(float(hit.x) + 0.5, float(hit.y) + 0.5, float(hit.z) + 0.5)
+	)
+	if _cascade != null and is_instance_valid(_cascade):
+		## Tumble the peeled face — no full-column cascade (that would drop whole towers).
+		if _cascade.has_method("detach_blast_voxels") and not detached.is_empty():
+			_cascade.call("detach_blast_voxels", detached, world_hit)
+	_notify_destruction(world_hit, 36.0)
+	return removed
+
+
+## Minion bite: remove one nearby building voxel (−1 score). No cascade.
+func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
+	if _terrain == null or _tool == null:
+		return false
+	var vox := _find_building_vox_near(world_pos, reach_m)
+	if vox == Vector3i(2147483647, 2147483647, 2147483647):
+		return false
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.AIR
+	_tool.do_point(vox)
+	adjust_player_score(-1)
+	var world := _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
+	_notify_destruction(world, 10.0)
+	return true
+
+
+## World position of a nearby building fabric voxel, or Vector3.INF.
+func find_nearest_building_nibble(from: Vector3, max_dist: float) -> Vector3:
+	var vox := _find_building_vox_near(from, max_dist)
+	if vox == Vector3i(2147483647, 2147483647, 2147483647):
+		return Vector3.INF
+	return _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
+
+
+func _find_building_vox_near(from: Vector3, max_dist: float) -> Vector3i:
+	const SENTINEL := Vector3i(2147483647, 2147483647, 2147483647)
+	if _terrain == null or _tool == null:
+		return SENTINEL
+	var local := _terrain.to_local(from)
+	var max_vox := maxi(int(ceil(max_dist / VOXEL_SIZE)), 2)
+	var ox := int(floor(local.x))
+	var oy := int(floor(local.y))
+	var oz := int(floor(local.z))
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var best := SENTINEL
+	var best_d2 := max_dist * max_dist
+	## Prefer facade voxels a bit above street level; spiral outward in XZ.
+	for r in range(0, max_vox + 1):
+		var found_this_ring := false
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if r > 0 and absi(dx) != r and absi(dz) != r:
+					continue
+				for dy in range(0, 10):
+					var v := Vector3i(ox + dx, oy + dy, oz + dz)
+					var id := int(_tool.get_voxel(v))
+					if not VoxelMaterial.is_undead_structure_target(id):
+						continue
+					var center := _terrain.to_global(
+						Vector3(float(v.x) + 0.5, float(v.y) + 0.5, float(v.z) + 0.5)
+					)
+					var world_d2 := center.distance_squared_to(from)
+					if world_d2 > best_d2:
+						continue
+					best_d2 = world_d2
+					best = v
+					found_this_ring = true
+		if found_this_ring and r >= 1:
+			## First ring with a hit is close enough — stop expanding.
+			break
+	return best
+
+
+func _carve_building_sphere_counted(local_center: Vector3, radius_vox: float) -> int:
+	## Giant stomps only hit building fabric — not roads / plazas / parks.
+	var removed := 0
+	var r_i := int(ceil(radius_vox)) + 1
+	var r2 := radius_vox * radius_vox
+	var cx := int(floor(local_center.x))
+	var cy := int(floor(local_center.y))
+	var cz := int(floor(local_center.z))
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.AIR
+	for z in range(cz - r_i, cz + r_i + 1):
+		for y in range(cy - r_i, cy + r_i + 1):
+			for x in range(cx - r_i, cx + r_i + 1):
+				var center := Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
+				if center.distance_squared_to(local_center) > r2 + 0.0001:
+					continue
+				var vox := Vector3i(x, y, z)
+				var id := int(_tool.get_voxel(vox))
+				if not VoxelMaterial.is_undead_structure_target(id):
+					continue
+				_tool.do_point(vox)
+				removed += 1
+	return removed
 
 
 func _on_meteor_impacted(world_pos: Vector3, seeds: Array, sky_beam: Node = null) -> void:
@@ -905,6 +1530,12 @@ func _on_meteor_impacted(world_pos: Vector3, seeds: Array, sky_beam: Node = null
 			spawned += 1
 			site_tendrils[tid] = true
 			_tendril_to_meteor_site[tid] = site_id
+		else:
+			## Meteor pre-planted a LEAD; registration failed (cap) — don't leave an orphan tip.
+			_tool.channel = VoxelBuffer.CHANNEL_TYPE
+			_tool.mode = VoxelTool.MODE_SET
+			_tool.value = prev_mat if prev_mat >= 0 else VoxelMaterial.METEOR_ROCK
+			_tool.do_point(vox)
 	## If capacity/plant glitches left us short, force more tips on nearby fabric.
 	var want_min := 2
 	if spawned < want_min and _infection.has_method("spawn_tendril_at_vox"):
@@ -1145,6 +1776,10 @@ func _apply_agent_hit(from: Vector3, to: Vector3, direction: Vector3) -> bool:
 		var vehicles: VehicleDirector = hit["vehicles"]
 		var v_agent: VehicleAgent = hit["agent"]
 		ok = vehicles.wreck_agent(v_agent, point, direction)
+	elif kind == "undead":
+		var undead: Node = hit["undead"]
+		var unit: Node = hit["unit"]
+		ok = bool(undead.call("kill_unit", unit))
 	if ok:
 		_notify_destruction(point, 34.0)
 	return ok
@@ -1179,11 +1814,25 @@ func _query_closest_agent_hit(from: Vector3, to: Vector3) -> Dictionary:
 					best = car_hit.duplicate()
 					best["kind"] = "vehicle"
 					best["vehicles"] = inst.vehicles
+	if _undead != null and is_instance_valid(_undead) and _undead.has_method("query_segment_hit"):
+		var u_hit: Dictionary = _undead.call("query_segment_hit", from, to)
+		if not u_hit.is_empty():
+			var d3: float = float(u_hit["distance"])
+			if d3 < best_dist:
+				best_dist = d3
+				best = u_hit.duplicate()
+				best["kind"] = "undead"
+				best["undead"] = _undead
 	return best
 
 
 func _carve_destructible_sphere(local_center: Vector3, radius_vox: float) -> void:
+	_carve_destructible_sphere_counted(local_center, radius_vox)
+
+
+func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float) -> int:
 	## Point carve only — skips infection body / meteor rock / bedrock / water.
+	var removed := 0
 	var r_i := int(ceil(radius_vox)) + 1
 	var r2 := radius_vox * radius_vox
 	var cx := int(floor(local_center.x))
@@ -1202,6 +1851,8 @@ func _carve_destructible_sphere(local_center: Vector3, radius_vox: float) -> voi
 				if not VoxelMaterial.is_destructible(int(_tool.get_voxel(vox))):
 					continue
 				_tool.do_point(vox)
+				removed += 1
+	return removed
 
 
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
@@ -1227,7 +1878,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_ESCAPE:
 				get_tree().quit()
+			KEY_ENTER, KEY_KP_ENTER:
+				if _game_over:
+					_retry_after_game_over()
+					get_viewport().set_input_as_handled()
 			KEY_N:
+				if _game_over:
+					return
 				if _day_night != null and _day_night.has_method("toggle_day_night"):
 					_day_night.call("toggle_day_night")
 				get_viewport().set_input_as_handled()
+
+
+func _input(event: InputEvent) -> void:
+	## Game-over retry must work even if another control ate unhandled input.
+	if not _game_over or _booting:
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			_retry_after_game_over()
+			get_viewport().set_input_as_handled()
