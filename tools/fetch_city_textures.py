@@ -12,17 +12,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "assets" / "city" / "textures"
 
-# ambientCG asset id -> destination filename (Color / albedo)
+# ambientCG asset id -> destination filename (Color / albedo).
+# Tower / wild facade maps (metal, plates, paint, tiles, roofs) are project-authored
+# in generate_city_textures.py — keep them out of this list so a refresh cannot
+# quietly flatten them back to ambientCG fillers.
 MANIFEST: dict[str, str] = {
     "Plaster001": "plaster.jpg",
-    "Metal049A": "metal.jpg",
     "Bricks097": "brick_dark.jpg",
     "Gravel023": "gravel.jpg",
     "Ground054": "dirt.jpg",
-    "Terrazzo013": "tiles.jpg",
-    "RoofingTiles013A": "roof_clay.jpg",
-    "MetalPlates006": "metal_plate.jpg",
-    "Paint001": "paint.jpg",
     "Bark014": "bark.jpg",
     "PavingStones128": "stone.jpg",
 }
@@ -124,6 +122,12 @@ def write_credits() -> None:
             "",
             "Project-authored (see generate_city_textures.py):",
             "- glass.jpg, water.jpg, leaves.jpg, curb.jpg, road_line.jpg, crosswalk.jpg",
+            "- metal.jpg / metal_normal.jpg — anodized curtain-wall panels",
+            "- metal_plate.jpg / metal_plate_normal.jpg — riveted industrial plates",
+            "- paint.jpg / paint_normal.jpg — painted plaster with crackle",
+            "- tiles.jpg / tiles_normal.jpg — glazed diamond ceramic",
+            "- roof.jpg / roof_normal.jpg — standing-seam metal roof",
+            "- roof_clay.jpg / roof_clay_normal.jpg — terracotta pantiles",
             "",
         ]
     )

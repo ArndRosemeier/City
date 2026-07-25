@@ -134,9 +134,11 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.weathering = 0.3
 		VoxelMaterial.TILES:
 			s.albedo_file = "tiles.jpg"
+			s.normal_file = "tiles_normal.jpg"
 			s.tile_meters = Vector2(2.0, 2.0)
-			s.roughness = 0.7
-			s.tint_variation = 0.4
+			s.roughness = 0.55
+			s.normal_strength = 0.9
+			s.tint_variation = 0.45
 			s.weathering = 0.3
 			s.streaks = 0.25
 		VoxelMaterial.PARK:
@@ -162,25 +164,32 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.weathering = 0.4
 		VoxelMaterial.ROOF:
 			s.albedo_file = "roof.jpg"
+			s.normal_file = "roof_normal.jpg"
 			s.tile_meters = Vector2(2.5, 2.5)
-			s.roughness = 0.75
+			s.roughness = 0.55
+			s.metallic = 0.35
+			s.normal_strength = 1.05
 			s.tint_variation = 0.45
 			s.weathering = 0.7
 		VoxelMaterial.ROOF_CLAY:
-			## Dark slate tiles, not red clay — keep weathering mild so it does not
-			## crush to black.
+			## Warm terracotta pantiles — authored courses so pitched roofs read at
+			## distance instead of crushing into a flat slate slab.
 			s.albedo_file = "roof_clay.jpg"
-			s.tile_meters = Vector2(1.6, 1.6)
+			s.normal_file = "roof_clay_normal.jpg"
+			s.tile_meters = Vector2(1.8, 1.4)
 			s.roughness = 0.78
+			s.normal_strength = 1.0
 			s.tint_variation = 0.4
 			s.weathering = 0.35
 		VoxelMaterial.METAL:
 			s.albedo_file = "metal.jpg"
-			s.tile_meters = Vector2(2.0, 2.0)
+			s.normal_file = "metal_normal.jpg"
+			s.tile_meters = Vector2(2.4, 3.2)
 			## Curtain-wall metal covers whole tower shafts, so it needs the strongest
 			## per-lot spread and weathering of any material or every tower matches.
-			s.roughness = 0.4
-			s.metallic = 0.8
+			s.roughness = 0.38
+			s.metallic = 0.82
+			s.normal_strength = 0.95
 			s.tint_variation = 0.55
 			s.weathering = 0.5
 			s.grime = 0.4
@@ -188,9 +197,11 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.streaks = 0.5
 		VoxelMaterial.METAL_PLATE:
 			s.albedo_file = "metal_plate.jpg"
-			s.tile_meters = Vector2(1.5, 1.5)
-			s.roughness = 0.5
-			s.metallic = 0.75
+			s.normal_file = "metal_plate_normal.jpg"
+			s.tile_meters = Vector2(1.6, 1.6)
+			s.roughness = 0.48
+			s.metallic = 0.78
+			s.normal_strength = 1.1
 			s.tint_variation = 0.6
 			s.weathering = 0.55
 			s.grime = 0.45
@@ -217,8 +228,10 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			## Accent bands and pilasters: the widest colour spread in the palette, so a
 			## banded shaft picks up a different accent hue per lot.
 			s.albedo_file = "paint.jpg"
-			s.tile_meters = Vector2(0.6, 0.6)
-			s.roughness = 0.7
+			s.normal_file = "paint_normal.jpg"
+			s.tile_meters = Vector2(1.8, 1.8)
+			s.roughness = 0.72
+			s.normal_strength = 0.55
 			s.tint_variation = 0.85
 			s.weathering = 0.35
 			s.streaks = 0.3
