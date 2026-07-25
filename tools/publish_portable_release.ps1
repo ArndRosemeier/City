@@ -224,8 +224,14 @@ Optional: run **install_city.bat** for shortcuts under ``%LOCALAPPDATA%\Programs
 ``city_voxel.dll`` is included. No Rust/Visual Studio build required.
 "@
 
-	$existing = & gh release view $Tag 2>&1
-	if ($LASTEXITCODE -eq 0) {
+	## "release not found" writes to stderr — must not trip $ErrorActionPreference Stop.
+	$prevEap = $ErrorActionPreference
+	$ErrorActionPreference = "Continue"
+	$null = & gh release view $Tag 2>&1
+	$viewCode = $LASTEXITCODE
+	$ErrorActionPreference = $prevEap
+
+	if ($viewCode -eq 0) {
 		Write-Step "Release $Tag exists - uploading/replacing asset..."
 		& gh release upload $Tag $ZipPath --clobber
 		if ($LASTEXITCODE -ne 0) {
