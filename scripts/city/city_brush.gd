@@ -1,14 +1,13 @@
-## Thin brush: live VoxelTool *or* OfflineVoxelVolume (thread-safe baking).
+## Thin brush: live VoxelTool *or* NativeOfflineVoxelVolume (thread-safe baking).
 ## Local district coords; live mode offsets by `origin` into world voxel space.
 class_name CityBrush
 extends RefCounted
 
-const OfflineVoxelVolumeScript := preload("res://scripts/city/offline_voxel_volume.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 
 var tool: VoxelTool
 var origin: Vector3i = Vector3i.ZERO
-## OfflineVoxelVolume / NativeOfflineVoxelVolume when baking off-thread; null in live mode.
+## NativeOfflineVoxelVolume when baking off-thread; null in live mode.
 var volume
 
 
@@ -25,8 +24,6 @@ func use_offline_volume(p_volume = null) -> void:
 		volume = p_volume
 	else:
 		volume = CityVoxelNativeScript.make_volume()
-		if volume == null:
-			volume = OfflineVoxelVolumeScript.new()
 	## Offline paints in local space; origin applied at commit time.
 	origin = Vector3i.ZERO
 

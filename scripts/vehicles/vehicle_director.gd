@@ -439,6 +439,8 @@ func _spawn_agents() -> void:
 func _physics_process(delta: float) -> void:
 	if _agents.is_empty():
 		return
+	CityProfiler.set_counter("vehicle_agents", _agents.size())
+	CityProfiler.begin("vehicles")
 	_time += delta
 	_drain_flee_repath_queue()
 	_occupancy_accum += delta
@@ -452,6 +454,7 @@ func _physics_process(delta: float) -> void:
 		_refresh_lod(false)
 	_update_frustum_visibility()
 	_sync_near_visuals()
+	CityProfiler.end("vehicles")
 
 
 func _refresh_crossing_occupancy() -> void:

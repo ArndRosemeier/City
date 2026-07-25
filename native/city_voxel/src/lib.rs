@@ -1,6 +1,9 @@
 use godot::prelude::*;
 use std::collections::HashMap;
 
+mod cascade_debris;
+mod materials;
+
 struct CityVoxelExtension;
 
 #[gdextension]
@@ -150,7 +153,9 @@ impl NativeOfflineVoxelVolume {
 
 impl NativeOfflineVoxelVolume {
     fn ensure_block(&mut self, bp: (i32, i32, i32)) -> &mut Vec<u8> {
-        self.blocks.entry(bp).or_insert_with(|| vec![0u8; BLOCK_VOXELS])
+        self.blocks
+            .entry(bp)
+            .or_insert_with(|| vec![0u8; BLOCK_VOXELS])
     }
 }
 

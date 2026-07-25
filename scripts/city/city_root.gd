@@ -5,10 +5,11 @@ extends Node3D
 const VOXEL_SIZE := 0.5
 const AirGeneratorScript := preload("res://scripts/city/air_generator.gd")
 const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library.gd")
+const CityWalkerScript := preload("res://scripts/city/city_walker.gd")
+const DistrictInstanceScript := preload("res://scripts/city/district_instance.gd")
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
-const VoxelCascadeDebrisScript := preload("res://scripts/city/voxel_cascade_debris.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
 const DayNightCycleScript := preload("res://scripts/city/day_night_cycle.gd")
@@ -30,7 +31,8 @@ const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
 var _streamer: Node
-var _walker: CityWalker
+## Typed as CharacterBody3D so portable installs work before global class_name cache exists.
+var _walker: CharacterBody3D
 var _hud: Label
 var _status: Label
 var _action_bar: Node
@@ -77,10 +79,8 @@ var _collision_view_vox: int = 48
 
 
 func _ready() -> void:
-	if CityVoxelNativeScript.ensure_loaded():
-		print("CityRoot: NativeOfflineVoxelVolume ready")
-	else:
-		print("CityRoot: using GDScript OfflineVoxelVolume fallback")
+	CityVoxelNativeScript.require_loaded()
+	print("CityRoot: city_voxel native ready (volume + cascade debris)")
 	_audio = CityAudioScript.new()
 	_audio.name = "CityAudio"
 	add_child(_audio)
@@ -161,9 +161,21 @@ func is_settings_open() -> bool:
 	return _settings_panel != null and bool(_settings_panel.call("is_open"))
 
 
+func _as_district_instance(entry: Variant) -> Variant:
+	## Resolve without relying on global class_name cache (portable installs).
+	if entry == null or not is_instance_valid(entry):
+		return null
+	if not (entry is Node):
+		return null
+	var node := entry as Node
+	if node.get_script() != DistrictInstanceScript:
+		return null
+	return entry
+
+
 func _on_night_factor_changed(night_factor: float) -> void:
 	_street_night_factor = clampf(night_factor, 0.0, 1.0)
-	VoxelBlockLibrary.set_glass_lit_night_factor(_street_night_factor)
+	VoxelBlockLibraryScript.set_glass_lit_night_factor(_street_night_factor)
 	_push_night_factor_to_street_lights()
 
 
@@ -172,8 +184,8 @@ func _push_night_factor_to_street_lights() -> void:
 		return
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
-		if inst == null or not is_instance_valid(inst):
+		var inst = _as_district_instance(entry)
+		if inst == null:
 			continue
 		if inst.street_props != null and is_instance_valid(inst.street_props):
 			if inst.street_props.has_method("set_night_factor"):
@@ -373,7 +385,7 @@ func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int
 		return
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
+		var inst = _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst):
 			continue
 		if inst.crowd != null and is_instance_valid(inst.crowd):
@@ -463,11 +475,32 @@ func _ensure_cascade_debris() -> void:
 		_debris_root.name = "DebrisRoot"
 		add_child(_debris_root)
 	if _cascade == null or not is_instance_valid(_cascade):
-		_cascade = VoxelCascadeDebrisScript.new()
-		_cascade.name = "VoxelCascadeDebris"
+		_cascade = CityVoxelNativeScript.make_cascade_debris()
+		_cascade.name = "NativeCascadeDebris"
 		add_child(_cascade)
-	_cascade.setup(_terrain, _tool, _debris_root, VOXEL_SIZE)
+		if _cascade.has_signal("debris_spawned"):
+			_cascade.connect("debris_spawned", Callable(self, "_on_native_debris_spawned"))
+	var mats: Array = []
+	mats.resize(VoxelMaterial.COUNT)
+	for i in VoxelMaterial.COUNT:
+		mats[i] = VoxelBlockLibraryScript.block_material_for(i)
+	_cascade.call(
+		"setup",
+		_terrain,
+		_tool,
+		_debris_root,
+		VOXEL_SIZE,
+		mats,
+		VoxelBuffer.CHANNEL_TYPE,
+		VoxelTool.MODE_SET,
+		VoxelMaterial.AIR
+	)
 	_ensure_infection_director()
+
+
+func _on_native_debris_spawned(world_pos: Vector3) -> void:
+	if _audio != null and _audio.has_method("play_debris"):
+		_audio.call("play_debris", world_pos)
 
 
 func _ensure_infection_director() -> void:
@@ -528,7 +561,7 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 	if _streamer != null and _streamer.has_method("get_loaded_districts"):
 		var districts: Array = _streamer.call("get_loaded_districts") as Array
 		for entry in districts:
-			var inst: DistrictInstance = entry as DistrictInstance
+			var inst = _as_district_instance(entry)
 			if inst == null or not is_instance_valid(inst) or inst.building_lod == null:
 				continue
 			if not inst.building_lod.has_method("get_footprints_near"):
@@ -776,7 +809,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 		spawn = gen.find_spawn_world(_tool)
 
 	_status.text = "Spawning player…"
-	_walker = CityWalker.new()
+	_walker = CityWalkerScript.new() as CharacterBody3D
 	_walker.name = "Walker"
 	add_child(_walker)
 	_walker.set_physics_process(false)
@@ -786,7 +819,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.melee_strike_requested.connect(_on_melee_strike)
 	_walker.stomp_requested.connect(_on_stomp)
 	_walker.meteor_requested.connect(_on_meteor_requested)
-	var cam := _walker.get_camera()
+	var cam: Camera3D = _walker.call("get_camera") as Camera3D
 	## Visuals out to settings radius; collisions only near the player (big remesh win).
 	_player_viewer = VoxelViewer.new()
 	_player_viewer.name = "VoxelViewer"
@@ -1190,7 +1223,7 @@ func find_nearest_grow_pad(from: Vector3, max_dist: float) -> Node3D:
 	var best_d2 := max_dist * max_dist
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
+		var inst = _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.scale_pads == null:
 			continue
 		for pad in inst.scale_pads.get_children():
@@ -1223,7 +1256,7 @@ func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
 		return best
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
+		var inst = _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
 			continue
 		var hit: Dictionary = inst.crowd.find_nearest_agent(from, max_dist)
@@ -1246,7 +1279,7 @@ func scare_crowd_from_mages(threats: Array, trigger_m: float, clear_m: float) ->
 		return
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
+		var inst = _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
 			continue
 		inst.crowd.scare_from_threats(threats, trigger_m, clear_m)
@@ -1272,7 +1305,7 @@ func try_convert_ped_near(world_pos: Vector3, radius: float) -> Variant:
 	var best_d2 := radius * radius
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
+		var inst = _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
 			continue
 		var hit: Dictionary = inst.crowd.find_nearest_agent(world_pos, radius)
@@ -1724,7 +1757,7 @@ func _notify_destruction(world_pos: Vector3, radius_m: float = 32.0) -> void:
 		return
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
+		var inst = _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst):
 			continue
 		if inst.crowd != null and is_instance_valid(inst.crowd):
@@ -1793,7 +1826,7 @@ func _query_closest_agent_hit(from: Vector3, to: Vector3) -> Dictionary:
 	var best_dist := INF
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
 	for entry in districts:
-		var inst: DistrictInstance = entry as DistrictInstance
+		var inst = _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst):
 			continue
 		## Crowd/traffic exist only after full bake (far tiles skip them).

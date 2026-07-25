@@ -1,4 +1,4 @@
-## Commits OfflineVoxelVolume block maps into a live VoxelTerrain (main thread only).
+## Commits NativeOfflineVoxelVolume block maps into a live VoxelTerrain (main thread only).
 class_name OfflineVolumeCommitter
 extends RefCounted
 

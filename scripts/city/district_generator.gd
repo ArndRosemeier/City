@@ -70,7 +70,7 @@ func begin_generate_offline(
 	p_origin: Vector3i,
 	p_coord: Vector2i
 ) -> void:
-	## Thread-safe path: paint into an OfflineVoxelVolume (no VoxelTool).
+	## Thread-safe path: paint into a NativeOfflineVoxelVolume (no VoxelTool).
 	origin_vox = p_origin
 	district_coord = p_coord
 	city_seed = seed_value
@@ -83,7 +83,7 @@ func begin_generate_offline(
 
 
 func get_offline_volume():
-	## Returns OfflineVoxelVolume when baking off-thread; otherwise null.
+	## Returns NativeOfflineVoxelVolume when baking off-thread; otherwise null.
 	if _brush == null:
 		return null
 	return _brush.volume

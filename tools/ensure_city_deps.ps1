@@ -86,9 +86,9 @@ function Assert-NativeDll {
 		Write-Step ("Native city_voxel.dll OK: " + $NativeDll)
 		return
 	}
-	Write-Step ("WARNING: city_voxel.dll missing at " + $NativeDll)
-	Write-Step "Rebuild with tools\build_city_voxel.ps1 if you need the fast native bake path."
-	Write-Step "Game still runs with the GDScript OfflineVoxelVolume fallback."
+	Write-Step ("ERROR: city_voxel.dll missing or too small at " + $NativeDll)
+	Write-Step "Rebuild with tools\build_city_voxel.ps1 — native code is required (no fallback)."
+	throw "city_voxel.dll required"
 }
 
 

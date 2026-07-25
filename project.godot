@@ -23,6 +23,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 ErrorOverlay="*res://scripts/debug/error_overlay.gd"
+CityProfiler="*res://scripts/debug/city_profiler.gd"
 
 [display]
 

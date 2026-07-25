@@ -72,7 +72,9 @@ if not exist "%INSTALL_DIR%" (
     exit /b 1
 )
 
-REM Core game data (skip VCS / build caches / this installer scratch).
+REM Core game data. Skip VCS/dev caches — NEVER copy a stale source .godot.
+REM Fresh class_name maps + imported assets are generated on the install copy below
+REM so new scripts / preloads / GLBs do not require installer script edits.
 robocopy "%ROOT%" "%INSTALL_DIR%" /E /NFL /NDL /NJH /NJS /nc /ns /np ^
     /XD .git .godot dist native .cursor ^
     /XF install_city.bat *.tmp *.log ^
@@ -92,6 +94,7 @@ if errorlevel 1 (
     if "%SILENT%"=="0" pause
     exit /b 1
 )
+set "INSTALL_GODOT=%INSTALL_DIR%\tools\godot\%GODOT_NAME%"
 
 REM Native bake helper (optional but preferred).
 if exist "%ROOT%\addons\city_voxel\bin\city_voxel.dll" (
@@ -104,6 +107,28 @@ if exist "%ROOT%\tools\ensure_city_deps.ps1" (
     if not exist "%INSTALL_DIR%\tools" mkdir "%INSTALL_DIR%\tools"
     copy /Y "%ROOT%\tools\ensure_city_deps.ps1" "%INSTALL_DIR%\tools\ensure_city_deps.ps1" >nul
 )
+
+REM Bake .godot for THIS install tree: class cache + imported preloads.
+REM This is what keeps packages current after gameplay changes.
+echo.
+echo Importing assets into install ^(Godot headless — may take a few minutes^)...
+"%INSTALL_GODOT%" --headless --path "%INSTALL_DIR%" --import
+if errorlevel 1 (
+    echo ERROR: Godot --import failed on the install folder.
+    if "%SILENT%"=="0" pause
+    exit /b 1
+)
+if not exist "%INSTALL_DIR%\.godot\global_script_class_cache.cfg" (
+    echo ERROR: .godot\global_script_class_cache.cfg missing after import.
+    if "%SILENT%"=="0" pause
+    exit /b 1
+)
+if not exist "%INSTALL_DIR%\.godot\imported" (
+    echo ERROR: .godot\imported was not created in the install folder.
+    if "%SILENT%"=="0" pause
+    exit /b 1
+)
+echo   Asset import OK.
 
 call :write_launcher "%INSTALL_DIR%\City.bat"
 call :write_uninstall "%INSTALL_DIR%\Uninstall_City.bat"
@@ -224,6 +249,14 @@ echo if not exist "%%ROOT%%project.godot" ^(
 echo     echo ERROR: project.godot missing in %%ROOT%%
 echo     pause
 echo     exit /b 1
+echo ^)
+echo if not exist "%%ROOT%%.godot\global_script_class_cache.cfg" ^(
+echo     echo Regenerating script class cache...
+echo     "%%GODOT_EXE%%" --headless --path "%%ROOT%%." --import
+echo ^)
+echo if not exist "%%ROOT%%.godot\imported" ^(
+echo     echo First-time asset import — please wait...
+echo     "%%GODOT_EXE%%" --headless --path "%%ROOT%%." --import
 echo ^)
 echo start "City" /MAX "%%GODOT_EXE%%" --path "%%ROOT%%." res://scenes/city_poc.tscn --maximized
 echo endlocal

@@ -6,6 +6,7 @@ crosswalks, and street lights. Showcase scene still available via `start.bat`.
 ## Requirements
 
 - Godot **4.6 + Voxel Tools** (`tools/godot/Godot_v4.6-voxel_win64.exe`) for the city POC
+- **`addons/city_voxel/bin/city_voxel.dll`** (required — bake volume + cascade debris; rebuild with `tools/build_city_voxel.ps1`)
 - Optional stock Godot 4.3+ for the human showcase (`start.bat` / `scenes/main.tscn`)
 
 ## Run (city)
@@ -32,16 +33,19 @@ install_city.bat /D "D:\Games\City"
 
 From the repo root, double-click **`make_installer.bat`**.
 
-That builds:
+That stages a clean copy, runs a full Godot import *on the staged folder*, and
+validates every `scripts/` file + `city_poc`:
 
-- `dist\CityPortable\` — full playable folder (includes engine)
-- `dist\City-Windows.zip` — zip that folder and send it to others
+- `dist\CityPortable\` — full playable folder (engine + fresh `.godot` import)
 
-Recipients unzip, then run **`City.bat`** (play) or **`install_city.bat`** (install + shortcuts).
+Zip that folder yourself if you want an archive. You should not need to edit the
+installer when adding scripts/assets — new content is picked up by the staged
+import + validation. Recipients run **`City.bat`** or **`install_city.bat`**.
+Keep the packaged `.godot` folder.
 
 (`tools\pack_city_portable.bat` is the older folder-only helper; prefer `make_installer.bat`.)
 
-Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **N** day/night · **Settings** (top-right) for quality.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **N** day/night · **F7** profiler overlay · **Settings** (top-right) for quality.
 
 ## Layout
 

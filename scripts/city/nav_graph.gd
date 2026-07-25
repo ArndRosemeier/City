@@ -293,6 +293,13 @@ func random_goal_by_path_length(
 
 
 func find_path(from_node: int, to_node: int) -> PackedInt32Array:
+	CityProfiler.begin("nav_find_path")
+	var out := _find_path_inner(from_node, to_node)
+	CityProfiler.end("nav_find_path")
+	return out
+
+
+func _find_path_inner(from_node: int, to_node: int) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	if from_node < 0 or to_node < 0 or from_node >= node_count or to_node >= node_count:
 		return out
