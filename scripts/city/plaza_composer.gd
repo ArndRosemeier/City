@@ -5,6 +5,9 @@ extends RefCounted
 var brush: CityBrush
 var rng: RandomNumberGenerator
 var ground_y: int = 1
+## Paving palette — set from the district theme.
+var pave_mat: int = VoxelMaterial.PLAZA
+var pave_inner_mat: int = VoxelMaterial.TILES
 
 
 func compose_grand(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -26,14 +29,14 @@ func compose_satellite(min_v: Vector3i, max_v: Vector3i) -> void:
 
 
 func _pave(min_v: Vector3i, max_v: Vector3i, grand: bool) -> void:
-	brush.fill_box(min_v, max_v, VoxelMaterial.PLAZA)
+	brush.fill_box(min_v, max_v, pave_mat)
 	if not grand:
 		return
 	var inset := 3
 	var inner_min := Vector3i(min_v.x + inset, min_v.y, min_v.z + inset)
 	var inner_max := Vector3i(max_v.x - inset, max_v.y, max_v.z - inset)
 	if inner_max.x > inner_min.x and inner_max.z > inner_min.z:
-		brush.fill_box(inner_min, inner_max, VoxelMaterial.TILES)
+		brush.fill_box(inner_min, inner_max, pave_inner_mat)
 
 
 func _edge_planters(min_v: Vector3i, max_v: Vector3i) -> void:

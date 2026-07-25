@@ -7,26 +7,66 @@ var rng: RandomNumberGenerator
 var ground_y: int = 1
 
 
+## Main promenade / loop path width in voxels (0.5 m each).
+const PROMENADE_W := 5
+const LOOP_W := 3
+## How far the loop path sits inside the park border.
+const LOOP_INSET := 7
+
+
 func compose_large(min_v: Vector3i, max_v: Vector3i) -> void:
+	var w := max_v.x - min_v.x
+	var d := max_v.z - min_v.z
+	if w < 30 or d < 30:
+		compose_pocket(min_v, max_v)
+		return
+	var along_x := w >= d
 	_lawn(min_v, max_v)
-	_cross_paths(min_v, max_v)
-	_pond(min_v, max_v)
-	_grove(min_v, max_v, 8 + rng.randi() % 6)
-	_hedge_beds(min_v, max_v)
+	## Layout order matters: paths first, then water, then anything that plants only
+	## on remaining lawn voxels — that keeps trees and beds off the walkways for free.
+	var promenade := _curved_path(min_v, max_v, along_x, PROMENADE_W, 0.0)
+	_loop_path(min_v, max_v)
+	var pond := _pond(min_v, max_v, along_x)
+	_pond_approach(min_v, max_v, pond, along_x)
+	_allee(min_v, max_v, promenade, along_x)
+	_groves(min_v, max_v)
+	_edge_planting(min_v, max_v)
+	_flower_beds(min_v, max_v)
+	_benches(min_v, max_v, promenade, along_x)
 
 
 func compose_pocket(min_v: Vector3i, max_v: Vector3i) -> void:
 	_lawn(min_v, max_v)
 	_simple_path(min_v, max_v)
-	_grove(min_v, max_v, 2 + rng.randi() % 2)
-	# Bench
-	var cx := (min_v.x + max_v.x) / 2
+	## Keep crowns clear of the surrounding street: a canopy is a few metres wide now.
+	for _i in range(3 + rng.randi() % 3):
+		var x := rng.randi_range(min_v.x + 5, max_v.x - 6)
+		var z := rng.randi_range(min_v.z + 5, max_v.z - 6)
+		if not _is_plantable(x, z):
+			continue
+		_tree_round(x, ground_y, z)
 	var cz := (min_v.z + max_v.z) / 2
-	brush.fill_box(
-		Vector3i(cx - 1, ground_y + 1, cz),
-		Vector3i(cx + 2, ground_y + 2, cz + 1),
-		VoxelMaterial.PLANTER
-	)
+	var bx := (min_v.x + max_v.x) / 2 - 1
+	var bz := cz + 3
+	if _area_is_lawn(bx, bz, 3, 1):
+		brush.fill_box(
+			Vector3i(bx, ground_y + 1, bz),
+			Vector3i(bx + 3, ground_y + 2, bz + 1),
+			VoxelMaterial.PLANTER
+		)
+	var fx := min_v.x + 4
+	var fz := min_v.z + 4
+	if _area_is_lawn(fx, fz, 4, 2):
+		brush.fill_box(
+			Vector3i(fx, ground_y + 1, fz),
+			Vector3i(fx + 4, ground_y + 2, fz + 2),
+			VoxelMaterial.PLANTER
+		)
+		brush.fill_box(
+			Vector3i(fx, ground_y + 2, fz),
+			Vector3i(fx + 4, ground_y + 3, fz + 2),
+			VoxelMaterial.PAINT
+		)
 
 
 func compose_courtyard_garden(hole_min: Vector3i, hole_max: Vector3i) -> void:
@@ -69,26 +109,50 @@ func _lawn(min_v: Vector3i, max_v: Vector3i) -> void:
 	brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 
 
-func _cross_paths(min_v: Vector3i, max_v: Vector3i) -> void:
-	var cx := (min_v.x + max_v.x) / 2
-	var cz := (min_v.z + max_v.z) / 2
-	brush.fill_box(
-		Vector3i(cx - 1, ground_y, min_v.z),
-		Vector3i(cx + 2, ground_y + 1, max_v.z),
-		VoxelMaterial.GRAVEL
-	)
-	brush.fill_box(
-		Vector3i(min_v.x, ground_y, cz - 1),
-		Vector3i(max_v.x, ground_y + 1, cz + 2),
-		VoxelMaterial.GRAVEL
-	)
-	# Diagonal meander accents
-	for t in range(min_v.x + 2, max_v.x - 2, 3):
-		var z := min_v.z + 2 + ((t - min_v.x) % maxi(1, max_v.z - min_v.z - 4))
-		if z >= max_v.z - 1:
-			continue
-		brush.set_vox(Vector3i(t, ground_y, z), VoxelMaterial.GRAVEL)
-		brush.set_vox(Vector3i(t + 1, ground_y, z), VoxelMaterial.GRAVEL)
+## Meandering promenade across the long axis. Returns the centre line so plantings and
+## benches can follow it. Entry x for along_x paths, entry z otherwise.
+func _curved_path(
+	min_v: Vector3i, max_v: Vector3i, along_x: bool, width: int, phase_offset: float
+) -> PackedInt32Array:
+	var centers := PackedInt32Array()
+	var phase := rng.randf() * TAU + phase_offset
+	var span := float(max_v.z - min_v.z) if along_x else float(max_v.x - min_v.x)
+	var amp := span * 0.13
+	var run := (max_v.x - min_v.x) if along_x else (max_v.z - min_v.z)
+	var mid := float(min_v.z + max_v.z) * 0.5 if along_x else float(min_v.x + max_v.x) * 0.5
+	centers.resize(run)
+	for i in range(run):
+		var t := float(i)
+		var c := mid + sin(t * 0.042 + phase) * amp + sin(t * 0.015 + phase * 1.7) * amp * 0.45
+		var ci := int(round(c))
+		centers[i] = ci
+		var lo := ci - width / 2
+		for k in range(width):
+			var cross := lo + k
+			if along_x:
+				if cross <= min_v.z or cross >= max_v.z - 1:
+					continue
+				brush.set_vox(Vector3i(min_v.x + i, ground_y, cross), VoxelMaterial.GRAVEL)
+			else:
+				if cross <= min_v.x or cross >= max_v.x - 1:
+					continue
+				brush.set_vox(Vector3i(cross, ground_y, min_v.z + i), VoxelMaterial.GRAVEL)
+	return centers
+
+
+func _loop_path(min_v: Vector3i, max_v: Vector3i) -> void:
+	## Strolling loop just inside the border — gives the park an edge to read against
+	## the surrounding sidewalk instead of a lawn that stops mid-air.
+	var x0 := min_v.x + LOOP_INSET
+	var z0 := min_v.z + LOOP_INSET
+	var x1 := max_v.x - LOOP_INSET
+	var z1 := max_v.z - LOOP_INSET
+	if x1 - x0 < LOOP_W * 3 or z1 - z0 < LOOP_W * 3:
+		return
+	brush.fill_box(Vector3i(x0, ground_y, z0), Vector3i(x1, ground_y + 1, z0 + LOOP_W), VoxelMaterial.GRAVEL)
+	brush.fill_box(Vector3i(x0, ground_y, z1 - LOOP_W), Vector3i(x1, ground_y + 1, z1), VoxelMaterial.GRAVEL)
+	brush.fill_box(Vector3i(x0, ground_y, z0), Vector3i(x0 + LOOP_W, ground_y + 1, z1), VoxelMaterial.GRAVEL)
+	brush.fill_box(Vector3i(x1 - LOOP_W, ground_y, z0), Vector3i(x1, ground_y + 1, z1), VoxelMaterial.GRAVEL)
 
 
 func _simple_path(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -100,24 +164,114 @@ func _simple_path(min_v: Vector3i, max_v: Vector3i) -> void:
 	)
 
 
-func _pond(min_v: Vector3i, max_v: Vector3i) -> void:
-	var cx := (min_v.x + max_v.x) / 2 + rng.randi_range(-3, 3)
-	var cz := (min_v.z + max_v.z) / 2 + rng.randi_range(-2, 2)
-	var rx := 4 + rng.randi() % 3
-	var rz := 3 + rng.randi() % 2
-	for z in range(cz - rz, cz + rz + 1):
-		for x in range(cx - rx, cx + rx + 1):
+## Pond scaled to the park (the old fixed 4 m puddle vanished in a 100 m park).
+## Returns its voxel footprint, or an empty rect when no clear spot was found.
+func _pond(min_v: Vector3i, max_v: Vector3i, along_x: bool) -> Rect2i:
+	var w := max_v.x - min_v.x
+	var d := max_v.z - min_v.z
+	var rx := clampi(int(float(w) * 0.15), 5, 24)
+	var rz := clampi(int(float(d) * 0.17), 4, 18)
+	## Wobble the outline so it does not read as a stamped ellipse.
+	var p1 := rng.randf() * TAU
+	var p2 := rng.randf() * TAU
+	for _try in range(6):
+		## Sit in one quadrant, off the promenade's own axis.
+		var fx := 0.3 if rng.randf() < 0.5 else 0.7
+		var fz := 0.28 if rng.randf() < 0.5 else 0.72
+		if along_x:
+			fx = rng.randf() * 0.4 + 0.15 if rng.randf() < 0.5 else rng.randf() * 0.4 + 0.45
+		var cx := min_v.x + int(float(w) * fx)
+		var cz := min_v.z + int(float(d) * fz)
+		var cells := _pond_cells(min_v, max_v, cx, cz, rx, rz, p1, p2)
+		if cells.is_empty():
+			continue
+		var blocked := 0
+		for c: Vector3i in cells:
+			if brush.get_vox(c) != VoxelMaterial.PARK:
+				blocked += 1
+		## A pond that swallows a walkway looks like a bug, so retry elsewhere.
+		if float(blocked) / float(cells.size()) > 0.04:
+			continue
+		for c2: Vector3i in cells:
+			brush.set_vox(c2, VoxelMaterial.WATER)
+		_pond_rim(min_v, max_v, cx, cz, rx, rz, p1, p2)
+		return Rect2i(cx - rx, cz - rz, rx * 2, rz * 2)
+	return Rect2i()
+
+
+func _pond_cells(
+	min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, rx: int, rz: int, p1: float, p2: float
+) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	for z in range(cz - rz - 1, cz + rz + 2):
+		for x in range(cx - rx - 1, cx + rx + 2):
+			if x < min_v.x + 3 or z < min_v.z + 3 or x >= max_v.x - 3 or z >= max_v.z - 3:
+				return []
+			if _pond_norm(x, z, cx, cz, rx, rz, p1, p2) > 1.0:
+				continue
+			out.append(Vector3i(x, ground_y, z))
+	return out
+
+
+func _pond_rim(
+	min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, rx: int, rz: int, p1: float, p2: float
+) -> void:
+	for z in range(cz - rz - 2, cz + rz + 3):
+		for x in range(cx - rx - 2, cx + rx + 3):
 			if x < min_v.x + 2 or z < min_v.z + 2 or x >= max_v.x - 2 or z >= max_v.z - 2:
 				continue
-			var nx := float(x - cx) / float(rx)
-			var nz := float(z - cz) / float(rz)
-			if nx * nx + nz * nz > 1.0:
+			var n := _pond_norm(x, z, cx, cz, rx, rz, p1, p2)
+			if n <= 1.0 or n > 1.4:
 				continue
-			var edge := nx * nx + nz * nz > 0.72
-			if edge:
-				brush.set_vox(Vector3i(x, ground_y, z), VoxelMaterial.STONE)
-			else:
-				brush.set_vox(Vector3i(x, ground_y, z), VoxelMaterial.WATER)
+			if brush.get_vox(Vector3i(x, ground_y, z)) != VoxelMaterial.PARK:
+				continue
+			brush.set_vox(Vector3i(x, ground_y, z), VoxelMaterial.STONE)
+
+
+func _pond_norm(
+	x: int, z: int, cx: int, cz: int, rx: int, rz: int, p1: float, p2: float
+) -> float:
+	var nx := float(x - cx) / float(rx)
+	var nz := float(z - cz) / float(rz)
+	var a := atan2(nz, nx)
+	var wobble := 1.0 + 0.16 * sin(3.0 * a + p1) + 0.1 * sin(5.0 * a + p2)
+	return (nx * nx + nz * nz) / (wobble * wobble)
+
+
+func _pond_approach(min_v: Vector3i, max_v: Vector3i, pond: Rect2i, along_x: bool) -> void:
+	## Short spur from the loop path to the water's edge, plus a gravel overlook.
+	if pond.size.x <= 0:
+		return
+	var cx := pond.position.x + pond.size.x / 2
+	var cz := pond.position.y + pond.size.y / 2
+	if along_x:
+		var near_top := cz < (min_v.z + max_v.z) / 2
+		var z_loop := min_v.z + LOOP_INSET + LOOP_W if near_top else max_v.z - LOOP_INSET - LOOP_W
+		var z_shore := cz - pond.size.y / 2 - 2 if near_top else cz + pond.size.y / 2 + 2
+		_spur_z(cx, mini(z_loop, z_shore), maxi(z_loop, z_shore))
+	else:
+		var near_left := cx < (min_v.x + max_v.x) / 2
+		var x_loop := min_v.x + LOOP_INSET + LOOP_W if near_left else max_v.x - LOOP_INSET - LOOP_W
+		var x_shore := cx - pond.size.x / 2 - 2 if near_left else cx + pond.size.x / 2 + 2
+		_spur_x(cz, mini(x_loop, x_shore), maxi(x_loop, x_shore))
+
+
+func _spur_z(x: int, z_from: int, z_to: int) -> void:
+	for z in range(z_from, z_to + 1):
+		for k in range(-1, 2):
+			_pave_if_lawn(Vector3i(x + k, ground_y, z))
+
+
+func _spur_x(z: int, x_from: int, x_to: int) -> void:
+	for x in range(x_from, x_to + 1):
+		for k in range(-1, 2):
+			_pave_if_lawn(Vector3i(x, ground_y, z + k))
+
+
+func _pave_if_lawn(p: Vector3i) -> void:
+	if brush.get_vox(p) != VoxelMaterial.PARK:
+		return
+	brush.set_vox(p, VoxelMaterial.GRAVEL)
 
 
 func _grove(min_v: Vector3i, max_v: Vector3i, count: int) -> void:
@@ -129,31 +283,161 @@ func _grove(min_v: Vector3i, max_v: Vector3i, count: int) -> void:
 		_tree(x, ground_y, z)
 
 
-func _hedge_beds(min_v: Vector3i, max_v: Vector3i) -> void:
-	## Sparse flower boxes / short hedges along a loose grid — not a field of pillars.
+func _allee(
+	min_v: Vector3i, max_v: Vector3i, centers: PackedInt32Array, along_x: bool
+) -> void:
+	## Formal tree rows flanking the promenade, following its curve. Spacing keeps the
+	## crowns apart — closer together they merged into one canopy roof over the path.
+	var step := 11
+	var off := PROMENADE_W / 2 + 3
+	var i := 4
+	while i < centers.size() - 4:
+		var c := centers[i]
+		var sides := PackedInt32Array([-off, off])
+		for side in sides:
+			var x: int = min_v.x + i if along_x else c + side
+			var z: int = c + side if along_x else min_v.z + i
+			if x < min_v.x + 2 or z < min_v.z + 2 or x >= max_v.x - 2 or z >= max_v.z - 2:
+				continue
+			if not _is_plantable(x, z):
+				continue
+			_tree_tall(x, ground_y, z)
+		i += step
+
+
+func _groves(min_v: Vector3i, max_v: Vector3i) -> void:
+	## Clustered planting: a handful of grove centres with a scatter of mixed trees
+	## around each, so the lawn reads as landscaping instead of evenly spread dots.
+	var w := max_v.x - min_v.x
+	var d := max_v.z - min_v.z
+	var clusters := clampi((w * d) / 1100, 3, 14)
+	for _c in range(clusters):
+		var gx := rng.randi_range(min_v.x + 5, max_v.x - 6)
+		var gz := rng.randi_range(min_v.z + 5, max_v.z - 6)
+		var spread := rng.randi_range(4, 9)
+		var trees := rng.randi_range(3, 7)
+		## Worn earth under the canopy — breaks the uniform green.
+		for z in range(gz - spread / 2, gz + spread / 2 + 1):
+			for x in range(gx - spread / 2, gx + spread / 2 + 1):
+				if brush.get_vox(Vector3i(x, ground_y, z)) != VoxelMaterial.PARK:
+					continue
+				if rng.randf() < 0.35:
+					brush.set_vox(Vector3i(x, ground_y, z), VoxelMaterial.DIRT)
+		for _t in range(trees):
+			var tx := gx + rng.randi_range(-spread, spread)
+			var tz := gz + rng.randi_range(-spread, spread)
+			if tx < min_v.x + 2 or tz < min_v.z + 2 or tx >= max_v.x - 2 or tz >= max_v.z - 2:
+				continue
+			if not _is_plantable(tx, tz):
+				continue
+			_tree(tx, ground_y, tz)
+
+
+func _edge_planting(min_v: Vector3i, max_v: Vector3i) -> void:
+	## Hedge band around the border with gaps where paths reach the street, so the park
+	## has a frame instead of a lawn that simply stops.
 	var y0 := ground_y
-	for z in range(min_v.z + 4, max_v.z - 4, 11):
-		for x in range(min_v.x + 4, max_v.x - 4, 9):
-			if brush.get_vox(Vector3i(x, y0, z)) != VoxelMaterial.PARK:
-				continue
-			if rng.randf() < 0.35:
-				continue
-			# 2×1 planter box with leaf hedge on top.
-			var x1 := x + 1
-			if brush.get_vox(Vector3i(x1, y0, z)) != VoxelMaterial.PARK:
-				x1 = x
+	var inset := 2
+	for x in range(min_v.x + inset, max_v.x - inset):
+		_hedge_run(x, min_v.z + inset, y0)
+		_hedge_run(x, max_v.z - inset - 1, y0)
+	for z in range(min_v.z + inset, max_v.z - inset):
+		_hedge_run(min_v.x + inset, z, y0)
+		_hedge_run(max_v.x - inset - 1, z, y0)
+
+
+func _hedge_run(x: int, z: int, y0: int) -> void:
+	if not _is_plantable(x, z):
+		return
+	## Broken line, not a wall: leave roughly a fifth of the run open.
+	if rng.randf() < 0.2:
+		return
+	brush.set_vox(Vector3i(x, y0 + 1, z), VoxelMaterial.LEAVES)
+	if rng.randf() < 0.55:
+		brush.set_vox(Vector3i(x, y0 + 2, z), VoxelMaterial.LEAVES)
+
+
+func _flower_beds(min_v: Vector3i, max_v: Vector3i) -> void:
+	## A few real beds beside the walkways, replacing the old lattice of 300 identical
+	## planter boxes that read as scattered crates.
+	var target := clampi((max_v.x - min_v.x) * (max_v.z - min_v.z) / 2600, 3, 9)
+	var made := 0
+	var tries := 0
+	while made < target and tries < 120:
+		tries += 1
+		var bw := rng.randi_range(4, 9)
+		var bd := rng.randi_range(2, 3)
+		if rng.randf() < 0.5:
+			var swap := bw
+			bw = bd
+			bd = swap
+		var x0 := rng.randi_range(min_v.x + 4, max_v.x - 5 - bw)
+		var z0 := rng.randi_range(min_v.z + 4, max_v.z - 5 - bd)
+		if not _area_is_lawn(x0, z0, bw, bd):
+			continue
+		if not _near_path(x0, z0, bw, bd):
+			continue
+		var y0 := ground_y
+		brush.fill_box(
+			Vector3i(x0, y0 + 1, z0), Vector3i(x0 + bw, y0 + 2, z0 + bd), VoxelMaterial.PLANTER
+		)
+		var bloom := VoxelMaterial.PAINT if rng.randf() < 0.6 else VoxelMaterial.LEAVES
+		brush.fill_box(
+			Vector3i(x0, y0 + 2, z0), Vector3i(x0 + bw, y0 + 3, z0 + bd), bloom
+		)
+		made += 1
+
+
+func _benches(
+	min_v: Vector3i, max_v: Vector3i, centers: PackedInt32Array, along_x: bool
+) -> void:
+	var step := 17
+	var off := PROMENADE_W / 2 + 1
+	var i := 9
+	while i < centers.size() - 9:
+		var c := centers[i]
+		var side := off if (i / step) % 2 == 0 else -off
+		var x := min_v.x + i if along_x else c + side
+		var z := c + side if along_x else min_v.z + i
+		if x < min_v.x + 3 or z < min_v.z + 3 or x >= max_v.x - 4 or z >= max_v.z - 4:
+			i += step
+			continue
+		if along_x:
+			if _area_is_lawn(x, z, 1, 3):
+				brush.fill_box(
+					Vector3i(x, ground_y + 1, z),
+					Vector3i(x + 1, ground_y + 2, z + 3),
+					VoxelMaterial.PLANTER
+				)
+		elif _area_is_lawn(x, z, 3, 1):
 			brush.fill_box(
-				Vector3i(x, y0 + 1, z),
-				Vector3i(x1 + 1, y0 + 2, z + 1),
+				Vector3i(x, ground_y + 1, z),
+				Vector3i(x + 3, ground_y + 2, z + 1),
 				VoxelMaterial.PLANTER
 			)
-			brush.fill_box(
-				Vector3i(x, y0 + 2, z),
-				Vector3i(x1 + 1, y0 + 3, z + 1),
-				VoxelMaterial.LEAVES
-			)
-			if rng.randf() < 0.4:
-				brush.set_vox(Vector3i(x, y0 + 3, z), VoxelMaterial.PAINT)
+		i += step
+
+
+func _is_plantable(x: int, z: int) -> bool:
+	## Lawn or bare earth: keeps paths, water and stone rims clear without extra bookkeeping.
+	var id := brush.get_vox(Vector3i(x, ground_y, z))
+	return id == VoxelMaterial.PARK or id == VoxelMaterial.DIRT
+
+
+func _area_is_lawn(x0: int, z0: int, w: int, d: int) -> bool:
+	for z in range(z0, z0 + d):
+		for x in range(x0, x0 + w):
+			if not _is_plantable(x, z):
+				return false
+	return true
+
+
+func _near_path(x0: int, z0: int, w: int, d: int) -> bool:
+	for z in range(z0 - 2, z0 + d + 2):
+		for x in range(x0 - 2, x0 + w + 2):
+			if brush.get_vox(Vector3i(x, ground_y, z)) == VoxelMaterial.GRAVEL:
+				return true
+	return false
 
 
 func _tree(x: int, y0: int, z: int) -> void:
@@ -167,49 +451,46 @@ func _tree(x: int, y0: int, z: int) -> void:
 			_tree_wide(x, y0, z)
 
 
+## Voxels are 0.5 m, so the old 3-voxel trunks and single leaf plate were 1.5 m shrubs
+## on sticks. Park trees are sized in real metres: 3–7 m of trunk under a canopy that is
+## several metres across and tall enough to read as a volume from the ground.
 func _tree_round(x: int, y0: int, z: int) -> void:
-	var trunk_h := 3 + rng.randi() % 4
+	var trunk_h := 5 + rng.randi() % 3
+	var r := 3 + rng.randi() % 2
 	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	var canopy_y := y0 + trunk_h
-	for dz in range(-2, 3):
-		for dx in range(-2, 3):
-			if absi(dx) == 2 and absi(dz) == 2:
-				continue
-			brush.set_vox(Vector3i(x + dx, canopy_y, z + dz), VoxelMaterial.LEAVES)
-			if absi(dx) + absi(dz) <= 2:
-				brush.set_vox(Vector3i(x + dx, canopy_y + 1, z + dz), VoxelMaterial.LEAVES)
+	_canopy(x, y0 + trunk_h + r - 2, z, r, r - 1)
 
 
 func _tree_tall(x: int, y0: int, z: int) -> void:
-	## Narrower, taller canopy — street / grove accent.
-	var trunk_h := 5 + rng.randi() % 3
+	## Narrow upright crown — the promenade rows and street accents.
+	var trunk_h := 7 + rng.randi() % 3
+	var ry := 3 + rng.randi() % 2
 	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	var canopy_y := y0 + trunk_h
-	for layer in range(3):
-		var r := 1 if layer == 2 else 2
-		for dz in range(-r, r + 1):
-			for dx in range(-r, r + 1):
-				if absi(dx) == r and absi(dz) == r and r > 1:
-					continue
-				if absi(dx) + absi(dz) > r + 1:
-					continue
-				brush.set_vox(Vector3i(x + dx, canopy_y + layer, z + dz), VoxelMaterial.LEAVES)
+	_canopy(x, y0 + trunk_h + ry - 2, z, 2 + rng.randi() % 2, ry)
 
 
 func _tree_wide(x: int, y0: int, z: int) -> void:
-	## Broader, lower leaf mass.
-	var trunk_h := 2 + rng.randi() % 3
+	## Low spreading crown — shade tree on the lawn.
+	var trunk_h := 4 + rng.randi() % 3
+	var r := 4 + rng.randi() % 2
 	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	var canopy_y := y0 + trunk_h
-	for dz in range(-3, 4):
-		for dx in range(-3, 4):
-			if absi(dx) == 3 and absi(dz) == 3:
-				continue
-			if absi(dx) * absi(dx) + absi(dz) * absi(dz) > 10:
-				continue
-			brush.set_vox(Vector3i(x + dx, canopy_y, z + dz), VoxelMaterial.LEAVES)
-			if absi(dx) <= 2 and absi(dz) <= 2:
-				brush.set_vox(Vector3i(x + dx, canopy_y + 1, z + dz), VoxelMaterial.LEAVES)
+	_canopy(x, y0 + trunk_h + 1, z, r, 2)
+
+
+func _canopy(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
+	## Ellipsoid leaf mass with a ragged rim so crowns are not identical blobs.
+	for dy in range(-ry, ry + 1):
+		for dz in range(-rxz, rxz + 1):
+			for dx in range(-rxz, rxz + 1):
+				var n := (
+					float(dx * dx + dz * dz) / float(rxz * rxz)
+					+ float(dy * dy) / float(ry * ry)
+				)
+				if n > 1.0:
+					continue
+				if n > 0.68 and rng.randf() < 0.35:
+					continue
+				brush.set_vox(Vector3i(cx + dx, cy + dy, cz + dz), VoxelMaterial.LEAVES)
 
 
 func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:

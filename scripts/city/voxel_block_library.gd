@@ -5,6 +5,8 @@ class_name VoxelBlockLibrary
 extends RefCounted
 
 const TEX_DIR := "res://assets/city/textures/"
+## World size of one voxel cell (matches CityRoot.VOXEL_SIZE / terrain scale).
+const VOXEL_WORLD_SIZE := 0.5
 
 
 static func build() -> VoxelBlockyLibrary:
@@ -33,9 +35,12 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			## Pool surface only — don't trap the player in an invisible full cell.
 			return _mesh_model(id, _mesh_water(), true, false, AABB(Vector3(0.02, 0.15, 0.02), Vector3(0.96, 0.48, 0.96)))
 		VoxelMaterial.GLASS:
-			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3(0.12, 0.1, 0.12), Vector3(0.76, 0.8, 0.76)))
+			## Visual stays inset, but collision fills the cell. An inset box left
+			## 0.1–0.12 voxel seams between neighbouring panes — the capsule could
+			## worm through those gaps into the hollow building instead of climbing.
+			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3.ZERO, Vector3.ONE))
 		VoxelMaterial.GLASS_LIT:
-			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3(0.12, 0.1, 0.12), Vector3(0.76, 0.8, 0.76)))
+			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3.ZERO, Vector3.ONE))
 		VoxelMaterial.CURB:
 			## Low curb lip (~0.2 m world) so CharacterBody can step/jump it.
 			return _mesh_model(id, _mesh_curb(), false, true, AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.4, 1.0)))
@@ -305,19 +310,144 @@ static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 	_add_quad(st, Vector3(bmin.x, bmin.y, bmin.z), Vector3(bmax.x, bmin.y, bmin.z), Vector3(bmax.x, bmin.y, bmax.z), Vector3(bmin.x, bmin.y, bmax.z), Vector3(0, -1, 0))
 
 
-## Shared textured materials for debris / impostors (same look as Blocky voxels).
-static var _mat_cache: Dictionary = {}  # int → StandardMaterial3D
+const SURFACE_SHADER := "res://assets/city/shaders/voxel_surface.gdshader"
+const GLASS_SHADER := "res://assets/city/shaders/voxel_glass.gdshader"
+const WATER_SHADER := "res://assets/city/shaders/voxel_water.gdshader"
+## World height of the street deck (ground_thickness + 1 voxel), used for grime.
+const STREET_DECK_Y := 1.0
+## Building lot footprint in metres (DistrictCoord.CELL_SIZE * VOXEL_WORLD_SIZE).
+const LOT_METERS := 14.0
+
+## Shared materials, reused by terrain blocks, debris and impostors.
+static var _surface_mat_cache: Dictionary = {}  # id * 2 + object_space → ShaderMaterial
 static var _infection_mat_cache: Dictionary = {}  # bool is_lead → ShaderMaterial
 static var _meteor_rock_mat: ShaderMaterial = null
+static var _gameboy_mat: ShaderMaterial = null
 
 
-## Terrain block material (may be ShaderMaterial for infection / meteor rock).
+## Terrain block material. Everything except infection / meteor rock / Game Boy uses
+## the shared world-projected surface shaders.
 static func block_material_for(id: int) -> Material:
 	if id == VoxelMaterial.INFECTION or id == VoxelMaterial.INFECTION_LEAD:
 		return infection_material(id == VoxelMaterial.INFECTION_LEAD)
 	if id == VoxelMaterial.METEOR_ROCK:
 		return meteor_rock_material()
-	return material_for(id)
+	if id == VoxelMaterial.GAMEBOY:
+		return gameboy_material()
+	return surface_material(id, false)
+
+
+## Same look for detached geometry (cascade debris, impostor chunks). Those bodies
+## tumble, so they project in mesh-local space — world projection would swim.
+static func debris_material_for(id: int) -> Material:
+	if id == VoxelMaterial.INFECTION or id == VoxelMaterial.INFECTION_LEAD:
+		return infection_material(id == VoxelMaterial.INFECTION_LEAD)
+	if id == VoxelMaterial.METEOR_ROCK:
+		return meteor_rock_material()
+	if id == VoxelMaterial.GAMEBOY:
+		return gameboy_material()
+	return surface_material(id, true)
+
+
+## World-projected surface material for one voxel type.
+static func surface_material(id: int, object_space: bool) -> ShaderMaterial:
+	var key := id * 2 + (1 if object_space else 0)
+	var cached: Variant = _surface_mat_cache.get(key)
+	if cached is ShaderMaterial:
+		return cached
+	var mat := _build_surface_material(id, object_space)
+	_surface_mat_cache[key] = mat
+	return mat
+
+
+static func _build_surface_material(id: int, object_space: bool) -> ShaderMaterial:
+	var spec := VoxelSurfaceSpec.for_id(id)
+	var mat := ShaderMaterial.new()
+	match spec.kind:
+		VoxelSurfaceSpec.Kind.GLASS:
+			mat.shader = _load_shader(GLASS_SHADER)
+			mat.set_shader_parameter("lit_ratio", spec.lit_ratio)
+			mat.set_shader_parameter("night_factor", 0.0)
+			mat.set_shader_parameter("lit_warm", Color(1.0, 0.82, 0.45, 1.0))
+			mat.set_shader_parameter("lit_cool", Color(0.72, 0.86, 1.0, 1.0))
+			mat.set_shader_parameter("lit_energy", 1.8)
+			## One lit/dark draw per 1 m of facade — roughly one punched window.
+			mat.set_shader_parameter("window_meters", 1.0)
+			mat.set_shader_parameter("fresnel_strength", 0.55)
+			mat.set_shader_parameter("day_sky_tint", 0.35)
+		VoxelSurfaceSpec.Kind.WATER:
+			mat.shader = _load_shader(WATER_SHADER)
+			mat.set_shader_parameter("deep_tint", Color(0.07, 0.19, 0.28, 1.0))
+			mat.set_shader_parameter("scroll_speed", 0.045)
+			mat.set_shader_parameter("wave_scale", 1.6)
+			mat.set_shader_parameter("wave_strength", 0.4)
+			mat.set_shader_parameter("wave_speed", 0.7)
+			mat.set_shader_parameter("fresnel_strength", 0.45)
+			mat.set_shader_parameter("sparkle", 1.2)
+		_:
+			mat.shader = _load_shader(SURFACE_SHADER)
+			var ntex: Texture2D = null
+			if spec.normal_file != "":
+				ntex = _tex(spec.normal_file)
+			mat.set_shader_parameter("use_normal", ntex != null)
+			if ntex != null:
+				mat.set_shader_parameter("normal_tex", ntex)
+			mat.set_shader_parameter("normal_strength", spec.normal_strength)
+			mat.set_shader_parameter("lot_meters", LOT_METERS)
+			mat.set_shader_parameter("tint_variation", spec.tint_variation)
+			mat.set_shader_parameter("weathering", spec.weathering)
+			mat.set_shader_parameter("grime", spec.grime)
+			mat.set_shader_parameter("ground_y", STREET_DECK_Y)
+			mat.set_shader_parameter("grime_height", spec.grime_height)
+			mat.set_shader_parameter("streaks", spec.streaks)
+
+	mat.set_shader_parameter("albedo_tex", _tex(spec.albedo_file))
+	mat.set_shader_parameter("tile_meters", spec.tile_meters)
+	mat.set_shader_parameter("tint", spec.tint)
+	mat.set_shader_parameter("roughness_base", spec.roughness)
+	mat.set_shader_parameter("metallic_base", spec.metallic)
+	mat.set_shader_parameter("object_space", 1.0 if object_space else 0.0)
+	return mat
+
+
+static func _load_shader(path: String) -> Shader:
+	var shader := load(path) as Shader
+	if shader == null:
+		push_error("Missing voxel surface shader: %s" % path)
+	return shader
+
+
+## Olive Game Boy plastic — animated LCD sheen (gameboy_shell.gdshader).
+static func gameboy_material() -> ShaderMaterial:
+	if _gameboy_mat != null:
+		return _gameboy_mat
+	var shader: Shader = load("res://assets/city/shaders/gameboy_shell.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var plas: Texture2D = _tex("plaster.jpg")
+	if plas != null:
+		mat.set_shader_parameter("albedo_tex", plas)
+		mat.set_shader_parameter("texture_mix", 0.58)
+	else:
+		mat.set_shader_parameter("texture_mix", 0.0)
+	mat.set_shader_parameter("plastic_tint", Color(0.56, 0.66, 0.42, 1.0))
+	mat.set_shader_parameter("seam_color", Color(0.14, 0.18, 0.11, 1.0))
+	mat.set_shader_parameter("lcd_glow", Color(0.4, 0.98, 0.45, 1.0))
+	mat.set_shader_parameter("lcd_deep", Color(0.1, 0.24, 0.08, 1.0))
+	## Panel layout keyed to the voxel grid so each cell reads as a moulded brick.
+	mat.set_shader_parameter("cell_size", VOXEL_WORLD_SIZE)
+	mat.set_shader_parameter("seam_width", 0.07)
+	mat.set_shader_parameter("bevel", 0.24)
+	mat.set_shader_parameter("grain_scale", 7.0)
+	mat.set_shader_parameter("grain_strength", 0.35)
+	mat.set_shader_parameter("cell_tint_variation", 0.1)
+	mat.set_shader_parameter("emission_base", 0.14)
+	mat.set_shader_parameter("emission_peak", 0.45)
+	mat.set_shader_parameter("pulse_hz", 0.35)
+	mat.set_shader_parameter("scan_strength", 0.32)
+	mat.set_shader_parameter("sheen", 0.55)
+	_gameboy_mat = mat
+	return mat
 
 
 ## Dark rock with red glowing veins only (emission masked to cracks).
@@ -380,182 +510,12 @@ static func infection_material(is_lead: bool) -> ShaderMaterial:
 	return mat
 
 
-static func material_for(id: int) -> StandardMaterial3D:
-	var cached: Variant = _mat_cache.get(id)
-	if cached is StandardMaterial3D:
-		return cached
-	var mat := _material_for(id)
-	_mat_cache[id] = mat
-	return mat
-
-
-## Drive emissive punched windows with day/night (shared GLASS_LIT material).
+## Drive emissive punched windows with day/night (shared GLASS_LIT materials).
 static func set_glass_lit_night_factor(night_factor: float) -> void:
-	var mat := material_for(VoxelMaterial.GLASS_LIT)
 	var n := clampf(night_factor, 0.0, 1.0)
-	var power := smoothstep(0.15, 0.7, n)
-	mat.emission_enabled = power > 0.02
-	mat.emission = Color(1.0, 0.82, 0.4)
-	mat.emission_energy_multiplier = lerpf(0.05, 3.2, power)
-	mat.albedo_color = Color(1.0, 0.9, 0.55, lerpf(0.35, 0.62, power))
-
-
-static func _material_for(id: int) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.roughness = 0.88
-
-	match id:
-		VoxelMaterial.BEDROCK:
-			mat.albedo_texture = _tex("rock.jpg")
-			mat.roughness = 0.95
-		VoxelMaterial.ROAD, VoxelMaterial.ASPHALT:
-			mat.albedo_texture = _tex("asphalt.jpg")
-			mat.roughness = 0.92
-		VoxelMaterial.SIDEWALK:
-			mat.albedo_texture = _tex("sidewalk.jpg")
-			mat.roughness = 0.9
-		VoxelMaterial.CONCRETE:
-			mat.albedo_texture = _tex("concrete.jpg")
-			mat.roughness = 0.9
-		VoxelMaterial.BRICK:
-			mat.albedo_texture = _tex("brick.jpg")
-			mat.roughness = 0.85
-		VoxelMaterial.BRICK_DARK:
-			mat.albedo_texture = _tex("brick_dark.jpg")
-			mat.roughness = 0.85
-		VoxelMaterial.GLASS:
-			mat.albedo_texture = _tex("glass.jpg")
-			mat.albedo_color = Color(0.75, 0.88, 1.0, 0.4)
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.roughness = 0.08
-			mat.metallic = 0.2
-			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		VoxelMaterial.GLASS_LIT:
-			mat.albedo_texture = _tex("glass.jpg")
-			mat.albedo_color = Color(1.0, 0.9, 0.55, 0.35)
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.roughness = 0.12
-			mat.metallic = 0.15
-			mat.emission_enabled = false
-			mat.emission = Color(1.0, 0.82, 0.4)
-			mat.emission_energy_multiplier = 0.05
-			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		VoxelMaterial.PLAZA:
-			mat.albedo_texture = _tex("plaza.jpg")
-			mat.roughness = 0.88
-		VoxelMaterial.PARK:
-			mat.albedo_texture = _tex("grass.jpg")
-			mat.roughness = 0.95
-		VoxelMaterial.ROOF:
-			mat.albedo_texture = _tex("roof.jpg")
-			mat.roughness = 0.75
-		VoxelMaterial.ROOF_CLAY:
-			mat.albedo_texture = _tex("roof_clay.jpg")
-			mat.roughness = 0.78
-		VoxelMaterial.PLANTER:
-			mat.albedo_texture = _tex("wood.jpg")
-			mat.roughness = 0.8
-		VoxelMaterial.PLASTER:
-			mat.albedo_texture = _tex("plaster.jpg")
-			mat.roughness = 0.9
-		VoxelMaterial.METAL:
-			mat.albedo_texture = _tex("metal.jpg")
-			mat.roughness = 0.35
-			mat.metallic = 0.85
-		VoxelMaterial.METAL_PLATE:
-			mat.albedo_texture = _tex("metal_plate.jpg")
-			mat.roughness = 0.45
-			mat.metallic = 0.8
-		VoxelMaterial.GRAVEL:
-			mat.albedo_texture = _tex("gravel.jpg")
-			mat.roughness = 0.95
-		VoxelMaterial.DIRT:
-			mat.albedo_texture = _tex("dirt.jpg")
-			mat.roughness = 0.95
-		VoxelMaterial.WATER:
-			mat.albedo_texture = _tex("water.jpg")
-			mat.albedo_color = Color(0.55, 0.75, 0.95, 0.62)
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.roughness = 0.08
-			mat.metallic = 0.05
-			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		VoxelMaterial.CURB:
-			mat.albedo_texture = _tex("curb.jpg")
-			mat.roughness = 0.9
-		VoxelMaterial.ROAD_LINE:
-			mat.albedo_texture = _tex("road_line.jpg")
-			mat.roughness = 0.85
-		VoxelMaterial.CROSSWALK:
-			mat.albedo_texture = _tex("crosswalk.jpg")
-			mat.roughness = 0.85
-		VoxelMaterial.TILES:
-			mat.albedo_texture = _tex("tiles.jpg")
-			mat.roughness = 0.7
-		VoxelMaterial.BARK:
-			mat.albedo_texture = _tex("bark.jpg")
-			mat.roughness = 0.92
-		VoxelMaterial.LEAVES:
-			mat.albedo_texture = _tex("leaves.jpg")
-			mat.roughness = 0.88
-			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		VoxelMaterial.STONE:
-			mat.albedo_texture = _tex("stone.jpg")
-			mat.roughness = 0.88
-		VoxelMaterial.PAINT:
-			mat.albedo_texture = _tex("paint.jpg")
-			mat.roughness = 0.7
-		VoxelMaterial.METEOR_ROCK:
-			mat.albedo_texture = _tex("rock.jpg")
-			mat.albedo_color = Color(0.55, 0.5, 0.45)
-			mat.roughness = 0.95
-		VoxelMaterial.INFECTION:
-			mat.albedo_texture = _tex("leaves.jpg")
-			mat.albedo_color = Color(0.45, 0.95, 0.35)
-			mat.roughness = 0.55
-			mat.emission_enabled = true
-			mat.emission = Color(0.25, 0.85, 0.2)
-			mat.emission_energy_multiplier = 0.85
-		VoxelMaterial.INFECTION_LEAD:
-			mat.albedo_texture = _tex("leaves.jpg")
-			mat.albedo_color = Color(0.7, 1.0, 0.4)
-			mat.roughness = 0.35
-			mat.emission_enabled = true
-			mat.emission = Color(0.55, 1.0, 0.25)
-			mat.emission_energy_multiplier = 4.5
-		_:
-			mat.albedo_color = VoxelMaterial.color(id)
-
-	if mat.albedo_texture == null and id != VoxelMaterial.GLASS and id != VoxelMaterial.GLASS_LIT and id != VoxelMaterial.WATER:
-		mat.albedo_color = VoxelMaterial.color(id)
-	_apply_normal_map(mat, id)
-	return mat
-
-
-static func _apply_normal_map(mat: StandardMaterial3D, id: int) -> void:
-	var normal_file := ""
-	match id:
-		VoxelMaterial.BRICK, VoxelMaterial.BRICK_DARK:
-			normal_file = "brick_normal.jpg"
-		VoxelMaterial.ASPHALT, VoxelMaterial.ROAD:
-			normal_file = "asphalt_normal.jpg"
-		VoxelMaterial.CONCRETE:
-			normal_file = "concrete_normal.jpg"
-		VoxelMaterial.PLASTER:
-			normal_file = "plaster_normal.jpg"
-		VoxelMaterial.CURB, VoxelMaterial.SIDEWALK:
-			normal_file = "sidewalk_normal.jpg"
-		VoxelMaterial.STONE:
-			normal_file = "stone_normal.jpg"
-		_:
-			return
-	var ntex := _tex_optional(normal_file)
-	if ntex == null:
-		return
-	mat.normal_enabled = true
-	mat.normal_texture = ntex
-	mat.normal_scale = 0.85
+	for id in [VoxelMaterial.GLASS, VoxelMaterial.GLASS_LIT]:
+		surface_material(id, false).set_shader_parameter("night_factor", n)
+		surface_material(id, true).set_shader_parameter("night_factor", n)
 
 
 static func _tex(file_name: String) -> Texture2D:
@@ -567,10 +527,3 @@ static func _tex(file_name: String) -> Texture2D:
 	if tex == null:
 		push_error("Failed to load city texture: %s" % path)
 	return tex
-
-
-static func _tex_optional(file_name: String) -> Texture2D:
-	var path := TEX_DIR + file_name
-	if not ResourceLoader.exists(path):
-		return null
-	return load(path) as Texture2D

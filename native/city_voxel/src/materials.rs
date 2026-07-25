@@ -7,7 +7,8 @@ pub const LEAVES: i32 = 24;
 pub const METEOR_ROCK: i32 = 29;
 pub const INFECTION: i32 = 30;
 pub const INFECTION_LEAD: i32 = 31;
-pub const COUNT: i32 = 32;
+pub const GAMEBOY: i32 = 32;
+pub const COUNT: i32 = 33;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR

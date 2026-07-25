@@ -65,3 +65,6 @@ tools/pose_*.png.import
 # Kenney kit extract / download scratch (fallback GLBs live under models/)
 assets/vehicles/_kenney_src/
 assets/vehicles/_kenney_tmp.zip
+
+# Audio generation scratch HTML (not shipped)
+assets/audio/tmp/

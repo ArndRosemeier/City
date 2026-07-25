@@ -34,8 +34,10 @@ const GLASS_LIT := 28
 const METEOR_ROCK := 29
 const INFECTION := 30
 const INFECTION_LEAD := 31
+## Destructible Game Boy / Tetris cabinet shell.
+const GAMEBOY := 32
 
-const COUNT := 32
+const COUNT := 33
 
 
 static func is_solid(id: int) -> bool:
@@ -69,7 +71,7 @@ static func is_building_fabric(id: int) -> bool:
 	match id:
 		AIR, BEDROCK, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES:
 			return false
-		METEOR_ROCK, INFECTION, INFECTION_LEAD:
+		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
 		_:
 			return id > AIR and id < COUNT
@@ -174,5 +176,8 @@ static func color(id: int) -> Color:
 			return Color(0.35, 0.72, 0.28)
 		INFECTION_LEAD:
 			return Color(0.55, 1.0, 0.35)
+		GAMEBOY:
+			## Classic olive DMG plastic.
+			return Color(0.55, 0.62, 0.42)
 		_:
 			return Color(1, 0, 1)

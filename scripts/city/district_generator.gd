@@ -26,6 +26,10 @@ const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 ## Planner cell ≈ 14 m — mid-size city lot / street ROW (euro mid-rise depth).
 @export var cell_size: int = 28
 
+## District personality. DistrictBakeJob sets it from the world seed + coord; the
+## one-shot generate() path derives it in _setup_composers().
+var theme: DistrictTheme = null
+
 var _rng := RandomNumberGenerator.new()
 var _brush: CityBrush
 var _planner: DistrictPlanner
@@ -90,13 +94,20 @@ func get_offline_volume():
 
 
 func _setup_composers() -> void:
+	if theme == null:
+		## Standalone path (tools, single-district tests): derive from the district seed.
+		theme = DistrictTheme.for_district(city_seed, district_coord)
+
 	_planner = DistrictPlannerScript.new()
+	_planner.theme = theme
 	_planner.build(size_x, size_z, city_seed, cell_size, district_coord)
 
 	_plaza = PlazaComposerScript.new()
 	_plaza.brush = _brush
 	_plaza.rng = _rng
 	_plaza.ground_y = ground_thickness
+	_plaza.pave_mat = theme.plaza_mat
+	_plaza.pave_inner_mat = theme.plaza_inner_mat
 
 	_park = ParkComposerScript.new()
 	_park.brush = _brush
@@ -106,6 +117,7 @@ func _setup_composers() -> void:
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
 	_grammar.rng = _rng
+	_grammar.theme = theme
 	_grammar.floor_height = maxi(floor_height_vox, 6)
 	_grammar.ground_floor_height = 8  # ~4.0 m retail / lobby
 	_grammar.max_height = max_building_height_vox
@@ -195,7 +207,7 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 		LandUse.ROAD:
 			_paint_street_cell(smin, smax, cx, cz, false)
 		LandUse.PLAZA:
-			_brush.fill_box(smin, smax, VoxelMaterial.PLAZA)
+			_brush.fill_box(smin, smax, theme.plaza_mat)
 		LandUse.PARK:
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		_:
@@ -282,6 +294,15 @@ func decorate_open_spaces() -> void:
 		var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
 		var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
 		_park.compose_large(pmin, pmax)
+	## Pocket parks: the streamed path never called _paint_park_cell, so every square
+	## outside the large park stayed an empty lawn rectangle.
+	var pocket_i := 0
+	for p in _planner.pocket_parks:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 200 + pocket_i)
+		pocket_i += 1
+		var qmin := Vector3i(p.x * cell_size, ground_thickness, p.y * cell_size)
+		var qmax := Vector3i((p.x + 1) * cell_size, ground_thickness + 1, (p.y + 1) * cell_size)
+		_park.compose_pocket(qmin, qmax)
 
 
 func decorate_open_spaces_far() -> void:
@@ -307,6 +328,13 @@ func decorate_open_spaces_far() -> void:
 		var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
 		var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
 		_park.compose_far_sparse(pmin, pmax)
+	var pocket_i := 0
+	for p in _planner.pocket_parks:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 230 + pocket_i)
+		pocket_i += 1
+		var qmin := Vector3i(p.x * cell_size, ground_thickness, p.y * cell_size)
+		var qmax := Vector3i((p.x + 1) * cell_size, ground_thickness + 1, (p.y + 1) * cell_size)
+		_park.compose_far_sparse(qmin, qmax)
 
 
 func open_space_bounds() -> Array[AABB]:
@@ -339,6 +367,13 @@ func open_space_bounds() -> Array[AABB]:
 			AABB(
 				Vector3(ox + lp.position.x * cell_size, y0, oz + lp.position.y * cell_size),
 				Vector3(lp.size.x * cell_size, yh, lp.size.y * cell_size)
+			)
+		)
+	for p in _planner.pocket_parks:
+		out.append(
+			AABB(
+				Vector3(ox + p.x * cell_size, y0, oz + p.y * cell_size),
+				Vector3(cell_size, yh, cell_size)
 			)
 		)
 	return out
@@ -452,7 +487,7 @@ func _paint_street_cell(min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, aven
 	var intersection := horiz and vert
 
 	# Base fill sidewalk so edges connect to lots.
-	_brush.fill_box(min_v, max_v, VoxelMaterial.SIDEWALK)
+	_brush.fill_box(min_v, max_v, theme.sidewalk_mat)
 
 	var sw := _sidewalk_depth_vox()
 	var curb := 1
@@ -505,7 +540,7 @@ func _paint_street_cell(min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, aven
 			_brush.set_vox(Vector3i(min_v.x + sw, y, z), VoxelMaterial.CURB)
 			_brush.set_vox(Vector3i(max_v.x - sw - 1, y, z), VoxelMaterial.CURB)
 
-	if avenue and not intersection:
+	if avenue and not intersection and theme.median_planting:
 		_paint_avenue_median(min_v, max_v, horiz)
 
 
@@ -598,7 +633,7 @@ func _paint_plaza_cell(
 	min_v: Vector3i, max_v: Vector3i, cx: int, cz: int, plaza: PlazaComposer
 ) -> void:
 	## Base pave every plaza cell. Fancy compose runs once in decorate_open_spaces().
-	_brush.fill_box(min_v, max_v, VoxelMaterial.PLAZA)
+	_brush.fill_box(min_v, max_v, theme.plaza_mat)
 	var in_grand := _planner.grand_plaza.has_point(Vector2i(cx, cz))
 	if in_grand:
 		return
@@ -628,48 +663,63 @@ func _paint_lot(
 	zone: int,
 	grammar: BuildingGrammar
 ) -> void:
-	_brush.fill_box(min_v, max_v, VoxelMaterial.SIDEWALK)
+	_brush.fill_box(min_v, max_v, theme.sidewalk_mat)
 	# Small private setback (~0.5–1.0 m) — footprint stays ~12–13 m on a 14 m lot.
 	var ring := 1 if cell_size < 20 else 2
 	var bmin := min_v + Vector3i(ring, 0, ring)
 	var bmax := max_v - Vector3i(ring, 0, ring)
 	if bmax.x - bmin.x < 6 or bmax.z - bmin.z < 6:
 		return
-	# Zone-based height caps (meters → vox via grammar.max_height). 100 m ceiling in core.
+	## The zone is a ceiling; the planner intensity field decides the actual height, so
+	## the skyline gets peaks and valleys instead of one flat step per zone ring.
 	var saved := grammar.max_height
+	var ceiling := max_building_height_vox
 	match zone:
 		LandUse.CORE_LOT, LandUse.CIVIC_LOT:
-			grammar.max_height = max_building_height_vox
+			ceiling = max_building_height_vox
 		LandUse.MID_LOT:
-			grammar.max_height = mini(saved, 120)  # 60 m
+			ceiling = mini(saved, 120)  # 60 m
 		LandUse.TOWN_LOT:
-			grammar.max_height = mini(saved, 80)  # 40 m
+			ceiling = mini(saved, 80)  # 40 m
 		LandUse.COURTYARD_LOT:
-			grammar.max_height = mini(saved, 72)  # 36 m
+			ceiling = mini(saved, 72)  # 36 m
 		_:
 			pass
+	grammar.max_height = _height_cap_for(cx, cz, ceiling)
 	var facing := _planner.street_facing(cx, cz)
 	var corner := _planner.is_corner_lot(cx, cz)
 	var on_plaza := _planner.faces_plaza(cx, cz)
 	var on_park := _planner.faces_park(cx, cz)
 	grammar.build_for_zone(bmin, bmax, zone, facing, corner, on_plaza, on_park)
-	# Approximate massing height for far LOD (zone caps overshoot actual floors a bit — fine for shells).
-	var mass_h := grammar.max_height
+	## Approximate massing height for far LOD. It tracks the intensity-driven cap so the
+	## impostor skyline matches the voxel skyline; the per-zone factors account for each
+	## archetype building fewer floors than its ceiling allows.
+	var cap := grammar.max_height
+	var mass_h := cap
 	match zone:
 		LandUse.CORE_LOT:
-			mass_h = grammar.max_height
+			mass_h = cap
 		LandUse.CIVIC_LOT:
-			mass_h = mini(grammar.max_height, 48)
+			mass_h = mini(cap, 48)
 		LandUse.MID_LOT:
-			mass_h = int(float(grammar.max_height) * 0.55)
+			mass_h = int(float(cap) * 0.75)
 		LandUse.TOWN_LOT:
-			mass_h = 28
+			mass_h = mini(cap, 32)
 		LandUse.COURTYARD_LOT:
-			mass_h = 40
+			mass_h = mini(cap, 40)
 		_:
-			mass_h = mini(grammar.max_height, 48)
+			mass_h = mini(cap, 48)
 	_record_building_impostor(bmin, bmax, mass_h, zone)
 	grammar.max_height = saved
+
+
+func _height_cap_for(cx: int, cz: int, zone_ceiling: int) -> int:
+	## Non-linear so only genuinely dense cells reach for the sky.
+	var v := _planner.intensity_at(cx, cz)
+	var shaped := pow(clampf(v, 0.0, 1.0), 1.7)
+	var scaled := float(max_building_height_vox) * theme.height_scale * lerpf(0.14, 1.0, shaped)
+	## 12 vox ≈ 6 m: never below a two-storey house.
+	return clampi(int(round(scaled)), 12, zone_ceiling)
 
 
 func _record_building_impostor(bmin: Vector3i, bmax: Vector3i, height_vox: int, zone: int) -> void:

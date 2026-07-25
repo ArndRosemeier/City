@@ -45,7 +45,9 @@ Keep the packaged `.godot` folder.
 
 (`tools\pack_city_portable.bat` is the older folder-only helper; prefer `make_installer.bat`.)
 
-Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **N** day/night · **F7** profiler overlay · **Settings** (top-right) for quality.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **N** day/night · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler · **Settings** (top-right) for quality.
+
+Tetris (after **T**): **1** left · **2** rotate · **3** right · **4** fast drop (tap once). Cabinet is `GAMEBOY` voxels — destroy any piece of it and the game breaks. **P** near a cabinet spawns a pedestrian who walks up, plays, and AI-controls the game.
 
 ## Layout
 
@@ -59,6 +61,46 @@ scripts/vehicles/  VehicleDirector / catalog / visuals
 scripts/humans/    Outfits, proportions
 LICENSE_ASSETS.md  Content license provenance
 ```
+
+## World seed
+
+Every launch draws a fresh world seed, so each game starts in a different city. District
+layouts still come from that seed mixed with the district's grid coordinate, so a world is
+fully reproducible: the seed is printed at startup and `--city-seed=N` replays it. Setting
+`city_seed` in the scene or from code (as the tools do) pins it as well; leaving it at `0`
+means "pick a new one". The tile at the world origin is always the downtown core
+regardless of seed, so the player spawns downtown.
+
+## District themes
+
+Every district tile picks a theme deterministically from the world seed and its grid
+coordinate (`scripts/city/district_theme.gd`): **Core High-Rise**, **Old Town**,
+**Waterfront Industrial**, **Garden Residential** or **Civic Quarter**. The theme sets
+the wall / roof / paving palette, the building archetype weights and a height scale, so
+the tile at the world origin is always the downtown core and the quarters around it get
+lower and older.
+
+Inside a tile, land use comes from a noise **intensity field** computed on world cell
+coordinates (`DistrictPlanner.intensity`) rather than distance from the tile centre, so
+dense clusters run across district borders and the same field drives per-lot building
+heights — the skyline has peaks and valleys instead of one plateau per tile.
+
+Terrain voxels share three shaders (`assets/city/shaders/voxel_surface.gdshader`,
+`voxel_glass.gdshader`, `voxel_water.gdshader`). They project textures from world space
+onto the dominant face axis, so materials read at real-world scale (a brick course is a
+brick course, not one texture per 0.5 m cube) and get per-lot tint variation, grime and
+ground-contact dirt. `scripts/city/voxel_surface_spec.gd` holds the per-material table.
+
+Parks (`scripts/city/park_composer.gd`) are laid out as landscaping rather than a lawn
+with props on it: a meandering tree-lined promenade, a strolling loop just inside the
+border, a pond scaled to the park with a stone rim and a spur path to the water, clustered
+groves over worn earth, hedges framing the edge, and a few flower beds and benches beside
+the walkways. Planting only ever lands on lawn voxels, which keeps it off the paths and
+out of the water automatically.
+
+Checks: `tools/test_voxel_surface_shader.gd` (run with `--script`),
+`tools/test_district_themes.tscn` and `tools/shot_city_parks.tscn` (run as scenes — the
+city scripts need the `CityProfiler` autoload).
 
 ## Design rules
 

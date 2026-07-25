@@ -20,8 +20,15 @@ const InfectionTendrilHudScript := preload("res://scripts/city/infection_tendril
 const UndeadInvasionDirectorScript := preload("res://scripts/city/undead_invasion_director.gd")
 const UndeadInvasionHudScript := preload("res://scripts/city/undead_invasion_hud.gd")
 const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
+const TetrisMachineScript := preload("res://scripts/city/tetris_machine.gd")
+const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
 
-@export var city_seed: int = 42
+## Sentinel for city_seed: draw a fresh world seed when the game starts.
+const SEED_RANDOM := 0
+## District layouts hang off this seed plus the district's grid coordinate. Left at
+## SEED_RANDOM every launch builds a different world; set a concrete value (in the
+## scene, from code, or with --city-seed=N) to replay one exactly.
+@export var city_seed: int = SEED_RANDOM
 @export var crowd_per_district: int = 96
 @export var vehicles_per_district: int = 14
 @export var bubble_radius_m: float = 360.0
@@ -42,6 +49,8 @@ var _infection: Node
 var _tendril_hud: Node
 var _undead_hud: Node
 var _minimap: Node
+var _tetris: Node3D
+var _tetris_peds: Array[Node3D] = []
 var _game_over_layer: CanvasLayer
 var _game_over_title: Label
 var _game_over_detail: Label
@@ -81,12 +90,40 @@ var _collision_view_vox: int = 48
 func _ready() -> void:
 	CityVoxelNativeScript.require_loaded()
 	print("CityRoot: city_voxel native ready (volume + cascade debris)")
+	_resolve_seed()
 	_audio = CityAudioScript.new()
 	_audio.name = "CityAudio"
 	add_child(_audio)
 	_build_env()
 	_build_hud()
 	call_deferred("_regenerate")
+
+
+func _resolve_seed() -> void:
+	## Runs once per launch, before any district is baked: every generator downstream
+	## mixes this with the district coordinate, so the whole world follows from it.
+	var cli := _cli_seed()
+	if cli != SEED_RANDOM:
+		city_seed = cli
+	if city_seed == SEED_RANDOM:
+		var rng := RandomNumberGenerator.new()
+		rng.randomize()
+		city_seed = maxi(rng.randi() & 0x7fffffff, 1)
+	print("CityRoot: world seed %d (replay with --city-seed=%d)" % [city_seed, city_seed])
+
+
+func _cli_seed() -> int:
+	const FLAG := "--city-seed="
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for a: String in args:
+		if not a.begins_with(FLAG):
+			continue
+		var raw := a.substr(FLAG.length())
+		if not raw.is_valid_int():
+			push_error("CityRoot: %s%s is not an integer" % [FLAG, raw])
+			return SEED_RANDOM
+		return int(raw)
+	return SEED_RANDOM
 
 
 func _build_env() -> void:
@@ -482,8 +519,9 @@ func _ensure_cascade_debris() -> void:
 			_cascade.connect("debris_spawned", Callable(self, "_on_native_debris_spawned"))
 	var mats: Array = []
 	mats.resize(VoxelMaterial.COUNT)
-	for i in VoxelMaterial.COUNT:
-		mats[i] = VoxelBlockLibraryScript.block_material_for(i)
+	## Index 0 is AIR — no debris ever spawns for it, the native side skips nulls.
+	for i in range(1, VoxelMaterial.COUNT):
+		mats[i] = VoxelBlockLibraryScript.debris_material_for(i)
 	_cascade.call(
 		"setup",
 		_terrain,
@@ -723,6 +761,12 @@ func _regenerate() -> void:
 	if _walker != null and is_instance_valid(_walker):
 		_walker.queue_free()
 		_walker = null
+	if _tetris != null and is_instance_valid(_tetris):
+		if _tetris.has_method("clear_shell"):
+			_tetris.call("clear_shell")
+		_tetris.queue_free()
+		_tetris = null
+	_clear_tetris_peds()
 	if _streamer != null and is_instance_valid(_streamer):
 		_streamer.call("clear_all")
 		_streamer.queue_free()
@@ -819,6 +863,8 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.melee_strike_requested.connect(_on_melee_strike)
 	_walker.stomp_requested.connect(_on_stomp)
 	_walker.meteor_requested.connect(_on_meteor_requested)
+	_walker.tetris_requested.connect(_on_tetris_requested)
+	_walker.pedestrian_requested.connect(_on_pedestrian_requested)
 	var cam: Camera3D = _walker.call("get_camera") as Camera3D
 	## Visuals out to settings radius; collisions only near the player (big remesh win).
 	_player_viewer = VoxelViewer.new()
@@ -952,6 +998,7 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	_tip_kill_leads_in_sphere(local, radius_vox)
 	_carve_destructible_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
+	_notify_tetris_damage()
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
 
 
@@ -992,6 +1039,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	if _cascade != null and _cascade.has_method("detach_blast_voxels"):
 		_cascade.call("detach_blast_voxels", detached, hit_world)
 	BlastFlashVfxScript.spawn(self, hit_world, radius)
+	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
 
 
@@ -1048,6 +1096,7 @@ func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
 			var max_y: int = int(column_max_y[col_key])
 			_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
 	BlastFlashVfxScript.spawn(self, feet_position, radius * 0.85)
+	_notify_tetris_damage(detached)
 	_notify_destruction(feet_position, maxf(radius * 5.0, 36.0))
 
 
@@ -1135,11 +1184,82 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	var hit_world := _terrain.to_global(
 		Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
 	)
+	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, 30.0 + 8.0 * scale)
 
 
 func _on_meteor_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
 	_spawn_meteor_at(hit_point)
+
+
+func _on_tetris_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
+	_spawn_tetris_at(hit_point)
+
+
+func _on_pedestrian_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
+	_spawn_tetris_ped_at(hit_point)
+
+
+func _spawn_tetris_at(hit_point: Vector3) -> void:
+	if _tool == null or _terrain == null:
+		push_error("CityRoot: cannot spawn Tetris without VoxelTerrain tool")
+		return
+	if _tetris != null and is_instance_valid(_tetris):
+		if _tetris.has_method("clear_shell"):
+			_tetris.call("clear_shell")
+		_tetris.queue_free()
+		_tetris = null
+	## Old cabinet players lose their machine.
+	_clear_tetris_peds()
+	var face_yaw := 0.0
+	if _walker != null and is_instance_valid(_walker):
+		var to_player := get_player_position() - hit_point
+		to_player.y = 0.0
+		if to_player.length_squared() > 0.01:
+			face_yaw = atan2(-to_player.x, -to_player.z)
+		else:
+			face_yaw = _walker.rotation.y + PI
+	## Cardinal facing only — voxel shell must stay axis-aligned (no diagonal cabinets).
+	face_yaw = roundf(face_yaw / (PI * 0.5)) * (PI * 0.5)
+	_tetris = TetrisMachineScript.new() as Node3D
+	_tetris.name = "TetrisMachine"
+	var spawned: Node3D = _tetris
+	add_child(_tetris)
+	spawned.tree_exited.connect(func() -> void:
+		if _tetris == spawned:
+			_tetris = null
+	)
+	_tetris.call("begin", _terrain, _tool, hit_point, face_yaw, VOXEL_SIZE)
+
+
+func _spawn_tetris_ped_at(hit_point: Vector3) -> void:
+	var slot := _tetris_peds.size()
+	var ped: Node3D = TetrisPedNpcScript.new() as Node3D
+	ped.name = "TetrisPedNpc_%d" % slot
+	add_child(ped)
+	_tetris_peds.append(ped)
+	ped.tree_exited.connect(func() -> void:
+		_tetris_peds.erase(ped)
+	)
+	var machine: Node3D = _tetris if _tetris != null and is_instance_valid(_tetris) else null
+	ped.call("begin", hit_point, machine, slot)
+
+
+func _clear_tetris_peds() -> void:
+	for ped in _tetris_peds:
+		if ped != null and is_instance_valid(ped):
+			ped.queue_free()
+	_tetris_peds.clear()
+
+
+func _notify_tetris_damage(detached: Array = []) -> void:
+	if _tetris == null or not is_instance_valid(_tetris):
+		return
+	if detached.is_empty():
+		if _tetris.has_method("check_integrity"):
+			_tetris.call("check_integrity")
+	elif _tetris.has_method("notify_voxels_carved"):
+		_tetris.call("notify_voxels_carved", detached)
 
 
 func _try_auto_spawn_meteor() -> void:
@@ -1421,6 +1541,7 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 	if _cascade != null and is_instance_valid(_cascade):
 		if _cascade.has_method("detach_blast_voxels") and not detached.is_empty():
 			_cascade.call("detach_blast_voxels", detached, world_hit)
+	_notify_tetris_damage(detached)
 	_notify_destruction(world_hit, 36.0)
 	return removed
 
@@ -1433,11 +1554,13 @@ func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
 	if vox == Vector3i(2147483647, 2147483647, 2147483647):
 		return false
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var mat_id := int(_tool.get_voxel(vox))
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.AIR
 	_tool.do_point(vox)
 	adjust_player_score(-1)
 	var world := _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
+	_notify_tetris_damage([{"vox": vox, "mat": mat_id}])
 	_notify_destruction(world, 10.0)
 	return true
 

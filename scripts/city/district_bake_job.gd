@@ -20,6 +20,9 @@ static func bake(params: Dictionary) -> Dictionary:
 	var origin: Vector3i = params.get("origin_vox", DistrictCoord.origin_vox(coord))
 	var quality: String = str(params.get("quality", QUALITY_FULL))
 	var dseed := DistrictCoord.district_seed(world_seed, coord)
+	## Theme comes from the world seed + tile coord, so neighbours agree on identity
+	## regardless of which one streams in first.
+	var theme := DistrictTheme.for_district(world_seed, coord)
 
 	var gen: DistrictGenerator = DistrictGeneratorScript.new()
 	gen.size_x = size_x
@@ -28,6 +31,7 @@ static func bake(params: Dictionary) -> Dictionary:
 	gen.floor_height_vox = int(params.get("floor_height_vox", 6))
 	gen.max_building_height_vox = int(params.get("max_building_height_vox", 200))
 	gen.voxel_size = float(params.get("voxel_size", 0.5))
+	gen.theme = theme
 	gen.begin_generate_offline(dseed, origin, coord)
 
 	gen.paint_district_ground_slab()
@@ -73,4 +77,6 @@ static func bake(params: Dictionary) -> Dictionary:
 		"quality": quality,
 		"planner": planner,
 		"generator": gen,
+		"theme_id": theme.id,
+		"theme_name": theme.display_name,
 	}

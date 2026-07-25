@@ -9,10 +9,13 @@ const ANIM_RUN := &"Sprint"
 const ANIM_DEATH := &"Death01"
 const ANIM_DRIVING := &"Driving"
 const ANIM_SITTING := &"Sitting_Idle"
+const ANIM_INTERACT := &"Interact"
+const ANIM_IDLE_TALKING := &"Idle_Talking"
 const LIB_NAME := &"quat"
 
 static var _cached_library: AnimationLibrary
 static var _cached_passenger_library: AnimationLibrary
+static var _cached_npc_library: AnimationLibrary
 static var _library_built: bool = false
 
 
@@ -38,8 +41,31 @@ static func get_passenger_library() -> AnimationLibrary:
 	return _cached_passenger_library
 
 
+static func get_npc_library() -> AnimationLibrary:
+	## Idle/Walk + Interact / Idle_Talking for scripted prop use (Tetris players, etc.).
+	if _cached_npc_library != null:
+		return _cached_npc_library
+	_cached_npc_library = _build_library(
+		[
+			String(ANIM_IDLE),
+			String(ANIM_WALK),
+			String(ANIM_INTERACT),
+			String(ANIM_IDLE_TALKING),
+		],
+		{String(ANIM_INTERACT): Animation.LOOP_NONE}
+	)
+	return _cached_npc_library
+
+
 static func attach_to(player: AnimationPlayer) -> void:
 	_attach_library(player, get_library(), ANIM_IDLE)
+
+
+static func attach_npc(player: AnimationPlayer) -> void:
+	var lib := get_npc_library()
+	if lib == null or player == null:
+		return
+	_attach_library(player, lib, ANIM_IDLE)
 
 
 static func attach_passenger(player: AnimationPlayer) -> void:
@@ -109,6 +135,35 @@ static func play_driving(player: AnimationPlayer) -> void:
 		if player.current_animation != sit:
 			player.play(sit, 0.15)
 	player.speed_scale = 1.0
+
+
+static func play_interact(player: AnimationPlayer) -> void:
+	if player == null:
+		return
+	var path := "%s/%s" % [LIB_NAME, ANIM_INTERACT]
+	if not player.has_animation(path):
+		play_idle_talking(player)
+		return
+	player.play(path, 0.12)
+	player.speed_scale = 1.0
+
+
+static func play_idle_talking(player: AnimationPlayer) -> void:
+	if player == null:
+		return
+	var path := "%s/%s" % [LIB_NAME, ANIM_IDLE_TALKING]
+	if player.has_animation(path):
+		if player.current_animation != path:
+			player.play(path, 0.2)
+		player.speed_scale = 1.0
+		return
+	play_idle(player)
+
+
+static func is_interact_playing(player: AnimationPlayer) -> bool:
+	if player == null:
+		return false
+	return player.current_animation == "%s/%s" % [LIB_NAME, ANIM_INTERACT]
 
 
 static func _attach_library(player: AnimationPlayer, library: AnimationLibrary, start: StringName) -> void:

@@ -5,6 +5,8 @@ extends RefCounted
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
+## Palette and archetype weights for the district this lot sits in.
+var theme: DistrictTheme
 var floor_height: int = 6
 var ground_floor_height: int = 8
 var max_height: int = 200
@@ -20,19 +22,22 @@ func build_for_zone(
 	on_plaza: bool,
 	on_park: bool
 ) -> void:
+	if theme == null:
+		push_error("BuildingGrammar.build_for_zone: theme not set")
+		return
 	match zone:
 		LandUse.CIVIC_LOT:
 			civic_landmark(bmin, bmax, facing)
 		LandUse.CORE_LOT:
-			if corner or rng.randf() < 0.55:
+			if corner or rng.randf() < theme.tower_chance:
 				tower_podium(bmin, bmax, facing, on_plaza)
 			else:
 				midrise_modern(bmin, bmax, facing, on_plaza)
 		LandUse.MID_LOT:
-			if rng.randf() < 0.55:
-				midrise_classic(bmin, bmax, facing, on_plaza)
-			else:
+			if rng.randf() < theme.modern_chance:
 				midrise_modern(bmin, bmax, facing, on_plaza)
+			else:
+				midrise_classic(bmin, bmax, facing, on_plaza)
 		LandUse.TOWN_LOT:
 			townhouse_row(bmin, bmax, facing)
 		LandUse.COURTYARD_LOT:
@@ -55,7 +60,7 @@ func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 		var umax := Vector3i(bmin.x + (u + 1) * unit_w, bmin.y, bmax.z)
 		if u == units - 1:
 			umax.x = bmax.x
-		var floors := rng.randi_range(3, 5)
+		var floors := rng.randi_range(2, _floors_for_cap(2, 5))
 		var wall := _pick_wall_mat(true)
 		_box_floors(umin, umax, floors, wall, facing, true, false)
 		_gable_roof(umin, umax, floors, facing)
@@ -67,28 +72,28 @@ func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 			var chx := (umin.x + umax.x) / 2
 			var chz := umin.z + 1 if facing != 1 else umax.z - 2
 			var top := bmin.y + floors * floor_height + ground_floor_height - floor_height + 2
-			brush.column(chx, chz, top, top + 3, VoxelMaterial.BRICK_DARK)
+			brush.column(chx, chz, top, top + 3, theme.wall_for(rng, true))
 
 
 func midrise_classic(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -> void:
-	var max_floors := maxi(5, max_height / floor_height)
-	var floors := rng.randi_range(maxi(5, max_floors / 2), max_floors - 2)
+	var max_floors := _floors_for_cap(3, 40)
+	var lo := maxi(3, max_floors / 2)
+	var floors := rng.randi_range(lo, maxi(lo, max_floors - 2))
 	var wall := _pick_wall_mat(false)
-	var base_mat := VoxelMaterial.STONE if on_plaza else VoxelMaterial.CONCRETE
+	var base_mat := VoxelMaterial.STONE if on_plaza else theme.base_mat
 	_tripartite(bmin, bmax, floors, base_mat, wall, facing, on_plaza, true)
 	_retail_storefront(bmin, bmax, facing)
 	_add_awnings(bmin, bmax, facing, false)
 	_add_balconies(bmin, bmax, floors, facing, 0.4)
-	_flat_roof_parapet(bmin, bmax, floors, VoxelMaterial.ROOF)
+	_flat_roof_parapet(bmin, bmax, floors, theme.roof_for(rng))
 	_roof_clutter(bmin, bmax, floors)
 
 
 func midrise_modern(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -> void:
-	var max_floors := maxi(5, max_height / floor_height)
-	var floors := rng.randi_range(maxi(5, max_floors / 2), max_floors - 1)
-	var wall := VoxelMaterial.PLASTER if rng.randf() < 0.45 else (
-		VoxelMaterial.CONCRETE if rng.randf() < 0.55 else VoxelMaterial.METAL
-	)
+	var max_floors := _floors_for_cap(3, 40)
+	var lo := maxi(3, max_floors / 2)
+	var floors := rng.randi_range(lo, maxi(lo, max_floors - 1))
+	var wall := _pick_wall_mat(false)
 	_box_floors(bmin, bmax, floors, wall, facing, true, true)
 	# Soft upper setbacks
 	if floors > 6:
@@ -108,7 +113,7 @@ func midrise_modern(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool)
 			)
 	_retail_storefront(bmin, bmax, facing)
 	_add_balconies(bmin, bmax, floors, facing, 0.25)
-	_flat_roof_parapet(bmin, bmax, floors, VoxelMaterial.ROOF)
+	_flat_roof_parapet(bmin, bmax, floors, theme.roof_for(rng))
 	_roof_clutter(bmin, bmax, floors)
 	if on_plaza:
 		_arcade_ground(bmin, bmax, facing)
@@ -118,7 +123,7 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 	var podium_floors := 2 + rng.randi() % 2
 	var shaft_floors := max_height / floor_height - podium_floors
 	# Podium fills lot
-	_box_floors(bmin, bmax, podium_floors, VoxelMaterial.STONE if on_plaza else VoxelMaterial.CONCRETE, facing, true, true)
+	_box_floors(bmin, bmax, podium_floors, VoxelMaterial.STONE if on_plaza else theme.base_mat, facing, true, true)
 	_retail_storefront(bmin, bmax, facing)
 	if on_plaza:
 		_arcade_ground(bmin, bmax, facing)
@@ -145,7 +150,7 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 		var fmax := Vector3i(smax.x - crown_inset, y0 + floor_height, smax.z - crown_inset)
 		if fmax.x - fmin.x < 6 or fmax.z - fmin.z < 6:
 			break
-		_fill_shell(fmin, fmax, VoxelMaterial.METAL, facing, false, true, f == 0)
+		_fill_shell(fmin, fmax, theme.tower_shaft_mat, facing, false, true, f == 0)
 	var top := shaft_base_y + shaft_floors * floor_height
 	brush.fill_box(
 		Vector3i(smin.x + 1, top, smin.z + 1),
@@ -160,7 +165,8 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 
 
 func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
-	var floors := rng.randi_range(4, mini(8, max_height / floor_height - 2))
+	var top_floors := mini(8, _floors_for_cap(3, 40))
+	var floors := rng.randi_range(mini(4, top_floors), top_floors)
 	var wall := _pick_wall_mat(false)
 	_box_floors(bmin, bmax, floors, wall, facing, true, false)
 	# Wing depth ~3–4 m around a central court (euroblock-ish on a single lot).
@@ -179,7 +185,7 @@ func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 				VoxelMaterial.PARK
 			)
 	_add_balconies(bmin, bmax, floors, facing, 0.35)
-	_flat_roof_parapet(bmin, bmax, floors, VoxelMaterial.ROOF_CLAY if rng.randf() < 0.4 else VoxelMaterial.ROOF)
+	_flat_roof_parapet(bmin, bmax, floors, theme.roof_for(rng))
 	_roof_clutter(bmin, bmax, floors)
 
 
@@ -207,6 +213,14 @@ func civic_landmark(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 		Vector3i(cx + 1, top + 9, cz + 1),
 		VoxelMaterial.METAL_PLATE
 	)
+
+
+## How many floors fit under the current height cap, clamped to an archetype's range.
+## The cap now comes from the district intensity field, so it can be genuinely low —
+## a garden-residential lot must produce a two-storey house, not an invalid range.
+func _floors_for_cap(min_floors: int, max_floors: int) -> int:
+	var fit := 1 + (max_height - ground_floor_height) / maxi(floor_height, 1)
+	return clampi(fit, min_floors, max_floors)
 
 
 func _floor_h(floor_index: int) -> int:
@@ -436,6 +450,7 @@ func _gable_roof(umin: Vector3i, umax: Vector3i, floors: int, facing: int) -> vo
 	var top := _floor_y(umin.y, floors)
 	var depth := umax.z - umin.z if facing == 2 or facing == 3 else umax.x - umin.x
 	var steps := maxi(2, depth / 2)
+	var roof_mat := theme.roof_for(rng)
 	for s in range(steps):
 		var inset := s
 		var y := top + s
@@ -443,13 +458,13 @@ func _gable_roof(umin: Vector3i, umax: Vector3i, floors: int, facing: int) -> vo
 			brush.fill_box(
 				Vector3i(umin.x + inset, y, umin.z),
 				Vector3i(umax.x - inset, y + 1, umax.z),
-				VoxelMaterial.ROOF_CLAY
+				roof_mat
 			)
 		else:
 			brush.fill_box(
 				Vector3i(umin.x, y, umin.z + inset),
 				Vector3i(umax.x, y + 1, umax.z - inset),
-				VoxelMaterial.ROOF_CLAY
+				roof_mat
 			)
 
 
@@ -531,25 +546,9 @@ func _grand_steps(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 
 
 func _pick_wall_mat(townhouse: bool) -> int:
-	## Per-lot palette variety standing in for albedo tint (Blocky IDs are discrete).
-	var roll := rng.randf()
-	if townhouse:
-		if roll < 0.35:
-			return VoxelMaterial.BRICK
-		if roll < 0.6:
-			return VoxelMaterial.BRICK_DARK
-		if roll < 0.85:
-			return VoxelMaterial.PLASTER
-		return VoxelMaterial.STONE
-	if roll < 0.28:
-		return VoxelMaterial.BRICK
-	if roll < 0.48:
-		return VoxelMaterial.BRICK_DARK
-	if roll < 0.72:
-		return VoxelMaterial.PLASTER
-	if roll < 0.88:
-		return VoxelMaterial.CONCRETE
-	return VoxelMaterial.STONE
+	## Per-lot palette variety from the district theme (Blocky IDs are discrete, so the
+	## material choice is what carries the district's identity).
+	return theme.wall_for(rng, townhouse)
 
 
 func _retail_storefront(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
@@ -558,7 +557,7 @@ func _retail_storefront(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 		return
 	var y0 := bmin.y + 1
 	var y1 := mini(bmin.y + ground_floor_height - 1, bmin.y + 5)
-	var mat := VoxelMaterial.METAL_PLATE if rng.randf() < 0.4 else VoxelMaterial.STONE
+	var mat := theme.accent_mat if rng.randf() < 0.4 else theme.base_mat
 	match facing:
 		0:
 			brush.fill_box(Vector3i(bmin.x + 1, y0, bmax.z), Vector3i(bmax.x - 1, y1, bmax.z + 1), mat)
@@ -582,7 +581,7 @@ func _add_awnings(bmin: Vector3i, bmax: Vector3i, facing: int, dense: bool) -> v
 	if rng.randf() < (0.25 if dense else 0.45):
 		return
 	var y := bmin.y + ground_floor_height - 1
-	var mat := VoxelMaterial.PAINT if rng.randf() < 0.55 else VoxelMaterial.METAL
+	var mat := theme.accent_mat if rng.randf() < 0.55 else VoxelMaterial.METAL
 	match facing:
 		0:
 			brush.fill_box(Vector3i(bmin.x + 1, y, bmax.z), Vector3i(bmax.x - 1, y + 1, bmax.z + 2), mat)

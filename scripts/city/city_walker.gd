@@ -10,6 +10,10 @@ signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: 
 signal stomp_requested(feet_position: Vector3, radius_m: float)
 ## M-key: aim a voxel infection meteor at hit_point (surface normal for VFX only).
 signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
+## T-key: summon a Game Boy Tetris machine at aim hit_point.
+signal tetris_requested(hit_point: Vector3, hit_normal: Vector3)
+## P-key: spawn a pedestrian at aim hit_point (plays nearby Tetris if present).
+signal pedestrian_requested(hit_point: Vector3, hit_normal: Vector3)
 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
 const ProportionModifierScript := preload("res://scripts/humans/proportion_modifier.gd")
@@ -797,6 +801,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				_request_infection_meteor()
 				get_viewport().set_input_as_handled()
 				return
+			KEY_T:
+				_request_tetris_machine()
+				get_viewport().set_input_as_handled()
+				return
+			KEY_P:
+				_request_pedestrian()
+				get_viewport().set_input_as_handled()
+				return
 			KEY_U:
 				_request_undead_radar()
 				get_viewport().set_input_as_handled()
@@ -1173,7 +1185,16 @@ func _try_begin_climb_up(forward: Vector3, sprinting: bool) -> bool:
 		return false
 	var wall := _find_climb_wall(forward)
 	if wall.is_empty():
-		return false
+		## Capsule already grinding a vertical face — start climb from that contact
+		## even if a single ray slipped through a seam.
+		var n := _wall_outward_normal()
+		if n == Vector3.ZERO or n.dot(forward) > -0.35:
+			return false
+		var head_y := 0.95 * character_scale + maxf(climb_min_wall_m, max_step_height * 2.8)
+		if _probe_wall(forward, head_y, climb_probe_m + 0.1).is_empty():
+			return false
+		_start_climb(ClimbMode.UP, n)
+		return true
 	_start_climb(ClimbMode.UP, wall["normal"] as Vector3)
 	return true
 
@@ -1402,6 +1423,18 @@ func _find_climb_wall(forward: Vector3) -> Dictionary:
 	var hit := _probe_wall(forward, chest_y, climb_probe_m)
 	if hit.is_empty():
 		hit = _probe_wall(forward, 0.55 * character_scale, climb_probe_m)
+	## Side offsets: a single centre ray can miss a thin seam between panes / bricks.
+	if hit.is_empty():
+		var side := Vector3(-forward.z, 0.0, forward.x)
+		for sign_s in [-1.0, 1.0]:
+			hit = _probe_wall_from(
+				global_position + side * (0.22 * character_scale * sign_s),
+				forward,
+				chest_y,
+				climb_probe_m
+			)
+			if not hit.is_empty():
+				break
 	if hit.is_empty():
 		return {}
 	var n: Vector3 = hit.normal
@@ -1416,17 +1449,33 @@ func _find_climb_wall(forward: Vector3) -> Dictionary:
 	var head_y := chest_y + maxf(climb_min_wall_m, max_step_height * 2.8)
 	var head := _probe_wall(forward, head_y, climb_probe_m + 0.1)
 	if head.is_empty():
+		## Head probe also gets a side try — ribbon windows leave lintels off-centre.
+		var side2 := Vector3(-forward.z, 0.0, forward.x)
+		for sign_h in [-1.0, 1.0]:
+			head = _probe_wall_from(
+				global_position + side2 * (0.22 * character_scale * sign_h),
+				forward,
+				head_y,
+				climb_probe_m + 0.1
+			)
+			if not head.is_empty():
+				break
+	if head.is_empty():
 		return {}
 	return {"normal": n, "hit": hit}
 
 
 func _probe_wall(dir: Vector3, from_y: float, dist: float) -> Dictionary:
+	return _probe_wall_from(global_position, dir, from_y, dist)
+
+
+func _probe_wall_from(origin: Vector3, dir: Vector3, from_y: float, dist: float) -> Dictionary:
 	var d := dir
 	d.y = 0.0
 	if d.length_squared() < 0.0001:
 		return {}
 	d = d.normalized()
-	var from := global_position + Vector3(0.0, from_y, 0.0)
+	var from := origin + Vector3(0.0, from_y, 0.0)
 	return _ray_query(from, from + d * dist)
 
 
@@ -1655,7 +1704,29 @@ func _slide_out_horizontal() -> void:
 		return
 	## Scale with size so giants clear voxel facades; keep small to avoid pops.
 	var dist := clampf(0.04 * character_scale, 0.04, 0.35)
-	global_position += push.normalized() * dist
+	var delta := push.normalized() * dist
+	## Never move into a wall contact — only along / away from the outward normal.
+	if test_move(global_transform, delta):
+		return
+	global_position += delta
+
+
+## Average outward (flattened) normal from this frame's wall slides. Empty if none.
+func _wall_outward_normal() -> Vector3:
+	var push := Vector3.ZERO
+	for i in get_slide_collision_count():
+		var col := get_slide_collision(i)
+		var n := col.get_normal()
+		n.y = 0.0
+		if n.length_squared() < 0.0001:
+			continue
+		## Near-vertical contacts only — floors / steps don't count as a facade.
+		if absf(col.get_normal().y) > 0.45:
+			continue
+		push += n.normalized()
+	if push.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return push.normalized()
 
 
 ## Find a free footprint at the SAME height, then one ground-ray snap (same as stabilize).
@@ -1667,18 +1738,28 @@ func _unstuck_horizontal() -> bool:
 	var origin := global_position
 	var r0 := maxf(_capsule_radius() * 0.4, 0.25)
 	var radii: Array[float] = [r0, r0 * 2.0, r0 * 3.5, r0 * 5.5, r0 * 8.0]
-	## Prefer escaping opposite to facing.
+	## Prefer escaping opposite to facing, and never cross to the inside of a facade.
 	var prefer := Vector3(-global_transform.basis.z.x, 0.0, -global_transform.basis.z.z)
 	if prefer.length_squared() < 0.0001:
 		prefer = Vector3(0.0, 0.0, -1.0)
 	else:
 		prefer = prefer.normalized()
+	var wall_out := _wall_outward_normal()
+	if wall_out != Vector3.ZERO:
+		prefer = wall_out
 
 	for radius in radii:
 		for i in 12:
 			var ang := atan2(prefer.x, prefer.z) + TAU * float(i) / 12.0
-			var candidate := origin + Vector3(sin(ang) * radius, 0.0, cos(ang) * radius)
+			var offset := Vector3(sin(ang) * radius, 0.0, cos(ang) * radius)
+			## Crossing a facade into a hollow building looks free (empty room) — reject
+			## any candidate that moves against the wall's outward normal.
+			if wall_out != Vector3.ZERO and offset.dot(wall_out) < -0.05 * radius:
+				continue
+			var candidate := origin + offset
 			if not _can_stand_at(candidate):
+				continue
+			if _is_enclosed_footprint(candidate):
 				continue
 			global_position = candidate
 			_snap_y_to_ground_once()
@@ -1709,6 +1790,25 @@ func _can_stand_at(pos: Vector3) -> bool:
 			free += 1
 	## Need room to move in at least two horizontal directions.
 	return free >= 2
+
+
+## True when a candidate sits in a room-like pocket (walls on 3+ sides within a few metres).
+## Street / plaza footprints stay open on most sides; hollow building interiors do not.
+func _is_enclosed_footprint(pos: Vector3) -> bool:
+	var reach := 2.4 * maxf(character_scale, 1.0)
+	var hits := 0
+	var dirs: Array[Vector3] = [
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(-1.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 1.0),
+		Vector3(0.0, 0.0, -1.0),
+	]
+	var from := pos + Vector3(0.0, 0.9 * character_scale, 0.0)
+	for d in dirs:
+		var hit := _ray_query(from, from + d * reach)
+		if not hit.is_empty():
+			hits += 1
+	return hits >= 3
 
 
 func _snap_y_to_ground_once() -> void:
@@ -2102,6 +2202,16 @@ func _aim_ray_at_cursor() -> Dictionary:
 func _request_infection_meteor() -> void:
 	var aim := _aim_ray_at_cursor()
 	meteor_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+
+
+func _request_tetris_machine() -> void:
+	var aim := _aim_ray_at_cursor()
+	tetris_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+
+
+func _request_pedestrian() -> void:
+	var aim := _aim_ray_at_cursor()
+	pedestrian_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
 func _request_undead_radar() -> void:
