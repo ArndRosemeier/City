@@ -8,6 +8,8 @@ signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
 signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
 ## Shift+LMB stomp: feet world position + max charged-blast radius (destruction == blast).
 signal stomp_requested(feet_position: Vector3, radius_m: float)
+## Shared combat energy pool (0…energy_max).
+signal energy_changed(current: float, maximum: float)
 ## M-key: aim a voxel infection meteor at hit_point (surface normal for VFX only).
 signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
 ## T-key: summon a Game Boy Tetris machine at aim hit_point.
@@ -84,6 +86,15 @@ const LIB_NAME := &"quat"
 ## LMB blaster: hold for intermittent bolts; same carve as eye laser each shot.
 @export var blaster_speed_mps: float = 30.0
 @export var blaster_interval_sec: float = 0.25
+## Shared energy pool for combat abilities.
+@export var energy_max: float = 100.0
+## Base regen at character_scale 1.0 (capped — smaller sizes do not regen faster).
+## Larger size slows it: scale 5 → 1 energy every 5 seconds.
+@export var energy_regen_per_sec: float = 1.0
+@export var energy_cost_laser: float = 1.0
+@export var energy_cost_blaster: float = 1.0
+@export var energy_cost_stomp: float = 10.0
+@export var energy_cost_blast: float = 20.0
 ## Hold LMB for blaster. Alt+LMB charges the bomb; Shift+LMB stomps; Ctrl+LMB laser.
 @export var charged_blast_speed_mps: float = 10.0
 @export var charged_blast_charge_sec: float = 1.6
@@ -217,6 +228,7 @@ var _blast_charging: bool = false
 var _blaster_holding: bool = false
 var _blaster_accum: float = 0.0
 var _live_blaster_bolts: Array[Node] = []
+var _energy: float = 100.0
 var _blast_fire_token: int = 0
 var _blast_pending_aim: Vector3 = Vector3.ZERO
 var _blast_pending_radius: float = 1.0
@@ -250,6 +262,7 @@ var _climb_pose_clear_sec: float = 0.0
 func _ready() -> void:
 	_rng.randomize()
 	_zoom = zoom_default
+	_energy = energy_max
 	collision_layer = 2
 	## Walking uses VoxelBoxMover against live voxels — do not collide with remeshed
 	## terrain (layer 1) or stale dig colliders fight the real shape. Safety deck only.
@@ -690,6 +703,35 @@ func is_playing_action() -> bool:
 	return _action_playing
 
 
+func get_energy() -> float:
+	return _energy
+
+
+func get_energy_max() -> float:
+	return energy_max
+
+
+func try_spend_energy(cost: float) -> bool:
+	if cost <= 0.0:
+		return true
+	if _energy + 0.0001 < cost:
+		return false
+	_energy = maxf(_energy - cost, 0.0)
+	energy_changed.emit(_energy, energy_max)
+	return true
+
+
+func _regen_energy(delta: float) -> void:
+	if _game_over_locked or _energy >= energy_max:
+		return
+	## 1/s at scale 1; scale N → 1 energy every N seconds (never faster than base).
+	var rate := energy_regen_per_sec / maxf(character_scale, 1.0)
+	var prev := _energy
+	_energy = minf(_energy + rate * delta, energy_max)
+	if not is_equal_approx(prev, _energy):
+		energy_changed.emit(_energy, energy_max)
+
+
 func play_action(anim_name: String, allow_toggle: bool = true) -> void:
 	if _climb_mode != ClimbMode.NONE:
 		return
@@ -1058,6 +1100,7 @@ func _update_camera_shake(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_regen_energy(delta)
 	if is_blocking_ui_open():
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -2720,6 +2763,9 @@ func _start_charged_blast_at_cursor() -> void:
 	if _charged_blast != null and bool(_charged_blast.call("is_firing")):
 		_blast_charge = 0.0
 		return
+	if not try_spend_energy(energy_cost_blast):
+		_blast_charge = 0.0
+		return
 	## Tap-release still fires a minimum bomb.
 	if _blast_charge < 0.05:
 		_blast_charge = 0.05
@@ -2797,6 +2843,8 @@ func _start_laser_eyes_at_cursor() -> void:
 	if now < _laser_ready_at_msec:
 		return
 	if _eye_laser != null and bool(_eye_laser.call("is_firing")):
+		return
+	if not try_spend_energy(energy_cost_laser):
 		return
 
 	var aim_point := _aim_point_at_cursor()
@@ -2879,6 +2927,8 @@ func _is_beam_held() -> bool:
 
 func _fire_blaster_bolt() -> void:
 	if _camera == null:
+		return
+	if not try_spend_energy(energy_cost_blaster):
 		return
 	## Same shoot flick as charged blast release — hand casts each bolt.
 	if has_action_animation(charged_blast_shoot_anim):
@@ -2967,6 +3017,8 @@ func _start_stomp() -> void:
 		return
 	if not has_action_animation(stomp_anim):
 		push_error("CityWalker: stomp anim missing (%s)" % stomp_anim)
+		return
+	if not try_spend_energy(energy_cost_stomp):
 		return
 	_stomp_ready_at_msec = now + int(maxi(int(stomp_cooldown_sec * 1000.0), 50))
 	play_action(stomp_anim, false)

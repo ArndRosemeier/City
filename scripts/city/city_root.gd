@@ -10,6 +10,7 @@ const DistrictInstanceScript := preload("res://scripts/city/district_instance.gd
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
+const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
 const DayNightCycleScript := preload("res://scripts/city/day_night_cycle.gd")
@@ -50,6 +51,7 @@ var _walker: CharacterBody3D
 var _hud: Label
 var _status: Label
 var _action_bar: Node
+var _energy_hud: Node
 var _debris_root: Node3D
 var _cascade: Node
 var _infection: Node
@@ -309,6 +311,10 @@ func _build_hud() -> void:
 	_tendril_hud = InfectionTendrilHudScript.new()
 	_tendril_hud.name = "InfectionTendrilHud"
 	add_child(_tendril_hud)
+
+	_energy_hud = PlayerEnergyHudScript.new()
+	_energy_hud.name = "PlayerEnergyHud"
+	add_child(_energy_hud)
 
 	_undead_hud = UndeadInvasionHudScript.new()
 	_undead_hud.name = "UndeadInvasionHud"
@@ -865,6 +871,8 @@ func _regenerate() -> void:
 		_roll_meteor_spawn_interval()
 	if _tendril_hud != null and is_instance_valid(_tendril_hud):
 		_tendril_hud.call("clear_display")
+	if _energy_hud != null and is_instance_valid(_energy_hud):
+		_energy_hud.call("clear_display")
 	if _undead_hud != null and is_instance_valid(_undead_hud):
 		_undead_hud.call("clear_display")
 	if _minimap != null and is_instance_valid(_minimap):
@@ -1007,6 +1015,8 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	add_child(_action_bar)
 	_action_bar.setup(_walker)
 	_action_bar.build_requested.connect(_on_build_chosen)
+	if _energy_hud != null and is_instance_valid(_energy_hud):
+		_energy_hud.call("bind_walker", _walker)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
 		_apply_saved_controls()
