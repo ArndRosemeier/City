@@ -68,8 +68,10 @@ Every launch draws a fresh world seed, so each game starts in a different city. 
 layouts still come from that seed mixed with the district's grid coordinate, so a world is
 fully reproducible: the seed is printed at startup and `--city-seed=N` replays it. Setting
 `city_seed` in the scene or from code (as the tools do) pins it as well; leaving it at `0`
-means "pick a new one". The tile at the world origin is always the downtown core
-regardless of seed, so the player spawns downtown.
+means "pick a new one". The player boots into a random district tile within three
+tiles of the world origin (chosen from the same seed, so `--city-seed=N` also
+replays the spawn). Override with `--spawn-district=x,z`. The tile at the world
+origin is still always the downtown core theme, even when you spawn elsewhere.
 
 ## District themes
 

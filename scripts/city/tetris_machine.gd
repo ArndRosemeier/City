@@ -364,11 +364,8 @@ func _stamp_voxel_shell() -> void:
 	_title.outline_modulate = Color(0.75, 0.88, 0.55, 1.0)
 	## Sit proud of the voxel header face (local -Z = toward the player).
 	_title.position = Vector3(0.0, FRAME_H - 0.9, -0.55)
-	_title.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	_title.rotation.y = PI
-	_title.double_sided = true
-	_title.no_depth_test = true
-	_title.render_priority = 10
+	_configure_cabinet_label(_title, 10)
 	add_child(_title)
 
 
@@ -543,9 +540,7 @@ func _build_labels() -> void:
 	_hud.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_hud.outline_size = 18
 	_hud.outline_modulate = Color(0.02, 0.06, 0.02, 0.95)
-	_hud.no_depth_test = true
-	_hud.render_priority = 10
-	_hud.double_sided = true
+	_configure_cabinet_label(_hud, 10)
 	add_child(_hud)
 
 	_game_over_label = Label3D.new()
@@ -561,10 +556,20 @@ func _build_labels() -> void:
 	_game_over_label.rotation.y = PI
 	_game_over_label.outline_size = 20
 	_game_over_label.outline_modulate = Color(0, 0, 0, 0.95)
-	_game_over_label.no_depth_test = true
-	_game_over_label.render_priority = 11
+	_configure_cabinet_label(_game_over_label, 11)
 	_game_over_label.visible = false
 	add_child(_game_over_label)
+
+
+## Depth-tested labels: no_depth_test made score/title paint over the player whenever
+## you stood in front of the cabinet. Opaque prepass still keeps glyphs readable against
+## the voxel shell without sorting them as translucent overlays.
+func _configure_cabinet_label(label: Label3D, priority: int) -> void:
+	label.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	label.double_sided = true
+	label.no_depth_test = false
+	label.alpha_cut = Label3D.ALPHA_CUT_OPAQUE_PREPASS
+	label.render_priority = priority
 
 
 func _board_index(x: int, y: int) -> int:

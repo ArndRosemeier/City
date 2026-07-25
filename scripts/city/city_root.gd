@@ -25,6 +25,8 @@ const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
+## How far from the world origin (in district tiles) the player may spawn.
+const SPAWN_DISTRICT_RING := 3
 ## District layouts hang off this seed plus the district's grid coordinate. Left at
 ## SEED_RANDOM every launch builds a different world; set a concrete value (in the
 ## scene, from code, or with --city-seed=N) to replay one exactly.
@@ -34,6 +36,9 @@ const SEED_RANDOM := 0
 @export var bubble_radius_m: float = 360.0
 ## Real-time seconds for a full 24h cycle.
 @export var day_length_sec: float = 420.0
+## District tile the player boots into. Filled at regenerate from the world seed
+## (or --spawn-district=x,z); tools can read it after boot.
+var spawn_district_coord: Vector2i = Vector2i.ZERO
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
@@ -102,7 +107,7 @@ func _ready() -> void:
 func _resolve_seed() -> void:
 	## Runs once per launch, before any district is baked: every generator downstream
 	## mixes this with the district coordinate, so the whole world follows from it.
-	var cli := _cli_seed()
+	var cli := _cli_int_flag("--city-seed=")
 	if cli != SEED_RANDOM:
 		city_seed = cli
 	if city_seed == SEED_RANDOM:
@@ -112,18 +117,46 @@ func _resolve_seed() -> void:
 	print("CityRoot: world seed %d (replay with --city-seed=%d)" % [city_seed, city_seed])
 
 
-func _cli_seed() -> int:
-	const FLAG := "--city-seed="
+func _cli_int_flag(flag: String) -> int:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for a: String in args:
+		if not a.begins_with(flag):
+			continue
+		var raw := a.substr(flag.length())
+		if not raw.is_valid_int():
+			push_error("CityRoot: %s%s is not an integer" % [flag, raw])
+			return SEED_RANDOM
+		return int(raw)
+	return SEED_RANDOM
+
+
+func _cli_spawn_district() -> Variant:
+	## Returns Vector2i when --spawn-district=x,z is present, otherwise null.
+	const FLAG := "--spawn-district="
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	for a: String in args:
 		if not a.begins_with(FLAG):
 			continue
 		var raw := a.substr(FLAG.length())
-		if not raw.is_valid_int():
-			push_error("CityRoot: %s%s is not an integer" % [FLAG, raw])
-			return SEED_RANDOM
-		return int(raw)
-	return SEED_RANDOM
+		var parts := raw.split(",")
+		if parts.size() != 2 or not parts[0].is_valid_int() or not parts[1].is_valid_int():
+			push_error("CityRoot: %s expects x,z integers (got %s)" % [FLAG, raw])
+			return null
+		return Vector2i(int(parts[0]), int(parts[1]))
+	return null
+
+
+func _pick_spawn_district() -> Vector2i:
+	var forced: Variant = _cli_spawn_district()
+	if forced is Vector2i:
+		return forced as Vector2i
+	## Stable for a given world seed so --city-seed=N also replays the spawn tile.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = DistrictCoord.feature_seed(city_seed, 0x53504E)  ## "SPN"
+	return Vector2i(
+		rng.randi_range(-SPAWN_DISTRICT_RING, SPAWN_DISTRICT_RING),
+		rng.randi_range(-SPAWN_DISTRICT_RING, SPAWN_DISTRICT_RING)
+	)
 
 
 func _build_env() -> void:
@@ -826,8 +859,14 @@ func _regenerate() -> void:
 	_streamer.status_message.connect(_on_streamer_status)
 	_streamer.spawn_district_ready.connect(_on_spawn_district_ready)
 
+	spawn_district_coord = _pick_spawn_district()
+	var theme := DistrictTheme.for_district(city_seed, spawn_district_coord)
+	print(
+		"CityRoot: spawn district %s (%s) — pin with --spawn-district=%d,%d"
+		% [spawn_district_coord, theme.display_name, spawn_district_coord.x, spawn_district_coord.y]
+	)
 	_status.text = "Generating spawn district…"
-	_streamer.boot_spawn_district(Vector2i.ZERO)
+	_streamer.boot_spawn_district(spawn_district_coord)
 
 
 func _on_streamer_status(text: String) -> void:

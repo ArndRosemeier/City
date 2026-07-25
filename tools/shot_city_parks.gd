@@ -54,10 +54,11 @@ func _ready() -> void:
 
 
 func _spawn_district(city: CityRoot) -> DistrictInstance:
+	var want := city.spawn_district_coord
 	var districts: Array = city._streamer.call("get_loaded_districts") as Array
 	for inst: Variant in districts:
 		var di: DistrictInstance = inst
-		if di.coord == Vector2i.ZERO and di.generator != null:
+		if di.coord == want and di.generator != null:
 			return di
 	return null
 
