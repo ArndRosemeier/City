@@ -22,7 +22,7 @@ if ($vsPath) {
 if (-not $vcvars) {
   Write-Host @"
 MSVC not found. Install Visual Studio with 'Desktop development with C++'.
-city_voxel.dll is required — there is no GDScript fallback.
+city_voxel.dll is required - there is no GDScript fallback.
 "@
   exit 1
 }

@@ -3,6 +3,8 @@
 class_name InfectionDirector
 extends Node
 
+const TendrilAuraScript := preload("res://scripts/city/infection_tendril_aura_vfx.gd")
+
 signal tendril_killed(tendril_id: int)
 signal tendril_spawned(tendril_id: int)
 ## Any removal path (tip-kill, inert retire, stream unload).
@@ -43,6 +45,8 @@ var _lead_at: Dictionary = {}
 ## Spawn order (HUD + stable iteration).
 var _rr_ids: Array[int] = []
 var player_score: int = 0
+## tendril_id → aura Node3D
+var _auras: Dictionary = {}
 
 
 func setup(terrain: VoxelTerrain, tool: VoxelTool, voxel_size: float) -> void:
@@ -56,6 +60,7 @@ func clear_all() -> void:
 	var tids: Array = _tendrils.keys()
 	for tid in tids:
 		_stop_tendril_sfx(int(tid))
+		_stop_tendril_aura(int(tid))
 	_tendrils.clear()
 	_lead_at.clear()
 	_rr_ids.clear()
@@ -74,7 +79,17 @@ func reset_player_score() -> void:
 
 
 func active_tendril_count() -> int:
-	return _tendrils.size()
+	return _growing_tendril_count()
+
+
+func _growing_tendril_count() -> int:
+	var n := 0
+	for tid in _tendrils.keys():
+		var t: Dictionary = _tendrils[tid]
+		if bool(t.get("dying", false)):
+			continue
+		n += 1
+	return n
 
 
 ## Snapshot for HUD: ordered rows of {id, value} (remaining tip value).
@@ -84,6 +99,8 @@ func get_tendril_hud_rows() -> Array:
 		if not _tendrils.has(tid):
 			continue
 		var t: Dictionary = _tendrils[tid]
+		if bool(t.get("dying", false)):
+			continue
 		var value := int(t.get("value", 0))
 		rows.append({"id": int(tid), "value": value, "depleted": value <= 0})
 	return rows
@@ -97,7 +114,7 @@ func spawn_tendril_at_vox(
 ) -> int:
 	if _tool == null:
 		return -1
-	if _tendrils.size() >= max_tendrils:
+	if _growing_tendril_count() >= max_tendrils:
 		return -1
 	## Don't double-bind the same lead cell to two tendrils.
 	if _lead_at.has(vox):
@@ -144,6 +161,7 @@ func spawn_tendril_at_vox(
 	_lead_at[vox] = tid
 	_rr_ids.append(tid)
 	_start_tendril_sfx(tid, vox)
+	_start_tendril_aura(tid, vox)
 	tendril_spawned.emit(tid)
 	return tid
 
@@ -154,7 +172,7 @@ func spawn_tendril_at_world(
 ) -> int:
 	if _tool == null or _terrain == null:
 		return -1
-	if _tendrils.size() >= max_tendrils:
+	if _growing_tendril_count() >= max_tendrils:
 		return -1
 	return spawn_tendril_at_vox(_world_to_vox(world_pos), prev_mat, heading, force)
 
@@ -237,8 +255,6 @@ func _physics_process(delta: float) -> void:
 			_rr_ids.erase(tid)
 			continue
 		var t: Dictionary = _tendrils[tid]
-		if bool(t.get("suspended", false)):
-			continue
 		var accum := float(t.get("tick_accum", 0.0)) + delta
 		if accum < tick_interval_sec:
 			t["tick_accum"] = accum
@@ -246,6 +262,12 @@ func _physics_process(delta: float) -> void:
 			continue
 		t["tick_accum"] = accum - tick_interval_sec
 		_tendrils[tid] = t
+		## Dying tips keep reverting even outside the detail bubble.
+		if bool(t.get("dying", false)):
+			_revert_tendril_tick(tid)
+			continue
+		if bool(t.get("suspended", false)):
+			continue
 		_advance_tendril(tid)
 
 
@@ -344,15 +366,11 @@ func _apply_digest_score(tid: int) -> void:
 		return
 	var t: Dictionary = _tendrils[tid]
 	var value := int(t.get("value", 0))
-	if value > 0:
-		t["value"] = value - 1
-		_tendrils[tid] = t
+	if value <= 0:
+		## Depleted tips keep converting; score is never taxed.
 		return
-	## Depleted tip: each further conversion taxes the player.
-	t["value"] = 0
+	t["value"] = value - 1
 	_tendrils[tid] = t
-	player_score -= 1
-	player_score_changed.emit(player_score)
 
 
 func _move_lead(tid: int, old_lead: Vector3i, new_lead: Vector3i) -> void:
@@ -449,22 +467,82 @@ func _kill_tendril(tid: int) -> void:
 	if not _tendrils.has(tid):
 		return
 	var t: Dictionary = _tendrils[tid]
+	if bool(t.get("dying", false)):
+		return
 	## Bank whatever value is left — kill early for the full 1000.
 	var remaining := maxi(int(t.get("value", 0)), 0)
 	if remaining > 0:
 		player_score += remaining
 		player_score_changed.emit(player_score)
+	var lead: Vector3i = t["lead"]
 	var cells: Dictionary = t["cells"]
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	## Restore in arbitrary order — materials only.
+	var order := _build_revert_order(lead, cells)
+	## Stop growth / tip targeting immediately; voxels peel back head → root.
+	_lead_at.erase(lead)
+	_stop_tendril_sfx(tid)
+	_stop_tendril_aura(tid)
+	t["dying"] = true
+	t["alive"] = false
+	t["value"] = 0
+	t["revert_queue"] = order
+	t["tick_accum"] = 0.0
+	_tendrils[tid] = t
+	tendril_killed.emit(tid)
+	## First voxel (the destroyed head) reverts on this kill tick.
+	_revert_tendril_tick(tid)
+
+
+## Head-first parent walk, then any leftover side-branch tips (also tip→root).
+func _build_revert_order(lead: Vector3i, cells: Dictionary) -> Array[Vector3i]:
+	var order: Array[Vector3i] = []
+	var seen: Dictionary = {}
+	_append_parent_chain(order, seen, lead, cells)
 	for vox in cells.keys():
+		if seen.has(vox):
+			continue
+		_append_parent_chain(order, seen, vox as Vector3i, cells)
+	return order
+
+
+func _append_parent_chain(
+	order: Array[Vector3i], seen: Dictionary, start: Vector3i, cells: Dictionary
+) -> void:
+	var cursor := start
+	var guard := 0
+	while guard < 4096:
+		guard += 1
+		if not cells.has(cursor) or seen.has(cursor):
+			break
+		seen[cursor] = true
+		order.append(cursor)
+		var info: Dictionary = cells[cursor]
+		var parent: Vector3i = info.get("parent", _NO_VOX)
+		if parent.x >= 2147483646:
+			break
+		cursor = parent
+
+
+func _revert_tendril_tick(tid: int) -> void:
+	if not _tendrils.has(tid):
+		return
+	var t: Dictionary = _tendrils[tid]
+	var queue: Array = t.get("revert_queue", []) as Array
+	var cells: Dictionary = t.get("cells", {}) as Dictionary
+	if queue.is_empty():
+		_forget_tendril(tid)
+		return
+	var vox: Vector3i = queue.pop_front() as Vector3i
+	t["revert_queue"] = queue
+	if cells.has(vox):
 		var info: Dictionary = cells[vox]
 		var prev: int = int(info.get("prev_mat", VoxelMaterial.AIR))
 		_set_voxel(vox, prev)
-		_lead_at.erase(vox)
-	_forget_tendril(tid)
-	tendril_killed.emit(tid)
+		cells.erase(vox)
+		t["cells"] = cells
+	_lead_at.erase(vox)
+	_tendrils[tid] = t
+	if queue.is_empty():
+		_forget_tendril(tid)
 
 
 func _retire_tendril_inert(tid: int) -> void:
@@ -483,6 +561,7 @@ func _forget_tendril(tid: int) -> void:
 		## Already gone — avoid double-ended for callers that erase first.
 		return
 	_stop_tendril_sfx(tid)
+	_stop_tendril_aura(tid)
 	_tendrils.erase(tid)
 	_rr_ids.erase(tid)
 	## Clean any stale lead map entries for this id.
@@ -512,23 +591,57 @@ func _move_tendril_sfx(tid: int, vox: Vector3i) -> void:
 	var audio := _city_audio()
 	if audio != null and audio.has_method("move_tendril_voice"):
 		audio.call("move_tendril_voice", tid, _vox_to_world(vox))
+	_move_tendril_aura(tid, vox)
 
 
 func _sfx_tendril_transmuted(tid: int, vox: Vector3i) -> void:
 	var world := _vox_to_world(vox)
 	var audio := _city_audio()
-	if audio == null:
-		return
-	if audio.has_method("move_tendril_voice"):
-		audio.call("move_tendril_voice", tid, world)
-	if audio.has_method("play_tendril_transmute"):
-		audio.call("play_tendril_transmute", world)
+	if audio != null:
+		if audio.has_method("move_tendril_voice"):
+			audio.call("move_tendril_voice", tid, world)
+		if audio.has_method("play_tendril_transmute"):
+			audio.call("play_tendril_transmute", world)
+	_move_tendril_aura(tid, vox)
 
 
 func _stop_tendril_sfx(tid: int) -> void:
 	var audio := _city_audio()
 	if audio != null and audio.has_method("stop_tendril_voice"):
 		audio.call("stop_tendril_voice", tid)
+
+
+func _aura_parent() -> Node:
+	if _terrain != null and is_instance_valid(_terrain):
+		return _terrain
+	return get_parent()
+
+
+func _start_tendril_aura(tid: int, vox: Vector3i) -> void:
+	_stop_tendril_aura(tid)
+	var host := _aura_parent()
+	if host == null:
+		return
+	var aura: Node3D = TendrilAuraScript.new() as Node3D
+	aura.name = "TendrilAura_%d" % tid
+	host.add_child(aura)
+	aura.call("setup", _vox_to_world(vox), _rng.randf() * TAU)
+	_auras[tid] = aura
+
+
+func _move_tendril_aura(tid: int, vox: Vector3i) -> void:
+	var aura: Variant = _auras.get(tid, null)
+	if aura == null or not is_instance_valid(aura):
+		return
+	if aura.has_method("move_to"):
+		aura.call("move_to", _vox_to_world(vox))
+
+
+func _stop_tendril_aura(tid: int) -> void:
+	var aura: Variant = _auras.get(tid, null)
+	_auras.erase(tid)
+	if aura != null and is_instance_valid(aura):
+		(aura as Node).queue_free()
 
 
 func _set_voxel(vox: Vector3i, mat_id: int) -> void:

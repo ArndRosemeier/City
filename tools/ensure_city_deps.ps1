@@ -87,7 +87,7 @@ function Assert-NativeDll {
 		return
 	}
 	Write-Step ("ERROR: city_voxel.dll missing or too small at " + $NativeDll)
-	Write-Step "Rebuild with tools\build_city_voxel.ps1 — native code is required (no fallback)."
+	Write-Step "Rebuild with tools\build_city_voxel.ps1 - native code is required (no fallback)."
 	throw "city_voxel.dll required"
 }
 
