@@ -25,6 +25,7 @@ const TetrisMachineScript := preload("res://scripts/city/tetris_machine.gd")
 const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
 const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
 const BuildPlacerScript := preload("res://scripts/city/build_placer.gd")
+const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -49,7 +50,9 @@ var _streamer: Node
 ## Typed as CharacterBody3D so portable installs work before global class_name cache exists.
 var _walker: CharacterBody3D
 var _hud: Label
+var _hud_layer: CanvasLayer
 var _status: Label
+var _loading_splash: CanvasLayer
 var _action_bar: Node
 var _energy_hud: Node
 var _debris_root: Node3D
@@ -87,6 +90,7 @@ var _sun: DirectionalLight3D
 var _player_viewer: VoxelViewer
 var _collision_viewer: VoxelViewer
 var _booting: bool = false
+var _district_hopping: bool = false
 var _fps_accum: float = 0.0
 var _infection_stream_accum: float = 0.0
 var _street_night_factor: float = 0.0
@@ -287,8 +291,16 @@ func _push_night_factor_to_street_lights() -> void:
 
 
 func _build_hud() -> void:
-	var layer := CanvasLayer.new()
-	add_child(layer)
+	_loading_splash = LoadingSplashScript.new()
+	add_child(_loading_splash)
+	_status = _loading_splash.call("status_label") as Label
+	_loading_splash.call("show_splash", "Setting up VoxelTerrain…")
+
+	_hud_layer = CanvasLayer.new()
+	_hud_layer.name = "HudLayer"
+	## Hidden until the spawn district is playable — the title splash owns the screen.
+	_hud_layer.visible = false
+	add_child(_hud_layer)
 
 	var cross := Label.new()
 	cross.text = "+"
@@ -299,14 +311,14 @@ func _build_hud() -> void:
 	cross.offset_top = -14
 	cross.offset_right = 8
 	cross.offset_bottom = 14
-	layer.add_child(cross)
+	_hud_layer.add_child(cross)
 
 	_hud = Label.new()
 	_hud.add_theme_font_size_override("font_size", 18)
 	_hud.add_theme_color_override("font_color", Color(0.95, 0.95, 0.95, 0.9))
 	_hud.position = Vector2(16, 12)
 	_hud.text = "—"
-	layer.add_child(_hud)
+	_hud_layer.add_child(_hud)
 
 	_tendril_hud = InfectionTendrilHudScript.new()
 	_tendril_hud.name = "InfectionTendrilHud"
@@ -324,17 +336,6 @@ func _build_hud() -> void:
 	_minimap.name = "CityMinimap"
 	add_child(_minimap)
 	_minimap.call("bind_city", self)
-
-	_status = Label.new()
-	_status.add_theme_font_size_override("font_size", 20)
-	_status.add_theme_color_override("font_color", Color(1, 0.92, 0.55))
-	_status.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_status.offset_left = -420.0
-	_status.offset_right = 420.0
-	_status.offset_top = -72
-	_status.offset_bottom = -40
-	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	layer.add_child(_status)
 
 	_build_game_over_overlay()
 
@@ -819,6 +820,128 @@ func request_undead_radar() -> bool:
 	return true
 
 
+## Hop one district tile in the direction the walker is facing (J by default).
+func request_district_hop() -> bool:
+	if _game_over or _booting or _district_hopping:
+		return false
+	if _walker == null or not is_instance_valid(_walker):
+		return false
+	if _streamer == null or not is_instance_valid(_streamer):
+		return false
+	_district_hopping = true
+	_district_hop_async()
+	return true
+
+
+func _facing_district_delta(forward: Vector3) -> Vector2i:
+	var f := Vector3(forward.x, 0.0, forward.z)
+	if f.length_squared() < 0.0001:
+		return Vector2i(0, -1)
+	f = f.normalized()
+	## Snap to the dominant axis so diagonal facing still lands on a neighbour tile.
+	if absf(f.x) >= absf(f.z):
+		return Vector2i(1 if f.x >= 0.0 else -1, 0)
+	return Vector2i(0, 1 if f.z >= 0.0 else -1)
+
+
+func _district_hop_async() -> void:
+	var walker := _walker
+	if walker == null or not is_instance_valid(walker):
+		_district_hopping = false
+		return
+	var origin_pos := walker.global_position
+	var here := DistrictCoord.from_world(origin_pos, VOXEL_SIZE)
+	var delta := _facing_district_delta(-walker.global_transform.basis.z)
+	var dest := here + delta
+	var theme := DistrictTheme.for_district(city_seed, dest)
+	print(
+		"CityRoot: district hop %s → %s (%s) facing=%s"
+		% [here, dest, theme.display_name, delta]
+	)
+	if _hud_layer != null:
+		_hud_layer.visible = false
+	if _loading_splash != null:
+		_loading_splash.call(
+			"show_splash",
+			"Hopping to %s %s…" % [theme.display_name, dest]
+		)
+	walker.set_physics_process(false)
+	walker.velocity = Vector3.ZERO
+	## Park above the destination centre so the bubble scores that tile first.
+	var hover := DistrictCoord.center_world(dest, VOXEL_SIZE) + Vector3(0.0, 40.0, 0.0)
+	walker.global_position = hover
+	var inst: DistrictInstance = _streamer.call("prioritize_district", dest) as DistrictInstance
+	if inst == null:
+		await _finish_district_hop_fail("missing district instance", origin_pos)
+		return
+	var guard := 0
+	while not inst.is_ready and guard < 3600:
+		guard += 1
+		if not is_instance_valid(inst):
+			await _finish_district_hop_fail("district unloaded while hopping", origin_pos)
+			return
+		if guard % 45 == 0 and _loading_splash != null:
+			var phase := "ground" if not inst.is_ground_ready else "detail"
+			_loading_splash.call(
+				"set_status",
+				"Loading %s %s (%s)…" % [theme.display_name, dest, phase]
+			)
+		## Ground is enough to find a street spawn; keep waiting for full ready when close.
+		if inst.is_ground_ready and inst.generator != null and guard > 900 and not inst.is_busy:
+			break
+		await get_tree().process_frame
+	if not is_instance_valid(inst) or inst.generator == null:
+		await _finish_district_hop_fail("district never became ready", origin_pos)
+		return
+	if _loading_splash != null:
+		_loading_splash.call("set_status", "Finding spawn in %s…" % theme.display_name)
+	var spawn: Vector3 = inst.generator.find_spawn_world(_tool)
+	if not _has_solid_ground_at(spawn):
+		var gguard := 0
+		while not _has_solid_ground_at(spawn) and gguard < 600:
+			gguard += 1
+			await get_tree().process_frame
+		spawn = inst.generator.find_spawn_world(_tool)
+	walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
+	walker.velocity = Vector3.ZERO
+	if _loading_splash != null:
+		_loading_splash.call("set_status", "Waiting for ground collisions…")
+	var floor_y := await _wait_floor_collision(spawn, 1800)
+	if is_nan(floor_y):
+		await _finish_district_hop_fail("no ground collision at hop spawn", origin_pos)
+		return
+	walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
+	walker.velocity = Vector3.ZERO
+	walker.set_physics_process(true)
+	if _streamer != null and _streamer.has_method("clear_priority_district"):
+		_streamer.call("clear_priority_district")
+	_district_hopping = false
+	if _hud_layer != null:
+		_hud_layer.visible = true
+	if _loading_splash != null:
+		_loading_splash.call("hide_splash")
+	print("CityRoot: district hop landed in %s at y=%.2f" % [dest, floor_y])
+
+
+func _finish_district_hop_fail(reason: String, restore_pos: Vector3) -> void:
+	push_error("CityRoot: district hop failed — %s" % reason)
+	if _streamer != null and _streamer.has_method("clear_priority_district"):
+		_streamer.call("clear_priority_district")
+	if _walker != null and is_instance_valid(_walker):
+		_walker.global_position = restore_pos
+		_walker.velocity = Vector3.ZERO
+		_walker.set_physics_process(true)
+	_district_hopping = false
+	if _hud_layer != null and not _booting:
+		_hud_layer.visible = true
+	if _loading_splash != null:
+		_loading_splash.call("set_status", "Hop failed — %s" % reason)
+		## Brief beat so the error is readable, then fade.
+		await get_tree().create_timer(1.2).timeout
+		if not _booting and _loading_splash != null:
+			_loading_splash.call("hide_splash")
+
+
 func _on_tendril_killed(_tendril_id: int) -> void:
 	## Tip-kill restores terrain; vanish any loose infection-textured debris too.
 	if _cascade != null and is_instance_valid(_cascade) and _cascade.has_method("clear_infection_debris"):
@@ -835,8 +958,13 @@ func _regenerate() -> void:
 	_booting = true
 	_game_over = false
 	_hide_game_over_overlay()
-	_status.visible = true
-	_status.text = "Setting up VoxelTerrain…"
+	if _hud_layer != null:
+		_hud_layer.visible = false
+	if _loading_splash != null:
+		_loading_splash.call("show_splash", "Setting up VoxelTerrain…")
+	elif _status != null:
+		_status.visible = true
+		_status.text = "Setting up VoxelTerrain…"
 	await get_tree().process_frame
 
 	if _walker != null and is_instance_valid(_walker):
@@ -920,7 +1048,9 @@ func _regenerate() -> void:
 
 
 func _on_streamer_status(text: String) -> void:
-	if _status != null and _status.visible:
+	if _loading_splash != null and _loading_splash.visible:
+		_loading_splash.call("set_status", text)
+	elif _status != null and _status.visible:
 		_status.text = text
 
 
@@ -1009,8 +1139,13 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	if look.length_squared() > 0.01:
 		_walker.set_yaw(atan2(-look.x, -look.z))
 
-	_status.visible = false
 	_booting = false
+	if _hud_layer != null:
+		_hud_layer.visible = true
+	if _loading_splash != null:
+		_loading_splash.call("hide_splash")
+	elif _status != null:
+		_status.visible = false
 	_action_bar = PlayerActionBarScript.new()
 	_action_bar.name = "PlayerActionBar"
 	add_child(_action_bar)

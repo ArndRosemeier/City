@@ -34,6 +34,9 @@ var _player: Node3D
 var _districts: Dictionary = {}  # Vector2i -> DistrictInstance
 var _boot_coord: Vector2i = Vector2i.ZERO
 var _booted: bool = false
+## When set, ground/detail jobs for this tile jump the queue (district hop).
+var _priority_coord: Vector2i = Vector2i(2147483647, 2147483647)
+var _has_priority: bool = false
 var _rescore_accum: float = 0.0
 var _job_cooldown: float = 0.0
 
@@ -89,6 +92,22 @@ func district_count() -> int:
 
 func get_district(coord: Vector2i) -> DistrictInstance:
 	return _districts.get(coord) as DistrictInstance
+
+
+## Ensure `coord` is in the bubble and prefer it for the next bake slots.
+## Used by the district-hop cheat so the tile ahead of the player starts before
+## neighbours that happen to be slightly closer to the old feet position.
+func prioritize_district(coord: Vector2i) -> DistrictInstance:
+	_request_district(coord, false)
+	_priority_coord = coord
+	_has_priority = true
+	_job_cooldown = 0.0
+	_kick_next_job()
+	return get_district(coord)
+
+
+func clear_priority_district() -> void:
+	_has_priority = false
 
 
 func for_each_district(cb: Callable) -> void:
@@ -361,6 +380,34 @@ func _try_start_one_job() -> bool:
 		## Boot may run before camera exists — allow ground-only boot job already started.
 		return false
 	var player_pos := _player_pos()
+	## District hop: bake the requested tile before anything else in the bubble.
+	if _has_priority and _districts.has(_priority_coord):
+		var prio: DistrictInstance = _districts[_priority_coord]
+		if prio != null and is_instance_valid(prio) and not prio.is_busy:
+			if prio.needs_ground():
+				_begin_tracked_job("ground", prio)
+				print(
+					"CityStreamer ground %s quality=full edge=%.0fm workers=%d/%d (priority)"
+					% [str(prio.coord), prio.distance_to_point(player_pos), _active_jobs.size(), max_workers]
+				)
+				prio.begin_ground(_terrain, _tool, _camera, "full")
+				return true
+			if prio.needs_detail():
+				_begin_tracked_job("detail", prio)
+				print(
+					"CityStreamer detail %s edge=%.0fm workers=%d/%d (priority)"
+					% [str(prio.coord), prio.distance_to_point(player_pos), _active_jobs.size(), max_workers]
+				)
+				prio.begin_detail(_terrain, _tool, _camera)
+				return true
+			if prio.needs_upgrade() and prio.distance_to_point(player_pos) <= voxel_detail_radius_m:
+				_begin_tracked_job("upgrade", prio)
+				print(
+					"CityStreamer upgrade %s edge=%.0fm workers=%d/%d (priority)"
+					% [str(prio.coord), prio.distance_to_point(player_pos), _active_jobs.size(), max_workers]
+				)
+				prio.begin_upgrade(_terrain, _tool, _camera)
+				return true
 	## Prefer upgrading far tiles that entered the detail radius.
 	var upgrade_job := _pick_nearest(func(inst: DistrictInstance) -> bool: return inst.needs_upgrade() and inst.distance_to_point(player_pos) <= voxel_detail_radius_m)
 	if upgrade_job != null:
@@ -412,6 +459,8 @@ func _on_district_ready(inst: DistrictInstance) -> void:
 		if str(inst.bake_quality) == "far":
 			kind = "far"
 		_note_job_finished(inst.coord, kind)
+	if _has_priority and inst.coord == _priority_coord:
+		_has_priority = false
 	if not _booted and inst.coord == _boot_coord:
 		_booted = true
 		spawn_district_ready.emit(inst)
@@ -445,3 +494,4 @@ func clear_all() -> void:
 		_unload_district(key as Vector2i)
 	_active_jobs.clear()
 	_booted = false
+	_has_priority = false

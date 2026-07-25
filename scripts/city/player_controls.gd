@@ -11,6 +11,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "jump", "label": "Jump (hold to rise)", "group": "Movement"},
 	{"id": "sprint", "label": "Sprint", "group": "Movement"},
 	{"id": "autorun", "label": "Autorun toggle", "group": "Movement"},
+	{"id": "district_hop", "label": "Hop to next district (J)", "group": "Movement"},
 	{"id": "look_up", "label": "Look up", "group": "Camera"},
 	{"id": "look_down", "label": "Look down", "group": "Camera"},
 	{"id": "look", "label": "Hold to look", "group": "Camera"},
@@ -77,6 +78,8 @@ static func default_binding(action_id: String) -> Dictionary:
 			return _key(KEY_SHIFT)
 		"autorun":
 			return _key(KEY_R)
+		"district_hop":
+			return _key(KEY_J)
 		"look_up":
 			return _key(KEY_PAGEUP)
 		"look_down":

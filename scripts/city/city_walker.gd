@@ -939,6 +939,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_request_undead_radar()
 			get_viewport().set_input_as_handled()
 			return
+		if ctl.matches_key_pressed(ek, "district_hop"):
+			_request_district_hop()
+			get_viewport().set_input_as_handled()
+			return
 		if ctl.matches_key_pressed(ek, "laser"):
 			_stop_blaster(false)
 			_blast_charging = false
@@ -2691,6 +2695,17 @@ func _request_undead_radar() -> void:
 			pass
 	else:
 		push_error("CityWalker: CityRoot missing request_undead_radar")
+
+
+func _request_district_hop() -> void:
+	var root := _city_root()
+	if root == null:
+		push_error("CityWalker: district hop — no CityRoot parent")
+		return
+	if root.has_method("request_district_hop"):
+		root.call("request_district_hop")
+	else:
+		push_error("CityWalker: CityRoot missing request_district_hop")
 
 
 func _start_charged_blast_at_cursor() -> void:

@@ -19,6 +19,11 @@ config/description="Eccentri City — procedural voxel city of weird ideas, infe
 run/main_scene="res://scenes/city_poc.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
+boot_splash/bg_color=Color(0.22, 0.14, 0.1, 1)
+boot_splash/image="res://assets/branding/eccentricity_title.png"
+boot_splash/stretch_mode=4
+boot_splash/use_filter=true
+boot_splash/minimum_display_time=800
 
 [autoload]
 
