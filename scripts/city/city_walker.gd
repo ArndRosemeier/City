@@ -2159,7 +2159,7 @@ func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: 
 	if audio != null and audio.has_method("play_laser_impact"):
 		audio.call("play_laser_impact", hit_point, character_scale)
 	var root := _city_root()
-	## Agents at the impact still die / flip; the blast itself does not cascade fabric.
+	## Agents at the impact still die / flip; carved fabric tumbles then cascades columns.
 	if root != null and root.has_method("apply_laser_agent_hit"):
 		var from := hit_point - dir * maxf(radius_m, 0.5)
 		root.call("apply_laser_agent_hit", from, hit_point, dir)

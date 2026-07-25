@@ -1047,7 +1047,8 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
 
 
-## Charged Shift bomb: carve + tumble debris, no column cascades above the hole.
+## Charged LMB bomb: carve + outward tumble debris, then cascade columns above the hole
+## (same unsupported / column collapse path as stomp and melee).
 func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	if _tool == null or _terrain == null:
 		return
@@ -1066,6 +1067,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	_tool.mode = VoxelTool.MODE_SET
 	_tool.value = VoxelMaterial.AIR
 	var detached: Array = []
+	var column_max_y: Dictionary = {}  # Vector2i → int
 	const MAX_DEBRIS := 900
 	for z in range(cz - r_i, cz + r_i + 1):
 		for y in range(cy - r_i, cy + r_i + 1):
@@ -1079,10 +1081,23 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 					continue
 				if detached.size() < MAX_DEBRIS:
 					detached.append({"vox": vox, "mat": mat_id})
+				var col := Vector2i(x, z)
+				if column_max_y.has(col):
+					column_max_y[col] = maxi(int(column_max_y[col]), y)
+				else:
+					column_max_y[col] = y
 				_tool.do_point(vox)
 	_restore_bedrock_floor(local, radius_vox)
-	if _cascade != null and _cascade.has_method("detach_blast_voxels"):
-		_cascade.call("detach_blast_voxels", detached, hit_world)
+	if _cascade != null:
+		## Primary blast voxels fly outward from the impact.
+		if _cascade.has_method("detach_blast_voxels"):
+			_cascade.call("detach_blast_voxels", detached, hit_world)
+		## Fabric still standing above the hole cascades like stomp / melee.
+		if _cascade.has_method("collapse_column_above"):
+			for col_key in column_max_y.keys():
+				var xz: Vector2i = col_key
+				var max_y: int = int(column_max_y[col_key])
+				_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
 	BlastFlashVfxScript.spawn(self, hit_world, radius)
 	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
