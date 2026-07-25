@@ -3,6 +3,7 @@ class_name PlayerActionBar
 extends CanvasLayer
 
 const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
+const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 
 const SLOT_COUNT := 6
 const DEFAULT_BINDS: Array[String] = [
@@ -21,6 +22,7 @@ var _buttons: Array[Button] = []
 var _menu: PopupMenu
 var _menu_slot: int = -1
 var _recipes: Array = []
+var _controls: PlayerControls
 
 
 func setup(_walker: Node = null) -> void:
@@ -33,35 +35,30 @@ func setup(_walker: Node = null) -> void:
 	_refresh_labels()
 
 
+func set_controls(controls: PlayerControls) -> void:
+	_controls = controls
+	_refresh_labels()
+
+
+func _ctl() -> PlayerControls:
+	if _controls == null:
+		_controls = PlayerControlsScript.new() as PlayerControls
+	return _controls
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
-	var slot := _slot_for_fkey((event as InputEventKey).keycode)
+	var ek := event as InputEventKey
+	var ctl := _ctl()
+	var slot := ctl.build_slot_for_key(ek)
 	if slot < 0:
 		return
-	if event.shift_pressed:
+	if ctl.is_build_assign_held(ek):
 		_open_assign_menu(slot)
 	else:
 		_place_slot(slot)
 	get_viewport().set_input_as_handled()
-
-
-func _slot_for_fkey(keycode: Key) -> int:
-	match keycode:
-		KEY_F1:
-			return 0
-		KEY_F2:
-			return 1
-		KEY_F3:
-			return 2
-		KEY_F4:
-			return 3
-		KEY_F5:
-			return 4
-		KEY_F6:
-			return 5
-		_:
-			return -1
 
 
 func _build_ui() -> void:
@@ -99,7 +96,8 @@ func _build_ui() -> void:
 	bar.add_child(vbox)
 
 	var hint := Label.new()
-	hint.text = "F1–F6 build · Shift+F1–F6 assign"
+	hint.name = "Hint"
+	hint.text = "Build slots · Settings → Controls to rebind"
 	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 11)
@@ -140,15 +138,17 @@ func _rebuild_menu() -> void:
 
 
 func _refresh_labels() -> void:
+	var ctl := _ctl()
+	var assign := ctl.binding_label("build_assign")
 	for i in range(_buttons.size()):
 		var id := _slots[i]
-		var key := "F%d" % (i + 1)
+		var key := ctl.binding_label("build_%d" % (i + 1))
 		var recipe := _recipe_named(id)
 		var label := recipe.display_name if recipe != null else "—"
 		_buttons[i].text = "%s\n%s" % [key, _short_label(label)]
 		_buttons[i].tooltip_text = (
-			"%s\n%s place at cursor · Shift+%s assign"
-			% [recipe.hint if recipe != null else "Empty", key, key]
+			"%s\n%s place at cursor · %s+%s assign"
+			% [recipe.hint if recipe != null else "Empty", key, assign, key]
 		)
 
 

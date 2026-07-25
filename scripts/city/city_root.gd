@@ -168,9 +168,7 @@ func _build_env() -> void:
 	_sun.light_energy = 1.3
 	_sun.light_color = Color(1.0, 0.96, 0.88)
 	_sun.shadow_enabled = true
-	## 4K + dense Blocky voxels: long cascades destroy fill-rate. Keep near-field only.
-	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	_sun.directional_shadow_max_distance = 120.0
+	_configure_sun_shadows(_sun, 120.0)
 	add_child(_sun)
 
 	var moon := DirectionalLight3D.new()
@@ -227,6 +225,24 @@ func _build_env() -> void:
 		_day_night.connect("night_factor_changed", _on_night_factor_changed)
 	if _day_night.has_method("get_night_factor"):
 		_on_night_factor_changed(float(_day_night.call("get_night_factor")))
+
+
+## Tuned for 0.5 m Blocky voxels (facades, eaves, leaf cards). Default Godot
+## bias + hard cascade splits shimmer badly as the camera / sun moves.
+func _configure_sun_shadows(sun: DirectionalLight3D, max_distance_m: float) -> void:
+	if sun == null:
+		return
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_blend_splits = true
+	sun.directional_shadow_max_distance = max_distance_m
+	## Pull the first split out a bit so near streets keep more texels.
+	sun.directional_shadow_split_1 = 0.22
+	## Prefer normal bias on cubes / thin foliage; plain bias alone peter-pans eaves.
+	sun.shadow_bias = 0.14
+	sun.shadow_normal_bias = 2.4
+	## Blur 0 triggers acne (engine auto-bias floor). Soften slightly.
+	sun.shadow_blur = 0.75
+	sun.directional_shadow_pancake_size = 8.0
 
 
 func is_settings_open() -> bool:
@@ -321,12 +337,15 @@ func _build_hud() -> void:
 	_settings_panel.settings_applied.connect(_on_settings_applied)
 	_settings_panel.opened.connect(_on_settings_opened)
 	_settings_panel.closed.connect(_on_settings_closed)
+	if _settings_panel.has_signal("controls_changed"):
+		_settings_panel.controls_changed.connect(_on_controls_changed)
 	if _settings_panel.has_signal("spawn_meteors_toggled"):
 		_settings_panel.spawn_meteors_toggled.connect(_on_spawn_meteors_toggled)
 	if _settings_panel.has_signal("undead_invasion_toggled"):
 		_settings_panel.undead_invasion_toggled.connect(_on_undead_invasion_toggled)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
+	call_deferred("_apply_saved_controls")
 
 
 func _build_game_over_overlay() -> void:
@@ -418,6 +437,23 @@ func _on_settings_closed() -> void:
 		_walker._set_capture(true)
 
 
+func _apply_saved_controls() -> void:
+	if _settings_panel != null and _settings_panel.has_method("get_player_controls"):
+		_on_controls_changed(_settings_panel.call("get_player_controls"))
+
+
+func _on_controls_changed(controls: Variant) -> void:
+	if controls == null:
+		return
+	if _walker != null and is_instance_valid(_walker) and _walker.has_method("set_controls"):
+		_walker.call("set_controls", controls)
+	if _action_bar != null and is_instance_valid(_action_bar) and _action_bar.has_method("set_controls"):
+		_action_bar.call("set_controls", controls)
+	var profiler := get_tree().root.get_node_or_null("CityProfiler")
+	if profiler != null and profiler.has_method("set_controls"):
+		profiler.call("set_controls", controls)
+
+
 func _on_settings_applied(settings: Dictionary) -> void:
 	var scale := clampf(float(settings.get("render_scale", 0.75)), 0.45, 1.0)
 	get_viewport().scaling_3d_scale = scale
@@ -430,7 +466,9 @@ func _on_settings_applied(settings: Dictionary) -> void:
 
 	if _sun != null:
 		_sun.shadow_enabled = bool(settings.get("shadows", true))
-		_sun.directional_shadow_max_distance = clampf(float(settings.get("shadow_distance_m", 120.0)), 40.0, 220.0)
+		_configure_sun_shadows(
+			_sun, clampf(float(settings.get("shadow_distance_m", 120.0)), 40.0, 220.0)
+		)
 
 	_voxel_view_vox = clampi(int(settings.get("voxel_view_vox", 100)), 80, 280)
 	_collision_view_vox = clampi(int(settings.get("collision_view_vox", 48)), 32, 128)
@@ -967,6 +1005,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_action_bar.build_requested.connect(_on_build_chosen)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
+		_apply_saved_controls()
 	if _undead_invasion_enabled:
 		_ensure_undead_director()
 		_undead.call("set_enabled", true)
@@ -2110,28 +2149,43 @@ func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
 				_tool.do_point(Vector3i(x, y, z))
 
 
+func _player_controls() -> RefCounted:
+	if _settings_panel != null and _settings_panel.has_method("get_player_controls"):
+		return _settings_panel.call("get_player_controls") as RefCounted
+	return null
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		match event.keycode:
-			KEY_ESCAPE:
-				get_tree().quit()
-			KEY_ENTER, KEY_KP_ENTER:
-				if _game_over:
-					_retry_after_game_over()
-					get_viewport().set_input_as_handled()
-			KEY_N:
-				if _game_over:
-					return
-				if _day_night != null and _day_night.has_method("toggle_day_night"):
-					_day_night.call("toggle_day_night")
-				get_viewport().set_input_as_handled()
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	var ek := event as InputEventKey
+	var ctl := _player_controls()
+	if ctl == null or not ctl.has_method("matches_key_pressed"):
+		return
+	if bool(ctl.call("matches_key_pressed", ek, "quit")):
+		get_tree().quit()
+		return
+	if bool(ctl.call("matches_key_pressed", ek, "retry")):
+		if _game_over:
+			_retry_after_game_over()
+			get_viewport().set_input_as_handled()
+		return
+	if bool(ctl.call("matches_key_pressed", ek, "day_night")):
+		if _game_over:
+			return
+		if _day_night != null and _day_night.has_method("toggle_day_night"):
+			_day_night.call("toggle_day_night")
+		get_viewport().set_input_as_handled()
 
 
 func _input(event: InputEvent) -> void:
 	## Game-over retry must work even if another control ate unhandled input.
 	if not _game_over or _booting:
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	var ctl := _player_controls()
+	if ctl != null and ctl.has_method("matches_key_pressed"):
+		if bool(ctl.call("matches_key_pressed", event, "retry")):
 			_retry_after_game_over()
 			get_viewport().set_input_as_handled()

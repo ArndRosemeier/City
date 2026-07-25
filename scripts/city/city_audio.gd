@@ -11,6 +11,7 @@ const MAX_TENDRIL_VOICES := 10
 const FOOTSTEP_DIR := "res://assets/audio/footstep"
 const DEBRIS_DIR := "res://assets/audio/debris"
 const LASER_FIRE_DIR := "res://assets/audio/laser"
+const BLAST_DIR := "res://assets/audio/blast"
 const UI_DIR := "res://assets/audio/ui"
 
 var enabled: bool = true
@@ -19,6 +20,9 @@ var _foot_streams: Array[AudioStream] = []
 var _debris_streams: Array[AudioStream] = []
 var _laser_fire_streams: Array[AudioStream] = []
 var _laser_impact_streams: Array[AudioStream] = []
+var _blast_charge_streams: Array[AudioStream] = []
+var _blast_throw_streams: Array[AudioStream] = []
+var _blast_impact_streams: Array[AudioStream] = []
 var _ui_on: AudioStream
 var _ui_off: AudioStream
 var _meteor_whine_stream: AudioStream
@@ -34,6 +38,8 @@ var _ui_player: AudioStreamPlayer
 var _whine_player: AudioStreamPlayer3D
 var _whine_follow: Node3D
 var _crash_player: AudioStreamPlayer3D
+var _blast_charge_player: AudioStreamPlayer3D
+var _blast_impact_player: AudioStreamPlayer3D
 var _tendril_voices: Dictionary = {}  # tendril_id → AudioStreamPlayer3D
 
 
@@ -46,6 +52,7 @@ func _ready() -> void:
 		p.name = "Sfx_%d" % i
 		p.max_distance = 80.0
 		p.unit_size = 4.0
+		p.max_db = 6.0
 		p.bus = &"Master"
 		add_child(p)
 		_pool.append(p)
@@ -56,6 +63,14 @@ func _ready() -> void:
 	_whine_player = _make_dedicated_player("MeteorWhine", 420.0, 18.0)
 	_crash_player = _make_dedicated_player("MeteorCrash", 720.0, 42.0)
 	_crash_player.attenuation_filter_cutoff_hz = 5000.0
+	_blast_charge_player = _make_dedicated_player("BlastCharge", 40.0, 5.0)
+	## Short range + inverse-square so distant cracks fall off quickly.
+	_blast_impact_player = _make_dedicated_player("BlastImpact3D", 45.0, 4.5)
+	_blast_impact_player.max_db = 12.0
+	_blast_impact_player.attenuation_model = (
+		AudioStreamPlayer3D.ATTENUATION_INVERSE_SQUARE_DISTANCE
+	)
+	_blast_impact_player.attenuation_filter_cutoff_hz = 7000.0
 
 
 func _process(delta: float) -> void:
@@ -142,6 +157,77 @@ func play_laser_impact(world_pos: Vector3, character_scale: float = 1.0) -> void
 	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.55, 1.3)
 	p.volume_db = -3.0
 	p.play()
+
+
+## Hand charge ramp — pitched so the clip roughly fills charge_sec, stopped on release.
+func play_charged_blast_charge(
+	world_pos: Vector3, character_scale: float = 1.0, charge_sec: float = 1.6
+) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_blast_charge_streams)
+	if stream == null or _blast_charge_player == null:
+		return
+	_blast_charge_player.stream = stream
+	_blast_charge_player.global_position = world_pos
+	var clip_len := _stream_length_sec(stream)
+	var target := maxf(charge_sec, 0.2)
+	## Stretch / squeeze the ramp to the hold window (clamped so it stays musical).
+	_blast_charge_player.pitch_scale = clampf(clip_len / target, 0.55, 2.8)
+	_blast_charge_player.pitch_scale *= clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.7, 1.25)
+	_blast_charge_player.volume_db = -6.0
+	_blast_charge_player.play()
+
+
+func move_charged_blast_charge(world_pos: Vector3) -> void:
+	if _blast_charge_player != null and _blast_charge_player.playing:
+		_blast_charge_player.global_position = world_pos
+
+
+func stop_charged_blast_charge() -> void:
+	if _blast_charge_player != null and _blast_charge_player.playing:
+		_blast_charge_player.stop()
+
+
+func play_charged_blast_throw(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	stop_charged_blast_charge()
+	var stream := _pick(_blast_throw_streams)
+	if stream == null:
+		## Fall back so a missing bank never goes silent.
+		play_laser_fire(world_pos, character_scale)
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.55, 1.35)
+	p.pitch_scale *= _rng.randf_range(0.96, 1.06)
+	p.volume_db = -3.5
+	p.play()
+
+
+func play_charged_blast_impact(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_blast_impact_streams)
+	## Fall back to throw woosh if no impact bank is present.
+	if stream == null:
+		stream = _pick(_blast_throw_streams)
+	if stream == null:
+		play_laser_impact(world_pos, character_scale)
+		return
+	var pitch := clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.65, 1.2)
+	pitch *= _rng.randf_range(0.97, 1.04)
+	## Dedicated 3D voice only — a non-positional bus layer was flattening distance.
+	## Note: AudioStreamPlayer3D.max_db defaults to 3; volume_db above that was a no-op.
+	if _blast_impact_player != null:
+		_blast_impact_player.stream = stream
+		_blast_impact_player.global_position = world_pos
+		_blast_impact_player.pitch_scale = pitch
+		_blast_impact_player.max_db = 12.0
+		_blast_impact_player.volume_db = 4.0
+		_blast_impact_player.play()
 
 
 ## Falling meteor scream — follows the body until impact / stop.
@@ -239,6 +325,7 @@ func _stop_infection_sfx() -> void:
 	stop_meteor_whine()
 	if _crash_player != null and _crash_player.playing:
 		_crash_player.stop()
+	stop_charged_blast_charge()
 	stop_all_tendril_voices()
 
 
@@ -247,6 +334,7 @@ func _make_dedicated_player(node_name: String, max_distance: float, unit_size: f
 	p.name = node_name
 	p.max_distance = max_distance
 	p.unit_size = unit_size
+	p.max_db = 12.0
 	p.bus = &"Master"
 	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	add_child(p)
@@ -259,6 +347,7 @@ func _next_player() -> AudioStreamPlayer3D:
 	## Reset pool defaults in case a one-shot temporarily widened range.
 	p.max_distance = 80.0
 	p.unit_size = 4.0
+	p.max_db = 6.0
 	return p
 
 
@@ -282,6 +371,13 @@ func _load_banks() -> void:
 	_debris_streams = _load_dir(DEBRIS_DIR, ["impactPlank_", "impactMining_", "impactGeneric_"])
 	_laser_fire_streams = _load_dir(LASER_FIRE_DIR, ["laserLarge_"])
 	_laser_impact_streams = _load_dir(LASER_FIRE_DIR, ["explosionCrunch_"])
+	_blast_charge_streams = _load_dir(BLAST_DIR, ["blast_charge_"])
+	_blast_throw_streams = _load_dir(BLAST_DIR, ["blast_throw_"])
+	_blast_impact_streams = _load_dir(BLAST_DIR, ["blast_impact_"])
+	## Explicit loads — DirAccess on res:// can miss newly added files until restart.
+	_ensure_stream(_blast_charge_streams, "res://assets/audio/blast/blast_charge_ramp.wav")
+	_ensure_stream(_blast_throw_streams, "res://assets/audio/blast/blast_throw_woosh.wav")
+	_ensure_stream(_blast_impact_streams, "res://assets/audio/blast/blast_impact_close.wav")
 	var ui := _load_dir(UI_DIR, ["switch_"])
 	if ui.size() >= 2:
 		_ui_on = ui[0]
@@ -338,6 +434,26 @@ func _load_dir(dir_path: String, prefixes: Array[String]) -> Array[AudioStream]:
 		return String(a.resource_path) < String(b.resource_path)
 	)
 	return out
+
+
+func _ensure_stream(bank: Array[AudioStream], path: String) -> void:
+	for s in bank:
+		if s != null and String(s.resource_path) == path:
+			return
+	var res := load(path)
+	if res is AudioStream:
+		bank.append(res as AudioStream)
+	else:
+		push_warning("CityAudio: failed to load blast stream %s" % path)
+
+
+func _stream_length_sec(stream: AudioStream) -> float:
+	if stream == null:
+		return 1.0
+	var len := stream.get_length()
+	if len > 0.05:
+		return len
+	return 1.0
 
 
 func _build_footstep() -> AudioStreamWAV:

@@ -20,6 +20,7 @@ const ProportionModifierScript := preload("res://scripts/humans/proportion_modif
 const BodyProportionsScript := preload("res://scripts/humans/body_proportions.gd")
 const EyeLaserVfxScript := preload("res://scripts/city/eye_laser_vfx.gd")
 const ChargedBlastVfxScript := preload("res://scripts/city/charged_blast_vfx.gd")
+const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 
 const PedOutfitCatalogScript := preload("res://scripts/humans/ped_outfit_catalog.gd")
 const PedOutfitApplierScript := preload("res://scripts/humans/ped_outfit_applier.gd")
@@ -188,10 +189,18 @@ var _blast_charging: bool = false
 var _blast_fire_token: int = 0
 var _blast_pending_aim: Vector3 = Vector3.ZERO
 var _blast_pending_radius: float = 1.0
-var _charge_orb: MeshInstance3D
+var _controls: PlayerControls
+var _charge_orb: Node3D
+var _charge_orb_core: MeshInstance3D
 var _charge_orb_mesh: SphereMesh
 var _charge_orb_mat: StandardMaterial3D
 var _charge_orb_light: OmniLight3D
+var _charge_ring_a: MeshInstance3D
+var _charge_ring_b: MeshInstance3D
+var _charge_ring_mesh_a: TorusMesh
+var _charge_ring_mesh_b: TorusMesh
+var _charge_ring_mat_a: StandardMaterial3D
+var _charge_ring_mat_b: StandardMaterial3D
 var _footstep_accum: float = 0.0
 var _climb_mode: ClimbMode = ClimbMode.NONE
 ## Outward wall normal (flattened) while climbing.
@@ -383,7 +392,11 @@ func set_game_over_locked(on: bool) -> void:
 			_eye_laser.call("cancel")
 		if _charged_blast != null and is_instance_valid(_charged_blast) and _charged_blast.has_method("cancel"):
 			_charged_blast.call("cancel")
+		_blast_charging = false
 		_blast_charge = 0.0
+		var audio := _city_audio()
+		if audio != null and audio.has_method("stop_charged_blast_charge"):
+			audio.call("stop_charged_blast_charge")
 
 
 func toggle_character_editor() -> void:
@@ -767,50 +780,76 @@ func is_feet_aligned() -> bool:
 	return _feet_aligned
 
 
+func set_controls(controls: PlayerControls) -> void:
+	_controls = controls
+
+
+func _ctl() -> PlayerControls:
+	if _controls == null:
+		_controls = PlayerControlsScript.new() as PlayerControls
+	return _controls
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if is_blocking_ui_open():
 		return
+	var ctl := _ctl()
 	if event is InputEventKey and event.pressed and not event.echo:
-		match event.keycode:
-			KEY_C:
-				toggle_character_editor()
-				get_viewport().set_input_as_handled()
-				return
-			KEY_R:
-				_auto_run = not _auto_run
-				get_viewport().set_input_as_handled()
-				return
-			KEY_O:
-				## Sound on/off.
-				_toggle_sound()
-				get_viewport().set_input_as_handled()
-				return
-			KEY_SPACE:
-				_jump_queued = true
-				get_viewport().set_input_as_handled()
-				return
-			KEY_EQUAL, KEY_KP_ADD:
-				adjust_character_scale(1.0)
-				get_viewport().set_input_as_handled()
-				return
-			KEY_MINUS, KEY_KP_SUBTRACT:
-				adjust_character_scale(-1.0)
-				get_viewport().set_input_as_handled()
-				return
-			KEY_M:
-				_request_infection_meteor()
-				get_viewport().set_input_as_handled()
-				return
-			KEY_T:
-				_request_tetris_machine()
-				get_viewport().set_input_as_handled()
-				return
-			KEY_P:
-				_request_pedestrian()
-				get_viewport().set_input_as_handled()
-				return
-			KEY_U:
-				_request_undead_radar()
+		var ek := event as InputEventKey
+		if ctl.matches_key_pressed(ek, "character_editor"):
+			toggle_character_editor()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "autorun"):
+			_auto_run = not _auto_run
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "sound_toggle"):
+			_toggle_sound()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "jump"):
+			_jump_queued = true
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "meteor"):
+			_request_infection_meteor()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "tetris"):
+			_request_tetris_machine()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "pedestrian"):
+			_request_pedestrian()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "undead_radar"):
+			_request_undead_radar()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "laser"):
+			_blast_charging = false
+			_blast_charge = 0.0
+			_start_laser_eyes_at_cursor()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "stomp"):
+			_blast_charging = false
+			_blast_charge = 0.0
+			_start_stomp()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "fire"):
+			_begin_charged_blast_hold()
+			get_viewport().set_input_as_handled()
+			return
+	if event is InputEventKey and not event.pressed:
+		## Release charged blast when fire is a key bind.
+		if _blast_charging and str(ctl.get_binding("fire").get("device", "")) == "key":
+			var code := int(ctl.get_binding("fire").get("code", -1)) as Key
+			if (event as InputEventKey).keycode == code:
+				_release_charged_blast_at_cursor()
 				get_viewport().set_input_as_handled()
 				return
 	if event is InputEventMouseMotion and _rmb_looking:
@@ -823,33 +862,50 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+		if mb.pressed and ctl.matches_mouse(mb, "zoom_in"):
 			_zoom = clampf(_zoom - zoom_step, zoom_min, zoom_max)
 			_spring.spring_length = _zoom
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			get_viewport().set_input_as_handled()
+			return
+		if mb.pressed and ctl.matches_mouse(mb, "zoom_out"):
 			_zoom = clampf(_zoom + zoom_step, zoom_min, zoom_max)
 			_spring.spring_length = _zoom
-		elif mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				if Input.is_key_pressed(KEY_CTRL):
-					_blast_charging = false
-					_blast_charge = 0.0
-					_start_laser_eyes_at_cursor()
-				elif Input.is_key_pressed(KEY_SHIFT):
-					_blast_charging = false
-					_blast_charge = 0.0
-					_start_stomp()
-				else:
-					_begin_charged_blast_hold()
-			else:
-				if _blast_charging:
-					_release_charged_blast_at_cursor()
 			get_viewport().set_input_as_handled()
-		elif mb.button_index == MOUSE_BUTTON_RIGHT:
+			return
+		var look_bind := ctl.get_binding("look")
+		if str(look_bind.get("device", "")) == "mouse" and int(mb.button_index) == int(look_bind.get("code", -1)):
+			## Look hold ignores modifiers so Shift+RMB still orbits.
 			if mb.pressed:
 				_set_rmb_looking(true)
 			else:
 				_set_rmb_looking(false)
+			get_viewport().set_input_as_handled()
+			return
+		var fire_bind := ctl.get_binding("fire")
+		var fire_btn := (
+			str(fire_bind.get("device", "")) == "mouse"
+			and int(mb.button_index) == int(fire_bind.get("code", -2))
+		)
+		if mb.pressed:
+			var combat := ctl.resolve_mouse_action(
+				mb, ["laser", "stomp", "fire"] as Array[String]
+			)
+			if combat.is_empty():
+				return
+			match combat:
+				"laser":
+					_blast_charging = false
+					_blast_charge = 0.0
+					_start_laser_eyes_at_cursor()
+				"stomp":
+					_blast_charging = false
+					_blast_charge = 0.0
+					_start_stomp()
+				"fire":
+					_begin_charged_blast_hold()
+			get_viewport().set_input_as_handled()
+		elif fire_btn and _blast_charging:
+			_release_charged_blast_at_cursor()
 			get_viewport().set_input_as_handled()
 
 
@@ -918,25 +974,26 @@ func _physics_process(delta: float) -> void:
 	## Large bodies: no floor-snap — Y is owned by the ground ray after the slide.
 	floor_snap_length = 0.0 if ray_mode else FLOOR_SNAP_M
 
-	## Page Up looks up, Page Down looks down (held = continuous).
+	var ctl := _ctl()
+	## Look up / down (held = continuous).
 	var pitch_input := 0.0
-	if Input.is_key_pressed(KEY_PAGEUP):
+	if ctl.is_key_held("look_up"):
 		pitch_input += 1.0
-	if Input.is_key_pressed(KEY_PAGEDOWN):
+	if ctl.is_key_held("look_down"):
 		pitch_input -= 1.0
 	if not is_zero_approx(pitch_input):
 		_pitch = clampf(_pitch + pitch_input * pitch_rate * delta, pitch_min, pitch_max)
 
-	## A/D turn on ground; while climbing they strafe along the wall.
+	## Turn on ground; while climbing these keys strafe along the wall.
 	var turn := 0.0
-	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+	if ctl.is_key_held("turn_left"):
 		turn += 1.0
-	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+	if ctl.is_key_held("turn_right"):
 		turn -= 1.0
 	if not is_zero_approx(turn) and _climb_mode == ClimbMode.NONE:
 		rotation.y += turn * keyboard_turn_rate * delta
 
-	## Move only along body facing (W/S).
+	## Move only along body facing.
 	var forward := -global_transform.basis.z
 	forward.y = 0.0
 	if forward.length_squared() > 0.0001:
@@ -944,15 +1001,13 @@ func _physics_process(delta: float) -> void:
 	else:
 		forward = Vector3(0.0, 0.0, -1.0)
 
-	var forward_held := (
-		Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP) or _auto_run
-	)
-	var back_held := Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)
+	var forward_held := ctl.is_key_held("move_forward") or _auto_run
+	var back_held := ctl.is_key_held("move_back")
 	if back_held and _auto_run:
 		_auto_run = false
 
 	if _climb_mode != ClimbMode.NONE:
-		## A = left (−), D = right (+) relative to facing the wall.
+		## Turn-left = strafe left (−), turn-right = strafe right (+) on the wall.
 		var strafe := -turn
 		_physics_climb(delta, forward, forward_held, back_held, strafe)
 		return
@@ -974,8 +1029,7 @@ func _physics_process(delta: float) -> void:
 	var wish := forward * (-input_dir.y)
 	wish.y = 0.0
 
-	var shift_held := Input.is_key_pressed(KEY_SHIFT)
-	var sprinting := shift_held
+	var sprinting := ctl.is_key_held("sprint")
 	var speed := sprint_speed if sprinting else walk_speed
 	speed *= character_scale
 	_moving = wish.length_squared() > 0.0001
@@ -1996,30 +2050,65 @@ func _teardown_charged_blast() -> void:
 func _ensure_charge_orb() -> void:
 	if _charge_orb != null and is_instance_valid(_charge_orb):
 		return
-	_charge_orb_mat = StandardMaterial3D.new()
-	_charge_orb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_charge_orb_mat.albedo_color = Color(1.0, 0.2, 0.05, 0.85)
-	_charge_orb_mat.emission_enabled = true
-	_charge_orb_mat.emission = Color(1.0, 0.15, 0.02)
-	_charge_orb_mat.emission_energy_multiplier = 10.0
-	_charge_orb_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_charge_orb_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_charge_orb = Node3D.new()
+	_charge_orb.name = "ChargeOrb"
+	_charge_orb.visible = false
+	add_child(_charge_orb)
+
+	_charge_orb_mat = _make_charge_mat(Color(1.0, 0.45, 0.12, 0.9), Color(1.0, 0.4, 0.1))
 	_charge_orb_mesh = SphereMesh.new()
 	_charge_orb_mesh.radial_segments = 14
 	_charge_orb_mesh.rings = 8
-	_charge_orb = MeshInstance3D.new()
-	_charge_orb.name = "ChargeOrb"
-	_charge_orb.mesh = _charge_orb_mesh
-	_charge_orb.material_override = _charge_orb_mat
-	_charge_orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_charge_orb.visible = false
-	add_child(_charge_orb)
+	_charge_orb_core = MeshInstance3D.new()
+	_charge_orb_core.name = "Core"
+	_charge_orb_core.mesh = _charge_orb_mesh
+	_charge_orb_core.material_override = _charge_orb_mat
+	_charge_orb_core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_charge_orb.add_child(_charge_orb_core)
+
+	_charge_ring_mat_a = _make_charge_mat(Color(1.0, 0.5, 0.15, 0.55), Color(1.0, 0.45, 0.12))
+	_charge_ring_mat_b = _make_charge_mat(Color(1.0, 0.55, 0.2, 0.4), Color(1.0, 0.5, 0.15))
+	_charge_ring_mesh_a = TorusMesh.new()
+	_charge_ring_mesh_a.rings = 22
+	_charge_ring_mesh_a.ring_segments = 8
+	_charge_ring_mesh_b = TorusMesh.new()
+	_charge_ring_mesh_b.rings = 20
+	_charge_ring_mesh_b.ring_segments = 8
+	_charge_ring_a = MeshInstance3D.new()
+	_charge_ring_a.name = "ChargeRingA"
+	_charge_ring_a.mesh = _charge_ring_mesh_a
+	_charge_ring_a.material_override = _charge_ring_mat_a
+	_charge_ring_a.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_charge_ring_a.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	_charge_orb.add_child(_charge_ring_a)
+	_charge_ring_b = MeshInstance3D.new()
+	_charge_ring_b.name = "ChargeRingB"
+	_charge_ring_b.mesh = _charge_ring_mesh_b
+	_charge_ring_b.material_override = _charge_ring_mat_b
+	_charge_ring_b.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_charge_ring_b.rotation_degrees = Vector3(70.0, 25.0, 0.0)
+	_charge_orb.add_child(_charge_ring_b)
+
 	_charge_orb_light = OmniLight3D.new()
 	_charge_orb_light.name = "ChargeLight"
-	_charge_orb_light.light_color = Color(1.0, 0.28, 0.05)
+	_charge_orb_light.light_color = Color(1.0, 0.45, 0.12)
 	_charge_orb_light.shadow_enabled = false
 	_charge_orb_light.visible = false
 	_charge_orb.add_child(_charge_orb_light)
+
+
+func _make_charge_mat(albedo: Color, emission: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = albedo
+	mat.emission_enabled = true
+	mat.emission = emission
+	mat.emission_energy_multiplier = 10.0
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.disable_receive_shadows = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	return mat
 
 
 func _charged_blast_radius() -> float:
@@ -2046,19 +2135,67 @@ func _update_blast_charge(delta: float, charging_now: bool) -> void:
 	if _charge_orb_light != null:
 		_charge_orb_light.visible = show_orb
 	if not show_orb:
+		var audio_off := _city_audio()
+		if audio_off != null and audio_off.has_method("stop_charged_blast_charge"):
+			audio_off.call("stop_charged_blast_charge")
 		return
-	var radius := _charged_blast_radius()
-	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.012)
-	var orb_r := radius * (0.09 + 0.03 * pulse)
+	var frac := clampf(_blast_charge / maxf(charged_blast_charge_sec, 0.05), 0.0, 1.0)
+	## Faster pulse near full charge.
+	var pulse_hz := lerpf(8.0, 22.0, frac * frac)
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.001 * pulse_hz)
+	## Compact core — not tied to carve radius.
+	var body_s := maxf(_effective_body_scale(), 0.05)
+	var orb_r := lerpf(0.07, 0.14, frac) * body_s * (0.92 + 0.12 * pulse)
 	if _charge_orb_mesh != null:
 		_charge_orb_mesh.radius = orb_r
 		_charge_orb_mesh.height = orb_r * 2.0
-	_charge_orb.global_position = _spell_hand_origin()
+	## Slight pull toward the cast hand (already at hand; nudge inward along -forward).
+	var hand := _spell_hand_origin()
+	var inward := global_transform.basis.z
+	if inward.length_squared() > 0.0001:
+		inward = inward.normalized()
+	else:
+		inward = Vector3.BACK
+	_charge_orb.global_position = hand + inward * (0.04 * body_s * (1.0 - frac * 0.35))
+	var audio := _city_audio()
+	if audio != null and audio.has_method("move_charged_blast_charge"):
+		audio.call("move_charged_blast_charge", _charge_orb.global_position)
+	## Dull orange → white-hot.
+	var hot := Color(
+		1.0,
+		lerpf(0.38, 0.92, frac),
+		lerpf(0.08, 0.55, frac)
+	)
 	if _charge_orb_mat != null:
-		_charge_orb_mat.emission_energy_multiplier = 8.0 + 10.0 * pulse
+		_charge_orb_mat.albedo_color = Color(hot.r, hot.g, hot.b, 0.88)
+		_charge_orb_mat.emission = hot
+		_charge_orb_mat.emission_energy_multiplier = lerpf(6.0, 18.0, frac) * (0.85 + 0.35 * pulse)
+	var ring_outer_a := orb_r * lerpf(1.7, 2.6, frac)
+	var ring_outer_b := orb_r * lerpf(2.1, 3.2, frac)
+	var tube_a := orb_r * 0.18
+	var tube_b := orb_r * 0.14
+	if _charge_ring_mesh_a != null:
+		_charge_ring_mesh_a.outer_radius = ring_outer_a
+		_charge_ring_mesh_a.inner_radius = maxf(ring_outer_a - tube_a, 0.01)
+	if _charge_ring_mesh_b != null:
+		_charge_ring_mesh_b.outer_radius = ring_outer_b
+		_charge_ring_mesh_b.inner_radius = maxf(ring_outer_b - tube_b, 0.01)
+	if _charge_ring_a != null:
+		_charge_ring_a.rotate_object_local(Vector3.UP, delta * lerpf(2.5, 5.5, frac))
+	if _charge_ring_b != null:
+		_charge_ring_b.rotate_object_local(Vector3.UP, -delta * lerpf(3.2, 7.0, frac))
+	if _charge_ring_mat_a != null:
+		_charge_ring_mat_a.albedo_color = Color(hot.r, hot.g, hot.b, lerpf(0.35, 0.65, frac))
+		_charge_ring_mat_a.emission = hot
+		_charge_ring_mat_a.emission_energy_multiplier = lerpf(4.0, 12.0, frac)
+	if _charge_ring_mat_b != null:
+		_charge_ring_mat_b.albedo_color = Color(hot.r, hot.g * 0.9, hot.b * 0.8, lerpf(0.25, 0.5, frac))
+		_charge_ring_mat_b.emission = hot
+		_charge_ring_mat_b.emission_energy_multiplier = lerpf(3.0, 10.0, frac)
 	if _charge_orb_light != null:
-		_charge_orb_light.light_energy = 2.0 + 8.0 * (_blast_charge / maxf(charged_blast_charge_sec, 0.05))
-		_charge_orb_light.omni_range = orb_r * 8.0
+		_charge_orb_light.light_color = hot
+		_charge_orb_light.light_energy = lerpf(1.5, 10.0, frac) * (0.9 + 0.25 * pulse)
+		_charge_orb_light.omni_range = orb_r * 10.0 + frac * 1.2 * body_s
 
 
 func _ensure_spell_charge_pose() -> void:
@@ -2080,10 +2217,21 @@ func _begin_charged_blast_hold() -> void:
 	_blast_charging = true
 	_blast_charge = maxf(_blast_charge, 0.05)
 	_ensure_spell_charge_pose()
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_charged_blast_charge"):
+		audio.call(
+			"play_charged_blast_charge",
+			_spell_hand_origin(),
+			character_scale,
+			charged_blast_charge_sec
+		)
 
 
 func _release_charged_blast_at_cursor() -> void:
 	_blast_charging = false
+	var audio := _city_audio()
+	if audio != null and audio.has_method("stop_charged_blast_charge"):
+		audio.call("stop_charged_blast_charge")
 	if _charge_orb != null:
 		_charge_orb.visible = false
 	if _charge_orb_light != null:
@@ -2156,7 +2304,9 @@ func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: 
 	else:
 		dir = dir.normalized()
 	var audio := _city_audio()
-	if audio != null and audio.has_method("play_laser_impact"):
+	if audio != null and audio.has_method("play_charged_blast_impact"):
+		audio.call("play_charged_blast_impact", hit_point, character_scale)
+	elif audio != null and audio.has_method("play_laser_impact"):
 		audio.call("play_laser_impact", hit_point, character_scale)
 	var root := _city_root()
 	## Agents at the impact still die / flip; carved fabric tumbles then cascades columns.
@@ -2301,7 +2451,9 @@ func _fire_charged_blast_projectile() -> void:
 		if fwd.length_squared() > 0.0001:
 			aim_point = origin + fwd.normalized() * 8.0
 	var audio := _city_audio()
-	if audio != null and audio.has_method("play_laser_fire"):
+	if audio != null and audio.has_method("play_charged_blast_throw"):
+		audio.call("play_charged_blast_throw", origin, character_scale)
+	elif audio != null and audio.has_method("play_laser_fire"):
 		audio.call("play_laser_fire", origin, character_scale)
 	if _charged_blast != null and _charged_blast.has_method("fire"):
 		_charged_blast.call(

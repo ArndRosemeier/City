@@ -2,3 +2,12 @@
 Source: https://kenney.nl (Impact Sounds, Sci-Fi Sounds, Interface Sounds)
 Mirrored via https://gamesounds.xyz/Kenney's Sound Pack/
 Credit Kenney.nl is appreciated but not required.
+
+Charged blast (Freesound, Creative Commons 0)
+- blast_charge_ramp.wav — Slow Ramp Up by BennettFilmTeacher
+  https://freesound.org/people/bennettfilmteacher/sounds/523789/
+- blast_throw_woosh.wav — Short-Fireball-Woosh by wjl
+  https://freesound.org/people/wjl/sounds/267887/
+- blast_impact_close.wav — Close-up Impact by d_yonqui
+  https://freesound.org/people/d_yonqui/sounds/862817/
+Original downloads kept under assets/audio/blast/source/ (converted to mono WAV for Godot).

@@ -1,6 +1,8 @@
 ## Autoload: reusable runtime profiler for City hot paths.
-## Toggle overlay with F7. Also registers Performance custom monitors.
+## Toggle overlay with F7 (rebindable). Also registers Performance custom monitors.
 extends CanvasLayer
+
+const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 
 const MAX_SCOPES := 48
 const SMOOTH := 0.18
@@ -15,6 +17,7 @@ var _open: Array = []  ## stack of {name, t0_us}
 var _frame_ms_smooth: float = 0.0
 var _physics_ms_smooth: float = 0.0
 var _last_physics_usec: int = 0
+var _controls: RefCounted
 
 
 func _ready() -> void:
@@ -131,9 +134,19 @@ func _physics_process(_delta: float) -> void:
 	_frame_scope_us.clear()
 
 
+func set_controls(controls: RefCounted) -> void:
+	_controls = controls
+
+
+func _ctl() -> RefCounted:
+	if _controls == null:
+		_controls = PlayerControlsScript.new() as RefCounted
+	return _controls
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_F7:
+		if bool(_ctl().call("matches_key_pressed", event, "profiler")):
 			set_overlay_enabled(not _enabled)
 			get_viewport().set_input_as_handled()
 
