@@ -95,6 +95,7 @@ var _collision_view_vox: int = 48
 
 
 func _ready() -> void:
+	add_to_group("city_root")
 	CityVoxelNativeScript.require_loaded()
 	print("CityRoot: city_voxel native ready (volume + cascade debris)")
 	_resolve_seed()
@@ -936,6 +937,9 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.name = "Walker"
 	add_child(_walker)
 	_walker.set_physics_process(false)
+	## Live voxel motion — digs/holes match data immediately (not remeshed colliders).
+	if _walker.has_method("bind_terrain"):
+		_walker.call("bind_terrain", _terrain)
 	## Hold above until collision exists — never enable physics in the void.
 	_walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	_walker.blast_requested.connect(_on_blast)
@@ -1086,8 +1090,7 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
 
 
-## Charged LMB bomb: carve + outward tumble debris, then cascade columns above the hole
-## (same unsupported / column collapse path as stomp and melee).
+## Charged LMB bomb (and stomp): carve + outward tumble debris, then cascade columns above.
 func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	if _tool == null or _terrain == null:
 		return
@@ -1131,7 +1134,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 		## Primary blast voxels fly outward from the impact.
 		if _cascade.has_method("detach_blast_voxels"):
 			_cascade.call("detach_blast_voxels", detached, hit_world)
-		## Fabric still standing above the hole cascades like stomp / melee.
+		## Fabric still standing above the hole cascades like melee.
 		if _cascade.has_method("collapse_column_above"):
 			for col_key in column_max_y.keys():
 				var xz: Vector2i = col_key
@@ -1142,61 +1145,9 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
 
 
-## Shift+LMB stomp: clear a bowl around the feet and cascade columns above.
+## Shift+LMB stomp: same destruction as a max-charge blast at the feet (anim/FX differ on the walker).
 func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
-	if _tool == null or _terrain == null:
-		return
-	var radius := maxf(radius_m, 0.5)
-	var local := _terrain.to_local(feet_position)
-	var radius_vox := minf(radius / VOXEL_SIZE, 16.0)
-	## Flattened bowl: full radius in XZ, shorter in Y so sidewalks crack without a deep shaft.
-	var ry := maxf(radius_vox * 0.55, 1.2)
-	## Revert tips before collecting — restored fabric in the bowl explodes with the stomp.
-	_tip_kill_leads_in_sphere(local, radius_vox)
-	var r_i := int(ceil(radius_vox)) + 1
-	var ry_i := int(ceil(ry)) + 1
-	var cx := int(floor(local.x))
-	var cy := int(floor(local.y))
-	var cz := int(floor(local.z))
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
-	var detached: Array = []
-	var column_max_y: Dictionary = {}
-	const MAX_DEBRIS := 1100
-	for z in range(cz - r_i, cz + r_i + 1):
-		for y in range(cy - ry_i, cy + ry_i + 1):
-			for x in range(cx - r_i, cx + r_i + 1):
-				var dx := (float(x) + 0.5 - local.x) / radius_vox
-				var dy := (float(y) + 0.5 - local.y) / ry
-				var dz := (float(z) + 0.5 - local.z) / radius_vox
-				if dx * dx + dy * dy + dz * dz > 1.0001:
-					continue
-				var vox := Vector3i(x, y, z)
-				var mat_id := int(_tool.get_voxel(vox))
-				if not VoxelMaterial.is_destructible(mat_id):
-					continue
-				if detached.size() < MAX_DEBRIS:
-					detached.append({"vox": vox, "mat": mat_id})
-				var col := Vector2i(x, z)
-				if column_max_y.has(col):
-					column_max_y[col] = maxi(int(column_max_y[col]), y)
-				else:
-					column_max_y[col] = y
-	for entry in detached:
-		var vox2: Vector3i = entry["vox"]
-		_tool.do_point(vox2)
-	_restore_bedrock_floor(local, radius_vox)
-	if _cascade != null:
-		if _cascade.has_method("detach_voxels"):
-			_cascade.detach_voxels(detached)
-		for col_key in column_max_y.keys():
-			var xz: Vector2i = col_key
-			var max_y: int = int(column_max_y[col_key])
-			_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
-	BlastFlashVfxScript.spawn(self, feet_position, radius * 0.85)
-	_notify_tetris_damage(detached)
-	_notify_destruction(feet_position, maxf(radius * 5.0, 36.0))
+	apply_charged_blast(feet_position, radius_m)
 
 
 func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -> void:
@@ -1272,17 +1223,20 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 
 	if _cascade == null:
 		return
-	## Cleared voxels become debris (already AIR in the world).
-	_cascade.detach_voxels(detached)
+	var hit_world := _terrain.to_global(
+		Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
+	)
+	## Punch sphere is already AIR — spawn debris immediately (same as blast).
+	if _cascade.has_method("detach_blast_voxels"):
+		_cascade.call("detach_blast_voxels", detached, hit_world)
+	elif _cascade.has_method("detach_voxels"):
+		_cascade.detach_voxels(detached)
 	## Remaining destructibles above the hole tumble down per column.
 	for col_key in column_max_y.keys():
 		var xz: Vector2i = col_key
 		var max_y: int = int(column_max_y[col_key])
 		_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
 
-	var hit_world := _terrain.to_global(
-		Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
-	)
 	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, 30.0 + 8.0 * scale)
 
@@ -2008,6 +1962,46 @@ func _notify_destruction(world_pos: Vector3, radius_m: float = 32.0) -> void:
 			inst.vehicles.react_to_destruction(world_pos, radius_m)
 
 
+## First destructible voxel along a world ray (includes walk-through park mats:
+## bark / leaves / planters). Physics rays miss those because they have no collision.
+## Returns {} or {point, normal, distance} in world space.
+func probe_destructible_ray(from_world: Vector3, to_world: Vector3) -> Dictionary:
+	if _tool == null or _terrain == null:
+		return {}
+	var local_from := _terrain.to_local(from_world)
+	var local_to := _terrain.to_local(to_world)
+	var delta := local_to - local_from
+	var dist := delta.length()
+	if dist < 0.05:
+		return {}
+	var dir := delta / dist
+	## ~0.2 voxel steps — same density as melee march.
+	var step := 0.2
+	var steps := int(ceil(dist / step)) + 1
+	var world_dir := to_world - from_world
+	var world_len := world_dir.length()
+	if world_len < 0.05:
+		return {}
+	world_dir /= world_len
+	var prev := Vector3i(2147483647, 2147483647, 2147483647)
+	for i in range(1, steps + 1):
+		var p := local_from + dir * (float(i) * step)
+		var v := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
+		if v == prev:
+			continue
+		prev = v
+		var id := int(_tool.get_voxel(v))
+		if not VoxelMaterial.is_destructible(id):
+			continue
+		var hit_t := clampf((float(i) * step / dist) * world_len - VOXEL_SIZE * 0.2, 0.0, world_len)
+		return {
+			"point": from_world + world_dir * hit_t,
+			"normal": -world_dir,
+			"distance": hit_t,
+		}
+	return {}
+
+
 ## Shorten a laser aim so the dart stops on the nearest ped/car before the wall.
 ## Prefer the camera click ray (what the player aimed at); also try eye→wall.
 func resolve_laser_aim(cam_from: Vector3, wall_aim: Vector3, eye_from: Vector3) -> Vector3:
@@ -2131,8 +2125,10 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 	return removed
 
 
+## Ensure the indestructible bedrock band (y=0) remains under a crater.
+## Diggable STONE / pavement above are left as carved air so holes match debris.
 func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
-	var thickness := 1
+	const BEDROCK_BAND := 1
 	var r := int(ceil(radius_vox)) + 1
 	var cx := int(floor(center_vox.x))
 	var cz := int(floor(center_vox.z))
@@ -2145,7 +2141,7 @@ func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
 			var dz := float(z) + 0.5 - center_vox.z
 			if dx * dx + dz * dz > radius_vox * radius_vox:
 				continue
-			for y in range(0, thickness):
+			for y in range(0, BEDROCK_BAND):
 				_tool.do_point(Vector3i(x, y, z))
 
 

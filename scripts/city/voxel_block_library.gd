@@ -313,8 +313,8 @@ static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 const SURFACE_SHADER := "res://assets/city/shaders/voxel_surface.gdshader"
 const GLASS_SHADER := "res://assets/city/shaders/voxel_glass.gdshader"
 const WATER_SHADER := "res://assets/city/shaders/voxel_water.gdshader"
-## World height of the street deck (ground_thickness + 1 voxel), used for grime.
-const STREET_DECK_Y := 1.0
+## World height of the street deck (ground_thickness+1)*voxel_size with thickness=6.
+const STREET_DECK_Y := 3.5
 ## Building lot footprint in metres (DistrictCoord.CELL_SIZE * VOXEL_WORLD_SIZE).
 const LOT_METERS := 14.0
 

@@ -1,16 +1,16 @@
-## Single eye-laser dart: long shaft, sharp tip, one shot per fire().
-## Glows and morphs (length / thickness / spin / color) while traveling.
-class_name EyeLaserVfx
+## One Star Wars–style blaster bolt. Travels, then frees itself on impact.
+## Walker spawns many while LMB is held for an intermittent beam stream.
+class_name BlasterBoltVfx
 extends Node3D
 
-signal impact(hit_point: Vector3, direction: Vector3)
+signal impact(hit_point: Vector3, direction: Vector3, shot_origin: Vector3)
 
-@export var shaft_length_m: float = 4.4
-@export var tip_length_m: float = 1.1
-@export var shaft_radius_m: float = 0.11
-@export var tip_base_radius_m: float = 0.11
+@export var shaft_length_m: float = 5.2
+@export var tip_length_m: float = 1.15
+@export var shaft_radius_m: float = 0.08
+@export var tip_base_radius_m: float = 0.1
 @export var speed_mps: float = 30.0
-@export var base_emission: float = 12.0
+@export var base_emission: float = 14.0
 
 var _root: Node3D
 var _shaft_mi: MeshInstance3D
@@ -31,20 +31,14 @@ var _aim_dist: float = 0.0
 var _traveled: float = 0.0
 var _age: float = 0.0
 var _phase: float = 0.0
-var _spin: float = 0.0
-## Shrink full-length dart when the aim is closer than the bolt body.
+## Shrink full-length bolt when the aim is closer than the bolt body.
 var _range_fit: float = 1.0
-## Visual morph multipliers (hit detection uses fitted length).
-var _len_mul: float = 1.0
-var _rad_mul: float = 1.0
-var _tip_mul: float = 1.0
-## Optional: (from: Vector3, tip: Vector3) -> float distance, or -1 if clear.
 var _obstacle_probe: Callable = Callable()
 ## Keep a close-range flash on screen even when travel would be one frame.
 const MIN_VISIBLE_SEC := 0.07
 
 
-func setup(_skeleton: Skeleton3D = null, _camera: Camera3D = null) -> void:
+func setup() -> void:
 	_ensure_mesh()
 
 
@@ -61,6 +55,12 @@ func is_firing() -> bool:
 	return _active
 
 
+func cancel() -> void:
+	_active = false
+	set_process(false)
+	queue_free()
+
+
 func _nominal_total() -> float:
 	return (shaft_length_m + tip_length_m) * _character_scale
 
@@ -69,19 +69,12 @@ func _base_total() -> float:
 	return _nominal_total() * _range_fit
 
 
-func _visual_total() -> float:
-	return _base_total() * _len_mul
-
-
 func _refit_to_aim() -> void:
-	## Tip must start short of the hit so the dart is visible, then travel in.
 	var nominal := maxf(_nominal_total(), 0.01)
 	var max_len := maxf(_aim_dist * 0.82, 0.28 * _character_scale)
 	_range_fit = clampf(max_len / nominal, 0.06, 1.0)
 
 
-## One click → one dart. Rear starts at origin (eyes); tip points at aim.
-## character_scale multiplies dart size (damage carve uses walker scale separately).
 func fire(
 	origin: Vector3,
 	aim_point: Vector3,
@@ -96,20 +89,16 @@ func fire(
 	var delta := aim_point - origin
 	var dist := delta.length()
 	if dist < 0.05:
+		queue_free()
 		return
 	_dir = delta / dist
 	_origin = origin
 	_aim_dist = dist
 	_traveled = 0.0
 	_age = 0.0
-	_phase = 0.0
-	_spin = 0.0
-	_len_mul = 1.0
-	_rad_mul = 1.0
-	_tip_mul = 1.0
+	_phase = randf() * TAU
 	if projectile_speed > 0.0:
 		speed_mps = projectile_speed
-	## Immediate probe so a ped/car already inside the dart length registers now.
 	if _obstacle_probe.is_valid():
 		var tip0 := _origin + _dir * minf(_nominal_total(), _aim_dist)
 		var hit0: Variant = _obstacle_probe.call(_origin, tip0)
@@ -124,7 +113,7 @@ func fire(
 	_root.visible = true
 	if _light != null:
 		_light.visible = true
-	_animate_shape(0.0)
+	_pulse_visual(0.0)
 	_orient()
 	set_process(true)
 
@@ -136,8 +125,6 @@ func _process(delta: float) -> void:
 	_traveled += speed_mps * delta
 	_age += delta
 	_phase += delta
-	_spin += delta * (9.0 + 6.0 * sin(_phase * 3.1))
-	## Mid-flight: stop early if the tip has swept into a ped/car.
 	if _obstacle_probe.is_valid():
 		var tip_along := minf(_traveled + _base_total(), _aim_dist)
 		var tip := _origin + _dir * tip_along
@@ -148,8 +135,7 @@ func _process(delta: float) -> void:
 				_aim_dist = maxf(d, 0.05)
 				_refit_to_aim()
 				_apply_size()
-	_animate_shape(delta)
-	## Pin tip on the hit once reached so close shots still flash.
+	_pulse_visual(delta)
 	if _traveled + _base_total() >= _aim_dist:
 		_traveled = maxf(_aim_dist - _base_total(), 0.0)
 		_orient()
@@ -159,45 +145,34 @@ func _process(delta: float) -> void:
 	_orient()
 
 
-func _animate_shape(_delta: float) -> void:
-	## Stretch / squash along flight + breathing thickness + tip flare.
-	var wave_a := sin(_phase * 14.0)
-	var wave_b := sin(_phase * 7.5 + 1.2)
-	var wave_c := sin(_phase * 22.0 + 0.4)
-	_len_mul = 0.72 + 0.38 * wave_a + 0.12 * wave_b
-	_rad_mul = 0.55 + 0.55 * (0.5 + 0.5 * wave_b) + 0.15 * wave_c
-	_tip_mul = 0.7 + 0.55 * (0.5 + 0.5 * sin(_phase * 18.0 + 0.8))
-	_apply_size()
-
-	## Hot core ↔ cooler cyan, with a white flash beat.
-	var flash := 0.55 + 0.45 * sin(_phase * 20.0)
-	var cool := 0.5 + 0.5 * sin(_phase * 5.5)
+func _pulse_visual(_delta: float) -> void:
+	## Brief bright / dim flicker so a stream reads as intermittent bolts.
+	var flash := 0.65 + 0.35 * sin(_phase * 28.0)
 	if _mat_core != null:
-		_mat_core.emission = Color(0.15 + 0.35 * cool, 0.75 + 0.2 * flash, 1.0)
-		_mat_core.emission_energy_multiplier = base_emission * (0.9 + 1.1 * flash)
-		_mat_core.albedo_color = Color(0.35 + 0.4 * flash, 0.9, 1.0)
+		_mat_core.emission = Color(1.0, 0.22 + 0.2 * flash, 0.05)
+		_mat_core.emission_energy_multiplier = base_emission * (0.95 + 1.2 * flash)
+		_mat_core.albedo_color = Color(1.0, 0.45 + 0.35 * flash, 0.15)
 	if _mat_tip != null:
-		_mat_tip.emission = Color(0.7 + 0.3 * flash, 0.95, 1.0)
-		_mat_tip.emission_energy_multiplier = base_emission * (1.4 + 1.6 * flash)
-		_mat_tip.albedo_color = Color(0.85, 0.98, 1.0)
+		_mat_tip.emission = Color(1.0, 0.75 + 0.2 * flash, 0.35)
+		_mat_tip.emission_energy_multiplier = base_emission * (1.5 + 1.4 * flash)
+		_mat_tip.albedo_color = Color(1.0, 0.9, 0.55)
 	if _mat_glow != null:
-		_mat_glow.emission_energy_multiplier = base_emission * 0.45 * (0.7 + 0.6 * flash)
-		_mat_glow.albedo_color = Color(0.2, 0.85, 1.0, 0.18 + 0.22 * flash)
+		_mat_glow.emission_energy_multiplier = base_emission * 0.4 * (0.6 + 0.7 * flash)
+		_mat_glow.albedo_color = Color(1.0, 0.25, 0.05, 0.16 + 0.2 * flash)
 	if _light != null:
-		_light.light_energy = 4.0 + 10.0 * flash
-		_light.light_color = Color(0.35 + 0.4 * cool, 0.85, 1.0)
-		_light.omni_range = (2.5 + 2.0 * _rad_mul) * _character_scale
+		_light.light_energy = 3.5 + 9.0 * flash
+		_light.light_color = Color(1.0, 0.35, 0.1)
+		_light.omni_range = 2.2 * _character_scale
 
 
 func _finish_impact() -> void:
 	var hit := _origin + _dir * _aim_dist
+	var dir := _dir
+	var origin := _origin
 	_active = false
-	if _root != null:
-		_root.visible = false
-	if _light != null:
-		_light.visible = false
 	set_process(false)
-	impact.emit(hit, _dir)
+	impact.emit(hit, dir, origin)
+	queue_free()
 
 
 func _exit_tree() -> void:
@@ -208,27 +183,27 @@ func _ensure_mesh() -> void:
 	if _root != null and is_instance_valid(_root):
 		return
 
-	_mat_core = _make_mat(Color(0.45, 0.96, 1.0), Color(0.25, 0.9, 1.0), false)
-	_mat_tip = _make_mat(Color(0.9, 0.98, 1.0), Color(0.7, 0.95, 1.0), false)
-	_mat_glow = _make_mat(Color(0.2, 0.85, 1.0, 0.25), Color(0.15, 0.8, 1.0), true)
+	_mat_core = _make_mat(Color(1.0, 0.4, 0.12), Color(1.0, 0.25, 0.05), false)
+	_mat_tip = _make_mat(Color(1.0, 0.85, 0.45), Color(1.0, 0.7, 0.3), false)
+	_mat_glow = _make_mat(Color(1.0, 0.2, 0.05, 0.22), Color(1.0, 0.18, 0.04), true)
 
 	_root = Node3D.new()
-	_root.name = "LaserDart"
+	_root.name = "BlasterBolt"
 	add_child(_root)
 
 	_shaft_mesh = CylinderMesh.new()
-	_shaft_mesh.radial_segments = 18
+	_shaft_mesh.radial_segments = 12
 	_shaft_mesh.cap_top = true
 	_shaft_mesh.cap_bottom = true
 
 	_tip_mesh = CylinderMesh.new()
-	_tip_mesh.radial_segments = 18
+	_tip_mesh.radial_segments = 12
 	_tip_mesh.top_radius = 0.0
 	_tip_mesh.cap_top = true
 	_tip_mesh.cap_bottom = true
 
 	_glow_mesh = CylinderMesh.new()
-	_glow_mesh.radial_segments = 14
+	_glow_mesh.radial_segments = 10
 	_glow_mesh.cap_top = false
 	_glow_mesh.cap_bottom = false
 
@@ -240,10 +215,10 @@ func _ensure_mesh() -> void:
 	_root.add_child(_tip_mi)
 
 	_light = OmniLight3D.new()
-	_light.name = "DartLight"
-	_light.light_color = Color(0.4, 0.9, 1.0)
-	_light.light_energy = 6.0
-	_light.omni_range = 4.0
+	_light.name = "BoltLight"
+	_light.light_color = Color(1.0, 0.35, 0.1)
+	_light.light_energy = 5.0
+	_light.omni_range = 2.5
 	_light.shadow_enabled = false
 	_light.visible = false
 	_root.add_child(_light)
@@ -281,28 +256,26 @@ func _make_mi(mi_name: String, mesh: Mesh, mat: Material) -> MeshInstance3D:
 
 func _apply_size() -> void:
 	var s := _character_scale * _range_fit
-	var shaft_len := shaft_length_m * s * _len_mul
-	var tip_len := tip_length_m * s * _len_mul * _tip_mul
-	var shaft_r := shaft_radius_m * _character_scale * _rad_mul
-	var tip_r := tip_base_radius_m * _character_scale * _rad_mul
-	var glow_r := shaft_r * (2.2 + 0.8 * _rad_mul)
-	var glow_len := shaft_len + tip_len * 0.65
+	var shaft_len := shaft_length_m * s
+	var tip_len := tip_length_m * s
+	var shaft_r := shaft_radius_m * _character_scale
+	var tip_r := tip_base_radius_m * _character_scale
+	var glow_r := shaft_r * 2.4
+	var glow_len := shaft_len + tip_len * 0.55
 
 	if _shaft_mesh != null:
 		_shaft_mesh.height = shaft_len
-		## Tapered shaft: thicker rear, thinner toward tip.
-		_shaft_mesh.bottom_radius = shaft_r * 1.25
-		_shaft_mesh.top_radius = shaft_r * 0.55
+		_shaft_mesh.bottom_radius = shaft_r * 1.15
+		_shaft_mesh.top_radius = shaft_r * 0.65
 	if _tip_mesh != null:
 		_tip_mesh.height = tip_len
 		_tip_mesh.top_radius = 0.0
 		_tip_mesh.bottom_radius = tip_r
 	if _glow_mesh != null:
 		_glow_mesh.height = glow_len
-		_glow_mesh.top_radius = glow_r * 0.7
+		_glow_mesh.top_radius = glow_r * 0.65
 		_glow_mesh.bottom_radius = glow_r
 
-	## +Y = flight: shaft behind, tip ahead. Soft sheath around both.
 	var tip_pos_y := shaft_len * 0.5
 	var shaft_pos_y := -tip_len * 0.5
 	if _shaft_mi != null:
@@ -310,15 +283,15 @@ func _apply_size() -> void:
 	if _tip_mi != null:
 		_tip_mi.position = Vector3(0.0, tip_pos_y, 0.0)
 	if _glow_mi != null:
-		_glow_mi.position = Vector3(0.0, (shaft_pos_y + tip_pos_y) * 0.35, 0.0)
+		_glow_mi.position = Vector3(0.0, (shaft_pos_y + tip_pos_y) * 0.3, 0.0)
 	if _light != null:
-		_light.position = Vector3(0.0, tip_pos_y * 0.6, 0.0)
+		_light.position = Vector3(0.0, tip_pos_y * 0.55, 0.0)
 
 
 func _orient() -> void:
 	if _root == null:
 		return
-	var total := _visual_total()
+	var total := _base_total()
 	var rear := _origin + _dir * _traveled
 	var center := rear + _dir * (total * 0.5)
 	var y_axis := _dir
@@ -327,10 +300,7 @@ func _orient() -> void:
 		x_axis = y_axis.cross(Vector3.RIGHT)
 	x_axis = x_axis.normalized()
 	var z_axis := x_axis.cross(y_axis).normalized()
-	## Spin around flight axis for a living, twisting dart.
-	var basis := Basis(x_axis, y_axis, z_axis)
-	basis = basis.rotated(y_axis, _spin)
-	_root.global_transform = Transform3D(basis, center)
+	_root.global_transform = Transform3D(Basis(x_axis, y_axis, z_axis), center)
 
 
 func _reparent_to_world() -> void:

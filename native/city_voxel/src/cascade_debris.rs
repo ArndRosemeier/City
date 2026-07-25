@@ -35,7 +35,8 @@ const CANOPY_RADIUS: i32 = 2;
 const CANOPY_UP: i32 = 4;
 const MAX_PENDING_UNSUPPORTED: usize = 400;
 
-/// BODY_MODE_RIGID
+/// PhysicsServer3D::BodyMode
+const BODY_MODE_STATIC: i32 = 0;
 const BODY_MODE_RIGID: i32 = 2;
 // PhysicsServer3D::BodyState (Godot 4.x)
 const BODY_STATE_TRANSFORM: i32 = 0;
@@ -49,6 +50,11 @@ const BODY_PARAM_BOUNCE: i32 = 0;
 const BODY_PARAM_FRICTION: i32 = 1;
 const BODY_PARAM_MASS: i32 = 2;
 const BODY_PARAM_GRAVITY_SCALE: i32 = 5;
+const BODY_PARAM_LINEAR_DAMP: i32 = 8;
+const BODY_PARAM_ANGULAR_DAMP: i32 = 9;
+/// Terrain (layer 1) + other debris (layer 4).
+const DEBRIS_COLLISION_MASK: i32 = 1 | 4;
+const DEBRIS_COLLISION_LAYER: i32 = 4;
 
 /// Temporary cascade diagnostics (console). Turn off after verifying visuals.
 const DEBUG_DEBRIS_LOG: bool = false;
@@ -67,6 +73,17 @@ struct LiveBody {
     shape: Rid,
     mat_id: i32,
     mm_index: i32,
+    /// Last world origin sampled for settle detection.
+    last_origin: Vector3,
+    /// Seconds spent nearly still — hard-freeze when this exceeds settle_still_sec.
+    still_sec: f32,
+    /// Seconds since spawn — force-freeze old jittering piles.
+    age_sec: f32,
+    /// Frozen as BODY_MODE_STATIC — overlaps cannot wake it.
+    settled: bool,
+    /// Collision cleared while dropping through stale street collision into a crater.
+    phantom_fall: bool,
+    half_extent: f32,
 }
 
 struct MmBucket {
@@ -106,6 +123,13 @@ struct NativeCascadeDebris {
     max_active_columns: i32,
     debris_evict_per_frame: i32,
     max_pending_visuals: i32,
+    /// World displacement (m) per physics frame below which a cube counts as "still".
+    /// Primary settle signal — solver velocity can jitter forever without real motion.
+    settle_move: f32,
+    /// Hold still this long, then freeze as static.
+    settle_still_sec: f32,
+    /// Always freeze after this age (stops overlap chatter piles).
+    settle_max_age_sec: f32,
 
     columns: Vec<Vec<ColumnEntry>>,
     pending_unsupported: Vec<Vector3i>,
@@ -152,6 +176,9 @@ impl INode for NativeCascadeDebris {
             max_active_columns: 180,
             debris_evict_per_frame: 48,
             max_pending_visuals: 2500,
+            settle_move: 0.045,
+            settle_still_sec: 0.22,
+            settle_max_age_sec: 2.4,
             columns: Vec::new(),
             pending_unsupported: Vec::new(),
             pending_visuals: Vec::new(),
@@ -175,6 +202,12 @@ impl INode for NativeCascadeDebris {
         let t0 = Time::singleton().get_ticks_usec();
         self.debug_frame = self.debug_frame.wrapping_add(1);
         self.evict_budget = self.debris_evict_per_frame.max(1);
+        let dt = delta as f32;
+        // Drop through stale street colliders into real voxel support, then freeze piles.
+        if self.tool.is_some() && self.terrain.is_some() {
+            self.pull_debris_through_phantom_floors(dt);
+            self.force_settle_still_debris(dt);
+        }
         self.sync_multimesh_transforms();
         self.debug_log_settle_sample();
         self.drain_pending_visuals();
@@ -192,7 +225,7 @@ impl INode for NativeCascadeDebris {
             self.last_tick_us = (Time::singleton().get_ticks_usec() - t0) as i64;
             return;
         }
-        self.accum += delta as f32;
+        self.accum += dt;
         let interval = self.cascade_interval_sec.max(0.001);
         while self.accum >= interval {
             self.accum -= interval;
@@ -404,12 +437,13 @@ impl NativeCascadeDebris {
             let Some(vox) = vox else {
                 continue;
             };
-            self.spawn_blast_cube(vox, mat, local_center);
+            self.spawn_cube_now(vox, mat, Some(local_center));
         }
     }
 }
 
 impl NativeCascadeDebris {
+
     fn rng_u32(&mut self) -> u32 {
         // xorshift64*
         self.rng_state ^= self.rng_state >> 12;
@@ -783,7 +817,7 @@ impl NativeCascadeDebris {
 
     fn free_oldest_sleeping(&mut self) -> bool {
         for i in 0..self.live.len() {
-            if self.body_sleeping(self.live[i].body) {
+            if self.live[i].settled || self.body_sleeping(self.live[i].body) {
                 return self.free_body_at(i);
             }
         }
@@ -840,20 +874,15 @@ impl NativeCascadeDebris {
         self.spawn_cube_now(vox, mat_id, None);
     }
 
-    fn spawn_blast_cube(&mut self, vox: Vector3i, mat_id: i32, blast_local: Vector3) {
-        if !self.make_room_for_spawn() {
-            if (self.pending_visuals.len() as i32) < self.max_pending_visuals {
-                self.pending_visuals.push(PendingVisual { vox, mat: mat_id });
-            }
+    fn spawn_cube_now(
+        &mut self,
+        vox: Vector3i,
+        mat_id: i32,
+        blast: Option<Vector3>,
+    ) {
+        if self.terrain.is_none() {
             return;
         }
-        self.spawn_cube_now(vox, mat_id, Some(blast_local));
-    }
-
-    fn spawn_cube_now(&mut self, vox: Vector3i, mat_id: i32, blast_local: Option<Vector3>) {
-        let Some(terrain) = self.terrain.as_ref() else {
-            return;
-        };
         if self.space == Rid::Invalid {
             godot_error!("NativeCascadeDebris: physics space invalid");
             return;
@@ -863,7 +892,10 @@ impl NativeCascadeDebris {
             vox.y as f32 + 0.5,
             vox.z as f32 + 0.5,
         );
-        let mut world_center = terrain.to_global(local_center);
+        let mut world_center = {
+            let terrain = self.terrain.as_ref().unwrap();
+            terrain.to_global(local_center)
+        };
         let scatter_m = self.voxel_size * self.spawn_scatter;
         let yaw = self.rng_range(0.0, std::f32::consts::TAU);
         let radial = self.rng_range(scatter_m * 0.35, scatter_m);
@@ -911,11 +943,11 @@ impl NativeCascadeDebris {
         );
         ps.call(
             "body_set_collision_layer",
-            &[body.to_variant(), 4i32.to_variant()],
+            &[body.to_variant(), DEBRIS_COLLISION_LAYER.to_variant()],
         );
         ps.call(
             "body_set_collision_mask",
-            &[body.to_variant(), 1i32.to_variant()],
+            &[body.to_variant(), DEBRIS_COLLISION_MASK.to_variant()],
         );
         ps.call(
             "body_set_enable_continuous_collision_detection",
@@ -927,7 +959,7 @@ impl NativeCascadeDebris {
             &[
                 body.to_variant(),
                 BODY_PARAM_BOUNCE.to_variant(),
-                0.12f32.to_variant(),
+                0.04f32.to_variant(),
             ],
         );
         ps.call(
@@ -935,7 +967,7 @@ impl NativeCascadeDebris {
             &[
                 body.to_variant(),
                 BODY_PARAM_FRICTION.to_variant(),
-                0.55f32.to_variant(),
+                0.85f32.to_variant(),
             ],
         );
         ps.call(
@@ -952,6 +984,23 @@ impl NativeCascadeDebris {
                 body.to_variant(),
                 BODY_PARAM_GRAVITY_SCALE.to_variant(),
                 1.0f32.to_variant(),
+            ],
+        );
+        // Keep flight lively — high damp stalls cubes mid-air.
+        ps.call(
+            "body_set_param",
+            &[
+                body.to_variant(),
+                BODY_PARAM_LINEAR_DAMP.to_variant(),
+                0.25f32.to_variant(),
+            ],
+        );
+        ps.call(
+            "body_set_param",
+            &[
+                body.to_variant(),
+                BODY_PARAM_ANGULAR_DAMP.to_variant(),
+                1.2f32.to_variant(),
             ],
         );
         ps.call("body_reset_mass_properties", &[body.to_variant()]);
@@ -1036,18 +1085,18 @@ impl NativeCascadeDebris {
             ],
         );
 
-        let (lin, ang) = if let Some(blast) = blast_local {
+        let (lin, ang) = if let Some(blast) = blast {
             let mut away = local_center - blast;
             if away.length_squared() < 0.0001 {
                 away = Vector3::new(
                     self.rng_range(-1.0, 1.0),
-                    0.4,
+                    0.55,
                     self.rng_range(-1.0, 1.0),
                 );
             }
-            away = away.normalized();
+            let dir = away.normalized();
             let burst = self.pop_impulse * self.rng_range(1.1, 2.0);
-            let lin = away * burst
+            let lin = dir * burst
                 + Vector3::UP * (self.pop_impulse * self.rng_range(0.45, 1.1));
             let ang = Vector3::new(
                 self.rng_range(-self.tumble_spin, self.tumble_spin),
@@ -1095,9 +1144,271 @@ impl NativeCascadeDebris {
             shape,
             mat_id,
             mm_index,
+            last_origin: world_center,
+            still_sec: 0.0,
+            age_sec: 0.0,
+            settled: false,
+            phantom_fall: false,
+            half_extent: half_extents.x,
         });
         self.base_mut()
             .emit_signal("debris_spawned", &[world_center.to_variant()]);
+    }
+
+    /// World Y of the top face of the highest solid voxel under `world` (terrain-local scan).
+    fn voxel_support_top_y(&mut self, world: Vector3) -> Option<f32> {
+        let local = {
+            let terrain = self.terrain.as_ref()?;
+            terrain.to_local(world)
+        };
+        let vx = local.x.floor() as i32;
+        let vz = local.z.floor() as i32;
+        let mut top_local_y: Option<f32> = None;
+        for y in (0..=64).rev() {
+            let id = self.get_voxel(Vector3i::new(vx, y, vz));
+            if materials::is_solid(id) {
+                // Terrain is scaled by voxel_size; local units are voxel indices.
+                top_local_y = Some((y + 1) as f32);
+                break;
+            }
+        }
+        let top = top_local_y?;
+        let top_local = Vector3::new(local.x, top, local.z);
+        let terrain = self.terrain.as_ref()?;
+        Some(terrain.to_global(top_local).y)
+    }
+
+    /// Street collision remesh lags carve — cubes rest on the old deck above air.
+    /// Temporarily clear collisions and drop them onto real voxel support.
+    fn pull_debris_through_phantom_floors(&mut self, delta: f32) {
+        if self.live.is_empty() || self.space == Rid::Invalid {
+            return;
+        }
+        let dt = delta.max(0.0);
+        let mut ps = Self::ps();
+        struct Snap {
+            index: usize,
+            body: Rid,
+            origin: Vector3,
+            basis: Basis,
+            vel: Vector3,
+            half: f32,
+            phantom_fall: bool,
+        }
+        let mut snaps: Vec<Snap> = Vec::with_capacity(self.live.len());
+        for (index, live) in self.live.iter_mut().enumerate() {
+            if live.settled {
+                continue;
+            }
+            live.age_sec += dt;
+            let Ok(xf) = ps
+                .call(
+                    "body_get_state",
+                    &[
+                        live.body.to_variant(),
+                        BODY_STATE_TRANSFORM.to_variant(),
+                    ],
+                )
+                .try_to::<Transform3D>()
+            else {
+                continue;
+            };
+            let vel = ps
+                .call(
+                    "body_get_state",
+                    &[
+                        live.body.to_variant(),
+                        BODY_STATE_LINEAR_VELOCITY.to_variant(),
+                    ],
+                )
+                .try_to::<Vector3>()
+                .unwrap_or(Vector3::ZERO);
+            snaps.push(Snap {
+                index,
+                body: live.body,
+                origin: xf.origin,
+                basis: xf.basis,
+                vel,
+                half: live.half_extent,
+                phantom_fall: live.phantom_fall,
+            });
+        }
+
+        let mut supports: Vec<(usize, f32)> = Vec::with_capacity(snaps.len());
+        for snap in &snaps {
+            if let Some(y) = self.voxel_support_top_y(snap.origin) {
+                supports.push((snap.index, y));
+            }
+        }
+        let support_by_index: HashMap<usize, f32> = supports.into_iter().collect();
+
+        for snap in snaps {
+            let Some(&support_y) = support_by_index.get(&snap.index) else {
+                continue;
+            };
+            let rest_y = support_y + snap.half;
+            let gap = snap.origin.y - rest_y;
+            let live = &mut self.live[snap.index];
+
+            if snap.phantom_fall {
+                if gap <= 0.08 {
+                    let xf = Transform3D {
+                        basis: snap.basis,
+                        origin: Vector3::new(snap.origin.x, rest_y, snap.origin.z),
+                    };
+                    ps.call(
+                        "body_set_state",
+                        &[
+                            snap.body.to_variant(),
+                            BODY_STATE_TRANSFORM.to_variant(),
+                            xf.to_variant(),
+                        ],
+                    );
+                    ps.call(
+                        "body_set_state",
+                        &[
+                            snap.body.to_variant(),
+                            BODY_STATE_LINEAR_VELOCITY.to_variant(),
+                            Vector3::ZERO.to_variant(),
+                        ],
+                    );
+                    ps.call(
+                        "body_set_state",
+                        &[
+                            snap.body.to_variant(),
+                            BODY_STATE_ANGULAR_VELOCITY.to_variant(),
+                            Vector3::ZERO.to_variant(),
+                        ],
+                    );
+                    ps.call(
+                        "body_set_collision_mask",
+                        &[
+                            snap.body.to_variant(),
+                            DEBRIS_COLLISION_MASK.to_variant(),
+                        ],
+                    );
+                    live.phantom_fall = false;
+                    live.last_origin = xf.origin;
+                } else {
+                    let mut dive = snap.vel;
+                    dive.y = dive.y.min(-10.0);
+                    ps.call(
+                        "body_set_state",
+                        &[
+                            snap.body.to_variant(),
+                            BODY_STATE_LINEAR_VELOCITY.to_variant(),
+                            dive.to_variant(),
+                        ],
+                    );
+                }
+                continue;
+            }
+
+            // Stuck on phantom floor: large voxel gap, barely moving vertically.
+            if gap > 0.28 && snap.vel.y > -1.25 && snap.vel.y < 1.0 {
+                live.phantom_fall = true;
+                ps.call(
+                    "body_set_collision_mask",
+                    &[snap.body.to_variant(), 0i32.to_variant()],
+                );
+                let mut dive = snap.vel;
+                dive.y = -12.0;
+                ps.call(
+                    "body_set_state",
+                    &[
+                        snap.body.to_variant(),
+                        BODY_STATE_LINEAR_VELOCITY.to_variant(),
+                        dive.to_variant(),
+                    ],
+                );
+            }
+        }
+    }
+
+    /// Freeze barely-moving / aged cubes as STATIC so overlap chatter cannot wake them.
+    fn force_settle_still_debris(&mut self, delta: f32) {
+        if self.live.is_empty() || self.space == Rid::Invalid {
+            return;
+        }
+        let move_lim = self.settle_move.max(0.001);
+        let need = self.settle_still_sec.max(0.05);
+        let max_age = self.settle_max_age_sec.max(0.5);
+        let dt = delta.max(0.0);
+        let mut ps = Self::ps();
+        for live in self.live.iter_mut() {
+            if live.settled || live.phantom_fall {
+                continue;
+            }
+            let xf = ps
+                .call(
+                    "body_get_state",
+                    &[
+                        live.body.to_variant(),
+                        BODY_STATE_TRANSFORM.to_variant(),
+                    ],
+                )
+                .try_to::<Transform3D>();
+            let Ok(xf) = xf else {
+                continue;
+            };
+            let origin = xf.origin;
+            let moved = (origin - live.last_origin).length();
+            live.last_origin = origin;
+            if moved < move_lim {
+                live.still_sec += dt;
+            } else {
+                live.still_sec = 0.0;
+            }
+            // Age cutoff always wins — overlapping piles can chatter forever otherwise.
+            let age_force = live.age_sec >= max_age;
+            let still_force = live.still_sec >= need;
+            if !still_force && !age_force {
+                continue;
+            }
+            Self::freeze_body_static(&mut ps, live, xf);
+        }
+    }
+
+    fn freeze_body_static(ps: &mut Gd<Object>, live: &mut LiveBody, xf: Transform3D) {
+        live.still_sec = 0.0;
+        live.settled = true;
+        live.phantom_fall = false;
+        live.last_origin = xf.origin;
+        ps.call(
+            "body_set_state",
+            &[
+                live.body.to_variant(),
+                BODY_STATE_LINEAR_VELOCITY.to_variant(),
+                Vector3::ZERO.to_variant(),
+            ],
+        );
+        ps.call(
+            "body_set_state",
+            &[
+                live.body.to_variant(),
+                BODY_STATE_ANGULAR_VELOCITY.to_variant(),
+                Vector3::ZERO.to_variant(),
+            ],
+        );
+        ps.call(
+            "body_set_state",
+            &[
+                live.body.to_variant(),
+                BODY_STATE_TRANSFORM.to_variant(),
+                xf.to_variant(),
+            ],
+        );
+        ps.call(
+            "body_set_mode",
+            &[live.body.to_variant(), BODY_MODE_STATIC.to_variant()],
+        );
+        ps.call(
+            "body_set_collision_mask",
+            &[
+                live.body.to_variant(),
+                DEBRIS_COLLISION_MASK.to_variant(),
+            ],
+        );
     }
 
     fn ensure_bucket(&mut self, mat_id: i32) -> &mut MmBucket {

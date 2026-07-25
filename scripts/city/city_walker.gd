@@ -6,7 +6,7 @@ signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
 ## Melee strike: origin + flat facing direction, range in meters.
 ## CityRoot scales the carve diameter with character_scale (no break below 0.5×).
 signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
-## Shift+LMB stomp: feet world position + blast radius in meters.
+## Shift+LMB stomp: feet world position + max charged-blast radius (destruction == blast).
 signal stomp_requested(feet_position: Vector3, radius_m: float)
 ## M-key: aim a voxel infection meteor at hit_point (surface normal for VFX only).
 signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
@@ -19,8 +19,10 @@ const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
 const ProportionModifierScript := preload("res://scripts/humans/proportion_modifier.gd")
 const BodyProportionsScript := preload("res://scripts/humans/body_proportions.gd")
 const EyeLaserVfxScript := preload("res://scripts/city/eye_laser_vfx.gd")
+const BlasterBoltVfxScript := preload("res://scripts/city/blaster_bolt_vfx.gd")
 const ChargedBlastVfxScript := preload("res://scripts/city/charged_blast_vfx.gd")
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
+const VoxelBodyMotionScript := preload("res://scripts/city/voxel_body_motion.gd")
 
 const PedOutfitCatalogScript := preload("res://scripts/humans/ped_outfit_catalog.gd")
 const PedOutfitApplierScript := preload("res://scripts/humans/ped_outfit_applier.gd")
@@ -40,11 +42,20 @@ const MIXAMO_LIB := "res://assets/humans/animations/mixamo/mixamo_actions.tres"
 const ANIM_IDLE := &"Idle"
 const ANIM_WALK := &"Walk"
 const ANIM_SPRINT := &"Sprint"
+const ANIM_JUMP_START := &"Jump_Start"
+const ANIM_JUMP_LOOP := &"Jump_Loop"
+const ANIM_JUMP_LAND := &"Jump_Land"
 const LIB_NAME := &"quat"
 
 @export var walk_speed: float = 5.0
 @export var sprint_speed: float = 8.5
-@export var jump_velocity: float = 6.8
+## Hold jump to charge; release to leap. Heights are meters at character_scale 1.0.
+@export var jump_height_min_m: float = 1.35
+@export var jump_height_max_m: float = 10.0
+## Seconds of hold to reach max jump height.
+@export var jump_charge_sec: float = 0.85
+## After release, still allow the leap this long if floor contact flickered.
+@export var jump_release_buffer_sec: float = 0.14
 @export var mouse_sensitivity: float = 0.0022
 @export var turn_speed: float = 10.0
 ## A/D keyboard turn rate (radians per second).
@@ -61,7 +72,6 @@ const LIB_NAME := &"quat"
 @export var stomp_anim: String = "Stomping_m"
 ## Fraction into Stomping when the foot hits and voxels break.
 @export var stomp_impact_ratio: float = 0.48
-@export var stomp_radius_at_scale_1: float = 2.8
 @export var stomp_cooldown_sec: float = 0.85
 @export var stomp_shake_trauma: float = 0.72
 @export var camera_shake_max_offset_m: float = 0.28
@@ -70,12 +80,15 @@ const LIB_NAME := &"quat"
 ## Ctrl+LMB laser: click aim, punch/kick carve power, meters.
 @export var laser_range_m: float = 100.0
 @export var laser_cooldown_sec: float = 0.45
-@export var laser_speed_mps: float = 30.0
-## Hold LMB to charge the bomb; release to fire. Shift+LMB stomps; Ctrl+LMB fires the laser.
+@export var laser_speed_mps: float = 60.0
+## LMB blaster: hold for intermittent bolts; same carve as eye laser each shot.
+@export var blaster_speed_mps: float = 30.0
+@export var blaster_interval_sec: float = 0.25
+## Hold LMB for blaster. Alt+LMB charges the bomb; Shift+LMB stomps; Ctrl+LMB laser.
 @export var charged_blast_speed_mps: float = 10.0
 @export var charged_blast_charge_sec: float = 1.6
-@export var charged_blast_radius_min_m: float = 0.9
-@export var charged_blast_radius_max_m: float = 4.2
+@export var charged_blast_radius_min_m: float = 0.54
+@export var charged_blast_radius_max_m: float = 2.52
 @export var charged_blast_cooldown_sec: float = 0.55
 @export var charged_blast_shoot_anim: String = "Spell_Simple_Shoot"
 @export var charged_blast_idle_anim: String = "Spell_Simple_Idle"
@@ -160,13 +173,24 @@ var _moving: bool = false
 var _body_base_y: float = 0.0
 var _feet_aligned: bool = false
 var _rng := RandomNumberGenerator.new()
-var _jump_queued: bool = false
+var _jump_release_buffer_left: float = 0.0
+var _jump_pending_charge: float = 0.0
+var _jump_charging: bool = false
+var _jump_charge: float = 0.0
 var _coyote_left: float = 0.0
+var _jumping: bool = false
+var _was_airborne: bool = false
+var _land_anim_left: float = 0.0
 var _safety_deck: StaticBody3D
 ## Hold forward without pressing W (toggle with R).
 var _auto_run: bool = false
-## Matches district surface top: (ground_thickness+1) * 0.5 m.
-const SAFETY_FLOOR_TOP_Y := 1.0
+## Void rescue only — top of the indestructible bedrock band (voxel y=0 → 0.5 m).
+## Must stay below diggable stone so stomped craters are enterable.
+const VOID_FLOOR_TOP_Y := 0.5
+## Street deck top (ground_thickness=6 → world y 3.5). Climb-down needs a real drop.
+const STREET_DECK_TOP_Y := 3.5
+## Physics layer 8 — player safety deck only (not voxel terrain layer 1).
+const SAFETY_DECK_LAYER := 128
 ## One-shot / emote override from the action bar; blocks Idle/Walk until done.
 var _action_playing: bool = false
 var _action_anim: String = ""
@@ -178,6 +202,9 @@ var _shake_trauma: float = 0.0
 var _stuck_timer: float = 0.0
 var _unstuck_cooldown: float = 0.0
 var _was_ray_grounded: bool = false
+## Live voxel AABB motion — digs/holes match voxel data immediately (no remesh wait).
+var _voxel_motion: RefCounted = VoxelBodyMotionScript.new()
+var _last_applied_motion: Vector3 = Vector3.ZERO
 var _eye_laser: Node
 var _charged_blast: Node
 var _laser_ready_at_msec: int = 0
@@ -186,6 +213,10 @@ var _blast_charge: float = 0.0
 var _blast_ready_at_msec: int = 0
 ## True while LMB is held for the bomb — charge until release fires it.
 var _blast_charging: bool = false
+## True while LMB blaster beam is held.
+var _blaster_holding: bool = false
+var _blaster_accum: float = 0.0
+var _live_blaster_bolts: Array[Node] = []
 var _blast_fire_token: int = 0
 var _blast_pending_aim: Vector3 = Vector3.ZERO
 var _blast_pending_radius: float = 1.0
@@ -220,8 +251,11 @@ func _ready() -> void:
 	_rng.randomize()
 	_zoom = zoom_default
 	collision_layer = 2
-	collision_mask = 1
-	floor_snap_length = FLOOR_SNAP_M
+	## Walking uses VoxelBoxMover against live voxels — do not collide with remeshed
+	## terrain (layer 1) or stale dig colliders fight the real shape. Safety deck only.
+	## Climb temporarily re-enables terrain (see _set_physics_terrain_collision).
+	collision_mask = SAFETY_DECK_LAYER
+	floor_snap_length = 0.0
 	floor_max_angle = deg_to_rad(55.0)
 	safe_margin = SAFE_MARGIN_M
 	floor_stop_on_slope = true
@@ -380,7 +414,9 @@ func is_blocking_ui_open() -> bool:
 func set_game_over_locked(on: bool) -> void:
 	_game_over_locked = on
 	if on:
-		_jump_queued = false
+		_cancel_jump_charge()
+		_jump_release_buffer_left = 0.0
+		_jumping = false
 		if _climb_mode != ClimbMode.NONE:
 			_end_climb(false)
 		_auto_run = false
@@ -392,6 +428,7 @@ func set_game_over_locked(on: bool) -> void:
 			_eye_laser.call("cancel")
 		if _charged_blast != null and is_instance_valid(_charged_blast) and _charged_blast.has_method("cancel"):
 			_charged_blast.call("cancel")
+		_stop_blaster(true)
 		_blast_charging = false
 		_blast_charge = 0.0
 		var audio := _city_audio()
@@ -428,6 +465,9 @@ func adjust_character_scale(direction: float) -> void:
 
 func set_character_scale(value: float, silent: bool = false) -> void:
 	var next := clampf(value, scale_min, scale_max)
+	if _voxel_motion != null and _voxel_motion.has_method("set_max_step_height"):
+		## Step height stays absolute meters (curbs), not scaled with character size.
+		_voxel_motion.call("set_max_step_height", max_step_height)
 	if is_equal_approx(next, character_scale):
 		return
 	var prev := character_scale
@@ -558,7 +598,14 @@ func _setup_animation_player(body: Node3D) -> void:
 		var copy: Animation = src.duplicate(true) as Animation
 		_strip_root_translation(copy)
 		## Keep locomotion looping even if import flags slip.
-		if key == String(ANIM_IDLE) or key == String(ANIM_WALK) or key == String(ANIM_SPRINT):
+		if (
+			key == String(ANIM_IDLE)
+			or key == String(ANIM_WALK)
+			or key == String(ANIM_SPRINT)
+			or key == String(ANIM_JUMP_LOOP)
+			or key == "Crouch_Idle"
+			or key == "Crouch_Idle_Loop"
+		):
 			copy.loop_mode = Animation.LOOP_LINEAR
 		library.add_animation(key, copy)
 		_action_names.append(key)
@@ -693,7 +740,7 @@ func _finish_body_setup() -> void:
 
 func _align_soles_to_floor() -> void:
 	## Match lowest sole to the capsule contact plane — only valid after grounding.
-	if _body_root == null or _skeleton == null or not is_on_floor():
+	if _body_root == null or _skeleton == null or not _floor_contacted():
 		return
 	## Never measure from a crouched climb pose — that ducks the mesh permanently.
 	if _climb_mode != ClimbMode.NONE:
@@ -784,6 +831,24 @@ func set_controls(controls: PlayerControls) -> void:
 	_controls = controls
 
 
+func bind_terrain(terrain: VoxelTerrain) -> void:
+	_voxel_motion.call("setup", terrain, max_step_height)
+
+
+func _floor_contacted() -> bool:
+	if _voxel_motion != null and bool(_voxel_motion.call("has_terrain")):
+		return bool(_voxel_motion.call("is_on_floor"))
+	return is_on_floor() or _was_ray_grounded
+
+
+func _set_physics_terrain_collision(enabled: bool) -> void:
+	## Climb still uses CharacterBody slide against remeshed facades.
+	if enabled:
+		collision_mask = 1 | SAFETY_DECK_LAYER
+	else:
+		collision_mask = SAFETY_DECK_LAYER
+
+
 func _ctl() -> PlayerControls:
 	if _controls == null:
 		_controls = PlayerControlsScript.new() as PlayerControls
@@ -794,6 +859,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	if is_blocking_ui_open():
 		return
 	var ctl := _ctl()
+	if event is InputEventKey and not event.echo:
+		var ek := event as InputEventKey
+		if ek.pressed and ctl.matches_key_pressed(ek, "jump"):
+			if _climb_mode != ClimbMode.NONE:
+				_end_climb(true)
+			else:
+				_begin_jump_charge()
+			get_viewport().set_input_as_handled()
+			return
+		if not ek.pressed and ctl.matches_key_released(ek, "jump"):
+			_release_jump_charge()
+			get_viewport().set_input_as_handled()
+			return
 	if event is InputEventKey and event.pressed and not event.echo:
 		var ek := event as InputEventKey
 		if ctl.matches_key_pressed(ek, "character_editor"):
@@ -806,10 +884,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if ctl.matches_key_pressed(ek, "sound_toggle"):
 			_toggle_sound()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "jump"):
-			_jump_queued = true
 			get_viewport().set_input_as_handled()
 			return
 		if ctl.matches_key_pressed(ek, "meteor"):
@@ -829,18 +903,27 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		if ctl.matches_key_pressed(ek, "laser"):
+			_stop_blaster(false)
 			_blast_charging = false
 			_blast_charge = 0.0
 			_start_laser_eyes_at_cursor()
 			get_viewport().set_input_as_handled()
 			return
+		if ctl.matches_key_pressed(ek, "beam"):
+			_blast_charging = false
+			_blast_charge = 0.0
+			_begin_blaster_hold()
+			get_viewport().set_input_as_handled()
+			return
 		if ctl.matches_key_pressed(ek, "stomp"):
+			_stop_blaster(false)
 			_blast_charging = false
 			_blast_charge = 0.0
 			_start_stomp()
 			get_viewport().set_input_as_handled()
 			return
 		if ctl.matches_key_pressed(ek, "fire"):
+			_stop_blaster(false)
 			_begin_charged_blast_hold()
 			get_viewport().set_input_as_handled()
 			return
@@ -850,6 +933,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			var code := int(ctl.get_binding("fire").get("code", -1)) as Key
 			if (event as InputEventKey).keycode == code:
 				_release_charged_blast_at_cursor()
+				get_viewport().set_input_as_handled()
+				return
+		if _blaster_holding and str(ctl.get_binding("beam").get("device", "")) == "key":
+			var beam_code := int(ctl.get_binding("beam").get("code", -1)) as Key
+			if (event as InputEventKey).keycode == beam_code:
+				_stop_blaster(false)
 				get_viewport().set_input_as_handled()
 				return
 	if event is InputEventMouseMotion and _rmb_looking:
@@ -886,23 +975,38 @@ func _unhandled_input(event: InputEvent) -> void:
 			str(fire_bind.get("device", "")) == "mouse"
 			and int(mb.button_index) == int(fire_bind.get("code", -2))
 		)
+		var beam_bind := ctl.get_binding("beam")
+		var beam_btn := (
+			str(beam_bind.get("device", "")) == "mouse"
+			and int(mb.button_index) == int(beam_bind.get("code", -2))
+		)
 		if mb.pressed:
 			var combat := ctl.resolve_mouse_action(
-				mb, ["laser", "stomp", "fire"] as Array[String]
+				mb, ["laser", "stomp", "beam", "fire"] as Array[String]
 			)
 			if combat.is_empty():
 				return
 			match combat:
 				"laser":
+					_stop_blaster(false)
 					_blast_charging = false
 					_blast_charge = 0.0
 					_start_laser_eyes_at_cursor()
 				"stomp":
+					_stop_blaster(false)
 					_blast_charging = false
 					_blast_charge = 0.0
 					_start_stomp()
+				"beam":
+					_blast_charging = false
+					_blast_charge = 0.0
+					_begin_blaster_hold()
 				"fire":
+					_stop_blaster(false)
 					_begin_charged_blast_hold()
+			get_viewport().set_input_as_handled()
+		elif beam_btn and _blaster_holding:
+			_stop_blaster(false)
 			get_viewport().set_input_as_handled()
 		elif fire_btn and _blast_charging:
 			_release_charged_blast_at_cursor()
@@ -957,22 +1061,27 @@ func _physics_process(delta: float) -> void:
 	if is_blocking_ui_open():
 		velocity.x = 0.0
 		velocity.z = 0.0
-		_jump_queued = false
-		if not is_on_floor():
+		_cancel_jump_charge()
+		_jump_release_buffer_left = 0.0
+		if not _floor_contacted():
 			var gravity_edit: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
 			velocity.y -= gravity_edit * delta
 		else:
 			velocity.y = 0.0
 			if not _feet_aligned and _skeleton != null and character_scale < ray_ground_scale:
 				_align_soles_to_floor()
-		move_and_slide()
+		_apply_body_motion(delta)
 		_apply_camera_angles()
 		return
 
 	var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
 	var ray_mode := character_scale >= ray_ground_scale
-	## Large bodies: no floor-snap — Y is owned by the ground ray after the slide.
-	floor_snap_length = 0.0 if ray_mode else FLOOR_SNAP_M
+	if _jump_release_buffer_left > 0.0:
+		_jump_release_buffer_left = maxf(_jump_release_buffer_left - delta, 0.0)
+	if _land_anim_left > 0.0:
+		_land_anim_left = maxf(_land_anim_left - delta, 0.0)
+	## Voxel motion owns contact; CharacterBody floor-snap stays off.
+	floor_snap_length = 0.0
 
 	var ctl := _ctl()
 	## Look up / down (held = continuous).
@@ -1007,12 +1116,15 @@ func _physics_process(delta: float) -> void:
 		_auto_run = false
 
 	if _climb_mode != ClimbMode.NONE:
+		_cancel_jump_charge()
 		## Turn-left = strafe left (−), turn-right = strafe right (+) on the wall.
 		var strafe := -turn
 		_physics_climb(delta, forward, forward_held, back_held, strafe)
 		return
 
-	if is_on_floor() or _was_ray_grounded:
+	_set_physics_terrain_collision(false)
+	var grounded := _floor_contacted()
+	if grounded and not _jumping:
 		_coyote_left = coyote_time_sec
 		if velocity.y < 0.0:
 			velocity.y = 0.0
@@ -1042,34 +1154,24 @@ func _physics_process(delta: float) -> void:
 		velocity.z = 0.0
 		sprinting = false
 
+	_update_jump_charge(delta)
 	var can_jump := _coyote_left > 0.0
-	## Jump always tries a horizontal unstick when you've been blocked — no Y pumping.
-	if _jump_queued and _stuck_timer > 0.15:
+	## Release-to-jump: buffered if floor contact flickered on the release frame.
+	if _jump_release_buffer_left > 0.0 and _stuck_timer > 0.15:
 		_unstuck_horizontal()
-	if _jump_queued and can_jump:
-		velocity.y = jump_velocity * sqrt(character_scale)
-		_coyote_left = 0.0
-		_was_ray_grounded = false
-		_jump_queued = false
-	else:
-		_jump_queued = false
+	if _jump_release_buffer_left > 0.0 and can_jump:
+		_do_jump(_jump_pending_charge)
 
 	## Climb-down must arm BEFORE we walk off the lip — otherwise we only fall.
-	if not ray_mode and back_held and not forward_held:
+	if not ray_mode and not _jump_charging and back_held and not forward_held:
 		if _try_begin_climb_down(forward):
 			_apply_camera_angles()
 			_update_camera_shake(delta)
 			return
 
-	## Human-scale curb step only — giants walk over curbs via radius, no Y pops.
-	if not ray_mode and _moving and is_on_floor() and velocity.y <= 0.0:
-		_try_step_up(delta)
-
+	## Curb steps are handled inside VoxelBoxMover (max_step_height).
 	var wish_speed := speed if _moving else 0.0
-	move_and_slide()
-	## Soft wall slide: push out along collision normals in XZ only (no vertical).
-	if _stuck_timer > 0.12:
-		_slide_out_horizontal()
+	_apply_body_motion(delta)
 	_stabilize_vertical(ray_mode)
 	_update_stuck_timer(delta, wish_speed)
 	## Auto-recover without jumping — still horizontal-only + one ground snap.
@@ -1077,9 +1179,17 @@ func _physics_process(delta: float) -> void:
 		if _unstuck_horizontal():
 			_stuck_timer = 0.0
 
+	var airborne_now := not _floor_contacted()
+	if _jumping and _floor_contacted() and velocity.y <= 0.0:
+		_jumping = false
+	if _was_airborne and not airborne_now:
+		_play_jump_land_anim()
+	_was_airborne = airborne_now or _jumping
+
 	## Climb-up after this frame's stuck/slide state is known.
 	## Air-grab climb-down if we already stepped off while holding S.
-	if not ray_mode:
+	## Don't steal the jump — charged Space is jump, climb is walk-into-wall.
+	if not ray_mode and not _jumping and not _jump_charging:
 		if forward_held and not back_held and _try_begin_climb_up(forward, sprinting):
 			_apply_camera_angles()
 			_update_camera_shake(delta)
@@ -1097,12 +1207,13 @@ func _physics_process(delta: float) -> void:
 	_update_locomotion_anim(speed, sprinting)
 	_update_footstep_sfx(delta, speed)
 	_update_blast_charge(delta, _blast_charging)
+	_update_blaster(delta)
 
-	if not ray_mode and is_on_floor() and not _feet_aligned and _skeleton != null:
+	if not ray_mode and _floor_contacted() and not _feet_aligned and _skeleton != null:
 		_align_soles_to_floor()
-	## Absolute floor — never drop below sidewalk height into Forget voids.
-	if global_position.y < SAFETY_FLOOR_TOP_Y - 0.5:
-		global_position.y = SAFETY_FLOOR_TOP_Y
+	## Absolute floor — never fall through the world into the void.
+	if global_position.y < VOID_FLOOR_TOP_Y - 0.15:
+		global_position.y = VOID_FLOOR_TOP_Y
 		velocity.y = 0.0
 		_was_ray_grounded = true
 	if _unstuck_cooldown > 0.0:
@@ -1116,13 +1227,8 @@ func _physics_climb(
 	back_held: bool,
 	strafe: float
 ) -> void:
-	## Space cancels off the wall.
-	if _jump_queued:
-		_jump_queued = false
-		_end_climb(true)
-		_apply_camera_angles()
-		_update_camera_shake(delta)
-		return
+	_set_physics_terrain_collision(true)
+	## Jump press already cancels climb in _unhandled_input.
 
 	_climb_ignore_ground_sec = maxf(_climb_ignore_ground_sec - delta, 0.0)
 
@@ -1222,8 +1328,8 @@ func _physics_climb(
 	_update_camera_shake(delta)
 	_play_climb_anim()
 	_update_blast_charge(delta, false)
-	if global_position.y < SAFETY_FLOOR_TOP_Y - 0.5:
-		global_position.y = SAFETY_FLOOR_TOP_Y
+	if global_position.y < VOID_FLOOR_TOP_Y - 0.15:
+		global_position.y = VOID_FLOOR_TOP_Y
 		_end_climb(false)
 
 
@@ -1232,7 +1338,7 @@ func _try_begin_climb_up(forward: Vector3, sprinting: bool) -> bool:
 		return false
 	if character_scale >= ray_ground_scale:
 		return false
-	if not (is_on_floor() or _was_ray_grounded):
+	if not _floor_contacted():
 		return false
 	## Running into a wall, or pressing into it long enough to stick.
 	if not sprinting and _stuck_timer < climb_start_stuck_sec:
@@ -1259,10 +1365,10 @@ func _try_begin_climb_down(forward: Vector3) -> bool:
 	if character_scale >= ray_ground_scale:
 		return false
 	## Must be high enough that a drop exists (not sidewalk / curb).
-	if global_position.y < SAFETY_FLOOR_TOP_Y + climb_drop_depth_m * 0.75:
+	if global_position.y < STREET_DECK_TOP_Y + climb_drop_depth_m * 0.75:
 		return false
 
-	var grounded := is_on_floor() or _was_ray_grounded
+	var grounded := _floor_contacted()
 	## Allow a short air-grab after stepping off, or while falling beside a facade.
 	var air_ok := (not grounded) and (_coyote_left > 0.0 or velocity.y <= 0.35)
 	if not grounded and not air_ok:
@@ -1358,6 +1464,7 @@ func _find_climb_down_wall(forward: Vector3, back: Vector3, radius: float) -> Di
 func _start_climb(mode: ClimbMode, wall_n: Vector3) -> void:
 	cancel_action()
 	_blast_charging = false
+	_set_physics_terrain_collision(true)
 	_climb_mode = mode
 	_climb_wall_n = wall_n
 	_climb_wall_n.y = 0.0
@@ -1366,7 +1473,9 @@ func _start_climb(mode: ClimbMode, wall_n: Vector3) -> void:
 	_stuck_timer = 0.0
 	_coyote_left = 0.0
 	_was_ray_grounded = false
-	_jump_queued = false
+	_cancel_jump_charge()
+	_jump_release_buffer_left = 0.0
+	_jumping = false
 	## Remember standing height — never re-align soles from the crouched climb pose.
 	_pre_climb_body_y = _body_root.position.y if _body_root != null else _body_base_y
 	_pre_climb_feet_aligned = _feet_aligned
@@ -1388,6 +1497,7 @@ func _end_climb(push_off: bool) -> void:
 	_climb_ignore_ground_sec = 0.0
 	_climb_wall_grace_sec = 0.0
 	_moving = false
+	_set_physics_terrain_collision(false)
 	_set_climb_camera_margin(false)
 	_restore_body_after_climb()
 	if push_off and n.length_squared() > 0.0001:
@@ -1591,7 +1701,7 @@ func _try_mount_ledge(into: Vector3) -> bool:
 
 
 func _climb_reached_ground() -> bool:
-	if is_on_floor():
+	if _floor_contacted():
 		return true
 	var hit := _ray_ground(0.0, 0.55 * character_scale)
 	if hit.is_empty():
@@ -1600,28 +1710,143 @@ func _climb_reached_ground() -> bool:
 	return global_position.y - gy <= 0.28 * character_scale
 
 
+func _begin_jump_charge() -> void:
+	if _jumping:
+		return
+	## Allow starting during coyote so a press on the lip still loads.
+	if _coyote_left <= 0.0 and not _floor_contacted():
+		return
+	_jump_charging = true
+	_jump_charge = 0.0
+	_jump_release_buffer_left = 0.0
+
+
+func _release_jump_charge() -> void:
+	if not _jump_charging:
+		return
+	var charge := clampf(_jump_charge, 0.0, 1.0)
+	_jump_charging = false
+	_jump_charge = 0.0
+	_jump_pending_charge = charge
+	_jump_release_buffer_left = jump_release_buffer_sec
+	## Immediate fire when already eligible this frame.
+	if _coyote_left > 0.0:
+		_do_jump(charge)
+
+
+func _cancel_jump_charge() -> void:
+	_jump_charging = false
+	_jump_charge = 0.0
+
+
+func _update_jump_charge(delta: float) -> void:
+	if not _jump_charging:
+		return
+	## Keep loading while the key is held; drop the charge if we fully leave coyote.
+	if not _ctl().is_key_held("jump"):
+		## Release can miss if focus blurs — treat unheld as release.
+		_release_jump_charge()
+		return
+	if _coyote_left <= 0.0 and not _floor_contacted():
+		_cancel_jump_charge()
+		return
+	var dur := maxf(jump_charge_sec, 0.05)
+	_jump_charge = minf(_jump_charge + delta / dur, 1.0)
+
+
+func _jump_height_for_charge(charge: float) -> float:
+	return lerpf(jump_height_min_m, jump_height_max_m, clampf(charge, 0.0, 1.0))
+
+
+func _jump_speed_for_height(height_m: float) -> float:
+	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+	g = maxf(g, 0.01)
+	var h := maxf(height_m, 0.05) * maxf(character_scale, 0.001)
+	## v = sqrt(2gh) — apex height in meters (scaled with character size).
+	return sqrt(2.0 * g * h)
+
+
+func _do_jump(charge: float = 0.0) -> void:
+	var height := _jump_height_for_charge(charge)
+	velocity.y = _jump_speed_for_height(height)
+	_coyote_left = 0.0
+	_jump_release_buffer_left = 0.0
+	_jump_pending_charge = 0.0
+	_cancel_jump_charge()
+	_was_ray_grounded = false
+	_jumping = true
+	_was_airborne = true
+	_land_anim_left = 0.0
+	cancel_action()
+	_play_jump_start_anim()
+
+
+func _play_jump_start_anim() -> void:
+	if _anim_player == null:
+		return
+	var start_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_START]
+	var loop_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_LOOP]
+	var path := start_path if _anim_player.has_animation(start_path) else loop_path
+	if not _anim_player.has_animation(path):
+		return
+	_anim_player.play(path, 0.08)
+	_anim_player.speed_scale = clampf(1.0 / maxf(character_scale, 0.001), 0.05, 4.0)
+
+
+func _play_jump_land_anim() -> void:
+	if _anim_player == null:
+		return
+	var path := "%s/%s" % [LIB_NAME, ANIM_JUMP_LAND]
+	if not _anim_player.has_animation(path):
+		return
+	_land_anim_left = 0.28
+	_anim_player.play(path, 0.06)
+	_anim_player.speed_scale = clampf(1.15 / maxf(character_scale, 0.001), 0.05, 4.0)
+
+
+func _apply_body_motion(delta: float) -> void:
+	## Central path: slide against live voxels. Holes are just missing blocks.
+	var before := global_position
+	if _voxel_motion != null and bool(_voxel_motion.call("has_terrain")):
+		_voxel_motion.call("move", self, _capsule, velocity, delta)
+		_last_applied_motion = global_position - before
+		if bool(_voxel_motion.call("is_on_floor")):
+			_was_ray_grounded = true
+			if velocity.y < 0.0:
+				velocity.y = 0.0
+		elif velocity.y > 0.0:
+			_was_ray_grounded = false
+		return
+	move_and_slide()
+	_last_applied_motion = global_position - before
+
+
 func _stabilize_vertical(ray_mode: bool) -> void:
 	## Kill residual vertical chatter after the slide.
-	if not ray_mode:
+	if _jumping:
 		_was_ray_grounded = false
-		if is_on_floor() and velocity.y <= 0.0:
+		return
+	if not ray_mode:
+		if _floor_contacted() and velocity.y <= 0.0:
 			velocity.y = 0.0
 		return
-	## Giant mode: own Y via a single ground ray. Capsule/voxel micro-hits cannot bob us.
+	## Giant mode: snap to voxel / physics ground when close.
 	if velocity.y > 0.15:
 		_was_ray_grounded = false
+		return
+	if _floor_contacted():
+		velocity.y = 0.0
+		_was_ray_grounded = true
 		return
 	var hit := _ray_ground(0.0, 6.0 * character_scale)
 	if hit.is_empty():
 		_was_ray_grounded = false
 		return
 	var ground_y: float = hit.position.y
-	## Never stick upward onto a surface above the feet (ceilings / overhangs).
 	if ground_y > global_position.y + 0.35 * character_scale:
 		_was_ray_grounded = false
 		return
-	## Only stick when close to ground (airborne jumps/falls keep physics Y).
-	if global_position.y - ground_y > 1.25 * character_scale and not is_on_floor():
+	if global_position.y - ground_y > 1.25 * character_scale:
 		_was_ray_grounded = false
 		return
 	global_position.y = ground_y
@@ -1649,7 +1874,8 @@ func _ensure_safety_deck() -> void:
 		return
 	_safety_deck = StaticBody3D.new()
 	_safety_deck.name = "SafetyDeck"
-	_safety_deck.collision_layer = 1
+	## Own layer so cascading debris (mask=terrain) never rests on this failsafe.
+	_safety_deck.collision_layer = SAFETY_DECK_LAYER
 	_safety_deck.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
@@ -1724,8 +1950,8 @@ func _update_stuck_timer(delta: float, wish_speed: float) -> void:
 	if wish_speed < 0.35 * character_scale:
 		_stuck_timer = 0.0
 		return
-	var real := get_real_velocity()
-	var real_h := Vector2(real.x, real.z).length()
+	var dt := maxf(delta, 0.0001)
+	var real_h := Vector2(_last_applied_motion.x, _last_applied_motion.z).length() / dt
 	if real_h < wish_speed * 0.1:
 		_stuck_timer += delta
 	else:
@@ -1829,8 +2055,6 @@ func _unstuck_horizontal() -> bool:
 
 
 func _can_stand_at(pos: Vector3) -> bool:
-	var xf := global_transform
-	xf.origin = pos
 	var s := clampf(0.12 * character_scale, 0.1, 0.45)
 	var free := 0
 	var dirs: Array[Vector3] = [
@@ -1839,10 +2063,20 @@ func _can_stand_at(pos: Vector3) -> bool:
 		Vector3(0.0, 0.0, s),
 		Vector3(0.0, 0.0, -s),
 	]
+	var use_voxel := _voxel_motion != null and bool(_voxel_motion.call("has_terrain"))
+	if use_voxel:
+		var offset0 := pos - global_position
+		if bool(_voxel_motion.call("intersects_at", self, _capsule, offset0)):
+			return false
+		for d in dirs:
+			if not bool(_voxel_motion.call("intersects_at", self, _capsule, offset0 + d)):
+				free += 1
+		return free >= 2
+	var xf := global_transform
+	xf.origin = pos
 	for d in dirs:
 		if not test_move(xf, d):
 			free += 1
-	## Need room to move in at least two horizontal directions.
 	return free >= 2
 
 
@@ -1910,11 +2144,47 @@ func _update_locomotion_anim(move_speed: float, sprinting: bool = false) -> void
 			cancel_action()
 		else:
 			return
+	var size_anim := clampf(1.0 / character_scale, 0.05, 4.0)
+	if _jump_charging and _land_anim_left <= 0.0:
+		## Hold crouch / jump-start while loading the leap.
+		var crouch_path := "%s/%s" % [LIB_NAME, &"Crouch_Idle"]
+		var start_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_START]
+		var charge_path := crouch_path if _anim_player.has_animation(crouch_path) else start_path
+		if _anim_player.has_animation(charge_path):
+			if String(_anim_player.current_animation) != charge_path:
+				_anim_player.play(charge_path, 0.1)
+			## Ease into a deeper crouch feel as charge fills.
+			_anim_player.speed_scale = clampf(0.35 + _jump_charge * 0.4, 0.2, 1.0) * size_anim
+			return
+	var airborne := _jumping or not _floor_contacted()
+	if airborne and _land_anim_left <= 0.0:
+		var start_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_START]
+		var loop_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_LOOP]
+		var cur := String(_anim_player.current_animation)
+		## Keep Jump_Start until it finishes, then hold Jump_Loop in the air.
+		if cur == start_path and _anim_player.is_playing():
+			_anim_player.speed_scale = size_anim
+			return
+		if _anim_player.has_animation(loop_path):
+			if cur != loop_path:
+				_anim_player.play(loop_path, 0.1)
+			_anim_player.speed_scale = size_anim
+			return
+		if _anim_player.has_animation(start_path):
+			if cur != start_path:
+				_anim_player.play(start_path, 0.08)
+			_anim_player.speed_scale = size_anim
+			return
+	if _land_anim_left > 0.0:
+		var land_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_LAND]
+		if _anim_player.has_animation(land_path):
+			if String(_anim_player.current_animation) != land_path:
+				_anim_player.play(land_path, 0.06)
+			_anim_player.speed_scale = clampf(1.15 * size_anim, 0.05, 4.0)
+			return
 	var idle_path := "%s/%s" % [LIB_NAME, ANIM_IDLE]
 	var walk_path := "%s/%s" % [LIB_NAME, ANIM_WALK]
 	var sprint_path := "%s/%s" % [LIB_NAME, ANIM_SPRINT]
-	# Bigger → slower playback (long strides / heavy idle). Tiny → snappier.
-	var size_anim := clampf(1.0 / character_scale, 0.05, 4.0)
 	## Right after climb: zero blend so Mixamo leans can't soften back in.
 	var just_climbed := _climb_pose_clear_sec > 0.0
 	var blend_loco := 0.0 if just_climbed else (0.15 if sprinting else 0.2)
@@ -1972,8 +2242,7 @@ func _update_footstep_sfx(delta: float, move_speed: float) -> void:
 	if not _moving:
 		_footstep_accum = 0.0
 		return
-	var grounded := is_on_floor() or _was_ray_grounded
-	if not grounded:
+	if not _floor_contacted():
 		_footstep_accum = 0.0
 		return
 	## Stride interval grows with size so giants don't machine-gun footsteps.
@@ -2327,10 +2596,22 @@ func aim_ground_at_cursor() -> Dictionary:
 
 
 ## Camera/crosshair ray: point + normal (UP if miss / far clip).
-func _aim_ray_at_cursor(magnet_agents: bool = true) -> Dictionary:
+## Combat aim (magnet_agents) also voxel-marches so walk-through park mats
+## (bark/leaves/planters) stay targetable without solid collision.
+## shot_origin: second agent-magnet probe (eyes / hand). Empty → eye laser origin.
+func _aim_ray_at_cursor(
+	magnet_agents: bool = true,
+	shot_origin: Vector3 = Vector3.INF
+) -> Dictionary:
 	if _camera == null:
 		var fallback := global_position - global_transform.basis.z * 10.0
-		return {"point": fallback, "normal": Vector3.UP}
+		return {
+			"point": fallback,
+			"normal": Vector3.UP,
+			"did_hit": false,
+			"cam_from": fallback,
+			"cam_dir": -global_transform.basis.z,
+		}
 	var mouse := get_viewport().get_mouse_position()
 	var from := _camera.project_ray_origin(mouse)
 	var ray_dir := _camera.project_ray_normal(mouse)
@@ -2348,12 +2629,55 @@ func _aim_ray_at_cursor(magnet_agents: bool = true) -> Dictionary:
 	if did_hit:
 		aim_point = hit["position"] as Vector3
 		aim_normal = hit["normal"] as Vector3
-	if magnet_agents:
-		var origin := _laser_eye_origin()
-		var root := _city_root()
-		if root != null and root.has_method("resolve_laser_aim"):
-			aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
-	return {"point": aim_point, "normal": aim_normal, "did_hit": did_hit}
+	var root := _city_root()
+	if magnet_agents and root != null and root.has_method("probe_destructible_ray"):
+		## Full ray — trees sit in front of ground/walls the physics hit would prefer.
+		var vhit: Variant = root.call("probe_destructible_ray", from, to)
+		if vhit is Dictionary and not (vhit as Dictionary).is_empty():
+			var vd := Dictionary(vhit)
+			var vdist := float(vd.get("distance", INF))
+			var pdist := from.distance_to(aim_point) if did_hit else INF
+			if vdist + 0.02 < pdist:
+				aim_point = vd["point"] as Vector3
+				aim_normal = vd.get("normal", -ray_dir) as Vector3
+				did_hit = true
+	if magnet_agents and root != null and root.has_method("resolve_laser_aim"):
+		var origin := shot_origin if shot_origin.is_finite() else _laser_eye_origin()
+		aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
+	return {
+		"point": aim_point,
+		"normal": aim_normal,
+		"did_hit": did_hit,
+		"cam_from": from,
+		"cam_dir": ray_dir,
+	}
+
+
+## Fresh cursor target + hand muzzle for one blaster bolt (retargets every shot).
+func _blaster_shot_endpoints() -> Dictionary:
+	var s := maxf(character_scale, 0.05)
+	var hand := _bone_world_pos(
+		[&"LeftHand", &"hand_l", &"hand.L", &"LeftLowerArm", &"lowerarm_l"]
+	)
+	if not hand.is_finite():
+		hand = global_position + Vector3(0.0, 1.15 * s, 0.0)
+	var aim := _aim_ray_at_cursor(true, hand)
+	var aim_point: Vector3 = aim["point"] as Vector3
+	var cam_dir: Vector3 = aim["cam_dir"] as Vector3
+	var to_aim := aim_point - hand
+	var dir: Vector3
+	if to_aim.length_squared() < 0.0001:
+		dir = cam_dir
+	else:
+		dir = to_aim.normalized()
+		## Hand can sit past a close cursor hit — shoot along the camera ray instead.
+		if dir.dot(cam_dir) < 0.2:
+			dir = cam_dir
+			var cam_from: Vector3 = aim["cam_from"] as Vector3
+			var along := maxf(cam_from.distance_to(aim_point), 1.25 * s)
+			aim_point = hand + dir * along
+	var origin := hand + dir * (0.2 * s)
+	return {"origin": origin, "aim_point": aim_point}
 
 
 func _request_infection_meteor() -> void:
@@ -2488,6 +2812,130 @@ func _start_laser_eyes_at_cursor() -> void:
 		_eye_laser.call("fire", origin, aim_point, laser_speed_mps, _effective_body_scale())
 
 
+func _begin_blaster_hold() -> void:
+	if _camera == null or _game_over_locked:
+		return
+	_blast_charging = false
+	_blast_charge = 0.0
+	var audio := _city_audio()
+	if audio != null and audio.has_method("stop_charged_blast_charge"):
+		audio.call("stop_charged_blast_charge")
+	_blaster_holding = true
+	_blaster_accum = 0.0
+	## Same hand cast pose as charged-blast hold.
+	_ensure_spell_charge_pose()
+	_fire_blaster_bolt()
+
+
+func _stop_blaster(cancel_in_flight: bool) -> void:
+	_blaster_holding = false
+	_blaster_accum = 0.0
+	if (
+		_action_anim == charged_blast_idle_anim
+		or _action_anim == charged_blast_shoot_anim
+	):
+		cancel_action()
+	if not cancel_in_flight:
+		return
+	for bolt in _live_blaster_bolts:
+		if bolt != null and is_instance_valid(bolt) and bolt.has_method("cancel"):
+			bolt.call("cancel")
+	_live_blaster_bolts.clear()
+
+
+func _update_blaster(delta: float) -> void:
+	if not _blaster_holding:
+		return
+	if _game_over_locked or not _is_beam_held():
+		_stop_blaster(false)
+		return
+	## Keep Spell_Simple_Idle between shots (Shoot overrides while a bolt leaves).
+	if not (_action_playing and _action_anim == charged_blast_shoot_anim):
+		_ensure_spell_charge_pose()
+	_blaster_accum += delta
+	var interval := maxf(blaster_interval_sec, 0.05)
+	while _blaster_accum >= interval:
+		_blaster_accum -= interval
+		_fire_blaster_bolt()
+
+
+func _is_beam_held() -> bool:
+	var ctl := _ctl()
+	var b := ctl.get_binding("beam")
+	if str(b.get("device", "")) == "key":
+		return ctl.is_key_held("beam")
+	var code := int(b.get("code", -1)) as MouseButton
+	if code < 0 or not Input.is_mouse_button_pressed(code):
+		return false
+	## Exact modifier match — Alt+LMB must not keep the bare-LMB blaster alive.
+	if bool(b.get("shift", false)) != Input.is_key_pressed(KEY_SHIFT):
+		return false
+	if bool(b.get("ctrl", false)) != Input.is_key_pressed(KEY_CTRL):
+		return false
+	if bool(b.get("alt", false)) != Input.is_key_pressed(KEY_ALT):
+		return false
+	return true
+
+
+func _fire_blaster_bolt() -> void:
+	if _camera == null:
+		return
+	## Same shoot flick as charged blast release — hand casts each bolt.
+	if has_action_animation(charged_blast_shoot_anim):
+		play_action(charged_blast_shoot_anim, false)
+	## Retarget every bolt from the live mouse cursor (camera ray → voxels/agents).
+	var shot := _blaster_shot_endpoints()
+	var origin: Vector3 = shot["origin"] as Vector3
+	var aim_point: Vector3 = shot["aim_point"] as Vector3
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_laser_fire"):
+		audio.call("play_laser_fire", origin, character_scale)
+
+	var bolt: Node = BlasterBoltVfxScript.new()
+	bolt.name = "BlasterBoltVfx"
+	add_child(bolt)
+	_live_blaster_bolts.append(bolt)
+	bolt.tree_exiting.connect(
+		func() -> void:
+			_live_blaster_bolts.erase(bolt)
+	)
+	bolt.call("setup")
+	bolt.call("set_character_scale", _effective_body_scale())
+	if bolt.has_method("set_obstacle_probe"):
+		bolt.call(
+			"set_obstacle_probe",
+			func(from: Vector3, tip: Vector3) -> float:
+				var root := _city_root()
+				if root == null or not root.has_method("laser_probe_agent_distance"):
+					return -1.0
+				return float(root.call("laser_probe_agent_distance", from, tip))
+		)
+	if bolt.has_signal("impact"):
+		bolt.connect("impact", _on_blaster_impact)
+	bolt.call("fire", origin, aim_point, blaster_speed_mps, _effective_body_scale())
+
+
+func _on_blaster_impact(hit_point: Vector3, direction: Vector3, shot_origin: Vector3) -> void:
+	## Same destruction as the eye-laser dart (agent hit or melee carve + cascade).
+	var dir := direction
+	if dir.length_squared() < 0.0001:
+		dir = -global_transform.basis.z
+	else:
+		dir = dir.normalized()
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_laser_impact"):
+		audio.call("play_laser_impact", hit_point, character_scale)
+	var from := shot_origin
+	if from.length_squared() < 0.0001:
+		from = hit_point - dir * 0.15
+	var root := _city_root()
+	if root != null and root.has_method("apply_laser_agent_hit"):
+		if bool(root.call("apply_laser_agent_hit", from, hit_point, dir)):
+			return
+	var origin := hit_point - dir * 0.15
+	melee_strike_requested.emit(origin, dir, maxf(2.5, character_scale * 2.0))
+
+
 func _city_root() -> Node:
 	var n: Node = get_parent()
 	while n != null:
@@ -2552,7 +3000,8 @@ func _schedule_stomp_impact() -> void:
 
 func _emit_stomp() -> void:
 	var feet := _stomp_feet_origin()
-	var radius := stomp_radius_at_scale_1 * character_scale
+	## Same carve/debris as a fully charged LMB blast at the feet.
+	var radius := charged_blast_radius_max_m * maxf(character_scale, 0.05)
 	add_camera_shake(stomp_shake_trauma * clampf(0.55 + 0.2 * character_scale, 0.55, 1.0))
 	var audio := _city_audio()
 	if audio != null and audio.has_method("play_laser_impact"):

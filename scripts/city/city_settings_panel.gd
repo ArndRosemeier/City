@@ -14,7 +14,8 @@ const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const CONFIG_PATH := "user://city_graphics.cfg"
 ## Bump when graphics defaults change so old user configs pick up the new baseline.
 const CONFIG_VERSION := 2
-const CONTROLS_VERSION := 1
+## Bump when default combat binds change so saved layouts pick up the new mapping.
+const CONTROLS_VERSION := 2
 
 var _btn: Button
 var _spawn_meteors_check: CheckBox

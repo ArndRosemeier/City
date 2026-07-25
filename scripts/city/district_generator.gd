@@ -17,7 +17,12 @@ const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 @export var size_z: int = 560
 ## Kept for older callers; equals max(size_x, size_z).
 @export var size_xz: int = 784
-@export var ground_thickness: int = 1
+## Indestructible world floor band [0, bedrock_thickness).
+@export var bedrock_thickness: int = 1
+## Diggable STONE under the street deck (between bedrock and surface).
+@export var stone_depth: int = 5
+## Surface voxel Y (sidewalk / road / park). Equals bedrock_thickness + stone_depth.
+@export var ground_thickness: int = 6
 ## 200 voxels * 0.5 m = 100 m ceiling.
 @export var max_building_height_vox: int = 200
 ## Typical residential floor-to-floor ≈ 3.0 m.
@@ -64,6 +69,7 @@ func begin_generate(
 		city_seed = seed_value
 	_rng.seed = city_seed
 	size_xz = maxi(size_x, size_z)
+	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
 	_brush = CityBrushScript.new(tool, origin_vox)
 	_setup_composers()
@@ -80,6 +86,7 @@ func begin_generate_offline(
 	city_seed = seed_value
 	_rng.seed = city_seed
 	size_xz = maxi(size_x, size_z)
+	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
 	_brush = CityBrushScript.new(null, Vector3i.ZERO)
 	_brush.use_offline_volume()
@@ -161,10 +168,9 @@ func paint_cell(cx: int, cz: int) -> void:
 		return
 	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:
 		return
-	_brush.fill_box(
+	_paint_substrate(
 		Vector3i(cx * cell_size, 0, cz * cell_size),
-		Vector3i((cx + 1) * cell_size, ground_thickness, (cz + 1) * cell_size),
-		VoxelMaterial.BEDROCK
+		Vector3i((cx + 1) * cell_size, 0, (cz + 1) * cell_size)
 	)
 	_brush.fill_box(
 		Vector3i(cx * cell_size, ground_thickness, cz * cell_size),
@@ -177,13 +183,10 @@ func paint_cell(cx: int, cz: int) -> void:
 
 func paint_district_ground_slab() -> void:
 	## One-shot walkable slab for the whole tile — avoids cell-by-cell air holes.
+	## Stack: BEDROCK (1) + diggable STONE (stone_depth) + surface deck at ground_thickness.
 	if _brush == null:
 		return
-	_brush.fill_box(
-		Vector3i(0, 0, 0),
-		Vector3i(size_x, ground_thickness, size_z),
-		VoxelMaterial.BEDROCK
-	)
+	_paint_substrate(Vector3i(0, 0, 0), Vector3i(size_x, 0, size_z))
 	_brush.fill_box(
 		Vector3i(0, ground_thickness, 0),
 		Vector3i(size_x, ground_thickness + 1, size_z),
@@ -191,8 +194,25 @@ func paint_district_ground_slab() -> void:
 	)
 
 
+## Bedrock floor + diggable stone fill. `min_v`/`max_v` supply XZ; Y is owned by the stack.
+func _paint_substrate(min_v: Vector3i, max_v: Vector3i) -> void:
+	var bed_top := maxi(bedrock_thickness, 1)
+	var stone_top := bed_top + maxi(stone_depth, 0)
+	_brush.fill_box(
+		Vector3i(min_v.x, 0, min_v.z),
+		Vector3i(max_v.x, bed_top, max_v.z),
+		VoxelMaterial.BEDROCK
+	)
+	if stone_top > bed_top:
+		_brush.fill_box(
+			Vector3i(min_v.x, bed_top, min_v.z),
+			Vector3i(max_v.x, stone_top, max_v.z),
+			VoxelMaterial.STONE
+		)
+
+
 func paint_cell_ground(cx: int, cz: int) -> void:
-	## Surface materials only (streets / plaza / park). Assumes bedrock+sidewalk slab exists.
+	## Surface materials only (streets / plaza / park). Assumes substrate+sidewalk slab exists.
 	if _brush == null or _planner == null:
 		return
 	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:

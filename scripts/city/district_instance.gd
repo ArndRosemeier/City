@@ -43,7 +43,7 @@ var _world_seed: int = 42
 var _crowd_count: int = 180
 var _vehicle_count: int = 10
 var _player_view_m: float = 220.0
-var _ground_thickness: int = 1
+var _ground_thickness: int = 6
 var _dseed: int = 0
 var _terrain_ref: VoxelTerrain
 var _tool_ref: VoxelTool
@@ -236,7 +236,7 @@ func _stamp_ground_async() -> void:
 		return
 
 	_dseed = int(payload.get("seed", 0))
-	_ground_thickness = int(payload.get("ground_thickness", 1))
+	_ground_thickness = int(payload.get("ground_thickness", 6))
 	_bake_impostors = payload.get("impostors", [])
 	_bake_blocks = payload.get("blocks", {})
 	generator = payload.get("generator") as DistrictGenerator

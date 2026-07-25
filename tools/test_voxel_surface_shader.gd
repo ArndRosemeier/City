@@ -116,9 +116,9 @@ func _initialize() -> void:
 	sun.light_energy = 1.4
 	holder.add_child(sun)
 
-	## Street deck sits at world y = 1.0 (ground_thickness + 1 voxel), which is where
+	## Street deck sits at world y = 3.5 (ground_thickness=6 + 1 voxel), which is where
 	## the shader's ground grime ramp starts.
-	var deck := 1.0
+	var deck := 3.5
 	_slab(holder, Vector3(16.0, 0.5, 10.0), Vector3(0.0, deck - 0.25, 0.0), VoxelMaterial.ASPHALT)
 	_slab(holder, Vector3(16.0, 0.2, 2.0), Vector3(0.0, deck + 0.1, 4.0), VoxelMaterial.SIDEWALK)
 	## Two brick walls one lot apart: the per-lot tint hash should make them differ.

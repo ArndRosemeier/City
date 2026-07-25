@@ -8,7 +8,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "move_back", "label": "Move back", "group": "Movement"},
 	{"id": "turn_left", "label": "Turn left", "group": "Movement"},
 	{"id": "turn_right", "label": "Turn right", "group": "Movement"},
-	{"id": "jump", "label": "Jump", "group": "Movement"},
+	{"id": "jump", "label": "Jump (hold to charge)", "group": "Movement"},
 	{"id": "sprint", "label": "Sprint", "group": "Movement"},
 	{"id": "autorun", "label": "Autorun toggle", "group": "Movement"},
 	{"id": "look_up", "label": "Look up", "group": "Camera"},
@@ -16,8 +16,9 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "look", "label": "Hold to look", "group": "Camera"},
 	{"id": "zoom_in", "label": "Zoom in", "group": "Camera"},
 	{"id": "zoom_out", "label": "Zoom out", "group": "Camera"},
-	{"id": "fire", "label": "Charged blast (LMB)", "group": "Combat"},
+	{"id": "fire", "label": "Charged blast (Alt+LMB)", "group": "Combat"},
 	{"id": "laser", "label": "Eye laser (Ctrl+LMB)", "group": "Combat"},
+	{"id": "beam", "label": "Blaster beam (LMB)", "group": "Combat"},
 	{"id": "stomp", "label": "Stomp (Shift+LMB)", "group": "Combat"},
 	{"id": "character_editor", "label": "Character editor", "group": "Character"},
 	{"id": "sound_toggle", "label": "Sound on/off", "group": "Character"},
@@ -87,9 +88,11 @@ static func default_binding(action_id: String) -> Dictionary:
 		"zoom_out":
 			return _mouse(MOUSE_BUTTON_WHEEL_DOWN)
 		"fire":
-			return _mouse(MOUSE_BUTTON_LEFT)
+			return _mouse(MOUSE_BUTTON_LEFT, false, false, true)
 		"laser":
 			return _mouse(MOUSE_BUTTON_LEFT, false, true, false)
+		"beam":
+			return _mouse(MOUSE_BUTTON_LEFT)
 		"stomp":
 			return _mouse(MOUSE_BUTTON_LEFT, true, false, false)
 		"character_editor":
@@ -265,6 +268,16 @@ func is_key_held(action_id: String) -> bool:
 func matches_key_pressed(event: InputEventKey, action_id: String) -> bool:
 	if not event.pressed or event.echo:
 		return false
+	return _matches_key_event(event, action_id)
+
+
+func matches_key_released(event: InputEventKey, action_id: String) -> bool:
+	if event.pressed or event.echo:
+		return false
+	return _matches_key_event(event, action_id)
+
+
+func _matches_key_event(event: InputEventKey, action_id: String) -> bool:
 	var b := get_binding(action_id)
 	if str(b.get("device", "")) != "key":
 		## Alias-only match when primary is a mouse bind? skip.

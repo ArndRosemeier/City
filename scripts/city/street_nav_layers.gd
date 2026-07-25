@@ -19,8 +19,8 @@ var _grid_cell_m: float = 4.0
 
 var cell_size: int = 10
 var voxel_size: float = 0.5
-var ground_thickness: int = 1
-var ground_y: float = 1.0
+var ground_thickness: int = 6
+var ground_y: float = 3.5
 var origin_vox: Vector3i = Vector3i.ZERO
 
 

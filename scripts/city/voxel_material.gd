@@ -59,6 +59,7 @@ static func is_walkable_surface(id: int) -> bool:
 
 static func is_ground_surface(id: int) -> bool:
 	## Outdoor ground / road deck — meteor auto-spawns land here, never on buildings.
+	## Diggable STONE substrate under the deck is not a landing / ped surface.
 	match id:
 		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES:
 			return true
@@ -66,10 +67,15 @@ static func is_ground_surface(id: int) -> bool:
 			return false
 
 
+## Stone fill under the street deck — diggable, not pavement.
+static func is_diggable_substrate(id: int) -> bool:
+	return id == STONE
+
+
 static func is_building_fabric(id: int) -> bool:
-	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground or road.
+	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground, road, or diggable stone.
 	match id:
-		AIR, BEDROCK, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES:
+		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES:
 			return false
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
