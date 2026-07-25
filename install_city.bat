@@ -76,7 +76,7 @@ REM Core game data. Skip VCS/dev caches — NEVER copy a stale source .godot.
 REM Fresh class_name maps + imported assets are generated on the install copy below
 REM so new scripts / preloads / GLBs do not require installer script edits.
 robocopy "%ROOT%" "%INSTALL_DIR%" /E /NFL /NDL /NJH /NJS /nc /ns /np ^
-    /XD .git .godot dist native .cursor ^
+    /XD "%ROOT%\.git" "%ROOT%\.godot" "%ROOT%\dist" "%ROOT%\native" "%ROOT%\.cursor" "%ROOT%\tools\vendor" ^
     /XF install_city.bat *.tmp *.log ^
     /R:2 /W:2 >nul
 set "RC=%ERRORLEVEL%"
@@ -85,6 +85,7 @@ if %RC% GEQ 8 (
     if "%SILENT%"=="0" pause
     exit /b 1
 )
+if exist "%INSTALL_DIR%\tools\vendor" rmdir /S /Q "%INSTALL_DIR%\tools\vendor"
 
 REM Engine binary into a stable relative path for the launcher.
 if not exist "%INSTALL_DIR%\tools\godot" mkdir "%INSTALL_DIR%\tools\godot"
@@ -231,34 +232,67 @@ exit /b 0
 set "OUT=%~1"
 (
 echo @echo off
-echo setlocal
+echo setlocal EnableExtensions
 echo set "ROOT=%%~dp0"
-echo set "GODOT_EXE=%%ROOT%%tools\godot\%GODOT_NAME%"
+echo set "ROOT=%%ROOT:~0,-1%%"
+echo set "GODOT_EXE=%%ROOT%%\tools\godot\%GODOT_NAME%"
+echo.
 echo if not exist "%%GODOT_EXE%%" ^(
-echo     if exist "%%ROOT%%tools\ensure_city_deps.ps1" ^(
-echo         echo Engine missing — downloading Godot + Voxel Tools...
-echo         powershell -NoProfile -ExecutionPolicy Bypass -File "%%ROOT%%tools\ensure_city_deps.ps1" -Root "%%ROOT%%"
+echo     if not exist "%%ROOT%%\tools\ensure_city_deps.ps1" ^(
+echo         echo ERROR: Engine missing and tools\ensure_city_deps.ps1 not found.
+echo         echo Place %GODOT_NAME% in tools\godot\ or restore ensure_city_deps.ps1.
+echo         pause
+echo         exit /b 1
+echo     ^)
+echo     echo.
+echo     echo Engine missing — downloading Godot 4.6 + Voxel Tools ^(~80 MB^)...
+echo     echo Internet required for this first-time step.
+echo     echo.
+echo     powershell -NoProfile -ExecutionPolicy Bypass -File "%%ROOT%%\tools\ensure_city_deps.ps1" -Root "%%ROOT%%"
+echo     if errorlevel 1 ^(
+echo         echo ERROR: Could not download the Godot voxel engine.
+echo         pause
+echo         exit /b 1
 echo     ^)
 echo ^)
 echo if not exist "%%GODOT_EXE%%" ^(
-echo     echo ERROR: Engine missing: %%GODOT_EXE%%
+echo     echo ERROR: Engine still missing: %%GODOT_EXE%%
 echo     pause
 echo     exit /b 1
 echo ^)
-echo if not exist "%%ROOT%%project.godot" ^(
+echo if not exist "%%ROOT%%\project.godot" ^(
 echo     echo ERROR: project.godot missing in %%ROOT%%
 echo     pause
 echo     exit /b 1
 echo ^)
-echo if not exist "%%ROOT%%.godot\global_script_class_cache.cfg" ^(
-echo     echo Regenerating script class cache...
-echo     "%%GODOT_EXE%%" --headless --path "%%ROOT%%." --import
+echo if not exist "%%ROOT%%\addons\city_voxel\bin\city_voxel.dll" ^(
+echo     echo ERROR: addons\city_voxel\bin\city_voxel.dll missing.
+echo     echo This DLL ships with the release zip and is required to play.
+echo     pause
+echo     exit /b 1
 echo ^)
-echo if not exist "%%ROOT%%.godot\imported" ^(
-echo     echo First-time asset import — please wait...
-echo     "%%GODOT_EXE%%" --headless --path "%%ROOT%%." --import
+echo if not exist "%%ROOT%%\.godot\global_script_class_cache.cfg" goto do_import
+echo if not exist "%%ROOT%%\.godot\imported" goto do_import
+echo goto launch
+echo.
+echo :do_import
+echo echo.
+echo echo First-time asset import — this can take several minutes. Please wait...
+echo echo.
+echo "%%GODOT_EXE%%" --headless --path "%%ROOT%%" --import
+echo if errorlevel 1 ^(
+echo     echo ERROR: Godot --import failed.
+echo     pause
+echo     exit /b 1
 echo ^)
-echo start "City" /MAX "%%GODOT_EXE%%" --path "%%ROOT%%." res://scenes/city_poc.tscn --maximized
+echo if not exist "%%ROOT%%\.godot\global_script_class_cache.cfg" ^(
+echo     echo ERROR: Import finished but .godot class cache is still missing.
+echo     pause
+echo     exit /b 1
+echo ^)
+echo.
+echo :launch
+echo start "City" /MAX "%%GODOT_EXE%%" --path "%%ROOT%%" res://scenes/city_poc.tscn --maximized
 echo endlocal
 ) > "%OUT%"
 exit /b 0
