@@ -1,59 +1,49 @@
-## Bottom action bar: 6 slots. F1–F6 play; Shift+F1–F6 assign.
+## Bottom build bar: F1–F6 place the bound recipe at the cursor; Shift+F1–F6 assign.
 class_name PlayerActionBar
 extends CanvasLayer
 
+const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
+
 const SLOT_COUNT := 6
 const DEFAULT_BINDS: Array[String] = [
-	"Dance",
-	"Idle_Talking",
-	"Interact",
-	"Punch_Jab",
-	"Kicking_m",
-	"Stomping_m",
-]
-const DEFAULT_FALLBACKS: Array[String] = [
-	"Dance",
-	"Idle_Talking",
-	"Interact",
-	"Punch_Jab",
-	"Sitting_Idle",
-	"Roll",
+	"cottage",
+	"pool",
+	"hot_tub",
+	"dog",
+	"cat",
+	"duck",
 ]
 
-var _walker: CityWalker
+signal build_requested(recipe_id: String)
+
 var _slots: Array[String] = []
 var _buttons: Array[Button] = []
 var _menu: PopupMenu
 var _menu_slot: int = -1
+var _recipes: Array = []
 
 
-func setup(walker: CityWalker) -> void:
-	_walker = walker
+func setup(_walker: Node = null) -> void:
 	layer = 30
+	_recipes = BuildCatalogScript.all()
 	_slots.resize(SLOT_COUNT)
 	for i in range(SLOT_COUNT):
-		var preferred := DEFAULT_BINDS[i] if i < DEFAULT_BINDS.size() else ""
-		var fallback := DEFAULT_FALLBACKS[i] if i < DEFAULT_FALLBACKS.size() else ""
-		if preferred != "" and walker != null and walker.has_action_animation(preferred):
-			_slots[i] = preferred
-		elif fallback != "" and walker != null and walker.has_action_animation(fallback):
-			_slots[i] = fallback
-		else:
-			_slots[i] = ""
+		_slots[i] = DEFAULT_BINDS[i] if i < DEFAULT_BINDS.size() else ""
 	_build_ui()
 	_refresh_labels()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		var slot := _slot_for_fkey(event.keycode)
-		if slot < 0:
-			return
-		if event.shift_pressed:
-			_open_assign_menu(slot)
-		else:
-			_play_slot(slot)
-		get_viewport().set_input_as_handled()
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	var slot := _slot_for_fkey((event as InputEventKey).keycode)
+	if slot < 0:
+		return
+	if event.shift_pressed:
+		_open_assign_menu(slot)
+	else:
+		_place_slot(slot)
+	get_viewport().set_input_as_handled()
 
 
 func _slot_for_fkey(keycode: Key) -> int:
@@ -86,11 +76,13 @@ func _build_ui() -> void:
 
 	var bar := PanelContainer.new()
 	bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	bar.offset_left = -230.0
-	bar.offset_right = 230.0
+	bar.offset_left = -260.0
+	bar.offset_right = 260.0
 	bar.offset_top = -92.0
 	bar.offset_bottom = -16.0
-	bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	## Ignore mouse on the bar itself so aiming through it still hits the world;
+	## slot buttons stay clickable for place / (via keyboard) assign.
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.06, 0.07, 0.09, 0.82)
 	sb.set_corner_radius_all(8)
@@ -102,34 +94,36 @@ func _build_ui() -> void:
 	root.add_child(bar)
 
 	var vbox := VBoxContainer.new()
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_theme_constant_override("separation", 4)
 	bar.add_child(vbox)
 
 	var hint := Label.new()
-	hint.text = "F1–F6 play · Shift+F1–F6 assign"
+	hint.text = "F1–F6 build · Shift+F1–F6 assign"
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.add_theme_color_override("font_color", Color(0.65, 0.7, 0.75, 0.9))
 	vbox.add_child(hint)
 
 	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 8)
 	vbox.add_child(row)
 
 	for i in range(SLOT_COUNT):
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(68, 52)
+		btn.custom_minimum_size = Vector2(78, 52)
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.clip_text = true
 		btn.mouse_filter = Control.MOUSE_FILTER_STOP
 		btn.gui_input.connect(_on_slot_gui_input.bind(i))
-		btn.pressed.connect(func() -> void: pass)
 		row.add_child(btn)
 		_buttons.append(btn)
 
 	_menu = PopupMenu.new()
-	_menu.name = "ActionAssignMenu"
+	_menu.name = "BuildAssignMenu"
 	add_child(_menu)
 	_menu.id_pressed.connect(_on_menu_id_pressed)
 	_rebuild_menu()
@@ -137,56 +131,62 @@ func _build_ui() -> void:
 
 func _rebuild_menu() -> void:
 	_menu.clear()
-	if _walker == null:
-		return
-	var names := _walker.list_action_animations()
-	for i in range(names.size()):
-		_menu.add_item(names[i], i)
-	if names.is_empty():
-		_menu.add_item("(no animations)", 0)
+	for i in range(_recipes.size()):
+		var recipe: BuildCatalog.Recipe = _recipes[i]
+		_menu.add_item("%s — %s" % [recipe.display_name, recipe.hint], i)
+	if _recipes.is_empty():
+		_menu.add_item("(no builds)", 0)
 		_menu.set_item_disabled(0, true)
 
 
 func _refresh_labels() -> void:
 	for i in range(_buttons.size()):
-		var name := _slots[i]
+		var id := _slots[i]
 		var key := "F%d" % (i + 1)
-		_buttons[i].text = "%s\n%s" % [key, _short_label(name) if name != "" else "—"]
+		var recipe := _recipe_named(id)
+		var label := recipe.display_name if recipe != null else "—"
+		_buttons[i].text = "%s\n%s" % [key, _short_label(label)]
 		_buttons[i].tooltip_text = (
-			"%s\n%s play · Shift+%s assign" % [name, key, key]
-			if name != ""
-			else "Empty — Shift+%s to assign" % key
+			"%s\n%s place at cursor · Shift+%s assign"
+			% [recipe.hint if recipe != null else "Empty", key, key]
 		)
 
 
-func _short_label(anim_name: String) -> String:
-	var s := anim_name.replace("_", " ")
-	if s.length() <= 10:
-		return s
-	return s.substr(0, 9) + "…"
+func _recipe_named(id: String) -> BuildCatalog.Recipe:
+	if id.is_empty():
+		return null
+	for r: Variant in _recipes:
+		var recipe: BuildCatalog.Recipe = r
+		if recipe.id == id:
+			return recipe
+	return null
+
+
+func _short_label(name: String) -> String:
+	if name.length() <= 10:
+		return name
+	return name.substr(0, 9) + "…"
 
 
 func _on_slot_gui_input(event: InputEvent, slot: int) -> void:
-	## Buttons still work as click shortcuts (don't steal RMB camera).
 	if not (event is InputEventMouseButton):
 		return
 	var mb := event as InputEventMouseButton
-	if not mb.pressed:
+	if not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
 		return
-	if mb.button_index == MOUSE_BUTTON_LEFT:
-		_play_slot(slot)
-		get_viewport().set_input_as_handled()
+	## Clicking a slot places using the *current* cursor ray — move the mouse off
+	## the button first, or prefer the F-key so aim stays on the world.
+	_place_slot(slot)
+	get_viewport().set_input_as_handled()
 
 
-func _play_slot(slot: int) -> void:
-	if _walker == null or not is_instance_valid(_walker):
-		return
+func _place_slot(slot: int) -> void:
 	if slot < 0 or slot >= _slots.size():
 		return
-	var anim := _slots[slot]
-	if anim.is_empty():
+	var id := _slots[slot]
+	if id.is_empty():
 		return
-	_walker.play_action(anim)
+	build_requested.emit(id)
 
 
 func _open_assign_menu(slot: int) -> void:
@@ -201,11 +201,11 @@ func _open_assign_menu(slot: int) -> void:
 
 
 func _on_menu_id_pressed(id: int) -> void:
-	if _walker == null or _menu_slot < 0 or _menu_slot >= _slots.size():
+	if _menu_slot < 0 or _menu_slot >= _slots.size():
 		return
-	var names := _walker.list_action_animations()
-	if id < 0 or id >= names.size():
+	if id < 0 or id >= _recipes.size():
 		return
-	_slots[_menu_slot] = names[id]
+	var recipe: BuildCatalog.Recipe = _recipes[id]
+	_slots[_menu_slot] = recipe.id
 	_refresh_labels()
 	_menu_slot = -1

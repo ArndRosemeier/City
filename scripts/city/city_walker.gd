@@ -2171,8 +2171,13 @@ func _aim_point_at_cursor() -> Vector3:
 	return _aim_ray_at_cursor()["point"] as Vector3
 
 
+## Ground / wall under the cursor — no agent magnet (builds shouldn't snap to peds).
+func aim_ground_at_cursor() -> Dictionary:
+	return _aim_ray_at_cursor(false)
+
+
 ## Camera/crosshair ray: point + normal (UP if miss / far clip).
-func _aim_ray_at_cursor() -> Dictionary:
+func _aim_ray_at_cursor(magnet_agents: bool = true) -> Dictionary:
 	if _camera == null:
 		var fallback := global_position - global_transform.basis.z * 10.0
 		return {"point": fallback, "normal": Vector3.UP}
@@ -2189,14 +2194,16 @@ func _aim_ray_at_cursor() -> Dictionary:
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	var aim_point := to
 	var aim_normal := Vector3.UP
-	if not hit.is_empty():
+	var did_hit := not hit.is_empty()
+	if did_hit:
 		aim_point = hit["position"] as Vector3
 		aim_normal = hit["normal"] as Vector3
-	var origin := _laser_eye_origin()
-	var root := _city_root()
-	if root != null and root.has_method("resolve_laser_aim"):
-		aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
-	return {"point": aim_point, "normal": aim_normal}
+	if magnet_agents:
+		var origin := _laser_eye_origin()
+		var root := _city_root()
+		if root != null and root.has_method("resolve_laser_aim"):
+			aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
+	return {"point": aim_point, "normal": aim_normal, "did_hit": did_hit}
 
 
 func _request_infection_meteor() -> void:

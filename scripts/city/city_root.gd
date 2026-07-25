@@ -22,6 +22,8 @@ const UndeadInvasionHudScript := preload("res://scripts/city/undead_invasion_hud
 const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
 const TetrisMachineScript := preload("res://scripts/city/tetris_machine.gd")
 const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
+const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
+const BuildPlacerScript := preload("res://scripts/city/build_placer.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -962,6 +964,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_action_bar.name = "PlayerActionBar"
 	add_child(_action_bar)
 	_action_bar.setup(_walker)
+	_action_bar.build_requested.connect(_on_build_chosen)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
 	if _undead_invasion_enabled:
@@ -969,7 +972,10 @@ func _on_spawn_district_ready(inst: Node) -> void:
 		_undead.call("set_enabled", true)
 		if _undead_hud != null and is_instance_valid(_undead_hud):
 			_undead_hud.call("bind_director", _undead)
-	print("CityRoot: playable — endless stream active at y=%.2f (M = infection meteor)" % floor_y)
+	print(
+		"CityRoot: playable — endless stream active at y=%.2f (F1–F6 = build · M = meteor · T = tetris)"
+		% floor_y
+	)
 
 
 func _has_solid_ground_at(world: Vector3) -> bool:
@@ -1229,6 +1235,26 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 
 func _on_meteor_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
 	_spawn_meteor_at(hit_point)
+
+
+func _on_build_chosen(recipe_id: String) -> void:
+	if _tool == null or _terrain == null or _walker == null:
+		push_error("CityRoot: cannot build without terrain / walker")
+		return
+	var recipe: BuildCatalog.Recipe = BuildCatalogScript.by_id(recipe_id)
+	if recipe == null:
+		return
+	var aim: Dictionary = _walker.call("aim_ground_at_cursor") as Dictionary
+	var hit: Vector3
+	if bool(aim.get("did_hit", false)):
+		hit = aim["point"] as Vector3
+	else:
+		## No ground under the cursor — drop it a few metres in front of the player.
+		hit = _walker.global_position - _walker.global_transform.basis.z * 4.0
+	var written: int = BuildPlacerScript.place(
+		_terrain, _tool, recipe, hit, _walker.global_position
+	)
+	print("CityRoot: built %s (%d voxels) at %s" % [recipe.display_name, written, hit])
 
 
 func _on_tetris_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
