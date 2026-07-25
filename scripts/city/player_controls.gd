@@ -8,7 +8,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "move_back", "label": "Move back", "group": "Movement"},
 	{"id": "turn_left", "label": "Turn left", "group": "Movement"},
 	{"id": "turn_right", "label": "Turn right", "group": "Movement"},
-	{"id": "jump", "label": "Jump (hold to charge)", "group": "Movement"},
+	{"id": "jump", "label": "Jump (hold to rise)", "group": "Movement"},
 	{"id": "sprint", "label": "Sprint", "group": "Movement"},
 	{"id": "autorun", "label": "Autorun toggle", "group": "Movement"},
 	{"id": "look_up", "label": "Look up", "group": "Camera"},
@@ -19,7 +19,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "fire", "label": "Charged blast (Alt+LMB)", "group": "Combat"},
 	{"id": "laser", "label": "Eye laser (Ctrl+LMB)", "group": "Combat"},
 	{"id": "beam", "label": "Blaster beam (LMB)", "group": "Combat"},
-	{"id": "stomp", "label": "Stomp (Shift+LMB)", "group": "Combat"},
+	{"id": "stomp", "label": "Stomp (Q)", "group": "Combat"},
 	{"id": "character_editor", "label": "Character editor", "group": "Character"},
 	{"id": "sound_toggle", "label": "Sound on/off", "group": "Character"},
 	{"id": "meteor", "label": "Spawn meteor", "group": "World"},
@@ -94,7 +94,7 @@ static func default_binding(action_id: String) -> Dictionary:
 		"beam":
 			return _mouse(MOUSE_BUTTON_LEFT)
 		"stomp":
-			return _mouse(MOUSE_BUTTON_LEFT, true, false, false)
+			return _key(KEY_Q)
 		"character_editor":
 			return _key(KEY_C)
 		"sound_toggle":
@@ -295,11 +295,13 @@ func _matches_key_event(event: InputEventKey, action_id: String) -> bool:
 				break
 	if not hit:
 		return false
-	if bool(b.get("shift", false)) != event.shift_pressed:
+	## Required modifiers must be held; extra modifiers are OK.
+	## (Otherwise Shift+Space fails jump while sprinting — bare Space demanded shift=off.)
+	if bool(b.get("shift", false)) and not event.shift_pressed:
 		return false
-	if bool(b.get("ctrl", false)) != event.ctrl_pressed:
+	if bool(b.get("ctrl", false)) and not event.ctrl_pressed:
 		return false
-	if bool(b.get("alt", false)) != event.alt_pressed:
+	if bool(b.get("alt", false)) and not event.alt_pressed:
 		return false
 	return true
 
@@ -310,11 +312,13 @@ func matches_mouse(event: InputEventMouseButton, action_id: String) -> bool:
 		return false
 	if int(event.button_index) != int(b.get("code", -1)):
 		return false
-	if bool(b.get("shift", false)) != event.shift_pressed:
+	## Same as keys: require listed mods only. resolve_mouse_action still prefers
+	## the more-specific bind (Alt+LMB blast over bare LMB beam).
+	if bool(b.get("shift", false)) and not event.shift_pressed:
 		return false
-	if bool(b.get("ctrl", false)) != event.ctrl_pressed:
+	if bool(b.get("ctrl", false)) and not event.ctrl_pressed:
 		return false
-	if bool(b.get("alt", false)) != event.alt_pressed:
+	if bool(b.get("alt", false)) and not event.alt_pressed:
 		return false
 	return true
 

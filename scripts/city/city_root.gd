@@ -626,7 +626,8 @@ func _ensure_infection_director() -> void:
 		_infection = InfectionDirectorScript.new()
 		_infection.name = "InfectionDirector"
 		add_child(_infection)
-	_infection.call("setup", _terrain, _tool, VOXEL_SIZE)
+	## Street deck voxel Y matches DistrictGenerator.ground_thickness (bedrock+stone).
+	_infection.call("setup", _terrain, _tool, VOXEL_SIZE, 6)
 	if _infection.has_signal("tendril_killed"):
 		var cb_kill := Callable(self, "_on_tendril_killed")
 		if not _infection.is_connected("tendril_killed", cb_kill):
@@ -1155,7 +1156,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
 
 
-## Shift+LMB stomp: same destruction as a max-charge blast at the feet (anim/FX differ on the walker).
+## Q stomp: same destruction as a max-charge blast at the feet (anim/FX differ on the walker).
 func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
 	apply_charged_blast(feet_position, radius_m)
 
@@ -1789,12 +1790,15 @@ func _on_meteor_impacted(world_pos: Vector3, seeds: Array, sky_beam: Node = null
 					if maxi(absi(x), absi(z)) != ring:
 						continue
 					var v2 := impact_vox + Vector3i(x, 0, z)
+					if v2.y < 6:
+						v2.y = 6
 					_tool.channel = VoxelBuffer.CHANNEL_TYPE
 					var id := int(_tool.get_voxel(v2))
 					if not VoxelMaterial.is_infectable(id):
-						var below := v2 + Vector3i(0, -1, 0)
-						if VoxelMaterial.is_infectable(int(_tool.get_voxel(below))):
-							v2 = below
+						## Prefer surface fabric above, never diggable stone under the deck.
+						var above := v2 + Vector3i(0, 1, 0)
+						if VoxelMaterial.is_infectable(int(_tool.get_voxel(above))):
+							v2 = above
 							id = int(_tool.get_voxel(v2))
 						else:
 							continue

@@ -118,8 +118,8 @@ static func is_infection(id: int) -> bool:
 
 
 static func is_infectable(id: int) -> bool:
-	## Tendrils crawl into normal fabric/ground — never into infection or meteor rock.
-	if is_infection(id) or id == METEOR_ROCK:
+	## Tendrils crawl into normal fabric/ground — never infection, meteor rock, or diggable stone under the deck.
+	if is_infection(id) or id == METEOR_ROCK or is_diggable_substrate(id):
 		return false
 	return is_destructible(id)
 

@@ -21,6 +21,8 @@ signal player_score_changed(score: int)
 @export var pick_jiggle: float = 2.4
 ## Max steps before a tendril re-rolls its general heading (actual = rnd * this).
 @export var heading_reaim_max_steps: int = 100
+## Street-deck surface voxel Y (DistrictGenerator.ground_thickness). Tips never go below this.
+@export var min_surface_vox_y: int = 6
 const TENDRIL_START_VALUE: int = 1000
 
 const _NEIGHBORS: Array[Vector3i] = [
@@ -49,10 +51,14 @@ var player_score: int = 0
 var _auras: Dictionary = {}
 
 
-func setup(terrain: VoxelTerrain, tool: VoxelTool, voxel_size: float) -> void:
+func setup(
+	terrain: VoxelTerrain, tool: VoxelTool, voxel_size: float, surface_vox_y: int = -1
+) -> void:
 	_terrain = terrain
 	_tool = tool
 	_voxel_size = voxel_size
+	if surface_vox_y >= 0:
+		min_surface_vox_y = surface_vox_y
 	_rng.randomize()
 
 
@@ -116,6 +122,8 @@ func spawn_tendril_at_vox(
 		return -1
 	if _growing_tendril_count() >= max_tendrils:
 		return -1
+	## Lift underground seeds onto the street deck — never start below ground level.
+	vox = _clamp_to_surface(vox)
 	## Don't double-bind the same lead cell to two tendrils.
 	if _lead_at.has(vox):
 		return -1
@@ -137,6 +145,8 @@ func spawn_tendril_at_vox(
 			if not VoxelMaterial.is_destructible(current):
 				return -1
 	elif current == VoxelMaterial.BEDROCK or current == VoxelMaterial.WATER:
+		return -1
+	if VoxelMaterial.is_diggable_substrate(current):
 		return -1
 
 	var tid := _next_id
@@ -408,6 +418,9 @@ func _pick_infect_neighbor(tid: int, vox: Vector3i) -> Vector3i:
 		order[j] = tmp
 	for off in order:
 		var n: Vector3i = vox + off
+		## Street deck is the floor — never crawl into diggable stone under pavement.
+		if n.y < min_surface_vox_y:
+			continue
 		var id := int(_tool.get_voxel(n))
 		if not VoxelMaterial.is_infectable(id):
 			continue
@@ -453,14 +466,22 @@ func _roll_reaim_steps() -> int:
 func _normalize_heading(heading: Vector3) -> Vector3:
 	if heading.length_squared() < 0.0001:
 		var yaw := _rng.randf() * TAU
-		return Vector3(cos(yaw), _rng.randf_range(-0.2, 0.35), sin(yaw)).normalized()
+		return Vector3(cos(yaw), _rng.randf_range(0.0, 0.35), sin(yaw)).normalized()
 	var h := heading
-	h.y = clampf(h.y, -0.55, 0.75)
+	## Prefer level / upward crawl — never aim into the ground.
+	h.y = clampf(h.y, 0.0, 0.75)
 	if absf(h.x) + absf(h.z) < 0.05:
 		var yaw2 := _rng.randf() * TAU
 		h.x = cos(yaw2)
 		h.z = sin(yaw2)
 	return h.normalized()
+
+
+## Raise a voxel onto the street-deck surface Y when it would start underground.
+func _clamp_to_surface(vox: Vector3i) -> Vector3i:
+	if vox.y >= min_surface_vox_y:
+		return vox
+	return Vector3i(vox.x, min_surface_vox_y, vox.z)
 
 
 func _kill_tendril(tid: int) -> void:

@@ -11,6 +11,8 @@ const BLOB_RADIUS: int = 3
 ## Tips per meteor — always plant in this inclusive range when capacity allows.
 const SEED_COUNT_MIN: int = 2
 const SEED_COUNT_MAX: int = 3
+## Street-deck surface voxel Y — tips must not plant in diggable stone below.
+const MIN_SURFACE_VOX_Y: int = 6
 
 @export var fall_speed_mps: float = 42.0
 @export var spawn_height_m: float = 55.0
@@ -311,8 +313,11 @@ func _plant_guaranteed_seeds(base: Vector3i, want: int) -> Array:
 				for x in range(-ring, ring + 1):
 					if maxi(absi(x), absi(z)) != ring:
 						continue
-					for dy in range(-1, 4):
-						ring_sites.append(base + Vector3i(x, dy, z))
+					for dy in range(0, 4):
+						var rv := base + Vector3i(x, dy, z)
+						if rv.y < MIN_SURFACE_VOX_Y:
+							rv.y = MIN_SURFACE_VOX_Y
+						ring_sites.append(rv)
 			_shuffle_vox_array(ring_sites)
 			for site3 in ring_sites:
 				if seeds.size() >= want:
@@ -336,7 +341,7 @@ func _collect_seed_candidates(base: Vector3i) -> Array[Vector3i]:
 				continue
 			for dy in range(-2, 5):
 				var v := base + Vector3i(x, dy, z)
-				if v.y < 0 or seen.has(v):
+				if v.y < MIN_SURFACE_VOX_Y or seen.has(v):
 					continue
 				var id := int(_tool.get_voxel(v))
 				if VoxelMaterial.is_infectable(id):
@@ -345,7 +350,7 @@ func _collect_seed_candidates(base: Vector3i) -> Array[Vector3i]:
 					continue
 				if id == VoxelMaterial.AIR:
 					var below := v + Vector3i(0, -1, 0)
-					if below.y < 0 or seen.has(below):
+					if below.y < MIN_SURFACE_VOX_Y or seen.has(below):
 						continue
 					var bid := int(_tool.get_voxel(below))
 					if VoxelMaterial.is_infectable(bid):
@@ -361,7 +366,10 @@ func _count_infectable_neighbors(vox: Vector3i) -> int:
 		Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 		Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
 	]:
-		if VoxelMaterial.is_infectable(int(_tool.get_voxel(vox + off))):
+		var nb: Vector3i = vox + off
+		if nb.y < MIN_SURFACE_VOX_Y:
+			continue
+		if VoxelMaterial.is_infectable(int(_tool.get_voxel(nb))):
 			n += 1
 	return n
 
@@ -377,7 +385,9 @@ func _shuffle_vox_array(arr: Array[Vector3i]) -> void:
 func _try_plant_seed_at(
 	vox: Vector3i, used: Dictionary, seeds: Array, require_infectable_start: bool
 ) -> bool:
-	if used.has(vox) or vox.y < 0:
+	if vox.y < MIN_SURFACE_VOX_Y:
+		vox = Vector3i(vox.x, MIN_SURFACE_VOX_Y, vox.z)
+	if used.has(vox):
 		return false
 	## Keep tips spaced so they don't immediately braid.
 	for u in used.keys():
@@ -387,13 +397,15 @@ func _try_plant_seed_at(
 	var existing := int(_tool.get_voxel(vox))
 	if existing == VoxelMaterial.BEDROCK or existing == VoxelMaterial.WATER:
 		return false
+	if VoxelMaterial.is_diggable_substrate(existing):
+		return false
 	if existing == VoxelMaterial.INFECTION_LEAD or existing == VoxelMaterial.INFECTION:
 		return false
 	if require_infectable_start and not VoxelMaterial.is_infectable(existing):
-		## Allow air→infectable below.
+		## Allow air→infectable surface below (never under the street deck).
 		if existing == VoxelMaterial.AIR:
 			var below := vox + Vector3i(0, -1, 0)
-			if below.y < 0 or used.has(below):
+			if below.y < MIN_SURFACE_VOX_Y or used.has(below):
 				return false
 			var below_id := int(_tool.get_voxel(below))
 			if not VoxelMaterial.is_infectable(below_id):
@@ -404,7 +416,7 @@ func _try_plant_seed_at(
 			return false
 	elif existing == VoxelMaterial.AIR:
 		var below2 := vox + Vector3i(0, -1, 0)
-		if below2.y >= 0 and not used.has(below2):
+		if below2.y >= MIN_SURFACE_VOX_Y and not used.has(below2):
 			var below_id2 := int(_tool.get_voxel(below2))
 			if (
 				below_id2 != VoxelMaterial.BEDROCK
@@ -412,10 +424,11 @@ func _try_plant_seed_at(
 				and below_id2 != VoxelMaterial.AIR
 				and below_id2 != VoxelMaterial.INFECTION_LEAD
 				and below_id2 != VoxelMaterial.INFECTION
+				and not VoxelMaterial.is_diggable_substrate(below_id2)
 			):
 				vox = below2
 				existing = below_id2
-	if used.has(vox):
+	if used.has(vox) or vox.y < MIN_SURFACE_VOX_Y:
 		return false
 	var prev_for_seed := existing
 	if prev_for_seed == VoxelMaterial.AIR:

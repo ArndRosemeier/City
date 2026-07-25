@@ -6,7 +6,7 @@ signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
 ## Melee strike: origin + flat facing direction, range in meters.
 ## CityRoot scales the carve diameter with character_scale (no break below 0.5×).
 signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
-## Shift+LMB stomp: feet world position + max charged-blast radius (destruction == blast).
+## Q stomp: feet world position + max charged-blast radius (destruction == blast).
 signal stomp_requested(feet_position: Vector3, radius_m: float)
 ## Shared combat energy pool (0…energy_max).
 signal energy_changed(current: float, maximum: float)
@@ -51,13 +51,10 @@ const LIB_NAME := &"quat"
 
 @export var walk_speed: float = 5.0
 @export var sprint_speed: float = 8.5
-## Hold jump to charge; release to leap. Heights are meters at character_scale 1.0.
-@export var jump_height_min_m: float = 1.35
+## Hold jump to keep rising; release or hit max height to fall. Meters at scale 1.0.
 @export var jump_height_max_m: float = 10.0
-## Seconds of hold to reach max jump height.
-@export var jump_charge_sec: float = 0.85
-## After release, still allow the leap this long if floor contact flickered.
-@export var jump_release_buffer_sec: float = 0.14
+## Upward speed while the jump key is held (m/s at scale 1.0).
+@export var jump_rise_speed_mps: float = 9.0
 @export var mouse_sensitivity: float = 0.0022
 @export var turn_speed: float = 10.0
 ## A/D keyboard turn rate (radians per second).
@@ -95,7 +92,7 @@ const LIB_NAME := &"quat"
 @export var energy_cost_blaster: float = 1.0
 @export var energy_cost_stomp: float = 10.0
 @export var energy_cost_blast: float = 20.0
-## Hold LMB for blaster. Alt+LMB charges the bomb; Shift+LMB stomps; Ctrl+LMB laser.
+## Hold LMB for blaster. Alt+LMB charges the bomb; Q stomps; Ctrl+LMB laser.
 @export var charged_blast_speed_mps: float = 10.0
 @export var charged_blast_charge_sec: float = 1.6
 @export var charged_blast_radius_min_m: float = 0.54
@@ -184,12 +181,11 @@ var _moving: bool = false
 var _body_base_y: float = 0.0
 var _feet_aligned: bool = false
 var _rng := RandomNumberGenerator.new()
-var _jump_release_buffer_left: float = 0.0
-var _jump_pending_charge: float = 0.0
-var _jump_charging: bool = false
-var _jump_charge: float = 0.0
 var _coyote_left: float = 0.0
 var _jumping: bool = false
+## True while ascending under a held jump (until release or max height).
+var _jump_rising: bool = false
+var _jump_start_y: float = 0.0
 var _was_airborne: bool = false
 var _land_anim_left: float = 0.0
 var _safety_deck: StaticBody3D
@@ -427,8 +423,7 @@ func is_blocking_ui_open() -> bool:
 func set_game_over_locked(on: bool) -> void:
 	_game_over_locked = on
 	if on:
-		_cancel_jump_charge()
-		_jump_release_buffer_left = 0.0
+		_end_jump_rise()
 		_jumping = false
 		if _climb_mode != ClimbMode.NONE:
 			_end_climb(false)
@@ -907,11 +902,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _climb_mode != ClimbMode.NONE:
 				_end_climb(true)
 			else:
-				_begin_jump_charge()
+				_try_start_jump()
 			get_viewport().set_input_as_handled()
 			return
 		if not ek.pressed and ctl.matches_key_released(ek, "jump"):
-			_release_jump_charge()
+			_end_jump_rise()
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -1024,7 +1019,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		)
 		if mb.pressed:
 			var combat := ctl.resolve_mouse_action(
-				mb, ["laser", "stomp", "beam", "fire"] as Array[String]
+				mb, ["laser", "beam", "fire"] as Array[String]
 			)
 			if combat.is_empty():
 				return
@@ -1034,11 +1029,6 @@ func _unhandled_input(event: InputEvent) -> void:
 					_blast_charging = false
 					_blast_charge = 0.0
 					_start_laser_eyes_at_cursor()
-				"stomp":
-					_stop_blaster(false)
-					_blast_charging = false
-					_blast_charge = 0.0
-					_start_stomp()
 				"beam":
 					_blast_charging = false
 					_blast_charge = 0.0
@@ -1104,8 +1094,7 @@ func _physics_process(delta: float) -> void:
 	if is_blocking_ui_open():
 		velocity.x = 0.0
 		velocity.z = 0.0
-		_cancel_jump_charge()
-		_jump_release_buffer_left = 0.0
+		_end_jump_rise()
 		if not _floor_contacted():
 			var gravity_edit: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
 			velocity.y -= gravity_edit * delta
@@ -1119,8 +1108,6 @@ func _physics_process(delta: float) -> void:
 
 	var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
 	var ray_mode := character_scale >= ray_ground_scale
-	if _jump_release_buffer_left > 0.0:
-		_jump_release_buffer_left = maxf(_jump_release_buffer_left - delta, 0.0)
 	if _land_anim_left > 0.0:
 		_land_anim_left = maxf(_land_anim_left - delta, 0.0)
 	## Voxel motion owns contact; CharacterBody floor-snap stays off.
@@ -1159,7 +1146,7 @@ func _physics_process(delta: float) -> void:
 		_auto_run = false
 
 	if _climb_mode != ClimbMode.NONE:
-		_cancel_jump_charge()
+		_end_jump_rise()
 		## Turn-left = strafe left (−), turn-right = strafe right (+) on the wall.
 		var strafe := -turn
 		_physics_climb(delta, forward, forward_held, back_held, strafe)
@@ -1197,16 +1184,10 @@ func _physics_process(delta: float) -> void:
 		velocity.z = 0.0
 		sprinting = false
 
-	_update_jump_charge(delta)
-	var can_jump := _coyote_left > 0.0
-	## Release-to-jump: buffered if floor contact flickered on the release frame.
-	if _jump_release_buffer_left > 0.0 and _stuck_timer > 0.15:
-		_unstuck_horizontal()
-	if _jump_release_buffer_left > 0.0 and can_jump:
-		_do_jump(_jump_pending_charge)
+	_update_jump_rise(delta)
 
 	## Climb-down must arm BEFORE we walk off the lip — otherwise we only fall.
-	if not ray_mode and not _jump_charging and back_held and not forward_held:
+	if not ray_mode and not _jump_rising and back_held and not forward_held:
 		if _try_begin_climb_down(forward):
 			_apply_camera_angles()
 			_update_camera_shake(delta)
@@ -1225,14 +1206,15 @@ func _physics_process(delta: float) -> void:
 	var airborne_now := not _floor_contacted()
 	if _jumping and _floor_contacted() and velocity.y <= 0.0:
 		_jumping = false
+		_jump_rising = false
 	if _was_airborne and not airborne_now:
 		_play_jump_land_anim()
 	_was_airborne = airborne_now or _jumping
 
 	## Climb-up after this frame's stuck/slide state is known.
 	## Air-grab climb-down if we already stepped off while holding S.
-	## Don't steal the jump — charged Space is jump, climb is walk-into-wall.
-	if not ray_mode and not _jumping and not _jump_charging:
+	## Don't steal the jump — Space is jump, climb is walk-into-wall.
+	if not ray_mode and not _jumping and not _jump_rising:
 		if forward_held and not back_held and _try_begin_climb_up(forward, sprinting):
 			_apply_camera_angles()
 			_update_camera_shake(delta)
@@ -1516,8 +1498,7 @@ func _start_climb(mode: ClimbMode, wall_n: Vector3) -> void:
 	_stuck_timer = 0.0
 	_coyote_left = 0.0
 	_was_ray_grounded = false
-	_cancel_jump_charge()
-	_jump_release_buffer_left = 0.0
+	_end_jump_rise()
 	_jumping = false
 	## Remember standing height — never re-align soles from the crouched climb pose.
 	_pre_climb_body_y = _body_root.position.y if _body_root != null else _body_base_y
@@ -1753,75 +1734,46 @@ func _climb_reached_ground() -> bool:
 	return global_position.y - gy <= 0.28 * character_scale
 
 
-func _begin_jump_charge() -> void:
-	if _jumping:
+func _try_start_jump() -> void:
+	if _jumping or _jump_rising:
 		return
-	## Allow starting during coyote so a press on the lip still loads.
+	## Coyote: press on the lip still launches immediately.
 	if _coyote_left <= 0.0 and not _floor_contacted():
 		return
-	_jump_charging = true
-	_jump_charge = 0.0
-	_jump_release_buffer_left = 0.0
-
-
-func _release_jump_charge() -> void:
-	if not _jump_charging:
-		return
-	var charge := clampf(_jump_charge, 0.0, 1.0)
-	_jump_charging = false
-	_jump_charge = 0.0
-	_jump_pending_charge = charge
-	_jump_release_buffer_left = jump_release_buffer_sec
-	## Immediate fire when already eligible this frame.
-	if _coyote_left > 0.0:
-		_do_jump(charge)
-
-
-func _cancel_jump_charge() -> void:
-	_jump_charging = false
-	_jump_charge = 0.0
-
-
-func _update_jump_charge(delta: float) -> void:
-	if not _jump_charging:
-		return
-	## Keep loading while the key is held; drop the charge if we fully leave coyote.
-	if not _ctl().is_key_held("jump"):
-		## Release can miss if focus blurs — treat unheld as release.
-		_release_jump_charge()
-		return
-	if _coyote_left <= 0.0 and not _floor_contacted():
-		_cancel_jump_charge()
-		return
-	var dur := maxf(jump_charge_sec, 0.05)
-	_jump_charge = minf(_jump_charge + delta / dur, 1.0)
-
-
-func _jump_height_for_charge(charge: float) -> float:
-	return lerpf(jump_height_min_m, jump_height_max_m, clampf(charge, 0.0, 1.0))
-
-
-func _jump_speed_for_height(height_m: float) -> float:
-	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity"))
-	g = maxf(g, 0.01)
-	var h := maxf(height_m, 0.05) * maxf(character_scale, 0.001)
-	## v = sqrt(2gh) — apex height in meters (scaled with character size).
-	return sqrt(2.0 * g * h)
-
-
-func _do_jump(charge: float = 0.0) -> void:
-	var height := _jump_height_for_charge(charge)
-	velocity.y = _jump_speed_for_height(height)
 	_coyote_left = 0.0
-	_jump_release_buffer_left = 0.0
-	_jump_pending_charge = 0.0
-	_cancel_jump_charge()
 	_was_ray_grounded = false
 	_jumping = true
+	_jump_rising = true
+	_jump_start_y = global_position.y
 	_was_airborne = true
 	_land_anim_left = 0.0
+	velocity.y = jump_rise_speed_mps * maxf(character_scale, 0.001)
 	cancel_action()
 	_play_jump_start_anim()
+
+
+## Stop ascending — fall begins (key released or max height reached).
+func _end_jump_rise() -> void:
+	if not _jump_rising:
+		return
+	_jump_rising = false
+	if velocity.y > 0.0:
+		velocity.y = 0.0
+
+
+func _update_jump_rise(_delta: float) -> void:
+	if not _jump_rising:
+		return
+	## Missed key-up (focus blur) still ends the rise.
+	if not _ctl().is_key_held("jump"):
+		_end_jump_rise()
+		return
+	var max_h := jump_height_max_m * maxf(character_scale, 0.001)
+	if global_position.y - _jump_start_y >= max_h:
+		_end_jump_rise()
+		return
+	## Hold cancels gravity — keep rising until release or ceiling.
+	velocity.y = jump_rise_speed_mps * maxf(character_scale, 0.001)
 
 
 func _play_jump_start_anim() -> void:
@@ -2188,18 +2140,7 @@ func _update_locomotion_anim(move_speed: float, sprinting: bool = false) -> void
 		else:
 			return
 	var size_anim := clampf(1.0 / character_scale, 0.05, 4.0)
-	if _jump_charging and _land_anim_left <= 0.0:
-		## Hold crouch / jump-start while loading the leap.
-		var crouch_path := "%s/%s" % [LIB_NAME, &"Crouch_Idle"]
-		var start_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_START]
-		var charge_path := crouch_path if _anim_player.has_animation(crouch_path) else start_path
-		if _anim_player.has_animation(charge_path):
-			if String(_anim_player.current_animation) != charge_path:
-				_anim_player.play(charge_path, 0.1)
-			## Ease into a deeper crouch feel as charge fills.
-			_anim_player.speed_scale = clampf(0.35 + _jump_charge * 0.4, 0.2, 1.0) * size_anim
-			return
-	var airborne := _jumping or not _floor_contacted()
+	var airborne := _jumping or _jump_rising or not _floor_contacted()
 	if airborne and _land_anim_left <= 0.0:
 		var start_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_START]
 		var loop_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_LOOP]
@@ -2915,8 +2856,9 @@ func _is_beam_held() -> bool:
 	var code := int(b.get("code", -1)) as MouseButton
 	if code < 0 or not Input.is_mouse_button_pressed(code):
 		return false
-	## Exact modifier match — Alt+LMB must not keep the bare-LMB blaster alive.
-	if bool(b.get("shift", false)) != Input.is_key_pressed(KEY_SHIFT):
+	## Shift is sprint — never blocks bare LMB beam. Alt/Ctrl still exclusive so
+	## Alt+LMB blast / Ctrl+LMB laser don't keep the blaster streaming.
+	if bool(b.get("shift", false)) and not Input.is_key_pressed(KEY_SHIFT):
 		return false
 	if bool(b.get("ctrl", false)) != Input.is_key_pressed(KEY_CTRL):
 		return false
