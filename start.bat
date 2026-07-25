@@ -1,5 +1,5 @@
 @echo off
-REM City — default launch: voxel city POC (crowd demo: start_crowd.bat).
+REM Eccentri City — default launch: voxel city POC (crowd demo: start_crowd.bat).
 
 setlocal
 set "ROOT=%~dp0"

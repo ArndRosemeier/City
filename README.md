@@ -1,15 +1,19 @@
-# City — Procedural voxel city (Godot 4)
+# Eccentri City — Procedural voxel city (Godot 4)
 
-Voxel district POC with skinned MPFB pedestrians, Quaternius cars, sidewalks/curbs,
-crosswalks, and street lights. Showcase scene still available via `start.bat`.
+Procedural voxel city of weird ideas (product id **EccentriCity**). Skinned MPFB
+pedestrians, Quaternius cars, sidewalks/curbs, crosswalks, street lights, infection,
+and oversized player power. Showcase scene still available via `start.bat`.
+
+Title art: `assets/branding/eccentricity_title.png` (cinematic; alt sketch in
+`eccentricity_title_a.png`).
 
 ## Download (Windows)
 
 Grab the latest player build from
 [**GitHub Releases**](https://github.com/ArndRosemeier/City/releases/latest):
 
-1. Download **CityPortable-windows.zip** and unzip it.
-2. Double-click **`City.bat`**.
+1. Download **EccentriCityPortable-windows.zip** and unzip it.
+2. Double-click **`EccentriCity.bat`**.
 3. First launch downloads Godot 4.6 + Voxel Tools (~80 MB; internet once) and
    imports assets (a few minutes). Later launches work offline.
 
@@ -28,24 +32,24 @@ Double-click **`start_city.bat`** — endless streamed districts.
 ### Install (Windows) — for players
 
 From an unzipped release (or this repo), double-click **`install_city.bat`**.
-It copies the game into `%LOCALAPPDATA%\Programs\City` and adds Desktop /
+It copies the game into `%LOCALAPPDATA%\Programs\EccentriCity` and adds Desktop /
 Start Menu shortcuts.
 
-If the engine is missing, **`City.bat`** / **`install_city.bat`** download
+If the engine is missing, **`EccentriCity.bat`** / **`install_city.bat`** download
 Godot 4.6 + Voxel Tools 1.6 from
 [Zylann/godot_voxel](https://github.com/Zylann/godot_voxel/releases/tag/v1.6).
 
 ```
 install_city.bat
-install_city.bat /D "D:\Games\City"
+install_city.bat /D "D:\Games\EccentriCity"
 ```
 
 ### Make / publish a package — for you (developer)
 
-- **`make_installer.bat`** — full local portable under `dist\CityPortable\`
+- **`make_installer.bat`** — full local portable under `dist\EccentriCityPortable\`
   (engine + baked `.godot` import + validation). Handy for offline USB copies.
 - **`publish_portable_release.bat`** — builds a *slim* zip (no engine / no
-  `.godot`; first `City.bat` fetches them) and uploads a GitHub Release.
+  `.godot`; first `EccentriCity.bat` fetches them) and uploads a GitHub Release.
   Requires `gh auth login` once.
 
 (`tools\pack_city_portable.bat` is the older folder-only helper; prefer the scripts above.)
@@ -87,7 +91,9 @@ coordinate (`scripts/city/district_theme.gd`): **Core High-Rise**, **Old Town**,
 **Waterfront Industrial**, **Garden Residential** or **Civic Quarter**. The theme sets
 the wall / roof / paving palette, the building archetype weights and a height scale, so
 the tile at the world origin is always the downtown core and the quarters around it get
-lower and older.
+lower and older. Themes also weight **eccentric massing**: spiral stair towers
+(`spiral_chance`), L/T footprints (`l_mass_chance`), and cylinder midrise / silos
+(`cylinder_chance`) — see `BuildingGrammar.spiral_tower` / `cylinder_midrise`.
 
 Inside a tile, land use comes from a noise **intensity field** computed on world cell
 coordinates (`DistrictPlanner.intensity`) rather than distance from the tile centre, so

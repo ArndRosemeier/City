@@ -1,5 +1,5 @@
 @echo off
-REM City — procedural crowd walk demo (MakeHuman pedestrians).
+REM Eccentri City — procedural crowd walk demo (MakeHuman pedestrians).
 
 setlocal
 set "ROOT=%~dp0"
@@ -17,5 +17,5 @@ if defined GODOT (
 )
 
 echo Starting crowd walk demo...
-start "City Crowd" /MAX "%GODOT_EXE%" --path "%ROOT%." res://scenes/main.tscn --maximized
+start "Eccentri City Crowd" /MAX "%GODOT_EXE%" --path "%ROOT%." res://scenes/main.tscn --maximized
 endlocal

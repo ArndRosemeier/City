@@ -1,4 +1,4 @@
-# Ensures City runtime deps are present (Godot + Voxel Tools engine).
+# Ensures Eccentri City runtime deps are present (Godot + Voxel Tools engine).
 # city_voxel.dll is shipped in-repo under addons/city_voxel/bin/.
 # Safe to call repeatedly. Used by install_city.bat / pack scripts.
 param(

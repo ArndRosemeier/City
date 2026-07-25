@@ -1,5 +1,5 @@
 @echo off
-REM City — voxel district POC (Voxel Tools / godot_voxel).
+REM Eccentri City — voxel district POC (Voxel Tools / godot_voxel).
 REM Requires Godot 4.6 + Voxel Tools module (not stock Godot).
 
 setlocal
@@ -42,5 +42,5 @@ echo   Sidewalks/curbs, traffic, street lights. Towers up to 100m.
 echo   Engine: %GODOT_EXE%
 echo.
 
-start "City Voxel" /MAX "%GODOT_EXE%" --path "%ROOT%." res://scenes/city_poc.tscn --maximized
+start "Eccentri City" /MAX "%GODOT_EXE%" --path "%ROOT%." res://scenes/city_poc.tscn --maximized
 endlocal

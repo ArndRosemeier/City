@@ -1,4 +1,4 @@
-## Autoload: reusable runtime profiler for City hot paths.
+## Autoload: reusable runtime profiler for Eccentri City hot paths.
 ## Toggle overlay with F7 (rebindable). Also registers Performance custom monitors.
 extends CanvasLayer
 

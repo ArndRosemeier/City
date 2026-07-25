@@ -47,7 +47,7 @@ func _build_ui() -> void:
 	panel.add_child(vbox)
 
 	_title = Label.new()
-	_title.text = "City — Human POC"
+	_title.text = "Blockscale — Human POC"
 	_title.add_theme_font_size_override("font_size", 26)
 	_title.add_theme_color_override("font_color", Color(0.95, 0.96, 0.98))
 	vbox.add_child(_title)

@@ -1,4 +1,4 @@
-Mixamo animations for the City walker (Adobe Mixamo Additional Terms).
+Mixamo animations for the Eccentri City walker (Adobe Mixamo Additional Terms).
 
 Download from https://www.mixamo.com/ (free Adobe account):
   1. Pick any Mixamo character (Y Bot is fine).

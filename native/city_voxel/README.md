@@ -1,4 +1,4 @@
-# Native City voxel helpers (Rust / godot-rust GDExtension)
+# Native Eccentri City voxel helpers (Rust / godot-rust GDExtension)
 
 ## What it provides
 

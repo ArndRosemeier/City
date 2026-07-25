@@ -1,4 +1,4 @@
-## Headless package check: prove a staged/portable City folder can load scripts + main scene.
+## Headless package check: prove a staged/portable Eccentri City folder can load scripts + main scene.
 ## Exit codes: 0 = OK, non-zero = failed (make_installer must abort).
 extends SceneTree
 

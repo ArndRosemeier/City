@@ -1,4 +1,4 @@
-﻿Quaternius Universal Animation Library (Standard / free glTF)
+Quaternius Universal Animation Library (Standard / free glTF)
 
 Author: Quaternius
 License: CC0 (Creative Commons Zero / Public Domain)
@@ -9,4 +9,4 @@ Files in this folder:
 - AnimationLibrary_Godot_Standard.gltf
 - AnimationLibrary_Godot_Standard.bin
 
-Downloaded for use in the City project.
+Downloaded for use in the Eccentri City project.

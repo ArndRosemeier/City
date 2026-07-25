@@ -136,7 +136,9 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.albedo_file = "tiles.jpg"
 			s.tile_meters = Vector2(2.0, 2.0)
 			s.roughness = 0.7
-			s.weathering = 0.25
+			s.tint_variation = 0.4
+			s.weathering = 0.3
+			s.streaks = 0.25
 		VoxelMaterial.PARK:
 			s.albedo_file = "grass.jpg"
 			## Blade detail has to be visible at walking distance, so tile roughly per
@@ -175,19 +177,25 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 		VoxelMaterial.METAL:
 			s.albedo_file = "metal.jpg"
 			s.tile_meters = Vector2(2.0, 2.0)
-			s.roughness = 0.35
-			s.metallic = 0.85
-			s.tint_variation = 0.25
-			s.weathering = 0.4
-			s.streaks = 0.3
+			## Curtain-wall metal covers whole tower shafts, so it needs the strongest
+			## per-lot spread and weathering of any material or every tower matches.
+			s.roughness = 0.4
+			s.metallic = 0.8
+			s.tint_variation = 0.55
+			s.weathering = 0.5
+			s.grime = 0.4
+			s.grime_height = 6.0
+			s.streaks = 0.5
 		VoxelMaterial.METAL_PLATE:
 			s.albedo_file = "metal_plate.jpg"
 			s.tile_meters = Vector2(1.5, 1.5)
-			s.roughness = 0.45
-			s.metallic = 0.8
-			s.tint_variation = 0.3
-			s.weathering = 0.5
-			s.streaks = 0.35
+			s.roughness = 0.5
+			s.metallic = 0.75
+			s.tint_variation = 0.6
+			s.weathering = 0.55
+			s.grime = 0.45
+			s.grime_height = 5.0
+			s.streaks = 0.5
 		VoxelMaterial.PLANTER:
 			s.albedo_file = "wood.jpg"
 			s.tile_meters = Vector2(1.2, 1.2)
@@ -206,10 +214,14 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.roughness = 0.88
 			s.tint_variation = 0.4
 		VoxelMaterial.PAINT:
+			## Accent bands and pilasters: the widest colour spread in the palette, so a
+			## banded shaft picks up a different accent hue per lot.
 			s.albedo_file = "paint.jpg"
 			s.tile_meters = Vector2(0.6, 0.6)
 			s.roughness = 0.7
-			s.tint_variation = 0.5
+			s.tint_variation = 0.85
+			s.weathering = 0.35
+			s.streaks = 0.3
 		VoxelMaterial.ROAD_LINE:
 			s.albedo_file = "road_line.jpg"
 			## One repeat per voxel: the stripe art is authored per cell.

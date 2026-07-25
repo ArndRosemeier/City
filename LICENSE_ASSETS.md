@@ -1,4 +1,4 @@
-# Asset licenses — City
+# Asset licenses — Eccentri City
 
 This document tracks provenance for 3D/content assets. Godot (MIT) does not
 dictate content licenses; each asset must be cleared separately.
@@ -39,7 +39,7 @@ These are build-time only.
 | SMPL / SMPL-X | Non-commercial free license; commercial needs Meshcapade |
 | DAZ Genesis in-game meshes | Interactive License per product |
 
-## City voxel textures
+## Eccentri City voxel textures
 
 | Asset | Source | License |
 |-------|--------|---------|

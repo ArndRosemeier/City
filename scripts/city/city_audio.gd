@@ -1,4 +1,4 @@
-## City SFX. On by default; toggle with O.
+## Eccentri City SFX. On by default; toggle with O.
 ## Prefers Kenney CC0 clips under res://assets/audio/; procedural fallback if missing.
 class_name CityAudio
 extends Node

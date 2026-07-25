@@ -1,4 +1,4 @@
-# Build the City voxel GDExtension (Windows x64).
+# Build the Eccentri City voxel GDExtension (Windows x64).
 # Requires: Rust stable + Visual Studio with C++ (MSVC).
 $ErrorActionPreference = "Stop"
 $env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path

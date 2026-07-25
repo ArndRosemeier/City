@@ -163,30 +163,47 @@ func _summarize(coord: Vector2i, res: Dictionary) -> Dictionary:
 		"road_cells": int(tags.get(LandUse.ROAD, 0)) + int(tags.get(LandUse.AVENUE, 0)),
 		"mean_intensity": intensity_sum / cells,
 		"top_m": top_m,
-		"walls": _material_histogram(res["blocks"]),
+		"walls": _material_histogram(res["blocks"], int(res["ground_thickness"])),
 	}
 
 
-func _material_histogram(blocks: Dictionary) -> Dictionary:
+## Voxels per 16³ block edge, and the block index layout used by the native volume.
+const BLOCK := 16
+
+
+func _material_histogram(blocks: Dictionary, ground_thickness: int) -> Dictionary:
 	## One stride-sampled pass over the baked voxels for both wall and park materials.
+	##
+	## Everything below the street deck is skipped. The substrate under the deck is
+	## STONE, which is also a legitimate wall material — counting it made STONE the
+	## "dominant wall" of every district by two orders of magnitude and hid the real
+	## per-theme palette completely.
 	var counts: Dictionary = {}
 	for id: int in WALL_IDS:
 		counts[id] = 0
 	for id2: int in PARK_IDS:
 		counts[id2] = 0
 	for key: Variant in blocks.keys():
+		var bp: Vector3i = key
+		var block_y0 := bp.y * BLOCK
+		if block_y0 + BLOCK <= ground_thickness:
+			continue
 		var data: PackedByteArray = blocks[key]
 		if data.size() <= 2:
 			var uid := int(data[0])
 			if counts.has(uid):
-				counts[uid] = int(counts[uid]) + 4096 / SAMPLE_STRIDE
+				## Only the layers of this block that sit at or above the deck.
+				var layers := mini(BLOCK, block_y0 + BLOCK - ground_thickness)
+				counts[uid] = int(counts[uid]) + layers * BLOCK * BLOCK / SAMPLE_STRIDE
 			continue
 		var voxels := data.size() / 2
 		var i := 0
 		while i < voxels:
-			var vid := int(data[i * 2])
-			if counts.has(vid):
-				counts[vid] = int(counts[vid]) + 1
+			## Layout is y + x * BLOCK + z * BLOCK², so the low nibble is the local Y.
+			if block_y0 + (i % BLOCK) >= ground_thickness:
+				var vid := int(data[i * 2])
+				if counts.has(vid):
+					counts[vid] = int(counts[vid]) + 1
 			i += SAMPLE_STRIDE
 	return counts
 
@@ -305,17 +322,18 @@ func _live_city_report() -> void:
 	var city := CityRoot.new()
 	city.city_seed = WORLD_SEED
 	add_child(city)
-	for _i in range(2400):
+	## Wall-clock, not frame count: the district bakes on worker threads while the main
+	## loop spins at hundreds of FPS, so a 2400-frame budget expired after ~3 s and the
+	## walker had not spawned yet.
+	var deadline := Time.get_ticks_msec() + 90_000
+	while city.get_node_or_null("Walker") == null:
+		if Time.get_ticks_msec() > deadline:
+			_fail("FAIL live city produced no walker after 90 s")
+			return
 		await get_tree().process_frame
-		if city.get_node_or_null("Walker") != null:
-			break
 	var walker: Node3D = city.get_node_or_null("Walker")
-	if walker == null:
-		_fail("FAIL live city produced no walker")
-		return
 	## Let districts stream in around the spawn point.
-	for _j in range(600):
-		await get_tree().process_frame
+	await _settle(8.0)
 
 	var districts: Array = city._streamer.call("get_loaded_districts") as Array
 	var peds := 0
@@ -351,9 +369,14 @@ func _live_city_report() -> void:
 	var target := DistrictCoord.center_world(coord, CityRoot.VOXEL_SIZE)
 	print("neighbour tile %s is %s" % [coord, DistrictTheme.for_district(WORLD_SEED, coord).display_name])
 	walker.global_position = Vector3(target.x, 40.0, target.z)
-	for _m in range(1200):
-		await get_tree().process_frame
+	await _settle(10.0)
 	await _shoot(walker.global_position, Vector3(0.0, 22.0, 40.0), Vector3(-0.3, 0.0, 0.0), NEIGHBOUR_PNG)
+
+
+func _settle(seconds: float) -> void:
+	var until := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < until:
+		await get_tree().process_frame
 
 
 func _shoot(anchor: Vector3, offset: Vector3, rot: Vector3, path: String) -> void:
@@ -366,8 +389,7 @@ func _shoot(anchor: Vector3, offset: Vector3, rot: Vector3, path: String) -> voi
 	cam.make_current()
 	## Settle, then sample the frame rate from this viewpoint: the new surface shaders
 	## add texture samples per pixel, so the cost has to stay visible in the log.
-	for _k in range(120):
-		await get_tree().process_frame
+	await _settle(3.0)
 	var fps := 0.0
 	for _f in range(60):
 		await get_tree().process_frame

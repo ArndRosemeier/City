@@ -1,4 +1,4 @@
-# City voxels
+# Eccentri City voxels
 
 Procedural district on **Zylann Voxel Tools** (`godot_voxel` module build):
 

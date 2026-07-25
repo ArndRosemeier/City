@@ -65,3 +65,118 @@ func get_vox(pos: Vector3i) -> int:
 
 func column(x: int, z: int, y0: int, y1: int, material_id: int) -> void:
 	fill_box(Vector3i(x, y0, z), Vector3i(x + 1, y1, z + 1), material_id)
+
+
+## Euclidean disk at a single Y (inclusive radius in voxels).
+func fill_disk(cx: int, cz: int, y: int, radius: int, material_id: int) -> void:
+	if radius < 0:
+		return
+	var r2 := radius * radius
+	for z in range(cz - radius, cz + radius + 1):
+		for x in range(cx - radius, cx + radius + 1):
+			var dx := x - cx
+			var dz := z - cz
+			if dx * dx + dz * dz <= r2:
+				set_vox(Vector3i(x, y, z), material_id)
+
+
+## Solid cylinder from y0 inclusive to y1 exclusive.
+func fill_cylinder(cx: int, cz: int, y0: int, y1: int, radius: int, material_id: int) -> void:
+	if y0 >= y1 or radius < 0:
+		return
+	for y in range(y0, y1):
+		fill_disk(cx, cz, y, radius, material_id)
+
+
+## Hollow cylinder shell. Inner void uses Euclidean radius `radius - wall_thick`.
+## When `hollow_inner` is false, behaves like fill_cylinder.
+func fill_cylinder_shell(
+	cx: int,
+	cz: int,
+	y0: int,
+	y1: int,
+	radius: int,
+	material_id: int,
+	hollow_inner: bool = true,
+	wall_thick: int = 1
+) -> void:
+	if y0 >= y1 or radius < 0:
+		return
+	if not hollow_inner or wall_thick <= 0:
+		fill_cylinder(cx, cz, y0, y1, radius, material_id)
+		return
+	var outer2 := radius * radius
+	var inner_r := maxi(0, radius - wall_thick)
+	var inner2 := inner_r * inner_r
+	for y in range(y0, y1):
+		for z in range(cz - radius, cz + radius + 1):
+			for x in range(cx - radius, cx + radius + 1):
+				var dx := x - cx
+				var dz := z - cz
+				var d2 := dx * dx + dz * dz
+				if d2 <= outer2 and d2 > inner2:
+					set_vox(Vector3i(x, y, z), material_id)
+
+
+## Solid ellipsoid centred on `center` with per-axis radii.
+func fill_ellipsoid(center: Vector3i, radii: Vector3i, material_id: int) -> void:
+	if radii.x <= 0 or radii.y <= 0 or radii.z <= 0:
+		return
+	var fx := float(radii.x)
+	var fy := float(radii.y)
+	var fz := float(radii.z)
+	for y in range(center.y - radii.y, center.y + radii.y + 1):
+		var ny := float(y - center.y) / fy
+		for z in range(center.z - radii.z, center.z + radii.z + 1):
+			var nz := float(z - center.z) / fz
+			for x in range(center.x - radii.x, center.x + radii.x + 1):
+				var nx := float(x - center.x) / fx
+				if nx * nx + ny * ny + nz * nz <= 1.0:
+					set_vox(Vector3i(x, y, z), material_id)
+
+
+## Hollow ellipsoid: only the outer rind is painted so the interior stays walkable.
+func fill_ellipsoid_shell(
+	center: Vector3i, radii: Vector3i, material_id: int, wall_thick: int = 2
+) -> void:
+	if radii.x <= 0 or radii.y <= 0 or radii.z <= 0:
+		return
+	if wall_thick <= 0:
+		fill_ellipsoid(center, radii, material_id)
+		return
+	var fx := float(radii.x)
+	var fy := float(radii.y)
+	var fz := float(radii.z)
+	var ix := maxf(fx - float(wall_thick), 0.001)
+	var iy := maxf(fy - float(wall_thick), 0.001)
+	var iz := maxf(fz - float(wall_thick), 0.001)
+	for y in range(center.y - radii.y, center.y + radii.y + 1):
+		var dy := float(y - center.y)
+		for z in range(center.z - radii.z, center.z + radii.z + 1):
+			var dz := float(z - center.z)
+			for x in range(center.x - radii.x, center.x + radii.x + 1):
+				var dx := float(x - center.x)
+				var outer := (dx / fx) * (dx / fx) + (dy / fy) * (dy / fy) + (dz / fz) * (dz / fz)
+				if outer > 1.0:
+					continue
+				var inner := (dx / ix) * (dx / ix) + (dy / iy) * (dy / iy) + (dz / iz) * (dz / iz)
+				if inner > 1.0:
+					set_vox(Vector3i(x, y, z), material_id)
+
+
+## Thin ring: voxels with distance in (radius - thick, radius] (Euclidean).
+func fill_disk_ring(
+	cx: int, cz: int, y: int, radius: int, thick: int, material_id: int
+) -> void:
+	if radius < 0 or thick <= 0:
+		return
+	var outer2 := radius * radius
+	var inner_r := maxi(0, radius - thick)
+	var inner2 := inner_r * inner_r
+	for z in range(cz - radius, cz + radius + 1):
+		for x in range(cx - radius, cx + radius + 1):
+			var dx := x - cx
+			var dz := z - cz
+			var d2 := dx * dx + dz * dz
+			if d2 <= outer2 and d2 > inner2:
+				set_vox(Vector3i(x, y, z), material_id)

@@ -1,5 +1,5 @@
 # Build a slim Windows player zip and upload it as a GitHub Release.
-# Slim zip: game content + city_voxel.dll. Godot and .godot are fetched/imported by City.bat.
+# Slim zip: game content + city_voxel.dll. Godot and .godot are fetched/imported by EccentriCity.bat.
 param(
 	[string]$Root = "",
 	[string]$Tag = "",
@@ -16,8 +16,8 @@ $Root = (Resolve-Path $Root).Path
 
 $GodotName = "Godot_v4.6-voxel_win64.exe"
 $DistDir = Join-Path $Root "dist"
-$StageDir = Join-Path $DistDir "CityPortableSlim"
-$ZipPath = Join-Path $DistDir "CityPortable-windows.zip"
+$StageDir = Join-Path $DistDir "EccentriCityPortableSlim"
+$ZipPath = Join-Path $DistDir "EccentriCityPortable-windows.zip"
 $MaxZipBytes = 2GB - 1MB
 
 if ([string]::IsNullOrWhiteSpace($Tag)) {
@@ -98,7 +98,7 @@ if not exist "%ROOT%\.godot\global_script_class_cache.cfg" (
 echo.
 
 :launch
-start "City" /MAX "%GODOT_EXE%" --path "%ROOT%" res://scenes/city_poc.tscn --maximized
+start "Eccentri City" /MAX "%GODOT_EXE%" --path "%ROOT%" res://scenes/city_poc.tscn --maximized
 endlocal
 "@
 	Set-Content -Path $outPath -Value $contents -Encoding ASCII
@@ -157,19 +157,19 @@ function Stage-SlimPortable {
 	New-Item -ItemType Directory -Force -Path $ensureDstDir | Out-Null
 	Copy-Item -Force $ensureSrc (Join-Path $ensureDstDir "ensure_city_deps.ps1")
 
-	Write-CityLauncher (Join-Path $StageDir "City.bat")
+	Write-CityLauncher (Join-Path $StageDir "EccentriCity.bat")
 	Copy-Item -Force (Join-Path $Root "install_city.bat") (Join-Path $StageDir "install_city.bat")
 
 	$readme = @"
-City - Windows portable (slim)
+Eccentri City - Windows portable (slim)
 ==============================
 
 1. Unzip this folder anywhere.
-2. Double-click City.bat
+2. Double-click EccentriCity.bat
 3. First launch downloads Godot 4.6 + Voxel Tools (~80 MB, internet required)
    and imports assets (several minutes). Later launches are offline.
 
-Optional: install_city.bat copies into %LOCALAPPDATA%\Programs\City with shortcuts.
+Optional: install_city.bat copies into %LOCALAPPDATA%\Programs\EccentriCity with shortcuts.
 
 Keep city_voxel.dll under addons\city_voxel\bin\ - required, not downloaded.
 "@
@@ -186,7 +186,7 @@ function Compress-SlimZip {
 	if ($null -ne $tar) {
 		Push-Location $DistDir
 		try {
-			& tar.exe -a -cf "CityPortable-windows.zip" "CityPortableSlim"
+			& tar.exe -a -cf "EccentriCityPortable-windows.zip" "EccentriCityPortableSlim"
 			if ($LASTEXITCODE -ne 0) {
 				throw "tar zip failed ($LASTEXITCODE)"
 			}
@@ -213,13 +213,13 @@ function Publish-Release {
 	}
 
 	$notes = @"
-## City portable (Windows)
+## Eccentri City portable (Windows)
 
-1. Download **CityPortable-windows.zip** and unzip it.
-2. Double-click **City.bat**.
+1. Download **EccentriCityPortable-windows.zip** and unzip it.
+2. Double-click **EccentriCity.bat**.
 3. First launch downloads Godot 4.6 + Voxel Tools (~80 MB) and imports assets (a few minutes). Later launches work offline.
 
-Optional: run **install_city.bat** for shortcuts under ``%LOCALAPPDATA%\Programs\City``.
+Optional: run **install_city.bat** for shortcuts under ``%LOCALAPPDATA%\Programs\EccentriCity``.
 
 ``city_voxel.dll`` is included. No Rust/Visual Studio build required.
 "@
@@ -240,7 +240,7 @@ Optional: run **install_city.bat** for shortcuts under ``%LOCALAPPDATA%\Programs
 	}
 	else {
 		Write-Step "Creating GitHub release $Tag ..."
-		& gh release create $Tag $ZipPath --title "City portable $Tag" --notes $notes
+		& gh release create $Tag $ZipPath --title "Eccentri City portable $Tag" --notes $notes
 		if ($LASTEXITCODE -ne 0) {
 			throw "gh release create failed"
 		}

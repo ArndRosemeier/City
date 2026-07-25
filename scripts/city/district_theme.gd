@@ -30,6 +30,8 @@ var roof_mats: PackedInt32Array = PackedInt32Array([VoxelMaterial.ROOF])
 var base_mat: int = VoxelMaterial.CONCRETE
 var tower_shaft_mat: int = VoxelMaterial.METAL
 var accent_mat: int = VoxelMaterial.PAINT
+## Contrasting band / pilaster materials so a shaft is never one flat colour.
+var band_mats: PackedInt32Array = PackedInt32Array([VoxelMaterial.CONCRETE])
 ## Ground surfaces. All must satisfy VoxelMaterial.is_walkable_surface — pedestrians
 ## sample the deck. The carriageway itself stays ASPHALT for the traffic layer.
 var sidewalk_mat: int = VoxelMaterial.SIDEWALK
@@ -42,6 +44,13 @@ var height_scale: float = 1.0
 ## Grammar weights: chance of a tower on a core lot, of a modern box on a mid lot.
 var tower_chance: float = 0.55
 var modern_chance: float = 0.45
+## Eccentri massing: spiral landmark among towers; L/T footprints; cylinder midrise.
+var spiral_chance: float = 0.0
+var l_mass_chance: float = 0.0
+var cylinder_chance: float = 0.0
+## Chance a lot becomes an outright weird building: sky hole, arch gate, blob cluster,
+## twisted stack. This is the district's "creativity dial".
+var wild_chance: float = 0.0
 ## Planner density knobs.
 var park_count: int = 6
 var road_density: float = 0.85
@@ -77,6 +86,10 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.base_mat = VoxelMaterial.STONE
 			t.tower_shaft_mat = VoxelMaterial.METAL
 			t.accent_mat = VoxelMaterial.METAL_PLATE
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.METAL_PLATE, VoxelMaterial.CONCRETE, VoxelMaterial.STONE,
+				VoxelMaterial.PAINT
+			])
 			t.sidewalk_mat = VoxelMaterial.SIDEWALK
 			t.plaza_mat = VoxelMaterial.TILES
 			t.plaza_inner_mat = VoxelMaterial.PLAZA
@@ -84,6 +97,11 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.height_scale = 1.0
 			t.tower_chance = 0.72
 			t.modern_chance = 0.7
+			t.spiral_chance = 0.28
+			t.l_mass_chance = 0.1
+			## Keep downtown midrise as towers/boxes — silos are a waterfront look.
+			t.cylinder_chance = 0.0
+			t.wild_chance = 0.3
 			t.park_count = 3
 			t.road_density = 0.9
 		OLD_TOWN:
@@ -99,6 +117,10 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.base_mat = VoxelMaterial.STONE
 			t.tower_shaft_mat = VoxelMaterial.STONE
 			t.accent_mat = VoxelMaterial.PAINT
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.STONE, VoxelMaterial.BRICK_DARK, VoxelMaterial.PLASTER,
+				VoxelMaterial.PLANTER
+			])
 			t.sidewalk_mat = VoxelMaterial.TILES
 			t.plaza_mat = VoxelMaterial.TILES
 			t.plaza_inner_mat = VoxelMaterial.STONE
@@ -106,6 +128,11 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.height_scale = 0.5
 			t.tower_chance = 0.05
 			t.modern_chance = 0.12
+			t.spiral_chance = 0.08
+			t.l_mass_chance = 0.45
+			t.cylinder_chance = 0.05
+			## Old Town weirdness is medieval: arches and pierced walls, not twists.
+			t.wild_chance = 0.16
 			t.park_count = 5
 			t.road_density = 0.95
 		WATERFRONT_INDUSTRIAL:
@@ -121,6 +148,10 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.base_mat = VoxelMaterial.CONCRETE
 			t.tower_shaft_mat = VoxelMaterial.METAL_PLATE
 			t.accent_mat = VoxelMaterial.METAL
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.METAL, VoxelMaterial.BRICK_DARK, VoxelMaterial.PAINT,
+				VoxelMaterial.CONCRETE
+			])
 			t.sidewalk_mat = VoxelMaterial.SIDEWALK
 			t.plaza_mat = VoxelMaterial.GRAVEL
 			t.plaza_inner_mat = VoxelMaterial.DIRT
@@ -128,6 +159,11 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.height_scale = 0.42
 			t.tower_chance = 0.08
 			t.modern_chance = 0.8
+			t.spiral_chance = 0.05
+			t.l_mass_chance = 0.35
+			t.cylinder_chance = 0.4
+			## Tanks, clustered vessels and pipe gantries — the organic/blob district.
+			t.wild_chance = 0.34
 			t.park_count = 2
 			t.road_density = 0.7
 			t.median_planting = false
@@ -143,6 +179,10 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.base_mat = VoxelMaterial.STONE
 			t.tower_shaft_mat = VoxelMaterial.PLASTER
 			t.accent_mat = VoxelMaterial.PAINT
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.BRICK, VoxelMaterial.PLANTER, VoxelMaterial.PAINT,
+				VoxelMaterial.STONE
+			])
 			t.sidewalk_mat = VoxelMaterial.SIDEWALK
 			t.plaza_mat = VoxelMaterial.GRAVEL
 			t.plaza_inner_mat = VoxelMaterial.PLAZA
@@ -150,6 +190,11 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.height_scale = 0.3
 			t.tower_chance = 0.0
 			t.modern_chance = 0.25
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.4
+			t.cylinder_chance = 0.0
+			## Garden quarters stay calm — the odd pierced villa, nothing towering.
+			t.wild_chance = 0.12
 			t.park_count = 10
 			t.road_density = 0.75
 		CIVIC_QUARTER:
@@ -162,6 +207,10 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.base_mat = VoxelMaterial.STONE
 			t.tower_shaft_mat = VoxelMaterial.STONE
 			t.accent_mat = VoxelMaterial.METAL_PLATE
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.METAL_PLATE, VoxelMaterial.TILES, VoxelMaterial.PLASTER,
+				VoxelMaterial.PAINT
+			])
 			t.sidewalk_mat = VoxelMaterial.PLAZA
 			t.plaza_mat = VoxelMaterial.PLAZA
 			t.plaza_inner_mat = VoxelMaterial.TILES
@@ -169,6 +218,11 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.height_scale = 0.62
 			t.tower_chance = 0.2
 			t.modern_chance = 0.3
+			t.spiral_chance = 0.35
+			t.l_mass_chance = 0.28
+			t.cylinder_chance = 0.18
+			## Monuments: grand arches and pierced slabs over the plazas.
+			t.wild_chance = 0.32
 			t.park_count = 6
 			t.road_density = 0.85
 		_:
@@ -189,3 +243,11 @@ func roof_for(rng: RandomNumberGenerator) -> int:
 		push_error("DistrictTheme %s: empty roof palette" % display_name)
 		return VoxelMaterial.ROOF
 	return roof_mats[rng.randi() % roof_mats.size()]
+
+
+## Band / pilaster material for shafts and wild massing.
+func band_for(rng: RandomNumberGenerator) -> int:
+	if band_mats.is_empty():
+		push_error("DistrictTheme %s: empty band palette" % display_name)
+		return VoxelMaterial.CONCRETE
+	return band_mats[rng.randi() % band_mats.size()]

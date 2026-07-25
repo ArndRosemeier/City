@@ -41,7 +41,7 @@ var _planner: DistrictPlanner
 var _plaza: PlazaComposer
 var _park: ParkComposer
 var _grammar: BuildingGrammar
-## World-space building massing for far LOD: {center, size, color}.
+## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
 ## World voxel origin of this district tile (local paint stays 0..size).
 var origin_vox: Vector3i = Vector3i.ZERO
@@ -288,7 +288,22 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 			mass_h = 40
 		_:
 			mass_h = 48
-	_record_building_impostor(bmin, bmax, mass_h, tag)
+	## Far tiles deliberately skip the grammar, so there is no real massing to describe —
+	## one coarse block per lot. These sit beyond the voxel radius entirely; when a tile
+	## is upgraded to "full" it re-bakes and gets the grammar's actual shapes.
+	_record_building_impostor(
+		[{
+			"shape": int(BuildingGrammar.ImpostorShape.BOX),
+			"center": Vector3(
+				float(bmin.x + bmax.x) * 0.5,
+				float(bmin.y) + float(mass_h) * 0.5,
+				float(bmin.z + bmax.z) * 0.5
+			),
+			"size": Vector3(float(bmax.x - bmin.x), float(mass_h), float(bmax.z - bmin.z)),
+			"yaw": 0.0,
+		}] as Array[Dictionary],
+		tag
+	)
 
 
 func decorate_open_spaces() -> void:
@@ -711,25 +726,20 @@ func _paint_lot(
 	var on_plaza := _planner.faces_plaza(cx, cz)
 	var on_park := _planner.faces_park(cx, cz)
 	grammar.build_for_zone(bmin, bmax, zone, facing, corner, on_plaza, on_park)
-	## Approximate massing height for far LOD. It tracks the intensity-driven cap so the
-	## impostor skyline matches the voxel skyline; the per-zone factors account for each
-	## archetype building fewer floors than its ceiling allows.
-	var cap := grammar.max_height
-	var mass_h := cap
-	match zone:
-		LandUse.CORE_LOT:
-			mass_h = cap
-		LandUse.CIVIC_LOT:
-			mass_h = mini(cap, 48)
-		LandUse.MID_LOT:
-			mass_h = int(float(cap) * 0.75)
-		LandUse.TOWN_LOT:
-			mass_h = mini(cap, 32)
-		LandUse.COURTYARD_LOT:
-			mass_h = mini(cap, 40)
-		_:
-			mass_h = mini(cap, 48)
-	_record_building_impostor(bmin, bmax, mass_h, zone)
+	## Far LOD uses the height the grammar actually painted. Deriving it from the cap
+	## instead made distant impostors overshoot the real voxels — archetypes routinely
+	## build well below their ceiling.
+	if grammar.built_height_vox <= 0:
+		push_error(
+			"DistrictGenerator: grammar reported no built height for zone %d at cell (%d, %d)"
+			% [zone, cx, cz]
+		)
+	if grammar.impostor_parts.is_empty():
+		push_error(
+			"DistrictGenerator: grammar reported no massing parts for zone %d at cell (%d, %d)"
+			% [zone, cx, cz]
+		)
+	_record_building_impostor(grammar.impostor_parts, zone)
 	grammar.max_height = saved
 
 
@@ -742,14 +752,11 @@ func _height_cap_for(cx: int, cz: int, zone_ceiling: int) -> int:
 	return clampi(int(round(scaled)), 12, zone_ceiling)
 
 
-func _record_building_impostor(bmin: Vector3i, bmax: Vector3i, height_vox: int, zone: int) -> void:
+## Turn the grammar's massing description into far-LOD shells. The grammar knows whether
+## it built a cylinder, an arch or an L-plan; deriving the shape from the zone here (as
+## this used to) gave every round or pierced building a plain box silhouette.
+func _record_building_impostor(parts: Array[Dictionary], zone: int) -> void:
 	var vs := voxel_size
-	var w := float(bmax.x - bmin.x) * vs
-	var d := float(bmax.z - bmin.z) * vs
-	var h := float(maxi(height_vox, 8)) * vs
-	var y0 := float(bmin.y) * vs
-	var cx := (float(origin_vox.x + bmin.x) + float(origin_vox.x + bmax.x)) * 0.5 * vs
-	var cz := (float(origin_vox.z + bmin.z) + float(origin_vox.z + bmax.z)) * 0.5 * vs
 	var color := Color(0.62, 0.58, 0.52)
 	var lit := 0.32
 	match zone:
@@ -771,54 +778,53 @@ func _record_building_impostor(bmin: Vector3i, bmax: Vector3i, height_vox: int, 
 		_:
 			pass
 
-	## Stepped massing where grammar uses podium / shaft / crown.
-	match zone:
-		LandUse.CORE_LOT:
-			var podium_h := clampf(h * 0.14, 6.0, 14.0)
-			var crown_h := clampf(h * 0.12, 4.0, 12.0)
-			var shaft_h := maxf(h - podium_h - crown_h, h * 0.45)
-			var inset := clampf(minf(w, d) * 0.12, 1.5, 6.0)
-			_append_impostor_box(cx, y0, cz, w, podium_h, d, color, lit * 0.7)
-			_append_impostor_box(cx, y0 + podium_h, cz, w - inset * 2.0, shaft_h, d - inset * 2.0, color, lit)
-			_append_impostor_box(
-				cx,
-				y0 + podium_h + shaft_h,
-				cz,
-				maxf(w - inset * 3.2, w * 0.55),
-				crown_h,
-				maxf(d - inset * 3.2, d * 0.55),
-				color * 0.92,
-				lit * 0.55
-			)
-		LandUse.MID_LOT:
-			var base_h := clampf(h * 0.22, 5.0, 10.0)
-			var shaft_h2 := maxf(h - base_h, 4.0)
-			var mid_inset := clampf(minf(w, d) * 0.06, 0.8, 3.0)
-			_append_impostor_box(cx, y0, cz, w, base_h, d, color * 1.05, lit * 0.6)
-			_append_impostor_box(cx, y0 + base_h, cz, w - mid_inset * 2.0, shaft_h2, d - mid_inset * 2.0, color, lit)
-		LandUse.CIVIC_LOT:
-			var plinth := clampf(h * 0.18, 4.0, 8.0)
-			_append_impostor_box(cx, y0, cz, w * 1.02, plinth, d * 1.02, color * 1.08, lit * 0.4)
-			_append_impostor_box(cx, y0 + plinth, cz, w * 0.92, maxf(h - plinth, 4.0), d * 0.92, color, lit)
-		_:
-			_append_impostor_box(cx, y0, cz, w, h, d, color, lit)
+	for part in parts:
+		var pc: Vector3 = part["center"]
+		var ps: Vector3 = part["size"]
+		## Ground-floor shells read as podium: slightly darker, fewer lit windows.
+		var near_ground := pc.y - ps.y * 0.5 < 3.0
+		_append_impostor_part(
+			int(part["shape"]),
+			Vector3(
+				(float(origin_vox.x) + pc.x) * vs,
+				pc.y * vs,
+				(float(origin_vox.z) + pc.z) * vs
+			),
+			ps * vs,
+			float(part["yaw"]),
+			color * (1.02 if near_ground else 1.0),
+			lit * (0.65 if near_ground else 1.0)
+		)
 
 
-func _append_impostor_box(
-	cx: float,
-	y0: float,
-	cz: float,
-	w: float,
-	h: float,
-	d: float,
-	color: Color,
-	lit: float
+## Fractional part, i.e. the shader `fract()` which GDScript does not have.
+func _unit_hash(v: float) -> float:
+	return v - floorf(v)
+
+
+func _append_impostor_part(
+	shape: int, center: Vector3, size: Vector3, yaw: float, color: Color, lit: float
 ) -> void:
-	if w < 1.0 or d < 1.0 or h < 1.0:
+	if size.x < 1.0 or size.y < 1.0 or size.z < 1.0:
 		return
+	## Per-lot brightness/hue spread, mirroring `tint_variation` in voxel_surface so the
+	## far skyline is as varied as the near one instead of one flat colour per zone.
+	## Quantised to the lot grid so all parts of one building share a tint.
+	var lot_m := VoxelBlockLibrary.LOT_METERS
+	var lot := Vector2(floorf(center.x / lot_m), floorf(center.z / lot_m))
+	var hash := _unit_hash(sin(lot.x * 12.9898 + lot.y * 78.233) * 43758.5453)
+	var bright := 1.0 + (hash - 0.5) * 0.3
+	var varied := Color(
+		clampf(color.r * bright * (1.0 + (_unit_hash(hash * 7.31) - 0.5) * 0.12), 0.0, 1.0),
+		clampf(color.g * bright, 0.0, 1.0),
+		clampf(color.b * bright * (1.0 - (_unit_hash(hash * 13.77) - 0.5) * 0.12), 0.0, 1.0),
+		1.0
+	)
 	building_impostors.append({
-		"center": Vector3(cx, y0 + h * 0.5, cz),
-		"size": Vector3(w, h, d),
-		"color": color,
-		"custom": Color(w, h, d, clampf(lit, 0.05, 0.85)),
+		"shape": shape,
+		"center": center,
+		"size": size,
+		"yaw": yaw,
+		"color": varied,
+		"custom": Color(size.x, size.y, size.z, clampf(lit, 0.05, 0.85)),
 	})

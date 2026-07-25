@@ -1,5 +1,5 @@
 @echo off
-REM Build slim CityPortable-windows.zip and upload a GitHub Release.
+REM Build slim EccentriCityPortable-windows.zip and upload a GitHub Release.
 REM Usage:
 REM   publish_portable_release.bat
 REM   publish_portable_release.bat portable-20260725

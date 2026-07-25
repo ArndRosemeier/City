@@ -4,7 +4,7 @@ REM Stages sources, re-imports the staged copy with Godot, then validates
 REM every script + city_poc. Zip yourself if you need an archive.
 REM
 REM Recipients use the folder, then either:
-REM   - double-click City.bat            (play in place)
+REM   - double-click EccentriCity.bat            (play in place)
 REM   - double-click install_city.bat    (copy to Programs + shortcuts)
 REM
 REM Usage:
@@ -15,7 +15,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"
-set "OUT_DIR=%ROOT%\dist\CityPortable"
+set "OUT_DIR=%ROOT%\dist\EccentriCityPortable"
 set "GODOT_NAME=Godot_v4.6-voxel_win64.exe"
 set "SILENT=0"
 
@@ -33,13 +33,13 @@ exit /b 1
 :args_done
 
 echo.
-echo  Make City portable package
+echo  Make Eccentri City portable package
 echo  -------------------------
 echo  Output folder : %OUT_DIR%
 echo.
 
 if not exist "%ROOT%\project.godot" (
-    echo ERROR: Run this from the City repo root.
+    echo ERROR: Run this from the Eccentri City repo root.
     if "%SILENT%"=="0" pause
     exit /b 1
 )
@@ -85,22 +85,22 @@ if exist "%ROOT%\tools\ensure_city_deps.ps1" (
 )
 
 (
-echo City - Windows package
+echo Eccentri City - Windows package
 echo ======================
 echo.
 echo Option A - play immediately
-echo   Double-click City.bat
+echo   Double-click EccentriCity.bat
 echo.
 echo Option B - install with shortcuts
 echo   Double-click install_city.bat
-echo   Default location: %%LOCALAPPDATA%%\Programs\City
+echo   Default location: %%LOCALAPPDATA%%\Programs\EccentriCity
 echo.
 echo Notes
 echo -----
 echo - Package includes a full Godot import + script class cache.
 echo   Keep the .godot folder; deleting it forces a long re-import.
 echo - Needs a 64-bit Windows 10/11 PC. No Rust/Visual Studio required.
-echo - If the engine binary is missing, install_city.bat / City.bat can
+echo - If the engine binary is missing, install_city.bat / EccentriCity.bat can
 echo   re-download Godot 4.6 + Voxel Tools ^(internet required^).
 ) > "%OUT_DIR%\README_INSTALL.txt"
 
