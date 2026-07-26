@@ -1,5 +1,13 @@
-## Builds mid-poly traffic cars with real glass, raked greenhouse, and -Z forward.
-## Forward matches VehicleDirector (atan2(-dir.x, -dir.z)): nose points local -Z.
+## Builds chunky, stylised traffic cars to match the voxel city: a handful of large
+## flat-shaded volumes instead of a pile of small boxes, real wheel arches cut into the
+## flanks, and a cabin tall enough that full-height passengers fit under the roof.
+##
+## The hull is one lofted volume driven by two piecewise-linear profile lines (top line
+## and plan line) plus an elliptical arch cut in the underside. Van cargo boxes and
+## pickup beds are just different top lines, not extra part types.
+##
+## Forward matches VehicleDirector (atan2(-dir.x, -dir.z)): nose points local -Z,
+## so local +X is the car's right-hand side.
 class_name ProceduralVehicle
 extends RefCounted
 
@@ -11,282 +19,409 @@ const MAT_LIGHT_R := "light_rear"
 const MAT_TIRE := "tire"
 const MAT_RIM := "rim"
 const MAT_ACCENT := "accent"
-const MAT_CHROME := "chrome"
 
-const WHEEL_SEGMENTS := 36
+## Passenger rig metrics, measured by tools/measure_passenger_seat.gd against the
+## Driving clip. Cabin heights are derived from these, so the roof can never drift out
+## of sync with the people sitting under it.
+##
+## Matches the smallest crowd pedestrian (CrowdDirector spawns 0.92..1.08) — passengers
+## are never shrunk below that just to fit a car.
+const PASSENGER_SCALE := 0.92
+## Feet-to-skull height of the tallest seated outfit at scale 1.0.
+const SEATED_HEIGHT_UNSCALED := 1.369
+## Air above the skull so the idle sway in the Driving clip never pokes through.
+const HEAD_CLEARANCE := 0.10
+## Seat floor to roof underside. Every profile's roof height comes from this.
+const CABIN_HEADROOM := SEATED_HEIGHT_UNSCALED * PASSENGER_SCALE + HEAD_CLEARANCE
+const ROOF_THICK := 0.07
+
+## How far surface details (lenses, bumpers, seams) stand off the panel they sit on.
+## Kept tiny so nothing meaningful pokes past the declared body box, but non-zero:
+## flush details z-fight with the panel, and recessed ones disappear behind it.
+const PROUD := 0.006
+
+## Clearance the arch opening leaves around the tyre, above and fore/aft. The opening
+## has to clear the whole tyre (top at 2 * wheel_r) or the wheel just overlaps the flank
+## instead of sitting in a hole.
+const ARCH_GAP := 0.025
+const ARCH_OVERHANG := 0.11
+## Body left above an arch. Any less and the fender looks cut clean through.
+const FENDER_MIN := 0.08
+## Loft stations across each arch. More reads rounder; 8 is enough at traffic distance.
+const ARCH_STATIONS := 8
+const WHEEL_SEGMENTS := 20
+
+## Rear-body shapes. The hull top line is built from these.
+const DECK_TRUNK := "trunk"
+const DECK_BOX := "box"
+const DECK_BED := "bed"
 
 
 static func build(entry: Dictionary, rng: RandomNumberGenerator) -> Node3D:
 	var profile_name := str(entry.get("profile", entry.get("id", "sedan")))
-	var profile := _profile(profile_name)
-	var paint := _resolve_paint(entry, profile, rng)
+	var p := _profile(profile_name)
+	var lay := _layout(p)
+	var livery := str(entry.get("id", ""))
+	var mats := _make_materials(_resolve_paint(entry, p, rng), livery)
+
 	var root := Node3D.new()
 	root.name = "ProceduralCar_%s" % profile_name
+	_build_hull(root, p, lay, mats)
+	_build_greenhouse(root, p, lay, mats)
+	_build_interior(root, p, lay, mats)
+	_build_wheels(root, p, lay, mats)
+	_build_lights(root, p, lay, mats)
+	_build_trim(root, p, lay, mats)
+	_build_livery(root, p, lay, mats, livery)
 
-	var mats := _make_materials(paint, profile)
-	var cabin := _cabin_layout(profile)
-	_build_lower_body(root, profile, cabin, mats)
-	_build_greenhouse(root, profile, cabin, mats)
-	_build_lights(root, profile, mats)
-	_build_wheels(root, profile, mats)
-	_build_extras(root, profile, cabin, mats, entry)
-
-	root.set_meta("seat_offsets", _seat_offsets(profile, cabin))
-	root.set_meta("body_length", float(profile["length"]))
-	root.set_meta("body_width", float(profile["width"]))
-	root.set_meta("body_height", float(profile["total_height"]))
+	root.set_meta("seat_offsets", _seat_offsets(p, lay))
+	## Collision extents deliberately describe the body only. Mirrors and roof props
+	## used to leak into the mesh AABB and made cars collide far wider than they look.
+	root.set_meta("body_length", float(p["length"]))
+	root.set_meta("body_width", float(p["width"]))
+	root.set_meta("body_height", float(lay["roof_y"]))
 	root.set_meta("glass_count", _count_named_mats(root, MAT_GLASS))
 	root.set_meta("forward_axis", "-Z")
-	# Match crowd pedestrians — never shrink people to fit a too-small cabin.
-	root.set_meta("passenger_scale", float(profile.get("passenger_scale", 0.92)))
+	root.set_meta("passenger_scale", PASSENGER_SCALE)
 	return root
 
 
-static func profile_seat_offsets(profile_name: String) -> Array:
-	var p := _profile(profile_name)
-	return _seat_offsets(p, _cabin_layout(p))
-
+# --- Profiles ---
 
 static func _profile(name: String) -> Dictionary:
 	match name:
 		"sedan", "taxi", "police":
-			# Modern compact sedan: long hood rake, fastback rear, low greenhouse.
 			return {
-				"style": name,
-				"length": 4.70,
-				"width": 1.84,
-				"lower_h": 0.48,
-				"cabin_h": 0.82,
-				"clearance": 0.14,
-				"hood_z": 1.35,
-				"cabin_z": 1.75,
-				"trunk_z": 1.10,
-				"cabin_inset": 0.10,
-				"ws_rake": 0.95,
-				"rw_rake": 0.85,
-				"roof_drop": 0.16,
-				"hood_nose_ratio": 0.32,
-				"modern": true,
-				"wheel_r": 0.34,
-				"wheel_w": 0.24,
-				"wheelbase": 2.75,
-				"bumper": 0.13,
-				"passenger_scale": 0.92,
-				"total_height": 0.14 + 0.48 + 0.82,
+				"family": "sedan",
+				"length": 4.40,
+				"width": 1.94,
+				"clearance": 0.15,
+				"wheel_r": 0.35,
+				"wheel_w": 0.25,
+				"wheelbase": 2.70,
+				"floor_y": 0.24,
+				"belt_y": 0.94,
+				"hood_len": 1.28,
+				"cabin_len": 1.86,
+				"ws_rake": 0.44,
+				"rw_rake": 0.38,
+				"roof_taper": 0.86,
+				"roof_drop": 0.0,
+				"nose_drop": 0.24,
+				"nose_crease": 0.26,
+				"rear_deck": DECK_TRUNK,
+				"deck_drop": 0.02,
+				"tail_drop": 0.14,
+				"rear_glass": true,
+				"seat_columns": 2,
 			}
 		"sedan_sports", "hatchback_sports":
 			return {
-				"style": "hatch",
-				"length": 4.35,
-				"width": 1.82,
-				"lower_h": 0.44,
-				"cabin_h": 0.78,
-				"clearance": 0.12,
-				"hood_z": 1.25,
-				"cabin_z": 1.95,
-				"trunk_z": 0.65,
-				"cabin_inset": 0.08,
-				"ws_rake": 1.10,
-				"rw_rake": 1.00,
-				"roof_drop": 0.22,
-				"hood_nose_ratio": 0.28,
-				"modern": true,
-				"wheel_r": 0.34,
-				"wheel_w": 0.26,
-				"wheelbase": 2.55,
-				"bumper": 0.11,
+				"family": "hatch",
+				"length": 4.14,
+				"width": 1.90,
+				"clearance": 0.13,
+				"wheel_r": 0.35,
+				"wheel_w": 0.27,
+				"wheelbase": 2.58,
+				"floor_y": 0.22,
+				"belt_y": 0.90,
+				"hood_len": 1.14,
+				"cabin_len": 1.94,
+				"ws_rake": 0.52,
+				"rw_rake": 0.62,
+				"roof_taper": 0.82,
+				"roof_drop": 0.06,
+				"nose_drop": 0.26,
+				"nose_crease": 0.24,
+				"rear_deck": DECK_TRUNK,
+				"deck_drop": 0.04,
+				"tail_drop": 0.16,
+				"rear_glass": true,
 				"sport": true,
-				"passenger_scale": 0.90,
-				"total_height": 0.12 + 0.44 + 0.78,
+				"seat_columns": 2,
 			}
 		"suv", "suv_luxury":
-			# Crossover: still raked, not a brick.
 			return {
-				"style": "suv",
-				"length": 4.80,
-				"width": 1.96,
-				"lower_h": 0.56,
-				"cabin_h": 0.92,
-				"clearance": 0.20,
-				"hood_z": 1.15,
-				"cabin_z": 2.30,
-				"trunk_z": 0.85,
-				"cabin_inset": 0.09,
-				"ws_rake": 0.72,
-				"rw_rake": 0.55,
-				"roof_drop": 0.10,
-				"hood_nose_ratio": 0.40,
-				"modern": true,
-				"wheel_r": 0.38,
-				"wheel_w": 0.26,
-				"wheelbase": 2.85,
-				"bumper": 0.14,
+				"family": "suv",
+				"length": 4.72,
+				"width": 2.00,
+				"clearance": 0.24,
+				"wheel_r": 0.40,
+				"wheel_w": 0.28,
+				"wheelbase": 2.84,
+				"floor_y": 0.36,
+				"belt_y": 1.06,
+				"hood_len": 1.15,
+				"cabin_len": 2.60,
+				"ws_rake": 0.40,
+				"rw_rake": 0.16,
+				"roof_taper": 0.90,
+				"roof_drop": 0.0,
+				"nose_drop": 0.24,
+				"nose_crease": 0.22,
+				"rear_deck": DECK_TRUNK,
+				"deck_drop": 0.02,
+				"tail_drop": 0.12,
+				"rear_glass": true,
 				"rails": true,
-				"passenger_scale": 0.94,
-				"total_height": 0.20 + 0.56 + 0.92,
+				"seat_columns": 2,
 			}
 		"van", "delivery":
 			return {
-				"style": "van",
-				"length": 5.15,
-				"width": 1.98,
-				"lower_h": 0.68,
-				"cabin_h": 1.15,
-				"clearance": 0.20,
-				"hood_z": 0.70,
-				"cabin_z": 3.75,
-				"trunk_z": 0.20,
-				"cabin_inset": 0.06,
-				"ws_rake": 0.32,
-				"rw_rake": 0.08,
+				"family": "van",
+				"length": 5.10,
+				"width": 2.00,
+				"clearance": 0.22,
+				"wheel_r": 0.37,
+				"wheel_w": 0.26,
+				"wheelbase": 3.10,
+				"floor_y": 0.34,
+				"belt_y": 1.06,
+				"hood_len": 0.62,
+				"cabin_len": 1.70,
+				"ws_rake": 0.30,
+				"rw_rake": 0.06,
+				"roof_taper": 0.94,
 				"roof_drop": 0.0,
-				"hood_nose_ratio": 0.78,
-				"modern": false,
-				"wheel_r": 0.36,
-				"wheel_w": 0.25,
-				"wheelbase": 3.15,
-				"bumper": 0.15,
-				"boxy": true,
-				"passenger_scale": 0.95,
-				"total_height": 0.20 + 0.68 + 1.15,
+				"nose_drop": 0.20,
+				"nose_crease": 0.20,
+				"rear_deck": DECK_BOX,
+				"deck_drop": 0.0,
+				"tail_drop": 0.0,
+				## Cargo bulkhead sits behind the cab, so there is nothing to see through.
+				"rear_glass": false,
+				## Cab bench seats three; VehicleDirector asks vans for up to 3 riders.
+				"seat_columns": 3,
 			}
 		"truck":
 			return {
-				"style": "truck",
-				"length": 5.45,
-				"width": 2.08,
-				"lower_h": 0.68,
-				"cabin_h": 1.05,
-				"clearance": 0.22,
-				"hood_z": 1.25,
-				"cabin_z": 1.50,
-				"trunk_z": 2.20,
-				"cabin_inset": 0.08,
-				"ws_rake": 0.48,
-				"rw_rake": 0.14,
+				"family": "truck",
+				"length": 5.20,
+				"width": 2.06,
+				"clearance": 0.26,
+				"wheel_r": 0.42,
+				"wheel_w": 0.30,
+				"wheelbase": 3.20,
+				"floor_y": 0.40,
+				"belt_y": 1.14,
+				"hood_len": 1.30,
+				"cabin_len": 1.50,
+				"ws_rake": 0.34,
+				"rw_rake": 0.20,
+				"roof_taper": 0.90,
 				"roof_drop": 0.0,
-				"hood_nose_ratio": 0.55,
-				"modern": false,
-				"wheel_r": 0.40,
-				"wheel_w": 0.28,
-				"wheelbase": 3.25,
-				"bumper": 0.16,
-				"flatbed": true,
-				"passenger_scale": 0.94,
-				"total_height": 0.22 + 0.68 + 1.05,
+				"nose_drop": 0.12,
+				"nose_crease": 0.25,
+				"rear_deck": DECK_BED,
+				"deck_drop": 0.0,
+				"tail_drop": 0.0,
+				"bed_drop": 0.16,
+				"bed_wall": 0.42,
+				"rear_glass": true,
+				"seat_columns": 2,
 			}
 		_:
-			push_error("ProceduralVehicle: unknown profile '%s', using sedan" % name)
+			push_error("ProceduralVehicle: unknown profile '%s'" % name)
 			return _profile("sedan")
 
 
-## Cabin opening in vehicle space. Nose / windshield toward -Z.
-static func _cabin_layout(p: Dictionary) -> Dictionary:
+## Derived geometry: every downstream builder reads this instead of recomputing.
+static func _layout(p: Dictionary) -> Dictionary:
 	var length: float = p["length"]
-	var lower_h: float = p["lower_h"]
-	var cabin_h: float = p["cabin_h"]
+	var hw: float = float(p["width"]) * 0.5
 	var clearance: float = p["clearance"]
-	var hood_z: float = p["hood_z"]
-	var cabin_z: float = p["cabin_z"]
-	var trunk_z: float = p["trunk_z"]
-	var bumper: float = p["bumper"]
-	var ws_rake: float = p["ws_rake"]
-	var rw_rake: float = p["rw_rake"]
-	var roof_drop: float = float(p.get("roof_drop", 0.0))
-	var width: float = p["width"]
-	var inset: float = p["cabin_inset"]
-
+	var floor_y: float = p["floor_y"]
+	var belt_y: float = p["belt_y"]
 	var z_nose := -length * 0.5
 	var z_tail := length * 0.5
-	# Belt front = rear edge of hood (still toward nose from cabin).
-	var z_belt_f := z_nose + bumper + hood_z
-	var z_belt_r := z_belt_f + cabin_z
-	z_belt_r = minf(z_belt_r, z_tail - bumper - maxf(trunk_z * 0.3, 0.12))
-	var y_belt := clearance + lower_h
-	var y_roof_f := y_belt + cabin_h
-	var y_roof_r := y_roof_f - roof_drop
-	# Roof starts behind windshield rake, ends before rear-window rake.
-	var z_roof_f := z_belt_f + ws_rake
-	var z_roof_r := z_belt_r - rw_rake
-	if z_roof_r <= z_roof_f + 0.35:
-		z_roof_r = z_roof_f + 0.35
-		z_belt_r = z_roof_r + rw_rake
 
-	var cabin_w := width - inset * 2.0
-	var pillar := 0.07
-	return {
+	if floor_y < clearance + 0.04:
+		push_error(
+			"ProceduralVehicle: profile '%s' seat floor %.2f is below its underbody %.2f"
+			% [str(p["family"]), floor_y, clearance]
+		)
+	if belt_y - floor_y < 0.45:
+		push_error(
+			"ProceduralVehicle: profile '%s' door height %.2f leaves no room for a torso"
+			% [str(p["family"]), belt_y - floor_y]
+		)
+
+	var roof_inner := floor_y + CABIN_HEADROOM
+	var roof_y := roof_inner + ROOF_THICK
+	var z_bf := z_nose + float(p["hood_len"])
+	var z_br := z_bf + float(p["cabin_len"])
+	var z_rf := z_bf + float(p["ws_rake"])
+	var z_rr := z_br - float(p["rw_rake"])
+	if z_rr <= z_rf + 0.30:
+		push_error(
+			"ProceduralVehicle: profile '%s' rakes leave a %.2f m roof — that reads as a tent"
+			% [str(p["family"]), z_rr - z_rf]
+		)
+
+	var lay := {
 		"z_nose": z_nose,
 		"z_tail": z_tail,
-		"z_belt_f": z_belt_f,
-		"z_belt_r": z_belt_r,
-		"z_roof_f": z_roof_f,
-		"z_roof_r": z_roof_r,
-		"y_belt": y_belt,
-		"y_roof": y_roof_f,
-		"y_roof_f": y_roof_f,
-		"y_roof_r": y_roof_r,
-		"cabin_w": cabin_w,
-		"pillar": pillar,
-		"glass_inset": 0.016,
-		"clearance": clearance,
-		"passenger_scale": float(p.get("passenger_scale", 0.92)),
+		"z_belt_f": z_bf,
+		"z_belt_r": z_br,
+		"z_roof_f": z_rf,
+		"z_roof_r": z_rr,
+		"hw": hw,
+		"hw_roof": hw * float(p["roof_taper"]),
+		"belt_y": belt_y,
+		"floor_y": floor_y,
+		"roof_inner": roof_inner,
+		"roof_y": roof_y,
+		"roof_inner_r": roof_inner - float(p["roof_drop"]),
+		"arch_y": float(p["wheel_r"]) * 2.0 + ARCH_GAP,
+		"arch_half": float(p["wheel_r"]) + ARCH_OVERHANG,
 	}
+	lay["top_line"] = _top_line(p, lay)
+	lay["plan_line"] = _plan_line(p, lay)
+
+	var wb: float = p["wheelbase"]
+	var axles: Array[float] = [-wb * 0.5, wb * 0.5]
+	for axle: float in axles:
+		var fender := _line_at(lay["top_line"] as Array[Vector2], axle) - float(lay["arch_y"])
+		if fender < FENDER_MIN:
+			push_error(
+				"ProceduralVehicle: profile '%s' leaves only %.2f m of fender over the axle at z=%.2f"
+				% [str(p["family"]), fender, axle]
+			)
+	return lay
 
 
-static func _resolve_paint(entry: Dictionary, profile: Dictionary, rng: RandomNumberGenerator) -> Color:
+## Side-view silhouette of the hull top, nose to tail.
+static func _top_line(p: Dictionary, lay: Dictionary) -> Array[Vector2]:
+	var belt_y: float = lay["belt_y"]
+	var z_nose: float = lay["z_nose"]
+	var z_tail: float = lay["z_tail"]
+	var z_bf: float = lay["z_belt_f"]
+	var z_br: float = lay["z_belt_r"]
+	var nose_drop: float = p["nose_drop"]
+	var line: Array[Vector2] = [
+		Vector2(z_nose, belt_y - nose_drop),
+		## Crease where the fascia turns into the bonnet — the one shape line up front.
+		Vector2(z_nose + float(p["nose_crease"]), belt_y - nose_drop * 0.42),
+		Vector2(z_bf, belt_y),
+		Vector2(z_br, belt_y),
+	]
+	match str(p["rear_deck"]):
+		DECK_TRUNK:
+			line.append(Vector2(z_tail - 0.36, belt_y - float(p["deck_drop"])))
+			line.append(Vector2(z_tail, belt_y - float(p["tail_drop"])))
+		DECK_BOX:
+			## Cargo box rises to roof height immediately behind the cab.
+			line.append(Vector2(z_br + 0.10, float(lay["roof_y"])))
+			line.append(Vector2(z_tail, float(lay["roof_y"])))
+		DECK_BED:
+			var bed_y := belt_y - float(p["bed_drop"])
+			line.append(Vector2(z_br + 0.10, bed_y))
+			line.append(Vector2(z_tail, bed_y))
+		_:
+			push_error("ProceduralVehicle: unknown rear_deck '%s'" % str(p["rear_deck"]))
+	return line
+
+
+## Plan-view half width. Pinched at both ends so the body is not a rectangle.
+static func _plan_line(p: Dictionary, lay: Dictionary) -> Array[Vector2]:
+	var hw: float = lay["hw"]
+	var z_nose: float = lay["z_nose"]
+	var z_tail: float = lay["z_tail"]
+	return [
+		Vector2(z_nose, hw * 0.88),
+		Vector2(z_nose + 0.55, hw),
+		Vector2(z_tail - 0.55, hw),
+		Vector2(z_tail, hw * 0.91),
+	]
+
+
+# --- Paint ---
+
+## Curated palette. Random HSV produced muddy pinks and browns that read as bugs;
+## neutrals repeat so traffic skews grey/white the way real traffic does.
+static func _palette() -> PackedColorArray:
+	return PackedColorArray([
+		Color(0.88, 0.89, 0.91),
+		Color(0.88, 0.89, 0.91),
+		Color(0.60, 0.62, 0.66),
+		Color(0.60, 0.62, 0.66),
+		Color(0.22, 0.23, 0.26),
+		Color(0.13, 0.14, 0.16),
+		Color(0.66, 0.15, 0.13),
+		Color(0.14, 0.26, 0.55),
+		Color(0.10, 0.42, 0.44),
+		Color(0.16, 0.36, 0.23),
+		Color(0.84, 0.44, 0.13),
+		Color(0.80, 0.66, 0.20),
+		Color(0.86, 0.83, 0.72),
+		Color(0.42, 0.58, 0.72),
+		Color(0.38, 0.13, 0.19),
+		Color(0.45, 0.46, 0.28),
+	])
+
+
+static func _sport_palette() -> PackedColorArray:
+	return PackedColorArray([
+		Color(0.78, 0.13, 0.11),
+		Color(0.90, 0.48, 0.06),
+		Color(0.88, 0.76, 0.10),
+		Color(0.10, 0.22, 0.60),
+		Color(0.08, 0.48, 0.52),
+		Color(0.10, 0.11, 0.13),
+		Color(0.92, 0.93, 0.95),
+	])
+
+
+static func _resolve_paint(entry: Dictionary, p: Dictionary, rng: RandomNumberGenerator) -> Color:
 	var id := str(entry.get("id", ""))
 	if id == "taxi":
-		return Color(0.92, 0.78, 0.12)
+		return Color(0.93, 0.74, 0.10)
 	if id == "police":
-		return Color(0.92, 0.93, 0.95)
+		return Color(0.91, 0.92, 0.94)
 	if entry.has("paint") and entry["paint"] != null:
 		var pv: Variant = entry["paint"]
 		if typeof(pv) == TYPE_ARRAY and (pv as Array).size() >= 3:
 			var a: Array = pv
 			return Color(float(a[0]), float(a[1]), float(a[2]))
-	var hue := rng.randf()
-	if hue > 0.28 and hue < 0.42:
-		hue = rng.randf()
-	var sat := rng.randf_range(0.42, 0.78)
-	var val := rng.randf_range(0.48, 0.92)
-	if bool(profile.get("sport", false)):
-		sat = rng.randf_range(0.55, 0.9)
-		val = rng.randf_range(0.4, 0.85)
-	return Color.from_hsv(hue, sat, val)
+	var pool := _sport_palette() if bool(p.get("sport", false)) else _palette()
+	return pool[rng.randi_range(0, pool.size() - 1)]
 
 
-static func _make_materials(paint: Color, profile: Dictionary) -> Dictionary:
-	var body := _std(MAT_BODY, paint, 0.38, 0.18)
-	var glass := _std(MAT_GLASS, Color(0.35, 0.52, 0.64, 0.32), 0.05, 0.08)
+static func _make_materials(paint: Color, livery: String) -> Dictionary:
+	## Matte-ish paint. The old kits were near-chrome and read as wet plastic.
+	var body := _std(MAT_BODY, paint, 0.52, 0.06)
+	var glass := _std(MAT_GLASS, Color(0.20, 0.28, 0.34, 0.44), 0.08, 0.0)
 	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	## Single-layer greenhouse shell: both faces must draw or the far side vanishes.
 	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var trim := _std(MAT_TRIM, Color(0.10, 0.10, 0.11), 0.6, 0.25)
-	var chrome := _std(MAT_CHROME, Color(0.78, 0.80, 0.84), 0.22, 0.85)
-	var lf := _std(MAT_LIGHT_F, Color(0.95, 0.94, 0.82), 0.15, 0.05)
+	var trim := _std(MAT_TRIM, Color(0.11, 0.11, 0.13), 0.62, 0.05)
+	var lf := _std(MAT_LIGHT_F, Color(0.96, 0.95, 0.84), 0.16, 0.0)
 	lf.emission_enabled = true
-	lf.emission = Color(0.9, 0.88, 0.7)
-	lf.emission_energy_multiplier = 0.7
-	var lr := _std(MAT_LIGHT_R, Color(0.78, 0.10, 0.08), 0.28, 0.05)
+	lf.emission = Color(0.95, 0.92, 0.74)
+	lf.emission_energy_multiplier = 0.55
+	var lr := _std(MAT_LIGHT_R, Color(0.74, 0.10, 0.08), 0.24, 0.0)
 	lr.emission_enabled = true
-	lr.emission = Color(0.75, 0.08, 0.05)
-	lr.emission_energy_multiplier = 0.55
-	var tire := _std(MAT_TIRE, Color(0.07, 0.07, 0.08), 0.9, 0.0)
-	var rim := _std(MAT_RIM, Color(0.70, 0.72, 0.76), 0.3, 0.65)
-	var accent := paint
-	if str(profile.get("style", "")) == "police":
-		accent = Color(0.12, 0.28, 0.72)
-	elif str(profile.get("style", "")) == "taxi":
-		accent = Color(0.14, 0.14, 0.15)
+	lr.emission = Color(0.78, 0.09, 0.06)
+	lr.emission_energy_multiplier = 0.5
+	var tire := _std(MAT_TIRE, Color(0.07, 0.07, 0.08), 0.95, 0.0)
+	var rim := _std(MAT_RIM, Color(0.72, 0.74, 0.78), 0.34, 0.45)
+
+	var accent := Color(0.14, 0.15, 0.17)
+	if livery == "police":
+		accent = Color(0.10, 0.26, 0.72)
+	elif livery == "taxi":
+		accent = Color(0.13, 0.13, 0.15)
+
 	return {
 		MAT_BODY: body,
 		MAT_GLASS: glass,
 		MAT_TRIM: trim,
-		MAT_CHROME: chrome,
 		MAT_LIGHT_F: lf,
 		MAT_LIGHT_R: lr,
 		MAT_TIRE: tire,
 		MAT_RIM: rim,
-		MAT_ACCENT: _std(MAT_ACCENT, accent, 0.42, 0.1),
+		MAT_ACCENT: _std(MAT_ACCENT, accent, 0.5, 0.05),
 	}
 
 
@@ -300,440 +435,387 @@ static func _std(mat_name: String, color: Color, roughness: float, metallic: flo
 	return m
 
 
-static func _build_lower_body(root: Node3D, p: Dictionary, cabin: Dictionary, mats: Dictionary) -> void:
-	## Hollow cabin: solid bulk only under hood/trunk + thin side sills.
-	## A full-length lower box buried passengers (only heads stuck out of the belt).
-	var length: float = p["length"]
-	var width: float = p["width"]
-	var lower_h: float = p["lower_h"]
-	var clearance: float = p["clearance"]
-	var hood_z: float = p["hood_z"]
-	var trunk_z: float = p["trunk_z"]
-	var bumper: float = p["bumper"]
-	var z_nose := -length * 0.5
-	var z_tail := length * 0.5
-	var z_bf: float = cabin["z_belt_f"]
-	var z_br: float = cabin["z_belt_r"]
-	var y0 := clearance
+# --- Hull ---
 
-	# Front bulkhead / nose volume (hood bay) — stops at cabin front.
-	var front_len := maxf(z_bf - (z_nose + bumper), 0.4)
-	_box(
-		root, "FrontBulk",
-		Vector3(width, lower_h, front_len),
-		Vector3(0.0, y0 + lower_h * 0.5, z_nose + bumper + front_len * 0.5),
-		mats[MAT_BODY]
+static func _build_hull(root: Node3D, p: Dictionary, lay: Dictionary, mats: Dictionary) -> void:
+	var stations := _hull_stations(p, lay)
+	if stations.size() < 3:
+		push_error("ProceduralVehicle: hull needs at least 3 stations, got %d" % stations.size())
+		return
+	## The cabin is an open channel: passengers sit down inside the hull, and the
+	## greenhouse caps it. A closed deck here buried everyone below the waist.
+	var hull := _loft_z(
+		root, "Hull", stations, mats[MAT_BODY],
+		Vector2(float(lay["z_belt_f"]), float(lay["z_belt_r"]))
 	)
-
-	# Rear bulk / trunk volume — starts at cabin rear (skip for long vans that are all cabin).
-	var rear_start := z_br
-	var rear_end := z_tail - bumper
-	var rear_len := rear_end - rear_start
-	if rear_len > 0.25 and not bool(p.get("boxy", false)):
-		_box(
-			root, "RearBulk",
-			Vector3(width, lower_h, rear_len),
-			Vector3(0.0, y0 + lower_h * 0.5, rear_start + rear_len * 0.5),
-			mats[MAT_BODY]
-		)
-	elif bool(p.get("boxy", false)) and rear_len > 0.1:
-		# Van: thin rear panel only.
-		_box(
-			root, "RearPanel",
-			Vector3(width, lower_h, minf(rear_len, 0.2)),
-			Vector3(0.0, y0 + lower_h * 0.5, rear_end - 0.1),
-			mats[MAT_BODY]
-		)
-
-	# Side sills + door skins along cabin (thin — leave interior hollow).
-	var cabin_len := maxf(z_br - z_bf, 0.5)
-	var sill_h := lower_h * 0.28
-	var door_h := lower_h * 0.92
-	var sides: Array[float] = [-1.0, 1.0]
-	for side in sides:
-		_box(
-			root, "Sill_%d" % int(side),
-			Vector3(0.08, sill_h, cabin_len * 0.98),
-			Vector3(side * (width * 0.5 - 0.04), y0 + sill_h * 0.5, (z_bf + z_br) * 0.5),
-			mats[MAT_TRIM]
-		)
-		_box(
-			root, "DoorSkin_%d" % int(side),
-			Vector3(0.045, door_h, cabin_len * 0.96),
-			Vector3(side * (width * 0.5 - 0.02), y0 + door_h * 0.5, (z_bf + z_br) * 0.5),
-			mats[MAT_BODY]
-		)
-
-	# Firewall between hood bay and cabin.
-	_box(
-		root, "Firewall",
-		Vector3(width * 0.92, lower_h * 0.95, 0.06),
-		Vector3(0.0, y0 + lower_h * 0.48, z_bf - 0.03),
-		mats[MAT_TRIM]
-	)
-
-	# Hood wedge: aggressive nose drop on modern cars.
-	var hood_rear_h := lower_h * 1.02
-	var nose_ratio: float = float(p.get("hood_nose_ratio", 0.62))
-	var hood_front_h := lower_h * nose_ratio
-	var hood_z0 := z_nose + bumper
-	var hood_z1 := hood_z0 + hood_z
-	_wedge_z(
-		root, "Hood",
-		width * 0.96,
-		hood_z0, hood_front_h,
-		hood_z1, hood_rear_h,
-		y0, mats[MAT_BODY]
-	)
-
-	# Soft nose / front fascia slope above bumper (modern cars).
-	if bool(p.get("modern", false)):
-		_wedge_z(
-			root, "Nose",
-			width * 0.88,
-			z_nose + bumper * 0.2, lower_h * 0.18,
-			hood_z0 + hood_z * 0.15, lower_h * 0.55,
-			y0, mats[MAT_BODY]
-		)
-
-	if not bool(p.get("flatbed", false)) and trunk_z > 0.35:
-		if bool(p.get("modern", false)):
-			var deck_z0 := z_tail - bumper - trunk_z
-			var deck_z1 := z_tail - bumper
-			_wedge_z(
-				root, "Trunk",
-				width * 0.94,
-				deck_z0, lower_h * 0.95,
-				deck_z1, lower_h * 0.45,
-				y0, mats[MAT_BODY]
-			)
-		else:
-			var trunk_h := lower_h * 0.82
-			_box(root, "Trunk", Vector3(width * 0.96, trunk_h, trunk_z * 0.88),
-				Vector3(0.0, y0 + trunk_h * 0.5 + 0.015, z_tail - bumper - trunk_z * 0.5), mats[MAT_BODY])
-
-	# Bumpers with chrome lip
-	_box(root, "BumperFront", Vector3(width * 1.03, lower_h * 0.36, bumper),
-		Vector3(0.0, y0 + lower_h * 0.26, z_nose + bumper * 0.5), mats[MAT_TRIM])
-	_box(root, "BumperFrontLip", Vector3(width * 0.55, 0.04, 0.05),
-		Vector3(0.0, y0 + lower_h * 0.42, z_nose + bumper + 0.01), mats[MAT_CHROME])
-	_box(root, "BumperRear", Vector3(width * 1.03, lower_h * 0.36, bumper),
-		Vector3(0.0, y0 + lower_h * 0.26, z_tail - bumper * 0.5), mats[MAT_TRIM])
-
-	_box(root, "Undertray", Vector3(width * 0.82, 0.035, length * 0.72),
-		Vector3(0.0, clearance * 0.4, 0.0), mats[MAT_TRIM])
-
-	# Wheel-arch lips
-	var wb: float = p["wheel_r"]
-	var wheelbase: float = p["wheelbase"]
-	var z_signs: Array[float] = [-1.0, 1.0]
-	for side in sides:
-		for zs in z_signs:
-			_box(root, "Arch_%d_%d" % [int(side), int(zs)],
-				Vector3(0.07, lower_h * 0.5, wb * 1.7),
-				Vector3(side * (width * 0.5 - 0.03), y0 + lower_h * 0.42, zs * wheelbase * 0.5),
-				mats[MAT_TRIM])
+	## The two big volumes are the only parts that cast: everything else is detail that
+	## would cost shadow draws without changing the silhouette on the road. Double-sided
+	## so the open cabin channel does not punch a hole through the shadow.
+	hull.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 
 
-static func _build_greenhouse(root: Node3D, p: Dictionary, c: Dictionary, mats: Dictionary) -> void:
-	var cabin_w: float = c["cabin_w"]
-	var pillar: float = c["pillar"]
-	var inset: float = c["glass_inset"]
-	var y_belt: float = c["y_belt"]
-	var y_rf: float = c["y_roof_f"]
-	var y_rr: float = c["y_roof_r"]
-	var z_bf: float = c["z_belt_f"]
-	var z_br: float = c["z_belt_r"]
-	var z_rf: float = c["z_roof_f"]
-	var z_rr: float = c["z_roof_r"]
-	var clearance: float = c["clearance"]
-	var roof_h := 0.055
-	var half_w := cabin_w * 0.5
-	var glass_half := half_w - pillar - inset
+static func _hull_stations(p: Dictionary, lay: Dictionary) -> Array[Dictionary]:
+	var top_line: Array[Vector2] = lay["top_line"]
+	var plan_line: Array[Vector2] = lay["plan_line"]
+	var out: Array[Dictionary] = []
+	for z in _station_zs(p, lay):
+		out.append({
+			"z": z,
+			"y0": _hull_bottom(p, lay, z),
+			"y1": _line_at(top_line, z),
+			"hw": _line_at(plan_line, z),
+		})
+	return out
 
-	# Roof panel — supports fastback drop (front roof higher than rear).
-	var hw := cabin_w * 0.49
-	var roof_verts := PackedVector3Array([
-		Vector3(-hw, y_rf - roof_h, z_rf), Vector3(hw, y_rf - roof_h, z_rf),
-		Vector3(hw, y_rf, z_rf), Vector3(-hw, y_rf, z_rf),
-		Vector3(-hw, y_rr - roof_h, z_rr), Vector3(hw, y_rr - roof_h, z_rr),
-		Vector3(hw, y_rr, z_rr), Vector3(-hw, y_rr, z_rr),
-	])
-	var roof_faces := [
-		[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0],
+
+## Station positions: every profile-line corner, both cabin edges, and a fan across
+## each wheel arch so the opening reads as a curve instead of a notch.
+static func _station_zs(p: Dictionary, lay: Dictionary) -> PackedFloat32Array:
+	var z_nose: float = lay["z_nose"]
+	var z_tail: float = lay["z_tail"]
+	var raw := PackedFloat32Array()
+	for v: Vector2 in lay["top_line"] as Array[Vector2]:
+		raw.append(v.x)
+	for v: Vector2 in lay["plan_line"] as Array[Vector2]:
+		raw.append(v.x)
+	raw.append(float(lay["z_belt_f"]))
+	raw.append(float(lay["z_belt_r"]))
+	var arch_half: float = lay["arch_half"]
+	var wb: float = p["wheelbase"]
+	var axles: Array[float] = [-wb * 0.5, wb * 0.5]
+	for axle: float in axles:
+		for i in range(ARCH_STATIONS + 1):
+			var t := float(i) / float(ARCH_STATIONS)
+			raw.append(axle - arch_half + t * arch_half * 2.0)
+
+	var clamped := PackedFloat32Array()
+	for z in raw:
+		clamped.append(clampf(z, z_nose, z_tail))
+	clamped.sort()
+	var out := PackedFloat32Array()
+	for z in clamped:
+		if out.is_empty() or z - out[out.size() - 1] > 0.012:
+			out.append(z)
+	return out
+
+
+## Underbody line: flat at ride height, lifting into a half-ellipse over each axle.
+static func _hull_bottom(p: Dictionary, lay: Dictionary, z: float) -> float:
+	var base: float = p["clearance"]
+	var arch_top: float = lay["arch_y"]
+	var arch_half: float = lay["arch_half"]
+	var wb: float = p["wheelbase"]
+	var axles: Array[float] = [-wb * 0.5, wb * 0.5]
+	var y := base
+	for axle: float in axles:
+		var t := absf(z - axle) / arch_half
+		if t < 1.0:
+			y = maxf(y, base + (arch_top - base) * sqrt(1.0 - t * t))
+	return y
+
+
+# --- Greenhouse ---
+
+static func _build_greenhouse(root: Node3D, p: Dictionary, lay: Dictionary, mats: Dictionary) -> void:
+	var hb: float = lay["hw"]
+	var hr: float = lay["hw_roof"]
+	var y_belt: float = lay["belt_y"]
+	var y_rf: float = lay["roof_inner"]
+	var y_rr: float = lay["roof_inner_r"]
+	var z_bf: float = lay["z_belt_f"]
+	var z_br: float = lay["z_belt_r"]
+	var z_rf: float = lay["z_roof_f"]
+	var z_rr: float = lay["z_roof_r"]
+
+	## Belt corners share the hull's half width, so glass rises straight off the door
+	## skin with no ledge to catch the light. Tumblehome comes from the roof taper.
+	var bfl := Vector3(-hb, y_belt, z_bf)
+	var bfr := Vector3(hb, y_belt, z_bf)
+	var brl := Vector3(-hb, y_belt, z_br)
+	var brr := Vector3(hb, y_belt, z_br)
+	var rfl := Vector3(-hr, y_rf, z_rf)
+	var rfr := Vector3(hr, y_rf, z_rf)
+	var rrl := Vector3(-hr, y_rr, z_rr)
+	var rrr := Vector3(hr, y_rr, z_rr)
+
+	_quad(root, "GlassWindshield", bfl, bfr, rfr, rfl, mats[MAT_GLASS])
+	_quad(root, "GlassSide_-1", bfl, rfl, rrl, brl, mats[MAT_GLASS])
+	_quad(root, "GlassSide_1", bfr, brr, rrr, rfr, mats[MAT_GLASS])
+	var rear_mat: Material = mats[MAT_GLASS] if bool(p["rear_glass"]) else mats[MAT_BODY]
+	var rear_name := "GlassRear" if bool(p["rear_glass"]) else "Bulkhead"
+	_quad(root, rear_name, rrl, rrr, brr, brl, rear_mat)
+
+	## Roof cap as a shallow loft: bevelled edges keep it from reading as a lid.
+	var cap: Array[Dictionary] = [
+		{"z": z_rf, "y0": y_rf, "y1": y_rf + ROOF_THICK, "hw": hr},
+		{"z": z_rf + 0.10, "y0": y_rf, "y1": y_rf + ROOF_THICK, "hw": hr + 0.012},
+		{"z": z_rr - 0.10, "y0": y_rr, "y1": y_rr + ROOF_THICK, "hw": hr + 0.012},
+		{"z": z_rr, "y0": y_rr, "y1": y_rr + ROOF_THICK, "hw": hr},
 	]
-	_mesh_from_faces(root, "Roof", roof_verts, roof_faces, mats[MAT_BODY])
+	var roof := _loft_z(root, "Roof", cap, mats[MAT_BODY], Vector2.ZERO)
+	roof.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 
-	# Belt / sill
-	_box(root, "Belt", Vector3(cabin_w, 0.05, maxf(z_br - z_bf, 0.4)),
-		Vector3(0.0, y_belt + 0.02, (z_bf + z_br) * 0.5), mats[MAT_BODY])
-
-	# A/C pillars follow glass rake to the (possibly dropping) roof line.
-	var sides: Array[float] = [-1.0, 1.0]
-	for side in sides:
-		var x: float = side * (half_w - pillar * 0.45)
-		_pillar_rake(root, "PillarA_%d" % int(side), x, pillar,
-			z_bf, y_belt, z_rf, y_rf - roof_h * 0.15, mats[MAT_BODY])
-		_pillar_rake(root, "PillarC_%d" % int(side), x, pillar,
-			z_br, y_belt, z_rr, y_rr - roof_h * 0.15, mats[MAT_BODY])
-
-	if z_rr - z_rf > 0.75:
-		var z_mid: float = (z_rf + z_rr) * 0.5
-		var y_mid: float = lerpf(y_rf, y_rr, 0.5)
-		for side in sides:
-			var x2: float = side * (half_w - pillar * 0.45)
-			_box(root, "PillarB_%d" % int(side),
-				Vector3(pillar * 0.8, maxf(y_mid - y_belt - roof_h * 0.2, 0.2), pillar),
-				Vector3(x2, (y_belt + y_mid) * 0.5, z_mid), mats[MAT_BODY])
-
-	_box(root, "HeaderFront", Vector3(cabin_w * 0.96, 0.045, 0.055),
-		Vector3(0.0, y_rf - 0.035, z_rf), mats[MAT_BODY])
-	_box(root, "HeaderRear", Vector3(cabin_w * 0.96, 0.045, 0.055),
-		Vector3(0.0, y_rr - 0.035, z_rr), mats[MAT_BODY])
-
-	# Windshield — deep rake into roof front.
-	_glass_quad(
-		root, "GlassWindshield",
-		Vector3(-glass_half, y_belt + inset, z_bf + inset * 0.4),
-		Vector3(glass_half, y_belt + inset, z_bf + inset * 0.4),
-		Vector3(glass_half, y_rf - roof_h - inset, z_rf - inset * 0.2),
-		Vector3(-glass_half, y_rf - roof_h - inset, z_rf - inset * 0.2),
-		mats[MAT_GLASS]
-	)
-	# Rear window follows roof drop.
-	_glass_quad(
-		root, "GlassRear",
-		Vector3(-glass_half, y_belt + inset, z_br - inset * 0.4),
-		Vector3(glass_half, y_belt + inset, z_br - inset * 0.4),
-		Vector3(glass_half, y_rr - roof_h - inset, z_rr + inset * 0.2),
-		Vector3(-glass_half, y_rr - roof_h - inset, z_rr + inset * 0.2),
-		mats[MAT_GLASS]
-	)
-
-	var has_b := z_rr - z_rf > 0.75
-	var z_mid2: float = (z_rf + z_rr) * 0.5
-	var y_mid2: float = lerpf(y_rf, y_rr, 0.5)
-	for side in sides:
-		var x_out: float = side * (half_w - inset)
-		if has_b:
-			_glass_quad(
-				root, "GlassSideFront_%d" % int(side),
-				Vector3(x_out, y_belt + inset * 2.0, z_bf + pillar + inset),
-				Vector3(x_out, y_belt + inset * 2.0, z_mid2 - pillar - inset),
-				Vector3(x_out, y_mid2 - roof_h - inset, z_mid2 - pillar - inset),
-				Vector3(x_out, y_rf - roof_h - inset, z_rf + pillar + inset),
-				mats[MAT_GLASS]
-			)
-			_glass_quad(
-				root, "GlassSideRear_%d" % int(side),
-				Vector3(x_out, y_belt + inset * 2.0, z_mid2 + pillar + inset),
-				Vector3(x_out, y_belt + inset * 2.0, z_br - pillar - inset),
-				Vector3(x_out, y_rr - roof_h - inset, z_rr - pillar - inset),
-				Vector3(x_out, y_mid2 - roof_h - inset, z_mid2 + pillar + inset),
-				mats[MAT_GLASS]
-			)
-		else:
-			_glass_quad(
-				root, "GlassSide_%d" % int(side),
-				Vector3(x_out, y_belt + inset * 2.0, z_bf + pillar + inset),
-				Vector3(x_out, y_belt + inset * 2.0, z_br - pillar - inset),
-				Vector3(x_out, y_rr - roof_h - inset, z_rr - pillar - inset),
-				Vector3(x_out, y_rf - roof_h - inset, z_rf + pillar + inset),
-				mats[MAT_GLASS]
-			)
-
-	# Cabin floor + seats inside the hollow cabin volume.
-	var floor_y: float = clearance + 0.08
-	_box(root, "CabinFloor",
-		Vector3(cabin_w * 0.72, 0.03, maxf(z_br - z_bf, 0.5) * 0.70),
-		Vector3(0.0, floor_y, (z_bf + z_br) * 0.5),
-		mats[MAT_TRIM])
-	var seat_w := cabin_w * 0.28
-	var seat_z := z_bf + (z_br - z_bf) * 0.36
-	# Cushion near real hip height; passenger root stays on the floor.
-	var seat_top := floor_y + 0.38
-	_box(root, "SeatL", Vector3(seat_w, 0.10, 0.42),
-		Vector3(-cabin_w * 0.20, seat_top, seat_z), mats[MAT_TRIM])
-	_box(root, "SeatR", Vector3(seat_w, 0.10, 0.42),
-		Vector3(cabin_w * 0.20, seat_top, seat_z), mats[MAT_TRIM])
-	_box(root, "SeatBackL", Vector3(seat_w * 0.9, 0.45, 0.07),
-		Vector3(-cabin_w * 0.20, seat_top + 0.22, seat_z + 0.18), mats[MAT_TRIM])
-	_box(root, "SeatBackR", Vector3(seat_w * 0.9, 0.45, 0.07),
-		Vector3(cabin_w * 0.20, seat_top + 0.22, seat_z + 0.18), mats[MAT_TRIM])
-	# Dash on the belt / firewall.
-	_box(root, "Dash", Vector3(cabin_w * 0.82, 0.14, 0.20),
-		Vector3(0.0, y_belt + 0.05, z_bf + 0.12), mats[MAT_TRIM])
+	## Pillars along the glass edges. Four corners plus one B-pillar per side is all a
+	## chunky car needs to read as having doors.
+	## Thick enough to belong on a chunky body; thin struts read as wire.
+	var pillar := 0.105
+	_strut(root, "PillarA_-1", bfl, rfl, pillar, mats[MAT_BODY])
+	_strut(root, "PillarA_1", bfr, rfr, pillar, mats[MAT_BODY])
+	_strut(root, "PillarC_-1", brl, rrl, pillar, mats[MAT_BODY])
+	_strut(root, "PillarC_1", brr, rrr, pillar, mats[MAT_BODY])
+	if z_rr - z_rf > 0.55:
+		var z_mid := (z_rf + z_rr) * 0.5
+		var y_mid := (y_rf + y_rr) * 0.5
+		_strut(
+			root, "PillarB_-1",
+			Vector3(-hb, y_belt, z_mid), Vector3(-hr, y_mid, z_mid),
+			pillar * 0.9, mats[MAT_BODY]
+		)
+		_strut(
+			root, "PillarB_1",
+			Vector3(hb, y_belt, z_mid), Vector3(hr, y_mid, z_mid),
+			pillar * 0.9, mats[MAT_BODY]
+		)
 
 
+# --- Interior ---
 
-static func _build_lights(root: Node3D, p: Dictionary, mats: Dictionary) -> void:
-	var length: float = p["length"]
-	var width: float = p["width"]
-	var lower_h: float = p["lower_h"]
-	var clearance: float = p["clearance"]
-	var bumper: float = p["bumper"]
-	var z_nose := -length * 0.5
-	var z_tail := length * 0.5
-	var y := clearance + lower_h * 0.55
-	var housing_d := 0.08
-	var lens_d := 0.035
+## Inward-facing liner for the open cabin channel, plus seats the riders sit on.
+## Without the liner you would see straight through the hull's back-facing skin.
+static func _build_interior(root: Node3D, p: Dictionary, lay: Dictionary, mats: Dictionary) -> void:
+	var hw: float = lay["hw"]
+	var y0: float = lay["floor_y"]
+	var y1: float = lay["belt_y"]
+	var z0: float = lay["z_belt_f"]
+	var z1: float = lay["z_belt_r"]
+	var trim: Material = mats[MAT_TRIM]
 
-	# Headlight housings + lenses (left/right), with chrome surround
-	var light_sides: Array[float] = [-1.0, 1.0]
-	for side in light_sides:
-		var x: float = side * width * 0.33
-		_box(root, "HL_Housing_%d" % int(side),
-			Vector3(width * 0.26, lower_h * 0.34, housing_d),
-			Vector3(x, y, z_nose + bumper + housing_d * 0.45), mats[MAT_TRIM])
-		_box(root, "HL_Chrome_%d" % int(side),
-			Vector3(width * 0.24, lower_h * 0.30, 0.02),
-			Vector3(x, y, z_nose + bumper + housing_d * 0.15), mats[MAT_CHROME])
-		_box(root, "HL_Lens_%d" % int(side),
-			Vector3(width * 0.20, lower_h * 0.24, lens_d),
-			Vector3(x, y, z_nose + bumper + 0.01), mats[MAT_LIGHT_F])
-		# Inner projector circle proxy
-		_cyl(root, "HL_Projector_%d" % int(side), lower_h * 0.08, lens_d * 0.8,
-			Vector3(x, y, z_nose + bumper - 0.005), mats[MAT_LIGHT_F], 16)
+	## Corners of the tub, listed so each quad's normal points into the cabin.
+	_quad(root, "TubFloor",
+		Vector3(-hw, y0, z0), Vector3(hw, y0, z0), Vector3(hw, y0, z1), Vector3(-hw, y0, z1), trim)
+	_quad(root, "TubWall_-1",
+		Vector3(-hw, y0, z0), Vector3(-hw, y0, z1), Vector3(-hw, y1, z1), Vector3(-hw, y1, z0), trim)
+	_quad(root, "TubWall_1",
+		Vector3(hw, y0, z0), Vector3(hw, y1, z0), Vector3(hw, y1, z1), Vector3(hw, y0, z1), trim)
+	_quad(root, "TubFront",
+		Vector3(-hw, y0, z0), Vector3(-hw, y1, z0), Vector3(hw, y1, z0), Vector3(hw, y0, z0), trim)
+	_quad(root, "TubRear",
+		Vector3(-hw, y0, z1), Vector3(hw, y0, z1), Vector3(hw, y1, z1), Vector3(-hw, y1, z1), trim)
 
-		_box(root, "TL_Housing_%d" % int(side),
-			Vector3(width * 0.24, lower_h * 0.30, housing_d),
-			Vector3(x * 1.02, y, z_tail - bumper - housing_d * 0.45), mats[MAT_TRIM])
-		_box(root, "TL_Lens_%d" % int(side),
-			Vector3(width * 0.18, lower_h * 0.22, lens_d),
-			Vector3(x * 1.02, y, z_tail - bumper - 0.01), mats[MAT_LIGHT_R])
+	var seats: Array = _seat_offsets(p, lay)
+	for i in range(seats.size()):
+		var seat: Dictionary = seats[i]
+		var sx := float(seat["x"])
+		var sz := float(seat["z"])
+		## Cushion top sits just under the rig's hips so nobody floats.
+		var cushion_top := y0 + 0.42
+		_box(root, "SeatCushion_%d" % i, Vector3(0.46, 0.10, 0.46),
+			Vector3(sx, cushion_top - 0.05, sz + 0.10), trim)
+		_box(root, "SeatBack_%d" % i, Vector3(0.46, 0.52, 0.09),
+			Vector3(sx, cushion_top + 0.26, sz + 0.40), trim)
 
-	# Center grille with chrome bars
-	_box(root, "GrillFrame", Vector3(width * 0.40, lower_h * 0.28, 0.05),
-		Vector3(0.0, clearance + lower_h * 0.48, z_nose + bumper + 0.04), mats[MAT_TRIM])
-	for i in range(3):
-		var gy: float = clearance + lower_h * 0.38 + float(i) * lower_h * 0.08
-		_box(root, "GrillBar_%d" % i, Vector3(width * 0.34, 0.015, 0.02),
-			Vector3(0.0, gy, z_nose + bumper + 0.06), mats[MAT_CHROME])
+	_box(root, "Dash", Vector3(hw * 1.9, 0.18, 0.24),
+		Vector3(0.0, y1 - 0.11, z0 + 0.15), trim)
+	## Steering wheel on the left: cheap, but it is what sells the cabin at a glance.
+	var wheel := _cyl(root, "SteeringWheel", 0.17, 0.035,
+		Vector3(float((seats[0] as Dictionary)["x"]), y1 - 0.03, z0 + 0.33), trim, 16)
+	wheel.rotation.x = PI * 0.5
 
 
-static func _build_wheels(root: Node3D, p: Dictionary, mats: Dictionary) -> void:
-	var width: float = p["width"]
+static func _seat_offsets(p: Dictionary, lay: Dictionary) -> Array:
+	var z0: float = lay["z_belt_f"]
+	var seat_y: float = lay["floor_y"]
+	## Knees reach ~0.24 m forward of the seat origin; keep them behind the firewall.
+	var seat_z := z0 + 0.55
+	var columns := int(p["seat_columns"])
+	var out: Array = []
+	if columns == 3:
+		var spread: float = float(lay["hw"]) * 0.58
+		out.append({"x": -spread, "y": seat_y, "z": seat_z})
+		out.append({"x": 0.0, "y": seat_y, "z": seat_z})
+		out.append({"x": spread, "y": seat_y, "z": seat_z})
+		return out
+	var half: float = float(lay["hw"]) * 0.38
+	out.append({"x": -half, "y": seat_y, "z": seat_z})
+	out.append({"x": half, "y": seat_y, "z": seat_z})
+	return out
+
+
+# --- Wheels ---
+
+static func _build_wheels(root: Node3D, p: Dictionary, lay: Dictionary, mats: Dictionary) -> void:
 	var wheel_r: float = p["wheel_r"]
 	var wheel_w: float = p["wheel_w"]
 	var wb: float = p["wheelbase"]
-	var y := wheel_r
 	var sides: Array[float] = [-1.0, 1.0]
-	var z_signs: Array[float] = [-1.0, 1.0]
-	for side in sides:
-		for zs in z_signs:
-			var wx: float = side * (width * 0.5 - wheel_w * 0.4)
-			var wz: float = zs * wb * 0.5
+	var ends: Array[float] = [-1.0, 1.0]
+	for side: float in sides:
+		for zs: float in ends:
+			var wz := zs * wb * 0.5
+			## Sit the tread a hair outside the flank so wheels read as planted.
+			var hw_here := _line_at(lay["plan_line"] as Array[Vector2], wz)
+			var wx := side * (hw_here + 0.012 - wheel_w * 0.5)
+			var at := Vector3(wx, wheel_r, wz)
 			var tire := _cyl(root, "Tire_%d_%d" % [int(side), int(zs)],
-				wheel_r, wheel_w, Vector3(wx, y, wz), mats[MAT_TIRE], WHEEL_SEGMENTS)
+				wheel_r, wheel_w, at, mats[MAT_TIRE], WHEEL_SEGMENTS)
 			tire.rotation.z = PI * 0.5
-			# Rim barrel
+			## One proud disc instead of a hub plus five spokes: same read, 5 fewer nodes.
 			var rim := _cyl(root, "Rim_%d_%d" % [int(side), int(zs)],
-				wheel_r * 0.62, wheel_w * 0.55, Vector3(wx, y, wz), mats[MAT_RIM], WHEEL_SEGMENTS)
+				wheel_r * 0.58, wheel_w * 1.06, at, mats[MAT_RIM], WHEEL_SEGMENTS)
 			rim.rotation.z = PI * 0.5
-			# Hub
 			var hub := _cyl(root, "Hub_%d_%d" % [int(side), int(zs)],
-				wheel_r * 0.18, wheel_w * 0.35, Vector3(wx, y, wz), mats[MAT_CHROME], 16)
+				wheel_r * 0.22, wheel_w * 1.12, at, mats[MAT_TRIM], 12)
 			hub.rotation.z = PI * 0.5
-			# Five spokes in the wheel plane
-			for s_i in range(5):
-				var ang: float = float(s_i) * TAU / 5.0
-				var spoke := _box(root, "Spoke_%d_%d_%d" % [int(side), int(zs), s_i],
-					Vector3(wheel_w * 0.14, wheel_r * 0.40, wheel_r * 0.07),
-					Vector3(
-						wx,
-						y + cos(ang) * wheel_r * 0.30,
-						wz + sin(ang) * wheel_r * 0.30
-					),
-					mats[MAT_RIM]
-				)
-				spoke.rotation.x = ang
 
 
-static func _build_extras(
-	root: Node3D, p: Dictionary, c: Dictionary, mats: Dictionary, entry: Dictionary
-) -> void:
-	var id := str(entry.get("id", ""))
-	var width: float = p["width"]
-	var length: float = p["length"]
-	var lower_h: float = p["lower_h"]
-	var clearance: float = p["clearance"]
-	var bumper: float = p["bumper"]
-	var y_roof: float = c["y_roof"]
-	var z_bf: float = c["z_belt_f"]
-	var z_br: float = c["z_belt_r"]
-	var z_rf: float = c["z_roof_f"]
-	var z_rr: float = c["z_roof_r"]
-	var cabin_w: float = c["cabin_w"]
-	var z_nose: float = c["z_nose"]
-	var z_tail: float = c["z_tail"]
+# --- Lights, bumpers, trim ---
 
-	# Mirrors near A-pillar
+static func _build_lights(root: Node3D, p: Dictionary, lay: Dictionary, mats: Dictionary) -> void:
+	var z_nose: float = lay["z_nose"]
+	var z_tail: float = lay["z_tail"]
+	var top_line: Array[Vector2] = lay["top_line"]
+	var plan_line: Array[Vector2] = lay["plan_line"]
+	var hw_nose := _line_at(plan_line, z_nose)
+	var hw_tail := _line_at(plan_line, z_tail)
+	## Ride the actual nose and tail caps, so lights land on the panel at any profile.
+	var nose_y := lerpf(_hull_bottom(p, lay, z_nose), _line_at(top_line, z_nose), 0.66)
+	var tail_y := lerpf(_hull_bottom(p, lay, z_tail), _line_at(top_line, z_tail), 0.62)
+
+	var lens_d := 0.12
 	var sides: Array[float] = [-1.0, 1.0]
-	for side in sides:
-		_box(root, "MirrorArm_%d" % int(side), Vector3(0.08, 0.04, 0.12),
-			Vector3(side * (width * 0.5 + 0.02), c["y_belt"] + (y_roof - c["y_belt"]) * 0.45, z_bf + 0.05),
-			mats[MAT_TRIM])
-		_box(root, "MirrorGlass_%d" % int(side), Vector3(0.16, 0.10, 0.04),
-			Vector3(side * (width * 0.5 + 0.12), c["y_belt"] + (y_roof - c["y_belt"]) * 0.45, z_bf + 0.02),
-			mats[MAT_CHROME])
+	for side: float in sides:
+		_box(root, "Headlight_%d" % int(side),
+			Vector3(hw_nose * 0.38, 0.14, lens_d),
+			Vector3(side * hw_nose * 0.57, nose_y, z_nose - PROUD + lens_d * 0.5),
+			mats[MAT_LIGHT_F])
+		_box(root, "Taillight_%d" % int(side),
+			Vector3(hw_tail * 0.36, 0.15, lens_d),
+			Vector3(side * hw_tail * 0.58, tail_y, z_tail + PROUD - lens_d * 0.5),
+			mats[MAT_LIGHT_R])
+
+	var grille_d := 0.10
+	_box(root, "Grille", Vector3(hw_nose * 0.66, 0.15, grille_d),
+		Vector3(0.0, nose_y, z_nose - PROUD + grille_d * 0.5), mats[MAT_TRIM])
+
+
+static func _build_trim(root: Node3D, p: Dictionary, lay: Dictionary, mats: Dictionary) -> void:
+	var z_nose: float = lay["z_nose"]
+	var z_tail: float = lay["z_tail"]
+	var z_bf: float = lay["z_belt_f"]
+	var z_br: float = lay["z_belt_r"]
+	var hw: float = lay["hw"]
+	var plan_line: Array[Vector2] = lay["plan_line"]
+	var clearance: float = p["clearance"]
+	var arch_y: float = lay["arch_y"]
+	var trim: Material = mats[MAT_TRIM]
+
+	## Bumpers stay inside the body width. The old ones were 3% wider and jutted out at
+	## every corner like bolted-on planks.
+	var bumper_h := (arch_y - clearance) * 0.72
+	var bumper_d := 0.13
+	_box(root, "BumperFront",
+		Vector3(_line_at(plan_line, z_nose) * 2.0, bumper_h, bumper_d),
+		Vector3(0.0, clearance + bumper_h * 0.5, z_nose - PROUD + bumper_d * 0.5), trim)
+	_box(root, "BumperRear",
+		Vector3(_line_at(plan_line, z_tail) * 2.0, bumper_h, bumper_d),
+		Vector3(0.0, clearance + bumper_h * 0.5, z_tail + PROUD - bumper_d * 0.5), trim)
+
+	## Rocker runs arch to arch like a real sill; clipping it to the cabin left a dark
+	## line that stopped halfway along the flank.
+	var rocker_z0 := -float(p["wheelbase"]) * 0.5 + float(lay["arch_half"])
+	var rocker_z1 := float(p["wheelbase"]) * 0.5 - float(lay["arch_half"])
+	var cabin_len := z_br - z_bf
+	var sides: Array[float] = [-1.0, 1.0]
+	for side: float in sides:
+		_box(root, "Rocker_%d" % int(side), Vector3(0.03, 0.075, rocker_z1 - rocker_z0),
+			Vector3(side * (hw + 0.012), clearance + 0.055, (rocker_z0 + rocker_z1) * 0.5), trim)
+		## Door shut lines, so the side is not one blank panel.
+		_box(root, "DoorSeam_%d" % int(side), Vector3(0.02, float(lay["belt_y"]) - arch_y, 0.022),
+			Vector3(side * (hw + 0.008), (arch_y + float(lay["belt_y"])) * 0.5, (z_bf + z_br) * 0.5),
+			trim)
+		## Mirror overlaps the greenhouse base so it is attached, not hovering.
+		_box(root, "Mirror_%d" % int(side), Vector3(0.17, 0.075, 0.10),
+			Vector3(side * (hw + 0.068), float(lay["belt_y"]) + 0.06, z_bf + 0.17), trim)
+
+
+# --- Per-livery and per-family props ---
+
+static func _build_livery(
+	root: Node3D, p: Dictionary, lay: Dictionary, mats: Dictionary, livery: String
+) -> void:
+	var hw: float = lay["hw"]
+	var hr: float = lay["hw_roof"]
+	var roof_y: float = lay["roof_y"]
+	var z_rf: float = lay["z_roof_f"]
+	var z_rr: float = lay["z_roof_r"]
+	var z_br: float = lay["z_belt_r"]
+	var z_tail: float = lay["z_tail"]
+	var sides: Array[float] = [-1.0, 1.0]
 
 	if bool(p.get("rails", false)):
-		for side in sides:
-			_box(root, "Rail_%d" % int(side), Vector3(0.045, 0.035, (z_br - z_bf) * 0.7),
-				Vector3(side * cabin_w * 0.28, y_roof + 0.025, (z_rf + z_br) * 0.5), mats[MAT_TRIM])
-
-	if id == "taxi":
-		_box(root, "TaxiSign", Vector3(0.5, 0.16, 0.24),
-			Vector3(0.0, y_roof + 0.12, (z_rf + z_br) * 0.4), mats[MAT_ACCENT])
-
-	if id == "police":
-		_box(root, "LightBar", Vector3(width * 0.55, 0.11, 0.3),
-			Vector3(0.0, y_roof + 0.09, (z_rf + z_br) * 0.42), mats[MAT_ACCENT])
-		for side in sides:
-			_box(root, "Stripe_%d" % int(side), Vector3(0.03, lower_h * 0.32, length * 0.42),
-				Vector3(side * (width * 0.5 + 0.01), clearance + lower_h * 0.55, 0.0), mats[MAT_ACCENT])
-
-	if bool(p.get("flatbed", false)):
-		var bed_len := z_tail - bumper - z_br
-		_box(root, "Flatbed", Vector3(width * 0.95, 0.08, bed_len),
-			Vector3(0.0, clearance + lower_h + 0.04, z_br + bed_len * 0.5), mats[MAT_TRIM])
-		for side in sides:
-			_box(root, "BedRail_%d" % int(side), Vector3(0.05, 0.38, bed_len * 0.95),
-				Vector3(side * width * 0.45, clearance + lower_h + 0.26, z_br + bed_len * 0.5), mats[MAT_TRIM])
+		for side: float in sides:
+			_box(root, "Rail_%d" % int(side), Vector3(0.06, 0.045, (z_rr - z_rf) * 0.82),
+				Vector3(side * hr * 0.74, roof_y + 0.022, (z_rf + z_rr) * 0.5), mats[MAT_TRIM])
 
 	if bool(p.get("sport", false)):
-		_box(root, "Spoiler", Vector3(width * 0.72, 0.045, 0.2),
-			Vector3(0.0, y_roof + 0.02, z_br - 0.05), mats[MAT_BODY])
-		_box(root, "SpoilerStalkL", Vector3(0.04, 0.12, 0.04),
-			Vector3(-width * 0.25, y_roof - 0.02, z_br), mats[MAT_TRIM])
-		_box(root, "SpoilerStalkR", Vector3(0.04, 0.12, 0.04),
-			Vector3(width * 0.25, y_roof - 0.02, z_br), mats[MAT_TRIM])
+		_box(root, "Spoiler", Vector3(hr * 1.7, 0.05, 0.20),
+			Vector3(0.0, float(lay["roof_inner_r"]) + ROOF_THICK + 0.02, z_rr + 0.06),
+			mats[MAT_BODY])
 
-	# Antenna on roof
-	_box(root, "Antenna", Vector3(0.015, 0.32, 0.015),
-		Vector3(cabin_w * 0.15, y_roof + 0.16, z_rr - 0.1), mats[MAT_TRIM])
+	match str(p["rear_deck"]):
+		DECK_BED:
+			var bed_y := float(lay["belt_y"]) - float(p["bed_drop"])
+			var wall: float = p["bed_wall"]
+			var bed_z0 := z_br + 0.10
+			var bed_len := z_tail - bed_z0
+			for side: float in sides:
+				_box(root, "BedRail_%d" % int(side), Vector3(0.09, wall, bed_len),
+					Vector3(side * (hw - 0.045), bed_y + wall * 0.5, bed_z0 + bed_len * 0.5),
+					mats[MAT_BODY])
+			_box(root, "Tailgate", Vector3(hw * 1.9, wall, 0.09),
+				Vector3(0.0, bed_y + wall * 0.5, z_tail - 0.045), mats[MAT_BODY])
+		DECK_BOX:
+			## Cargo doors: two seams on the tail panel keep the box from being a slab.
+			var seam_d := 0.024
+			for side: float in sides:
+				_box(root, "CargoSeam_%d" % int(side),
+					Vector3(seam_d, roof_y - float(lay["arch_y"]) - 0.14, seam_d),
+					Vector3(
+						side * 0.02,
+						(float(lay["arch_y"]) + roof_y) * 0.5,
+						z_tail + PROUD - seam_d * 0.5
+					),
+					mats[MAT_TRIM])
+			for side: float in sides:
+				_box(root, "CargoBand_%d" % int(side), Vector3(0.02, 0.09, (z_tail - z_br) * 0.9),
+					Vector3(side * (hw + 0.008), float(lay["belt_y"]) + 0.10,
+						(z_br + z_tail) * 0.5),
+					mats[MAT_TRIM])
 
-
-static func _seat_offsets(p: Dictionary, c: Dictionary) -> Array:
-	var width: float = p["width"]
-	var clearance: float = float(c.get("clearance", p["clearance"]))
-	var z_bf: float = c["z_belt_f"]
-	var z_br: float = c["z_belt_r"]
-	# Full-size humans: feet on cabin floor. Cabin is hollow so bodies fit under the roof.
-	var seat_y := clearance + 0.08
-	var seat_z := z_bf + (z_br - z_bf) * 0.36
-	var half_w := width * 0.18
-	var seats: Array = [
-		{"x": -half_w, "y": seat_y, "z": seat_z},
-		{"x": half_w, "y": seat_y, "z": seat_z},
-	]
-	if str(p.get("style", "")) == "van" or float(p["cabin_z"]) > 2.8:
-		seats.append({"x": -half_w, "y": seat_y, "z": seat_z + 0.9})
-		seats.append({"x": half_w, "y": seat_y, "z": seat_z + 0.9})
-	return seats
+	if livery == "taxi":
+		_box(root, "TaxiSign", Vector3(0.56, 0.15, 0.26),
+			Vector3(0.0, roof_y + 0.075, z_rf + 0.34), mats[MAT_ACCENT])
+		for side: float in sides:
+			_box(root, "TaxiStripe_%d" % int(side), Vector3(0.02, 0.13, (z_rr - z_rf) + 0.7),
+				Vector3(side * (hw + 0.01), float(lay["belt_y"]) - 0.22, (z_rf + z_rr) * 0.5),
+				mats[MAT_ACCENT])
+	elif livery == "police":
+		## Split bar: accent blue one side, tail red the other.
+		_box(root, "LightBar_-1", Vector3(hr * 0.7, 0.10, 0.22),
+			Vector3(-hr * 0.4, roof_y + 0.05, z_rf + 0.30), mats[MAT_ACCENT])
+		_box(root, "LightBar_1", Vector3(hr * 0.7, 0.10, 0.22),
+			Vector3(hr * 0.4, roof_y + 0.05, z_rf + 0.30), mats[MAT_LIGHT_R])
+		for side: float in sides:
+			_box(root, "PoliceStripe_%d" % int(side),
+				Vector3(0.02, 0.18, float(p["length"]) * 0.46),
+				Vector3(side * (hw + 0.01), float(lay["belt_y"]) - 0.24, 0.0),
+				mats[MAT_ACCENT])
 
 
 # --- Mesh helpers ---
+#
+# Face winding convention for _quad / _mesh_from_faces: order the four corners so that
+# (c2 - c0).cross(c1 - c0) points along the outward normal.
 
 static func _box(
 	parent: Node3D, node_name: String, size: Vector3, pos: Vector3, mat: Material
@@ -774,74 +856,89 @@ static func _cyl(
 	return mi
 
 
-## Wedge along Z: height at z0 / z1, bottom at y_bottom.
-static func _wedge_z(
+## Box spanning two points, used for pillars.
+static func _strut(
+	parent: Node3D, node_name: String, a: Vector3, b: Vector3, thickness: float, mat: Material
+) -> MeshInstance3D:
+	var span := b - a
+	var length := span.length()
+	if length < 0.001:
+		push_error("ProceduralVehicle: degenerate strut '%s'" % node_name)
+		length = 0.001
+		span = Vector3.UP * length
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(thickness, length, thickness)
+	mi.mesh = mesh
+	mi.position = (a + b) * 0.5
+	mi.quaternion = Quaternion(Vector3.UP, span / length)
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	return mi
+
+
+## Lofted volume along Z. Stations carry z, underside y0, top y1 and half width; the
+## surface between them is quads, so a rising y0 cuts a wheel arch into the flanks.
+## `open_top` (x < y) drops the top face over that Z range, leaving the cabin channel.
+static func _loft_z(
 	parent: Node3D,
 	node_name: String,
-	width: float,
-	z0: float,
-	h0: float,
-	z1: float,
-	h1: float,
-	y_bottom: float,
-	mat: Material
+	stations: Array[Dictionary],
+	mat: Material,
+	open_top: Vector2
 ) -> MeshInstance3D:
-	var hw := width * 0.5
-	var y00 := y_bottom
-	var y01 := y_bottom + h0
-	var y10 := y_bottom
-	var y11 := y_bottom + h1
-	# 8 corners of a tapered box
-	var verts := PackedVector3Array([
-		Vector3(-hw, y00, z0), Vector3(hw, y00, z0), Vector3(hw, y01, z0), Vector3(-hw, y01, z0),
-		Vector3(-hw, y10, z1), Vector3(hw, y10, z1), Vector3(hw, y11, z1), Vector3(-hw, y11, z1),
-	])
-	var faces := [
-		[0, 1, 2, 3], # z0
-		[5, 4, 7, 6], # z1
-		[4, 0, 3, 7], # -X
-		[1, 5, 6, 2], # +X
-		[3, 2, 6, 7], # top
-		[4, 5, 1, 0], # bottom
-	]
-	return _mesh_from_faces(parent, node_name, verts, faces, mat)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_opening := open_top.x < open_top.y
+
+	for i in range(stations.size() - 1):
+		var a := stations[i]
+		var b := stations[i + 1]
+		var za := float(a["z"])
+		var zb := float(b["z"])
+		var a0 := float(a["y0"])
+		var a1 := float(a["y1"])
+		var b0 := float(b["y0"])
+		var b1 := float(b["y1"])
+		var ha := float(a["hw"])
+		var hb := float(b["hw"])
+
+		var mid := (za + zb) * 0.5
+		if not (has_opening and mid > open_top.x and mid < open_top.y):
+			_add_quad(st,
+				Vector3(-ha, a1, za), Vector3(ha, a1, za), Vector3(hb, b1, zb), Vector3(-hb, b1, zb))
+		_add_quad(st,
+			Vector3(-ha, a0, za), Vector3(-hb, b0, zb), Vector3(hb, b0, zb), Vector3(ha, a0, za))
+		_add_quad(st,
+			Vector3(-ha, a0, za), Vector3(-ha, a1, za), Vector3(-hb, b1, zb), Vector3(-hb, b0, zb))
+		_add_quad(st,
+			Vector3(ha, a0, za), Vector3(hb, b0, zb), Vector3(hb, b1, zb), Vector3(ha, a1, za))
+
+	var first := stations[0]
+	var fz := float(first["z"])
+	var fh := float(first["hw"])
+	_add_quad(st,
+		Vector3(-fh, float(first["y0"]), fz), Vector3(fh, float(first["y0"]), fz),
+		Vector3(fh, float(first["y1"]), fz), Vector3(-fh, float(first["y1"]), fz))
+	var last := stations[stations.size() - 1]
+	var lz := float(last["z"])
+	var lh := float(last["hw"])
+	_add_quad(st,
+		Vector3(-lh, float(last["y1"]), lz), Vector3(lh, float(last["y1"]), lz),
+		Vector3(lh, float(last["y0"]), lz), Vector3(-lh, float(last["y0"]), lz))
+
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	return mi
 
 
-static func _pillar_rake(
-	parent: Node3D,
-	node_name: String,
-	x: float,
-	thickness: float,
-	z_bot: float,
-	y_bot: float,
-	z_top: float,
-	y_top: float,
-	mat: Material
-) -> MeshInstance3D:
-	var ht := thickness * 0.5
-	var zt := thickness * 0.45
-	var verts := PackedVector3Array([
-		Vector3(x - ht, y_bot, z_bot - zt),
-		Vector3(x + ht, y_bot, z_bot - zt),
-		Vector3(x + ht, y_bot, z_bot + zt),
-		Vector3(x - ht, y_bot, z_bot + zt),
-		Vector3(x - ht, y_top, z_top - zt),
-		Vector3(x + ht, y_top, z_top - zt),
-		Vector3(x + ht, y_top, z_top + zt),
-		Vector3(x - ht, y_top, z_top + zt),
-	])
-	var faces := [
-		[0, 1, 2, 3],
-		[5, 4, 7, 6],
-		[4, 0, 3, 7],
-		[1, 5, 6, 2],
-		[3, 2, 6, 7],
-		[4, 5, 1, 0],
-	]
-	return _mesh_from_faces(parent, node_name, verts, faces, mat)
-
-
-static func _glass_quad(
+static func _quad(
 	parent: Node3D,
 	node_name: String,
 	a: Vector3,
@@ -850,43 +947,9 @@ static func _glass_quad(
 	d: Vector3,
 	mat: Material
 ) -> MeshInstance3D:
-	# Two-sided quad (front + back) so alpha glass reads from both sides.
-	var verts := PackedVector3Array([a, b, c, d])
-	var faces := [[0, 1, 2, 3], [0, 3, 2, 1]]
-	return _mesh_from_faces(parent, node_name, verts, faces, mat)
-
-
-static func _mesh_from_faces(
-	parent: Node3D,
-	node_name: String,
-	corners: PackedVector3Array,
-	faces: Array,
-	mat: Material
-) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for face: Variant in faces:
-		var idx: Array = face
-		var i0: int = idx[0]
-		var i1: int = idx[1]
-		var i2: int = idx[2]
-		var i3: int = idx[3]
-		var n := (corners[i2] - corners[i0]).cross(corners[i1] - corners[i0]).normalized()
-		if n.length_squared() < 0.0001:
-			n = Vector3.UP
-		st.set_normal(n)
-		st.add_vertex(corners[i0])
-		st.set_normal(n)
-		st.add_vertex(corners[i1])
-		st.set_normal(n)
-		st.add_vertex(corners[i2])
-		st.set_normal(n)
-		st.add_vertex(corners[i0])
-		st.set_normal(n)
-		st.add_vertex(corners[i2])
-		st.set_normal(n)
-		st.add_vertex(corners[i3])
-	st.generate_normals()
+	_add_quad(st, a, b, c, d)
 	var mi := MeshInstance3D.new()
 	mi.name = node_name
 	mi.mesh = st.commit()
@@ -894,6 +957,38 @@ static func _mesh_from_faces(
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 	return mi
+
+
+## Flat-shaded: one normal for the whole quad, written per vertex. SurfaceTool's
+## generate_normals() welds coincident vertices and averages, which rounded every crease
+## off and turned the nose and tail into smooth loaves instead of faceted panels.
+static func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	var cross := (c - a).cross(b - a)
+	if cross.length_squared() < 1.0e-12:
+		push_error("ProceduralVehicle: degenerate quad at %s" % a)
+		return
+	var n := cross.normalized()
+	for v: Vector3 in [a, b, c, a, c, d]:
+		st.set_normal(n)
+		st.add_vertex(v)
+
+
+## Piecewise-linear lookup, clamped past both ends.
+static func _line_at(line: Array[Vector2], z: float) -> float:
+	if line.is_empty():
+		push_error("ProceduralVehicle: empty profile line")
+		return 0.0
+	if z <= line[0].x:
+		return line[0].y
+	for i in range(1, line.size()):
+		var a := line[i - 1]
+		var b := line[i]
+		if z <= b.x:
+			var span := b.x - a.x
+			if span <= 0.0001:
+				return b.y
+			return lerpf(a.y, b.y, (z - a.x) / span)
+	return line[line.size() - 1].y
 
 
 static func _count_named_mats(root: Node3D, mat_name: String) -> int:

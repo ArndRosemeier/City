@@ -26,6 +26,7 @@ const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
 const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
 const BuildPlacerScript := preload("res://scripts/city/build_placer.gd")
 const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
+const GemLightDirectorScript := preload("res://scripts/city/gem_light_director.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -59,6 +60,7 @@ var _action_bar: Node
 var _energy_hud: Node
 var _debris_root: Node3D
 var _cascade: Node
+var _gem_lights: Node
 var _infection: Node
 var _tendril_hud: Node
 var _undead_hud: Node
@@ -78,12 +80,17 @@ var _meteor_spawn_interval_sec: float = 120.0
 var _undead_invasion_enabled: bool = false
 var _undead: Node
 var _player_score: int = 0
+## Collected gem tallies keyed by VoxelMaterial.GEM_* id. Display comes later.
+var _gem_counts: Dictionary = {}
 var _game_over: bool = false
 var _radar_cooldown_left: float = 0.0
 var _radar_reveal_left: float = 0.0
+var _gem_pickup_accum: float = 0.0
 const RADAR_COOLDOWN_SEC := 30.0
 ## How long all undead stay painted on the minimap after U.
 const RADAR_REVEAL_SEC := 12.0
+const GEM_PICKUP_INTERVAL_SEC := 0.12
+const GEM_PICKUP_REACH_M := 1.35
 var _audio: Node
 var _day_night: Node
 var _settings_panel: Node
@@ -576,6 +583,11 @@ func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int
 func _process(delta: float) -> void:
 	_fps_accum += delta
 	_infection_stream_accum += delta
+	_gem_pickup_accum += delta
+	_sync_underground_lighting()
+	if _gem_pickup_accum >= GEM_PICKUP_INTERVAL_SEC:
+		_gem_pickup_accum = 0.0
+		_try_collect_nearby_gems()
 	if _radar_cooldown_left > 0.0:
 		_radar_cooldown_left = maxf(0.0, _radar_cooldown_left - delta)
 	if _radar_reveal_left > 0.0:
@@ -642,6 +654,26 @@ func _create_terrain() -> void:
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 
 
+func _ensure_gem_lights(camera: Camera3D) -> void:
+	if _gem_lights != null and is_instance_valid(_gem_lights):
+		_gem_lights.queue_free()
+		_gem_lights = null
+	_gem_lights = GemLightDirectorScript.new()
+	_gem_lights.name = "GemLightDirector"
+	add_child(_gem_lights)
+	_gem_lights.call("setup", _tool, camera, _streamer)
+
+
+func _sync_underground_lighting() -> void:
+	var under := 0.0
+	if _walker != null and is_instance_valid(_walker) and _walker.has_method("get_underground_factor"):
+		under = float(_walker.call("get_underground_factor"))
+	if _day_night != null and is_instance_valid(_day_night) and _day_night.has_method("set_underground_factor"):
+		_day_night.call("set_underground_factor", under)
+	if _gem_lights != null and is_instance_valid(_gem_lights) and _gem_lights.has_method("set_underground"):
+		_gem_lights.call("set_underground", under > 0.5)
+
+
 func _ensure_cascade_debris() -> void:
 	if _debris_root == null or not is_instance_valid(_debris_root):
 		_debris_root = Node3D.new()
@@ -702,6 +734,57 @@ func _ensure_infection_director() -> void:
 
 func _on_player_score_changed(score: int) -> void:
 	_player_score = score
+
+
+func get_gem_count(mat_id: int) -> int:
+	return int(_gem_counts.get(mat_id, 0))
+
+
+## All tallies keyed by VoxelMaterial.GEM_* — empty entries omitted.
+func get_gem_counts() -> Dictionary:
+	return _gem_counts.duplicate()
+
+
+## Remove one gem voxel and credit the inventory. Returns false if it is gone already.
+func try_collect_gem_at(vox: Vector3i) -> bool:
+	if _tool == null:
+		return false
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var mat_id := int(_tool.get_voxel(vox))
+	if not VoxelMaterial.is_gem(mat_id):
+		return false
+	_tool.mode = VoxelTool.MODE_SET
+	_tool.value = VoxelMaterial.AIR
+	_tool.do_point(vox)
+	_gem_counts[mat_id] = int(_gem_counts.get(mat_id, 0)) + 1
+	return true
+
+
+## Walk-up pickup: any gem within arm's reach of the chest is taken.
+func _try_collect_nearby_gems() -> void:
+	if _tool == null or _terrain == null or not is_player_alive():
+		return
+	var scale := 1.0
+	if _walker.has_method("get_character_scale"):
+		scale = maxf(float(_walker.call("get_character_scale")), 0.5)
+	var reach_m := GEM_PICKUP_REACH_M * scale
+	var chest := get_player_target_position()
+	var local := _terrain.to_local(chest)
+	var r_vox := int(ceil(reach_m / VOXEL_SIZE))
+	var r2 := (reach_m / VOXEL_SIZE) * (reach_m / VOXEL_SIZE)
+	var cx := int(floor(local.x))
+	var cy := int(floor(local.y))
+	var cz := int(floor(local.z))
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	for z in range(cz - r_vox, cz + r_vox + 1):
+		for y in range(cy - r_vox, cy + r_vox + 1):
+			for x in range(cx - r_vox, cx + r_vox + 1):
+				var center := Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
+				if center.distance_squared_to(local) > r2 + 0.0001:
+					continue
+				var id := int(_tool.get_voxel(Vector3i(x, y, z)))
+				if VoxelMaterial.is_gem(id):
+					try_collect_gem_at(Vector3i(x, y, z))
 
 
 func adjust_player_score(delta: int) -> void:
@@ -1089,6 +1172,8 @@ func _regenerate() -> void:
 		_undead.queue_free()
 		_undead = null
 	_player_score = 0
+	_gem_counts.clear()
+	_gem_pickup_accum = 0.0
 	_radar_cooldown_left = 0.0
 	_radar_reveal_left = 0.0
 	_clear_all_meteor_sites()
@@ -1107,6 +1192,9 @@ func _regenerate() -> void:
 		_cascade.clear_debris()
 		_cascade.queue_free()
 		_cascade = null
+	if _gem_lights != null and is_instance_valid(_gem_lights):
+		_gem_lights.queue_free()
+		_gem_lights = null
 	if _debris_root != null and is_instance_valid(_debris_root):
 		_debris_root.queue_free()
 		_debris_root = null
@@ -1204,6 +1292,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	spawn_viewer.global_position = spawn + Vector3(0.0, 2.0, 0.0)
 
 	_streamer.call("bind_player", _walker, cam)
+	_ensure_gem_lights(cam)
 
 	_status.text = "Waiting for ground collisions…"
 	var floor_y := await _wait_floor_collision(spawn, 2400)
@@ -1394,9 +1483,8 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
 
 
-## Drop whatever still stands above a fresh hole — unless it is hillside. Rock is
-## self-supporting, and a hill is one connected massif: cascading it turns a single
-## charged shot inside a cave into a mountain that hollows itself out column by column.
+## Drop whatever still stands above a fresh hole — unless it is soft soil/turf.
+## Stone and cave fabric cascade; dirt / gravel / park / grave soil do not.
 func _cascade_column_above(top_vox: Vector3i) -> void:
 	if _cascade == null or not is_instance_valid(_cascade):
 		return
@@ -1437,12 +1525,18 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var hit_vox := Vector3i(2147483647, 2147483647, 2147483647)
 	var found := false
+	var hit_gem := false
 	for i in range(1, steps + 1):
 		var p := local_origin + dir * (float(i) * step)
 		var v := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
 		if found and v == hit_vox:
 			continue
 		var id := int(_tool.get_voxel(v))
+		if VoxelMaterial.is_gem(id):
+			hit_vox = v
+			found = true
+			hit_gem = true
+			break
 		if not VoxelMaterial.is_destructible(id):
 			continue
 		hit_vox = v
@@ -1454,6 +1548,9 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	## Diameter = 1 voxel per human scale → radius = scale/2.
 	var radius_vox := scale * 0.5
 	var hit_center := Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
+	## Punching a gem (or a gem in the fist sphere) collects it — gems never carve.
+	if hit_gem:
+		try_collect_gem_at(hit_vox)
 	## Revert tips in the punch sphere first; then the strike carves restored fabric as usual.
 	_tip_kill_leads_in_sphere(hit_center, radius_vox)
 	var r_i := int(ceil(radius_vox))
@@ -1472,6 +1569,9 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 					continue
 				var vox := Vector3i(x, y, z)
 				var mat_id := int(_tool.get_voxel(vox))
+				if VoxelMaterial.is_gem(mat_id):
+					try_collect_gem_at(vox)
+					continue
 				if not VoxelMaterial.is_destructible(mat_id):
 					continue
 				detached.append({"vox": vox, "mat": mat_id})
@@ -1480,6 +1580,9 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 					column_max_y[col] = maxi(int(column_max_y[col]), y)
 				else:
 					column_max_y[col] = y
+
+	if hit_gem and detached.is_empty():
+		return
 
 	for entry in detached:
 		_tool.do_point(entry["vox"] as Vector3i)

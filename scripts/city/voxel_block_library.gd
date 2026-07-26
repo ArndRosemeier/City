@@ -523,12 +523,13 @@ const LOT_METERS := 14.0
 ## Shared materials, reused by terrain blocks, debris and impostors.
 static var _surface_mat_cache: Dictionary = {}  # id * 2 + object_space → ShaderMaterial
 static var _infection_mat_cache: Dictionary = {}  # bool is_lead → ShaderMaterial
+static var _gem_mat_cache: Dictionary = {}  # gem id → ShaderMaterial
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
 
 
-## Terrain block material. Everything except infection / meteor rock / Game Boy uses
-## the shared world-projected surface shaders.
+## Terrain block material. Everything except infection / meteor rock / Game Boy / gems
+## uses the shared world-projected surface shaders.
 static func block_material_for(id: int) -> Material:
 	if id == VoxelMaterial.INFECTION or id == VoxelMaterial.INFECTION_LEAD:
 		return infection_material(id == VoxelMaterial.INFECTION_LEAD)
@@ -536,6 +537,8 @@ static func block_material_for(id: int) -> Material:
 		return meteor_rock_material()
 	if id == VoxelMaterial.GAMEBOY:
 		return gameboy_material()
+	if VoxelMaterial.is_gem(id):
+		return gem_material(id)
 	return surface_material(id, false)
 
 
@@ -548,6 +551,8 @@ static func debris_material_for(id: int) -> Material:
 		return meteor_rock_material()
 	if id == VoxelMaterial.GAMEBOY:
 		return gameboy_material()
+	if VoxelMaterial.is_gem(id):
+		return gem_material(id)
 	return surface_material(id, true)
 
 
@@ -688,6 +693,65 @@ static func meteor_rock_material() -> ShaderMaterial:
 	_meteor_rock_mat = mat
 	return mat
 
+
+
+## Glowing gem ore — one shared shader, per-id colors / emission strength.
+static func gem_material(id: int) -> ShaderMaterial:
+	if not VoxelMaterial.is_gem(id):
+		push_error("VoxelBlockLibrary.gem_material: not a gem id %d" % id)
+		return surface_material(VoxelMaterial.STONE, false)
+	var cached: Variant = _gem_mat_cache.get(id)
+	if cached is ShaderMaterial:
+		return cached
+	var shader: Shader = load("res://assets/city/shaders/voxel_gem.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var albedo := VoxelMaterial.color(id)
+	var emit := albedo
+	var em_base := 1.0
+	var em_peak := 2.8
+	var pulse := 0.8
+	match id:
+		VoxelMaterial.GEM_QUARTZ:
+			emit = Color(0.75, 0.9, 1.0)
+			em_base = 0.9
+			em_peak = 2.4
+			pulse = 0.7
+		VoxelMaterial.GEM_AMBER:
+			emit = Color(1.0, 0.55, 0.12)
+			em_base = 1.1
+			em_peak = 3.0
+			pulse = 0.75
+		VoxelMaterial.GEM_TOPAZ:
+			emit = Color(1.0, 0.78, 0.25)
+			em_base = 1.25
+			em_peak = 3.4
+			pulse = 0.85
+		VoxelMaterial.GEM_SAPPHIRE:
+			emit = Color(0.25, 0.45, 1.0)
+			em_base = 1.5
+			em_peak = 4.2
+			pulse = 0.95
+		VoxelMaterial.GEM_EMERALD:
+			emit = Color(0.2, 1.0, 0.45)
+			em_base = 1.7
+			em_peak = 4.8
+			pulse = 1.05
+		VoxelMaterial.GEM_DIAMOND:
+			emit = Color(0.95, 0.98, 1.0)
+			em_base = 2.2
+			em_peak = 6.5
+			pulse = 1.25
+	mat.set_shader_parameter("base_color", albedo)
+	mat.set_shader_parameter("emission_color", emit)
+	mat.set_shader_parameter("emission_base", em_base)
+	mat.set_shader_parameter("emission_peak", em_peak)
+	mat.set_shader_parameter("pulse_hz", pulse)
+	mat.set_shader_parameter("sparkle_scale", 4.5)
+	mat.set_shader_parameter("metallic_base", 0.18 if id != VoxelMaterial.GEM_DIAMOND else 0.35)
+	mat.set_shader_parameter("roughness_base", 0.2 if id != VoxelMaterial.GEM_DIAMOND else 0.08)
+	_gem_mat_cache[id] = mat
+	return mat
 
 
 ## Animated infection look — GPU TIME/noise only; shared across all infected voxels.

@@ -80,6 +80,13 @@ const CAVE_STEEP_DROP := 7
 ## Share of the protected core (deck → shell) that should end up hollow.
 const CAVE_HOLLOW_TARGET := 0.30
 
+## Gem ore: one cluster seed per this many solid host voxels (interior only).
+const GEM_VOXELS_PER_CLUSTER := 1000
+## Max cluster seeds attempted relative to the estimate (caps runaway rolls).
+const GEM_CLUSTER_CAP := 220
+## Keep gems off the meadow skin and the outer CAVE_SHELL band.
+const GEM_SURFACE_MARGIN := 3
+
 ## Region bounds (local district voxel coords) and the per-column fields.
 var _ox: int = 0
 var _oz: int = 0
@@ -98,6 +105,9 @@ var _cave_lo: PackedInt32Array = PackedInt32Array()
 var _cave_hi: PackedInt32Array = PackedInt32Array()
 ## Cleared while boring a daylight mouth — the only carve allowed through the shell.
 var _shell_guard: bool = true
+## World-voxel positions / material ids of gem ore placed this compose (for lights).
+var gem_positions: PackedVector3Array = PackedVector3Array()
+var gem_mats: PackedInt32Array = PackedInt32Array()
 
 ## Rock beds from the bottom of the stack upward, repeated all the way to the summits
 ## so every hill in the tile shows the same geology.
@@ -145,6 +155,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_report(summits)
 	_paint_meadow()
 	_paint_terrain()
+	_scatter_gems()
 	_carve_caves(summits)
 	_scatter_boulders()
 	_plant_trees(1.0)
@@ -205,6 +216,8 @@ func _begin(min_v: Vector3i, max_v: Vector3i, need_brush: bool = true) -> bool:
 	_cave_hi.resize(_w * _d)
 	_cave_lo.fill(-1)
 	_cave_hi.fill(-1)
+	gem_positions = PackedVector3Array()
+	gem_mats = PackedInt32Array()
 	_shell_guard = true
 	_build_bed_dip()
 	return true
@@ -1173,10 +1186,15 @@ func _dress_cave_system(rooms: Array[Dictionary]) -> void:
 			var wz := _oz + z
 			for y in range(maxi(_cave_lo[row + x] - 1, deck_floor), hi + 2):
 				var here := brush.get_vox(Vector3i(wx, y, wz))
+				if VoxelMaterial.is_gem(here):
+					continue
 				if here == VoxelMaterial.AIR:
 					## Every deck in the column gets a floor, not just the lowest one —
 					## stacked caverns are the whole point of the network.
-					if _is_cave_shellable(brush.get_vox(Vector3i(wx, y - 1, wz))):
+					var below := brush.get_vox(Vector3i(wx, y - 1, wz))
+					if VoxelMaterial.is_gem(below):
+						continue
+					if _is_cave_shellable(below):
 						brush.set_vox(Vector3i(wx, y - 1, wz), VoxelMaterial.CAVE_FLOOR)
 					continue
 				if not _is_cave_shellable(here):
@@ -1313,13 +1331,92 @@ func _carve_ellipsoid(center: Vector3i, radii: Vector3i, floor_min_y: int) -> vo
 				var ny := float(y - center.y) / fy
 				if nx * nx + ny * ny + nz * nz > 1.0:
 					continue
-				brush.set_vox(Vector3i(x, y, z), VoxelMaterial.AIR)
+				var at := Vector3i(x, y, z)
+				## Leave gem ore as protruding nuggets instead of deleting it with the cave.
+				if VoxelMaterial.is_gem(brush.get_vox(at)):
+					continue
+				brush.set_vox(at, VoxelMaterial.AIR)
 				if _cave_hi[row + lx] < 0:
 					_cave_lo[row + lx] = y
 					_cave_hi[row + lx] = y
 					continue
 				_cave_lo[row + lx] = mini(_cave_lo[row + lx], y)
 				_cave_hi[row + lx] = maxi(_cave_hi[row + lx], y)
+
+
+## Embed gem ore in solid rock before caves open. Carve skips gem voxels so nuggets
+## stick into chambers; buried ones stay excavatable.
+func _scatter_gems() -> void:
+	var host_estimate := 0
+	for z in range(_d):
+		var row := z * _w
+		for x in range(_w):
+			if _is_road_cell(x, z):
+				continue
+			var h := _height[row + x]
+			if h < GEM_SURFACE_MARGIN + 4:
+				continue
+			## Interior band only — below the shell / meadow skin.
+			host_estimate += maxi(h - GEM_SURFACE_MARGIN * 2, 0)
+	var seeds := clampi(host_estimate / GEM_VOXELS_PER_CLUSTER, 0, GEM_CLUSTER_CAP)
+	if seeds <= 0:
+		return
+	var placed := 0
+	var tries := 0
+	while placed < seeds and tries < seeds * 12:
+		tries += 1
+		var x := rng.randi_range(2, _w - 3)
+		var z := rng.randi_range(2, _d - 3)
+		if _is_road_cell(x, z):
+			continue
+		var h := _height[z * _w + x]
+		var y_lo := ground_y + GEM_SURFACE_MARGIN
+		var y_hi := ground_y + h - GEM_SURFACE_MARGIN
+		if y_hi <= y_lo:
+			continue
+		var y := rng.randi_range(y_lo, y_hi)
+		var wx := _ox + x
+		var wz := _oz + z
+		var host := brush.get_vox(Vector3i(wx, y, wz))
+		if not _is_gem_host(host):
+			continue
+		var gem := VoxelMaterial.pick_gem(rng)
+		var cluster := 1 + rng.randi() % 4
+		_place_gem_cluster(Vector3i(wx, y, wz), gem, cluster)
+		placed += 1
+	print("HillComposer: gem clusters=%d voxels=%d" % [placed, gem_positions.size()])
+
+
+func _is_gem_host(id: int) -> bool:
+	match id:
+		VoxelMaterial.STONE, VoxelMaterial.BRICK, VoxelMaterial.GRAVEL:
+			return true
+		_:
+			return false
+
+
+func _place_gem_cluster(origin: Vector3i, gem: int, count: int) -> void:
+	var cursor := origin
+	for i in range(count):
+		var here := brush.get_vox(cursor)
+		if _is_gem_host(here):
+			brush.set_vox(cursor, gem)
+			gem_positions.append(Vector3(float(cursor.x), float(cursor.y), float(cursor.z)))
+			gem_mats.append(gem)
+		## Step to a random 6-neighbour for the next nugget.
+		match rng.randi() % 6:
+			0:
+				cursor.x += 1
+			1:
+				cursor.x -= 1
+			2:
+				cursor.y += 1
+			3:
+				cursor.y -= 1
+			4:
+				cursor.z += 1
+			_:
+				cursor.z -= 1
 
 
 func _scatter_boulders() -> void:

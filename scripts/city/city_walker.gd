@@ -261,6 +261,10 @@ var _charge_ring_mesh_a: TorusMesh
 var _charge_ring_mesh_b: TorusMesh
 var _charge_ring_mat_a: StandardMaterial3D
 var _charge_ring_mat_b: StandardMaterial3D
+## Warm fill light while under solid cover (caves / hill interiors).
+var _cave_torch: OmniLight3D
+var _underground: bool = false
+var _underground_streak: int = 0
 var _footstep_accum: float = 0.0
 ## True this physics frame when feet/shins occupy a WATER voxel.
 var _swimming: bool = false
@@ -348,6 +352,7 @@ func _ready() -> void:
 	_setup_eye_laser()
 	_setup_charged_blast()
 	_ensure_charge_orb()
+	_ensure_cave_torch()
 
 
 func _spawn_human(female: bool) -> void:
@@ -907,6 +912,15 @@ func bind_terrain(terrain: VoxelTerrain) -> void:
 	_voxel_motion.call("setup", terrain, max_step_height)
 
 
+func is_underground() -> bool:
+	return _underground
+
+
+## 0 outdoors / 1 underground — smoothed for DayNightCycle dimming.
+func get_underground_factor() -> float:
+	return 1.0 if _underground else 0.0
+
+
 func _floor_contacted() -> bool:
 	if _voxel_motion != null and bool(_voxel_motion.call("has_terrain")):
 		return bool(_voxel_motion.call("is_on_floor"))
@@ -1386,6 +1400,12 @@ func _update_camera_shake(delta: float) -> void:
 		deg_to_rad(camera_shake_max_roll_deg * 0.25 * shake * _rng.randf_range(-1.0, 1.0)),
 		deg_to_rad(camera_shake_max_roll_deg * shake * _rng.randf_range(-1.0, 1.0))
 	)
+
+
+func _process(_delta: float) -> void:
+	## Independent of physics_process — spawn holds physics off until ground is ready,
+	## and blasting in/out must re-evaluate cover every frame, not on a transition edge.
+	_update_underground()
 
 
 func _physics_process(delta: float) -> void:
@@ -2702,6 +2722,68 @@ func _ensure_charge_orb() -> void:
 	_charge_orb_light.shadow_enabled = false
 	_charge_orb_light.visible = false
 	_charge_orb.add_child(_charge_orb_light)
+
+
+func _ensure_cave_torch() -> void:
+	if _cave_torch != null and is_instance_valid(_cave_torch):
+		return
+	_cave_torch = OmniLight3D.new()
+	_cave_torch.name = "CaveTorch"
+	_cave_torch.light_color = Color(1.0, 0.88, 0.65)
+	_cave_torch.light_energy = 0.0
+	_cave_torch.omni_range = 9.0
+	_cave_torch.omni_attenuation = 1.4
+	_cave_torch.shadow_enabled = false
+	_cave_torch.position = Vector3(0.0, 1.35, 0.0)
+	add_child(_cave_torch)
+
+
+## Continuous roof probe — not an enter/exit edge. Blast a hole in the ceiling and
+## the next samples go outdoor; spawn already inside a cave and the first samples
+## go underground. Runs from _process so it still works while physics is gated off.
+func _update_underground() -> void:
+	var covered := _probe_solid_cover()
+	if covered == _underground:
+		_underground_streak = 0
+	else:
+		_underground_streak += 1
+		## Two frames is enough to kill mouth flicker without lagging a spawn-in-cave.
+		if _underground_streak >= 2:
+			_underground = covered
+			_underground_streak = 0
+	_ensure_cave_torch()
+	var want := 1.55 if _underground else 0.0
+	_cave_torch.light_energy = lerpf(_cave_torch.light_energy, want, 0.35)
+	_cave_torch.position.y = 1.35 * maxf(character_scale, 0.5)
+	_cave_torch.omni_range = 9.0 * maxf(character_scale, 0.75)
+
+
+## True when a structural roof sits somewhere above the head within the scan.
+## Tall chambers are still underground — air under the ceiling must not early-out.
+func _probe_solid_cover() -> bool:
+	if _voxel_motion == null or not bool(_voxel_motion.call("has_terrain")):
+		return false
+	var eye_y := global_position.y + 1.5 * maxf(character_scale, 0.5)
+	var x := global_position.x
+	var z := global_position.z
+	## 40 m up covers hill peaks; vegetation (leaves/trees) does not count as a roof.
+	var roof_hits := 0
+	for i in range(1, 81):
+		var id := _voxel_id_at(Vector3(x, eye_y + float(i) * 0.5, z))
+		if not _is_underground_roof(id):
+			continue
+		roof_hits += 1
+		if roof_hits >= 2:
+			return true
+	return false
+
+
+func _is_underground_roof(id: int) -> bool:
+	if id <= VoxelMaterial.AIR or id == VoxelMaterial.WATER:
+		return false
+	if VoxelMaterial.is_vegetation(id):
+		return false
+	return VoxelMaterial.is_solid(id)
 
 
 func _make_charge_mat(albedo: Color, emission: Color) -> StandardMaterial3D:

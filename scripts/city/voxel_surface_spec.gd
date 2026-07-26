@@ -38,8 +38,10 @@ var streaks: float = 0.0
 var lit_ratio: float = 0.0
 
 
-## Materials with their own bespoke shader (infection, meteor rock, Game Boy shell).
+## Materials with their own bespoke shader (infection, meteor rock, Game Boy, gems).
 static func has_bespoke_shader(id: int) -> bool:
+	if VoxelMaterial.is_gem(id):
+		return true
 	match id:
 		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY:
 			return true

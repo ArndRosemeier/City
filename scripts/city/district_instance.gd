@@ -53,6 +53,9 @@ var _bake_blocks: Dictionary = {}
 var _bake_block_keys: Array[Vector3i] = []
 var _bake_key_index: int = 0
 var _bake_impostors: Array = []
+## Hill gem ore in world voxel coords (empty outside Hill districts).
+var hill_gem_positions: PackedVector3Array = PackedVector3Array()
+var hill_gem_mats: PackedInt32Array = PackedInt32Array()
 
 
 func configure(
@@ -74,7 +77,7 @@ func configure(
 
 
 func ensure_prefetch() -> void:
-	## Floor first: visible + walkable deck as soon as the tile enters the bubble.
+	## Catch the player while the tile has no voxels yet; dropped again once ground commits.
 	_ensure_proxy_floor()
 
 
@@ -152,6 +155,8 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_bake_block_keys.clear()
 	_bake_key_index = 0
 	_bake_impostors.clear()
+	hill_gem_positions = PackedVector3Array()
+	hill_gem_mats = PackedInt32Array()
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
 		building_lod.queue_free()
@@ -215,7 +220,6 @@ func _stamp_ground_async() -> void:
 	## Bake the whole district off-thread, then commit ground-layer blocks on main.
 	_ensure_anchor()
 	_pin_data_only()
-	_ensure_proxy_floor()
 	var tool := _tool_ref
 	var box := DistrictCoord.aabb_vox(coord, 208)
 	var guard := 0
@@ -239,6 +243,8 @@ func _stamp_ground_async() -> void:
 	_ground_thickness = int(payload.get("ground_thickness", 6))
 	_bake_impostors = payload.get("impostors", [])
 	_bake_blocks = payload.get("blocks", {})
+	hill_gem_positions = payload.get("hill_gem_positions", PackedVector3Array()) as PackedVector3Array
+	hill_gem_mats = payload.get("hill_gem_mats", PackedInt32Array()) as PackedInt32Array
 	generator = payload.get("generator") as DistrictGenerator
 	if generator == null:
 		is_busy = false
@@ -276,7 +282,6 @@ func _stamp_detail_async() -> void:
 
 	_ensure_anchor()
 	_pin_data_only()
-	_ensure_proxy_floor()
 
 	## Upper blocks nearest-to-player (re-focus in case the camera moved during ground).
 	_bake_block_keys = OfflineVolumeCommitterScript.sorted_block_keys_near_player(
@@ -308,6 +313,9 @@ func _stamp_detail_async() -> void:
 		if day_night_far != null and day_night_far.has_method("get_night_factor"):
 			building_lod.set_night_factor(float(day_night_far.call("get_night_factor")))
 		_pin_data_only()
+		## Ground voxels are committed — the streaming failsafe would only be phantom
+		## collision under caves and craters from here on.
+		_clear_proxy_floor()
 		is_ready = true
 		is_busy = false
 		ready_to_play.emit(self)
@@ -385,6 +393,7 @@ func _stamp_detail_async() -> void:
 	## Player VoxelViewer remeshes the near field; district anchor stays data-only
 	## so whole-tile remesh storms don't tank FPS while other districts generate.
 	_pin_data_only()
+	_clear_proxy_floor()
 	is_ready = true
 	is_busy = false
 	ready_to_play.emit(self)
@@ -564,7 +573,10 @@ func _ensure_proxy_floor() -> void:
 	var thickness := 0.6
 	_proxy_floor = StaticBody3D.new()
 	_proxy_floor.name = "ProxyFloor"
-	_proxy_floor.collision_layer = 1
+	## Player failsafe layer, not terrain (1). On terrain this district-wide slab read as
+	## real geometry to the camera spring arm, walker raycasts and resting debris — and
+	## caves / blast craters sit below it, so the player ends up under phantom rock.
+	_proxy_floor.collision_layer = CityWalker.SAFETY_DECK_LAYER
 	_proxy_floor.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()

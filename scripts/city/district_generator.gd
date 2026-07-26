@@ -49,6 +49,9 @@ var _lake: LakeComposer
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
+## Hill gem ore (world voxel coords + material ids) collected during compose.
+var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
+var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
 ## World voxel origin of this district tile (local paint stays 0..size).
 var origin_vox: Vector3i = Vector3i.ZERO
 var district_coord: Vector2i = Vector2i.ZERO
@@ -106,6 +109,20 @@ func get_offline_volume():
 	return _brush.volume
 
 
+## World-voxel gem ore placed by the hill compose pass (empty outside Hill districts).
+func get_hill_gems() -> Dictionary:
+	var positions := PackedVector3Array()
+	positions.resize(_hill_gem_positions.size())
+	for i in range(_hill_gem_positions.size()):
+		var p := _hill_gem_positions[i]
+		positions[i] = Vector3(
+			p.x + float(origin_vox.x),
+			p.y + float(origin_vox.y),
+			p.z + float(origin_vox.z)
+		)
+	return {"positions": positions, "mats": _hill_gem_mats.duplicate()}
+
+
 func _setup_composers() -> void:
 	if theme == null:
 		## Standalone path (tools, single-district tests): derive from the district seed.
@@ -133,6 +150,9 @@ func _setup_composers() -> void:
 	_hill.ground_y = ground_thickness
 	_hill.planner = _planner
 	_hill.cell_size = cell_size
+	## Cleared each begin; filled by HillComposer.compose().
+	_hill_gem_positions = PackedVector3Array()
+	_hill_gem_mats = PackedInt32Array()
 
 	_graveyard = GraveyardComposerScript.new()
 	_graveyard.brush = _brush
@@ -362,6 +382,8 @@ func decorate_open_spaces() -> void:
 		var hmin := Vector3i(lh.position.x * cell_size, ground_thickness, lh.position.y * cell_size)
 		var hmax := Vector3i(lh.end.x * cell_size, ground_thickness + 1, lh.end.y * cell_size)
 		_hill.compose(hmin, hmax)
+		_hill_gem_positions = _hill.gem_positions.duplicate()
+		_hill_gem_mats = _hill.gem_mats.duplicate()
 		return
 	var lg := _planner.large_graveyard
 	if lg.size.x > 0:

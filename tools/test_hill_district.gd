@@ -15,6 +15,14 @@ const ROCK_IDS: Array[int] = [
 	VoxelMaterial.CAVE_WALL,
 	VoxelMaterial.CAVE_FLOOR,
 ]
+const GEM_IDS: Array[int] = [
+	VoxelMaterial.GEM_QUARTZ,
+	VoxelMaterial.GEM_AMBER,
+	VoxelMaterial.GEM_TOPAZ,
+	VoxelMaterial.GEM_SAPPHIRE,
+	VoxelMaterial.GEM_EMERALD,
+	VoxelMaterial.GEM_DIAMOND,
+]
 
 var _failed := false
 
@@ -98,10 +106,16 @@ func _ready() -> void:
 		return
 
 	var counts := _count_above_deck(res["blocks"], int(res["ground_thickness"]))
+	var gem_total := 0
+	var gem_parts: PackedStringArray = PackedStringArray()
+	for gid: int in GEM_IDS:
+		var n := int(counts.get(gid, 0))
+		gem_total += n
+		gem_parts.append("%d" % n)
 	print(
 		(
 			"voxels rock=%d stone=%d brick=%d dirt=%d gravel=%d grass=%d leaves=%d"
-			+ " cave_wall=%d cave_floor=%d"
+			+ " cave_wall=%d cave_floor=%d gems=%d [%s]"
 		)
 		% [
 			int(counts.get(VoxelMaterial.BEDROCK, 0)),
@@ -113,6 +127,8 @@ func _ready() -> void:
 			int(counts.get(VoxelMaterial.LEAVES, 0)),
 			int(counts.get(VoxelMaterial.CAVE_WALL, 0)),
 			int(counts.get(VoxelMaterial.CAVE_FLOOR, 0)),
+			gem_total,
+			", ".join(gem_parts),
 		]
 	)
 	if int(counts.get(VoxelMaterial.CAVE_FLOOR, 0)) < 100:
@@ -152,6 +168,26 @@ func _ready() -> void:
 			"FAIL cave lining too thin for a branched dungeon (cave_wall=%d)"
 			% int(counts.get(VoxelMaterial.CAVE_WALL, 0))
 		)
+		_quit()
+		return
+	if gem_total < 40:
+		_fail("FAIL gem ore missing or too sparse (gems=%d)" % gem_total)
+		_quit()
+		return
+	var quartz := int(counts.get(VoxelMaterial.GEM_QUARTZ, 0))
+	var diamond := int(counts.get(VoxelMaterial.GEM_DIAMOND, 0))
+	if quartz <= 0:
+		_fail("FAIL common quartz missing (quartz=%d)" % quartz)
+		_quit()
+		return
+	if diamond > quartz:
+		_fail("FAIL diamond (%d) more common than quartz (%d)" % [diamond, quartz])
+		_quit()
+		return
+	var gems_payload: Dictionary = (res.get("generator") as DistrictGenerator).get_hill_gems()
+	var gem_list: PackedVector3Array = gems_payload.get("positions", PackedVector3Array())
+	if gem_list.size() < 40:
+		_fail("FAIL hill gem registry empty (listed=%d)" % gem_list.size())
 		_quit()
 		return
 

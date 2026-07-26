@@ -8,43 +8,48 @@ pub const DIRT: i32 = 16;
 pub const WATER: i32 = 17;
 pub const BARK: i32 = 23;
 pub const LEAVES: i32 = 24;
+/// Kept for id parity with `voxel_material.gd` even when unused in native code.
+#[allow(dead_code)]
 pub const STONE: i32 = 25;
 pub const METEOR_ROCK: i32 = 29;
 pub const INFECTION: i32 = 30;
 pub const INFECTION_LEAD: i32 = 31;
 pub const GAMEBOY: i32 = 32;
+#[allow(dead_code)]
 pub const CAVE_WALL: i32 = 33;
+#[allow(dead_code)]
 pub const CAVE_FLOOR: i32 = 34;
 pub const GRAVE_SOIL: i32 = 37;
 pub const GRAVE_PATH: i32 = 38;
-pub const COUNT: i32 = 49;
+pub const GEM_QUARTZ: i32 = 49;
+pub const GEM_DIAMOND: i32 = 54;
+pub const COUNT: i32 = 55;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR
+}
+
+pub fn is_gem(id: i32) -> bool {
+    id >= GEM_QUARTZ && id <= GEM_DIAMOND
 }
 
 pub fn is_destructible(id: i32) -> bool {
     if id == AIR || id == BEDROCK || id == WATER {
         return false;
     }
-    if id == METEOR_ROCK || id == INFECTION {
+    if id == METEOR_ROCK || id == INFECTION || is_gem(id) {
         return false;
     }
     id > AIR && id < COUNT
 }
 
-/// Rock, soil and turf carry their own weight — a blast leaves a crater, never a
-/// collapsing column.
+/// Soft soil and turf carry their own weight — a blast leaves a crater, never a
+/// collapsing column. Stone and cave fabric cascade like built structure.
 pub fn is_self_supporting_terrain(id: i32) -> bool {
-    matches!(
-        id,
-        STONE | DIRT | GRAVEL | PARK | CAVE_WALL | CAVE_FLOOR | GRAVE_SOIL | GRAVE_PATH
-    )
+    matches!(id, DIRT | GRAVEL | PARK | GRAVE_SOIL | GRAVE_PATH)
 }
 
-/// Only built fabric may be pulled down by the debris cascade. A hill is one
-/// connected massif, so letting rock cascade lets a single shot inside a cave eat
-/// the whole mountain column by column.
+/// Destructible voxels cascade unless they are soft self-supporting terrain.
 pub fn cascades(id: i32) -> bool {
     is_destructible(id) && !is_self_supporting_terrain(id)
 }

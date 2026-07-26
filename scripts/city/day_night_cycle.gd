@@ -31,6 +31,11 @@ var _hour: float = 8.5
 var _night_factor: float = 0.0
 var _cloud_time: float = 0.0
 var _accum_broadcast: float = 0.0
+## 0 outdoors … 1 fully underground — kills sun/ambient so torch + gem lights matter.
+var _underground_factor: float = 0.0
+var _sun_energy_outdoor: float = 0.0
+var _moon_energy_outdoor: float = 0.0
+var _ambient_energy_outdoor: float = 0.0
 
 
 func setup(sun_light: DirectionalLight3D, moon_light: DirectionalLight3D, env: Environment, sky_mat: ShaderMaterial) -> void:
@@ -52,6 +57,19 @@ func get_hour() -> float:
 
 func get_night_factor() -> float:
 	return _night_factor
+
+
+func get_underground_factor() -> float:
+	return _underground_factor
+
+
+## Smooth 0..1 — caves go dark without fighting the day/night clock.
+func set_underground_factor(factor: float) -> void:
+	var next := clampf(factor, 0.0, 1.0)
+	if absf(next - _underground_factor) < 0.01:
+		return
+	_underground_factor = next
+	_apply_underground()
 
 
 func set_hour(hour: float) -> void:
@@ -99,14 +117,16 @@ func _apply(force_signal: bool) -> void:
 	var sun_golden := Color(1.0, 0.62, 0.28)
 	var sun_col := sun_day.lerp(sun_golden, dawn_dusk)
 	sun.light_color = sun_col
-	sun.light_energy = lerpf(min_sun_energy, max_sun_energy, day_amount)
+	_sun_energy_outdoor = lerpf(min_sun_energy, max_sun_energy, day_amount)
+	sun.light_energy = _sun_energy_outdoor
 	sun.shadow_enabled = day_amount > 0.08
 
 	## Moon opposite the sun — soft blue fill so night streets stay readable.
 	if moon != null:
 		moon.rotation_degrees = Vector3(elev_deg * 0.85, azim_deg + 180.0, 0.0)
 		moon.light_color = Color(0.62, 0.72, 1.0)
-		moon.light_energy = max_moon_energy * smoothstep(0.15, 0.85, night)
+		_moon_energy_outdoor = max_moon_energy * smoothstep(0.15, 0.85, night)
+		moon.light_energy = _moon_energy_outdoor
 		moon.shadow_enabled = false
 		moon.visible = night > 0.05
 
@@ -131,14 +151,40 @@ func _apply(force_signal: bool) -> void:
 
 	## Ambient / fog / glow — nights stay luminous.
 	environment.ambient_light_color = top.lerp(Color(0.45, 0.55, 0.85), 0.4)
-	environment.ambient_light_energy = lerpf(ambient_day, ambient_night, night)
+	_ambient_energy_outdoor = lerpf(ambient_day, ambient_night, night)
+	environment.ambient_light_energy = _ambient_energy_outdoor
 	environment.fog_light_color = horizon.lerp(Color(0.22, 0.28, 0.42), night * 0.55)
 	environment.fog_density = lerpf(fog_density_day, fog_density_night, night)
 	environment.glow_intensity = lerpf(0.45, 0.7, night)
 	environment.glow_bloom = lerpf(0.1, 0.18, night)
 	environment.tonemap_exposure = lerpf(1.0, 1.12, night)
 
+	_apply_underground()
+
 	var prev := _night_factor
 	_night_factor = night
 	if force_signal or absf(prev - _night_factor) > 0.01:
 		night_factor_changed.emit(_night_factor)
+
+
+func _apply_underground() -> void:
+	if sun == null or environment == null:
+		return
+	var u := _underground_factor
+	## Sky ambient is NOT occluded by cave roofs — it paints every surface equally.
+	## Underground we abandon AMBIENT_SOURCE_SKY for a near-black color ambient and
+	## kill the directional lights entirely (shadows alone cannot be trusted to seal a cave).
+	if u > 0.5:
+		sun.light_energy = 0.0
+		sun.shadow_enabled = false
+		if moon != null:
+			moon.light_energy = 0.0
+		environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		environment.ambient_light_color = Color(0.02, 0.025, 0.04)
+		environment.ambient_light_energy = 0.02
+	else:
+		sun.light_energy = _sun_energy_outdoor * (1.0 - u)
+		if moon != null:
+			moon.light_energy = _moon_energy_outdoor * (1.0 - u)
+		environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		environment.ambient_light_energy = lerpf(_ambient_energy_outdoor, 0.02, u)

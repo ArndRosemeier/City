@@ -152,6 +152,22 @@ func _normalize_body_orientation() -> void:
 	_body_length = maxf(aabb.size.z, 2.0)
 	_body_width = maxf(aabb.size.x, 1.2)
 	_body_height = maxf(aabb.size.y, 1.0)
+	_apply_declared_body_size()
+
+
+## Procedural kits publish their true body box. Deriving it from the mesh AABB instead
+## let mirrors and roof props inflate it, so cars collided far wider and taller than
+## they look.
+func _apply_declared_body_size() -> void:
+	if not (
+		_mesh_root.has_meta("body_length")
+		and _mesh_root.has_meta("body_width")
+		and _mesh_root.has_meta("body_height")
+	):
+		return
+	_body_length = float(_mesh_root.get_meta("body_length")) * _mesh_scale
+	_body_width = float(_mesh_root.get_meta("body_width")) * _mesh_scale
+	_body_height = float(_mesh_root.get_meta("body_height")) * _mesh_scale
 
 
 func _apply_procedural_seats_from_meta() -> void:
@@ -370,6 +386,10 @@ func _make_passenger(scene_path: String) -> Node3D:
 	body.add_child(anim)
 	QuaterniusLocomotionScript.attach_passenger(anim)
 	QuaterniusLocomotionScript.play_driving(anim)
+	## Cars and crowd peds cast no shadows; a rider that did left a human-shaped shadow
+	## sliding along under a car that had none.
+	for node in body.find_children("*", "GeometryInstance3D", true, false):
+		(node as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return root
 
 

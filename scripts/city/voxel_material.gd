@@ -65,8 +65,23 @@ const ROOF_CLAY_SLOPE_POS_X := 45
 const ROOF_CLAY_SLOPE_NEG_X := 46
 const ROOF_CLAY_SLOPE_POS_Z := 47
 const ROOF_CLAY_SLOPE_NEG_Z := 48
+## Hill ore — fantasy gems, common → legendary. See rarity weights in pick_gem().
+const GEM_QUARTZ := 49
+const GEM_AMBER := 50
+const GEM_TOPAZ := 51
+const GEM_SAPPHIRE := 52
+const GEM_EMERALD := 53
+const GEM_DIAMOND := 54
 
-const COUNT := 49
+const COUNT := 55
+
+## Rarity weights for pick_gem (sum = 100).
+const GEM_WEIGHT_QUARTZ := 48
+const GEM_WEIGHT_AMBER := 24
+const GEM_WEIGHT_TOPAZ := 14
+const GEM_WEIGHT_SAPPHIRE := 8
+const GEM_WEIGHT_EMERALD := 4
+const GEM_WEIGHT_DIAMOND := 2
 
 ## Which cell face is the tall eaves / ridge side of a slope wedge.
 const SLOPE_HIGH_POS_X := 0
@@ -132,12 +147,11 @@ static func is_diggable_substrate(id: int) -> bool:
 	return id == STONE
 
 
-## Rock, soil and turf carry their own weight: a blast leaves a crater, never a
-## collapsing column. Built fabric is the only thing the debris cascade may pull
-## down — a hill is one connected massif, so cascading it eats the whole mountain.
+## Soft soil and turf carry their own weight: a blast leaves a crater, never a
+## collapsing column. Stone and cave fabric cascade like built structure.
 static func is_self_supporting_terrain(id: int) -> bool:
 	match id:
-		STONE, DIRT, GRAVEL, PARK, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH:
+		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH:
 			return true
 		_:
 			return false
@@ -156,7 +170,7 @@ static func is_building_fabric(id: int) -> bool:
 
 ## Walls/props undead may stomp or nibble — never infection, meteor rock, or park trees.
 static func is_undead_structure_target(id: int) -> bool:
-	if is_infection(id) or id == METEOR_ROCK:
+	if is_infection(id) or id == METEOR_ROCK or is_gem(id):
 		return false
 	if is_vegetation(id):
 		return false
@@ -171,26 +185,76 @@ static func is_vegetation(id: int) -> bool:
 
 
 static func is_destructible(id: int) -> bool:
-	## Laser / melee / blast carve targets. Infection body + meteor rock are immune;
-	## only the glowing tip (INFECTION_LEAD) stays player-killable.
+	## Laser / melee / blast carve targets. Infection body, meteor rock, and gems are
+	## immune; only the glowing tip (INFECTION_LEAD) stays player-killable among specials.
+	## Gems are collected, not carved.
 	if id == AIR or id == BEDROCK or id == WATER:
 		return false
-	if id == METEOR_ROCK or id == INFECTION:
+	if id == METEOR_ROCK or id == INFECTION or is_gem(id):
 		return false
 	return id > AIR and id < COUNT
 
 
 static func is_player_carve_immune(id: int) -> bool:
-	return id == METEOR_ROCK or id == INFECTION or id == BEDROCK or id == WATER or id == AIR
+	return (
+		id == METEOR_ROCK
+		or id == INFECTION
+		or is_gem(id)
+		or id == BEDROCK
+		or id == WATER
+		or id == AIR
+	)
 
 
 static func is_infection(id: int) -> bool:
 	return id == INFECTION or id == INFECTION_LEAD
 
 
+static func is_gem(id: int) -> bool:
+	return id >= GEM_QUARTZ and id <= GEM_DIAMOND
+
+
+static func gem_rarity_weight(id: int) -> int:
+	match id:
+		GEM_QUARTZ:
+			return GEM_WEIGHT_QUARTZ
+		GEM_AMBER:
+			return GEM_WEIGHT_AMBER
+		GEM_TOPAZ:
+			return GEM_WEIGHT_TOPAZ
+		GEM_SAPPHIRE:
+			return GEM_WEIGHT_SAPPHIRE
+		GEM_EMERALD:
+			return GEM_WEIGHT_EMERALD
+		GEM_DIAMOND:
+			return GEM_WEIGHT_DIAMOND
+		_:
+			return 0
+
+
+## Weighted roll across the fantasy gem chart (weights sum to 100).
+static func pick_gem(rng: RandomNumberGenerator) -> int:
+	var roll := rng.randi_range(1, 100)
+	if roll <= GEM_WEIGHT_QUARTZ:
+		return GEM_QUARTZ
+	roll -= GEM_WEIGHT_QUARTZ
+	if roll <= GEM_WEIGHT_AMBER:
+		return GEM_AMBER
+	roll -= GEM_WEIGHT_AMBER
+	if roll <= GEM_WEIGHT_TOPAZ:
+		return GEM_TOPAZ
+	roll -= GEM_WEIGHT_TOPAZ
+	if roll <= GEM_WEIGHT_SAPPHIRE:
+		return GEM_SAPPHIRE
+	roll -= GEM_WEIGHT_SAPPHIRE
+	if roll <= GEM_WEIGHT_EMERALD:
+		return GEM_EMERALD
+	return GEM_DIAMOND
+
+
 static func is_infectable(id: int) -> bool:
-	## Tendrils crawl into normal fabric/ground — never infection, meteor rock, or diggable stone under the deck.
-	if is_infection(id) or id == METEOR_ROCK or is_diggable_substrate(id):
+	## Tendrils crawl into normal fabric/ground — never infection, meteor rock, gems, or diggable stone.
+	if is_infection(id) or id == METEOR_ROCK or is_gem(id) or is_diggable_substrate(id):
 		return false
 	return is_destructible(id)
 
@@ -272,5 +336,17 @@ static func color(id: int) -> Color:
 			return Color(0.12, 0.12, 0.13)
 		YEW:
 			return Color(0.11, 0.18, 0.13)
+		GEM_QUARTZ:
+			return Color(0.85, 0.92, 1.0)
+		GEM_AMBER:
+			return Color(0.95, 0.62, 0.18)
+		GEM_TOPAZ:
+			return Color(1.0, 0.72, 0.28)
+		GEM_SAPPHIRE:
+			return Color(0.22, 0.42, 0.95)
+		GEM_EMERALD:
+			return Color(0.18, 0.85, 0.42)
+		GEM_DIAMOND:
+			return Color(0.92, 0.96, 1.0)
 		_:
 			return Color(1, 0, 1)

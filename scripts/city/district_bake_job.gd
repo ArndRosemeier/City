@@ -61,6 +61,7 @@ static func bake(params: Dictionary) -> Dictionary:
 		return {"ok": false, "error": "volume missing"}
 
 	var cells_total := cells_x * cells_z
+	var gems: Dictionary = gen.get_hill_gems()
 	return {
 		"ok": true,
 		"error": "",
@@ -79,4 +80,6 @@ static func bake(params: Dictionary) -> Dictionary:
 		"generator": gen,
 		"theme_id": theme.id,
 		"theme_name": theme.display_name,
+		"hill_gem_positions": gems.get("positions", PackedVector3Array()),
+		"hill_gem_mats": gems.get("mats", PackedInt32Array()),
 	}
