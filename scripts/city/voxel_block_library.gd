@@ -16,6 +16,9 @@ static func build() -> VoxelBlockyLibrary:
 	for id in range(1, VoxelMaterial.COUNT):
 		models.append(_make_model(id))
 	lib.models = models
+	## Our surface shader rebuilds tangent frames from world axes; generated mesh
+	## tangents from SurfaceTool UVs are unused and have been a source of bad data.
+	lib.bake_tangents = false
 	lib.bake()
 	return lib
 
@@ -26,8 +29,11 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			## Visual only — park benches / planter rims must not snag giants or walkers.
 			return _mesh_model(id, _mesh_planter(), false, false, AABB(), false)
 		VoxelMaterial.LEAVES:
-			## Walk-through foliage.
-			return _mesh_model(id, _mesh_leaves(), false, false, AABB(), false)
+			## Walk-through foliage cards (alpha cutout). transparency_index for mesher order.
+			return _mesh_model(id, _mesh_leaves(), true, false, AABB(), false)
+		VoxelMaterial.YEW:
+			## Same cross-cards as deciduous; walk-through (hedges / cypress needles).
+			return _mesh_model(id, _mesh_yew(), true, false, AABB(), false)
 		VoxelMaterial.BARK:
 			## Trunk visuals only — dense groves were trapping large CharacterBodies.
 			return _mesh_model(id, _mesh_trunk(), false, false, AABB(), false)
@@ -48,6 +54,25 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			return _mesh_model(id, _mesh_road_line(), false, true, AABB(Vector3.ZERO, Vector3.ONE))
 		VoxelMaterial.PAINT:
 			return _mesh_model(id, _mesh_flower(), false, false, AABB(), false)
+		VoxelMaterial.ROOF_SLOPE_POS_X, VoxelMaterial.ROOF_CLAY_SLOPE_POS_X:
+			## Collide with the wedge mesh itself — a full-cell discard collision mesh
+			## baked solid sides for neighbor culling (egg-crate). A full-cell AABB alone
+			## put feet on the cube top while the pitched face cut through the legs.
+			return _mesh_model_slope_collision(
+				id, _mesh_slope_45(VoxelMaterial.SLOPE_HIGH_POS_X), VoxelMaterial.SLOPE_HIGH_POS_X
+			)
+		VoxelMaterial.ROOF_SLOPE_NEG_X, VoxelMaterial.ROOF_CLAY_SLOPE_NEG_X:
+			return _mesh_model_slope_collision(
+				id, _mesh_slope_45(VoxelMaterial.SLOPE_HIGH_NEG_X), VoxelMaterial.SLOPE_HIGH_NEG_X
+			)
+		VoxelMaterial.ROOF_SLOPE_POS_Z, VoxelMaterial.ROOF_CLAY_SLOPE_POS_Z:
+			return _mesh_model_slope_collision(
+				id, _mesh_slope_45(VoxelMaterial.SLOPE_HIGH_POS_Z), VoxelMaterial.SLOPE_HIGH_POS_Z
+			)
+		VoxelMaterial.ROOF_SLOPE_NEG_Z, VoxelMaterial.ROOF_CLAY_SLOPE_NEG_Z:
+			return _mesh_model_slope_collision(
+				id, _mesh_slope_45(VoxelMaterial.SLOPE_HIGH_NEG_Z), VoxelMaterial.SLOPE_HIGH_NEG_Z
+			)
 		_:
 			return _make_cube(id)
 
@@ -90,6 +115,47 @@ static func _mesh_model(
 	if transparent:
 		model.transparency_index = 1
 	return model
+
+
+## Walkable roof wedge: physics uses the visual trimesh (matches the pitched face).
+## Stepped AABBs approximate the solid for VoxelBoxMover / voxel raycasts — never a
+## full-cell box (that floats the capsule above the slope). No second discard mesh
+## (that would bake solid sides and reintroduce the egg-crate cull bug).
+static func _mesh_model_slope_collision(
+	id: int, visual: ArrayMesh, high_toward: int
+) -> VoxelBlockyModelMesh:
+	var model := VoxelBlockyModelMesh.new()
+	var mat := block_material_for(id)
+	model.mesh = visual
+	model.set_material_override(0, mat)
+	model.set_mesh_collision_enabled(0, true)
+	model.collision_aabbs = _slope_collision_aabbs(high_toward, 4)
+	model.culls_neighbors = false
+	return model
+
+
+## Stair-step boxes under the 45° pitch (unit cell). Conservative: each strip fills
+## up to the high edge of that strip so the walk surface is never below the wedge.
+static func _slope_collision_aabbs(high_toward: int, steps: int) -> Array[AABB]:
+	var boxes: Array[AABB] = []
+	var n := maxi(steps, 1)
+	var w := 1.0 / float(n)
+	for i in range(n):
+		var t0 := float(i) * w
+		var t1 := float(i + 1) * w
+		match high_toward:
+			VoxelMaterial.SLOPE_HIGH_POS_X:
+				boxes.append(AABB(Vector3(t0, 0.0, 0.0), Vector3(w, t1, 1.0)))
+			VoxelMaterial.SLOPE_HIGH_NEG_X:
+				boxes.append(AABB(Vector3(t0, 0.0, 0.0), Vector3(w, 1.0 - t0, 1.0)))
+			VoxelMaterial.SLOPE_HIGH_POS_Z:
+				boxes.append(AABB(Vector3(0.0, 0.0, t0), Vector3(1.0, t1, w)))
+			VoxelMaterial.SLOPE_HIGH_NEG_Z:
+				boxes.append(AABB(Vector3(0.0, 0.0, t0), Vector3(1.0, 1.0 - t0, w)))
+			_:
+				push_error("VoxelBlockLibrary._slope_collision_aabbs: bad high_toward %d" % high_toward)
+				return [AABB(Vector3.ZERO, Vector3.ONE)]
+	return boxes
 
 
 static func _collision_discard_material() -> ShaderMaterial:
@@ -155,6 +221,117 @@ static func _add_quad(
 	st.add_vertex(d)
 
 
+static func _add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, n: Vector3) -> void:
+	st.set_normal(n)
+	st.set_uv(Vector2(0, 1))
+	st.add_vertex(a)
+	st.set_uv(Vector2(1, 1))
+	st.add_vertex(b)
+	st.set_uv(Vector2(0.5, 0))
+	st.add_vertex(c)
+
+
+## 45° roof wedge in the unit cube. `high_toward` is a VoxelMaterial.SLOPE_HIGH_*.
+##
+## Normals stay outward for lighting. Triangle winding is clockwise when viewed from
+## outside (Godot's front-face convention), so (b−a)×(c−a) points *inward*. The
+## opposite winding made every outside view a back face — only leftover axis edges
+## drew, which looked like a hollow egg-crate.
+static func _mesh_slope_45(high_toward: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	match high_toward:
+		VoxelMaterial.SLOPE_HIGH_POS_X:
+			_add_quad(
+				st,
+				Vector3(1, 0, 1),
+				Vector3(1, 1, 1),
+				Vector3(1, 1, 0),
+				Vector3(1, 0, 0),
+				Vector3(1, 0, 0)
+			)
+			_add_tri(st, Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(0, 0, -1))
+			_add_tri(st, Vector3(0, 0, 1), Vector3(1, 1, 1), Vector3(1, 0, 1), Vector3(0, 0, 1))
+			_add_quad(
+				st,
+				Vector3(0, 0, 0),
+				Vector3(1, 1, 0),
+				Vector3(1, 1, 1),
+				Vector3(0, 0, 1),
+				Vector3(-1, 1, 0).normalized()
+			)
+		VoxelMaterial.SLOPE_HIGH_NEG_X:
+			_add_quad(
+				st,
+				Vector3(0, 0, 0),
+				Vector3(0, 1, 0),
+				Vector3(0, 1, 1),
+				Vector3(0, 0, 1),
+				Vector3(-1, 0, 0)
+			)
+			_add_tri(st, Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 0), Vector3(0, 0, -1))
+			_add_tri(st, Vector3(1, 0, 1), Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3(0, 0, 1))
+			_add_quad(
+				st,
+				Vector3(1, 0, 1),
+				Vector3(0, 1, 1),
+				Vector3(0, 1, 0),
+				Vector3(1, 0, 0),
+				Vector3(1, 1, 0).normalized()
+			)
+		VoxelMaterial.SLOPE_HIGH_POS_Z:
+			_add_quad(
+				st,
+				Vector3(0, 0, 1),
+				Vector3(0, 1, 1),
+				Vector3(1, 1, 1),
+				Vector3(1, 0, 1),
+				Vector3(0, 0, 1)
+			)
+			_add_tri(st, Vector3(0, 0, 0), Vector3(0, 1, 1), Vector3(0, 0, 1), Vector3(-1, 0, 0))
+			_add_tri(st, Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(1, 0, 0))
+			_add_quad(
+				st,
+				Vector3(1, 0, 0),
+				Vector3(1, 1, 1),
+				Vector3(0, 1, 1),
+				Vector3(0, 0, 0),
+				Vector3(0, 1, -1).normalized()
+			)
+		VoxelMaterial.SLOPE_HIGH_NEG_Z:
+			_add_quad(
+				st,
+				Vector3(1, 0, 0),
+				Vector3(1, 1, 0),
+				Vector3(0, 1, 0),
+				Vector3(0, 0, 0),
+				Vector3(0, 0, -1)
+			)
+			_add_tri(st, Vector3(0, 0, 1), Vector3(0, 0, 0), Vector3(0, 1, 0), Vector3(-1, 0, 0))
+			_add_tri(st, Vector3(1, 0, 1), Vector3(1, 1, 0), Vector3(1, 0, 0), Vector3(1, 0, 0))
+			_add_quad(
+				st,
+				Vector3(0, 0, 1),
+				Vector3(0, 1, 0),
+				Vector3(1, 1, 0),
+				Vector3(1, 0, 1),
+				Vector3(0, 1, 1).normalized()
+			)
+		_:
+			push_error("VoxelBlockLibrary._mesh_slope_45: bad high_toward %d" % high_toward)
+			return _box_mesh(Vector3.ZERO, Vector3.ONE)
+	_add_quad(
+		st,
+		Vector3(0, 0, 0),
+		Vector3(0, 0, 1),
+		Vector3(1, 0, 1),
+		Vector3(1, 0, 0),
+		Vector3(0, -1, 0)
+	)
+	st.index()
+	return st.commit()
+
+
 ## Low open planter box (wood rim + floor).
 static func _mesh_planter() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -174,6 +351,15 @@ static func _mesh_planter() -> ArrayMesh:
 
 ## Cross-plane foliage (classic plant card).
 static func _mesh_leaves() -> ArrayMesh:
+	return _mesh_foliage_cards()
+
+
+## Yew / hedge cards — same silhouette as deciduous leaves.
+static func _mesh_yew() -> ArrayMesh:
+	return _mesh_foliage_cards()
+
+
+static func _mesh_foliage_cards() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var y0 := 0.05
@@ -217,38 +403,43 @@ static func _mesh_leaves() -> ArrayMesh:
 	return st.commit()
 
 
-## Thin trunk cylinder.
+## Thin trunk cylinder with a mild base taper.
 static func _mesh_trunk() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var sides := 8
-	var r := 0.2
+	var sides := 12
+	var r_bot := 0.24
+	var r_top := 0.18
 	var cx := 0.5
 	var cz := 0.5
 	for i in range(sides):
 		var a0 := TAU * float(i) / float(sides)
 		var a1 := TAU * float(i + 1) / float(sides)
-		var x0 := cx + cos(a0) * r
-		var z0 := cz + sin(a0) * r
-		var x1 := cx + cos(a1) * r
-		var z1 := cz + sin(a1) * r
+		var x0b := cx + cos(a0) * r_bot
+		var z0b := cz + sin(a0) * r_bot
+		var x1b := cx + cos(a1) * r_bot
+		var z1b := cz + sin(a1) * r_bot
+		var x0t := cx + cos(a0) * r_top
+		var z0t := cz + sin(a0) * r_top
+		var x1t := cx + cos(a1) * r_top
+		var z1t := cz + sin(a1) * r_top
 		var n := Vector3(cos((a0 + a1) * 0.5), 0.0, sin((a0 + a1) * 0.5)).normalized()
 		_add_quad(
 			st,
-			Vector3(x0, 0.0, z0),
-			Vector3(x1, 0.0, z1),
-			Vector3(x1, 1.0, z1),
-			Vector3(x0, 1.0, z0),
+			Vector3(x0b, 0.0, z0b),
+			Vector3(x1b, 0.0, z1b),
+			Vector3(x1t, 1.0, z1t),
+			Vector3(x0t, 1.0, z0t),
 			n
 		)
-	## Top disk (simple fan as quads from center)
+	## Top disk
 	for i in range(sides):
 		var a0 := TAU * float(i) / float(sides)
 		var a1 := TAU * float(i + 1) / float(sides)
-		var x0 := cx + cos(a0) * r
-		var z0 := cz + sin(a0) * r
-		var x1 := cx + cos(a1) * r
-		var z1 := cz + sin(a1) * r
+		var x0 := cx + cos(a0) * r_top
+		var z0 := cz + sin(a0) * r_top
+		var x1 := cx + cos(a1) * r_top
+		var z1 := cz + sin(a1) * r_top
 		st.set_normal(Vector3.UP)
 		st.set_uv(Vector2(0.5, 0.5))
 		st.add_vertex(Vector3(cx, 1.0, cz))
@@ -258,7 +449,6 @@ static func _mesh_trunk() -> ArrayMesh:
 		st.add_vertex(Vector3(x1, 1.0, z1))
 	st.index()
 	return st.commit()
-
 
 ## Recessed water surface (pond / fountain pool).
 static func _mesh_water() -> ArrayMesh:
@@ -315,6 +505,7 @@ const SURFACE_SHADER := "res://assets/city/shaders/voxel_surface.gdshader"
 const DEBRIS_SHADER := "res://assets/city/shaders/voxel_debris.gdshader"
 const GLASS_SHADER := "res://assets/city/shaders/voxel_glass.gdshader"
 const WATER_SHADER := "res://assets/city/shaders/voxel_water.gdshader"
+const FOLIAGE_SHADER := "res://assets/city/shaders/voxel_foliage.gdshader"
 ## World height of the street deck (ground_thickness+1)*voxel_size with thickness=6.
 const STREET_DECK_Y := 3.5
 ## Building lot footprint in metres (DistrictCoord.CELL_SIZE * VOXEL_WORLD_SIZE).
@@ -386,6 +577,17 @@ static func _build_surface_material(id: int, object_space: bool) -> ShaderMateri
 			mat.set_shader_parameter("wave_speed", 0.7)
 			mat.set_shader_parameter("fresnel_strength", 0.45)
 			mat.set_shader_parameter("sparkle", 1.2)
+		VoxelSurfaceSpec.Kind.FOLIAGE:
+			## UV alpha cutout — same shader for terrain and debris (no world projection).
+			mat.shader = _load_shader(FOLIAGE_SHADER)
+			mat.set_shader_parameter("albedo_tex", _tex(spec.albedo_file))
+			mat.set_shader_parameter("tint", spec.tint)
+			mat.set_shader_parameter("roughness_base", spec.roughness)
+			mat.set_shader_parameter("metallic_base", spec.metallic)
+			mat.set_shader_parameter("alpha_scissor", 0.45)
+			mat.set_shader_parameter("lot_meters", LOT_METERS)
+			mat.set_shader_parameter("tint_variation", spec.tint_variation)
+			return mat
 		_:
 			## Object-space materials are debris Multimeshes; they need a fade-capable
 			## shader. Terrain stays on the opaque surface shader.
@@ -487,7 +689,7 @@ static func infection_material(is_lead: bool) -> ShaderMaterial:
 	var shader: Shader = load("res://assets/city/shaders/infection_alive.gdshader") as Shader
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
-	var leaves: Texture2D = _tex("leaves.jpg")
+	var leaves: Texture2D = _tex("leaves.png")
 	if leaves != null:
 		mat.set_shader_parameter("albedo_tex", leaves)
 	if is_lead:

@@ -26,7 +26,8 @@ Normal maps (1K-JPG NormalGL where available):
 - stone_normal.jpg <- PavingStones128
 
 Project-authored (see generate_city_textures.py):
-- glass.jpg, water.jpg, leaves.jpg, curb.jpg, road_line.jpg, crosswalk.jpg
+- glass.jpg, water.jpg, leaves.png, curb.jpg, road_line.jpg, crosswalk.jpg
+- yew.png / yew_normal.jpg — churchyard foliage cards (alpha cutout)
 - metal.jpg / metal_normal.jpg — anodized curtain-wall panels
 - metal_plate.jpg / metal_plate_normal.jpg — riveted industrial plates
 - paint.jpg / paint_normal.jpg — painted plaster with crackle

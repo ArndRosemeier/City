@@ -17,7 +17,7 @@ pub const CAVE_WALL: i32 = 33;
 pub const CAVE_FLOOR: i32 = 34;
 pub const GRAVE_SOIL: i32 = 37;
 pub const GRAVE_PATH: i32 = 38;
-pub const COUNT: i32 = 41;
+pub const COUNT: i32 = 49;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR

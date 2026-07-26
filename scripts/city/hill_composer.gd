@@ -10,9 +10,18 @@ extends RefCounted
 var brush: CityBrush
 var rng: RandomNumberGenerator
 var ground_y: int = 6
+var stamper: TreeStamper
 ## Land-use grid — road cells come from here instead of 400k voxel probes.
 var planner: DistrictPlanner
 var cell_size: int = 28
+
+
+func _stamper() -> TreeStamper:
+	if stamper == null:
+		stamper = TreeStamper.new()
+		stamper.brush = brush
+		stamper.rng = rng
+	return stamper
 
 ## Flat verge kept beside every road and along the tile seam before the ground climbs.
 const VERGE := 7
@@ -1360,54 +1369,8 @@ func _plant_trees(density: float) -> void:
 		var surface := brush.get_vox(Vector3i(wx, y0, wz))
 		if surface != VoxelMaterial.PARK and surface != VoxelMaterial.DIRT:
 			continue
-		_tree_at(wx, y0, wz)
+		_stamper().plant_random(wx, y0, wz)
 		made += 1
-
-
-func _tree_at(x: int, y0: int, z: int) -> void:
-	match rng.randi() % 3:
-		0:
-			_tree_round(x, y0, z)
-		1:
-			_tree_tall(x, y0, z)
-		_:
-			_tree_wide(x, y0, z)
-
-
-func _tree_round(x: int, y0: int, z: int) -> void:
-	var trunk_h := 5 + rng.randi() % 3
-	var r := 3 + rng.randi() % 2
-	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	_canopy(x, y0 + trunk_h + r - 2, z, r, r - 1)
-
-
-func _tree_tall(x: int, y0: int, z: int) -> void:
-	var trunk_h := 7 + rng.randi() % 3
-	var ry := 3 + rng.randi() % 2
-	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	_canopy(x, y0 + trunk_h + ry - 2, z, 2 + rng.randi() % 2, ry)
-
-
-func _tree_wide(x: int, y0: int, z: int) -> void:
-	var trunk_h := 4 + rng.randi() % 3
-	var r := 4 + rng.randi() % 2
-	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	_canopy(x, y0 + trunk_h + 1, z, r, 2)
-
-
-func _canopy(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
-	for dy in range(-ry, ry + 1):
-		for dz in range(-rxz, rxz + 1):
-			for dx in range(-rxz, rxz + 1):
-				var n := (
-					float(dx * dx + dz * dz) / float(rxz * rxz)
-					+ float(dy * dy) / float(ry * ry)
-				)
-				if n > 1.0:
-					continue
-				if n > 0.68 and rng.randf() < 0.35:
-					continue
-				brush.set_vox(Vector3i(cx + dx, cy + dy, cz + dz), VoxelMaterial.LEAVES)
 
 
 func _height_at(x: int, z: int) -> int:

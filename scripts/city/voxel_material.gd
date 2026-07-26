@@ -54,8 +54,47 @@ const GRAVE_PATH := 38
 const WROUGHT_IRON := 39
 ## Churchyard yew — nearly black evergreen for hedges and cypresses.
 const YEW := 40
+## 45° roof wedges. High face sits on the named axis side of the cell; the pitch
+## drops toward the opposite side. Separate ids per look because the block library
+## stores one mesh per type.
+const ROOF_SLOPE_POS_X := 41
+const ROOF_SLOPE_NEG_X := 42
+const ROOF_SLOPE_POS_Z := 43
+const ROOF_SLOPE_NEG_Z := 44
+const ROOF_CLAY_SLOPE_POS_X := 45
+const ROOF_CLAY_SLOPE_NEG_X := 46
+const ROOF_CLAY_SLOPE_POS_Z := 47
+const ROOF_CLAY_SLOPE_NEG_Z := 48
 
-const COUNT := 41
+const COUNT := 49
+
+## Which cell face is the tall eaves / ridge side of a slope wedge.
+const SLOPE_HIGH_POS_X := 0
+const SLOPE_HIGH_NEG_X := 1
+const SLOPE_HIGH_POS_Z := 2
+const SLOPE_HIGH_NEG_Z := 3
+
+
+## Slope type for a flat roof material (`ROOF` or `ROOF_CLAY`) with the tall face
+## toward `high_toward` (`SLOPE_HIGH_*`). Other base mats fall back to the cube id.
+static func roof_slope(base_mat: int, high_toward: int) -> int:
+	var clay := base_mat == ROOF_CLAY
+	match high_toward:
+		SLOPE_HIGH_POS_X:
+			return ROOF_CLAY_SLOPE_POS_X if clay else ROOF_SLOPE_POS_X
+		SLOPE_HIGH_NEG_X:
+			return ROOF_CLAY_SLOPE_NEG_X if clay else ROOF_SLOPE_NEG_X
+		SLOPE_HIGH_POS_Z:
+			return ROOF_CLAY_SLOPE_POS_Z if clay else ROOF_SLOPE_POS_Z
+		SLOPE_HIGH_NEG_Z:
+			return ROOF_CLAY_SLOPE_NEG_Z if clay else ROOF_SLOPE_NEG_Z
+		_:
+			push_error("VoxelMaterial.roof_slope: unknown high_toward %d" % high_toward)
+			return base_mat
+
+
+static func is_roof_slope(id: int) -> bool:
+	return id >= ROOF_SLOPE_POS_X and id <= ROOF_CLAY_SLOPE_NEG_Z
 
 
 static func is_solid(id: int) -> bool:
@@ -184,9 +223,9 @@ static func color(id: int) -> Color:
 			return Color(0.78, 0.74, 0.68)
 		PARK, LEAVES:
 			return Color(0.28, 0.48, 0.26)
-		ROOF:
+		ROOF, ROOF_SLOPE_POS_X, ROOF_SLOPE_NEG_X, ROOF_SLOPE_POS_Z, ROOF_SLOPE_NEG_Z:
 			return Color(0.35, 0.32, 0.3)
-		ROOF_CLAY:
+		ROOF_CLAY, ROOF_CLAY_SLOPE_POS_X, ROOF_CLAY_SLOPE_NEG_X, ROOF_CLAY_SLOPE_POS_Z, ROOF_CLAY_SLOPE_NEG_Z:
 			return Color(0.55, 0.28, 0.2)
 		PLANTER:
 			return Color(0.4, 0.35, 0.28)

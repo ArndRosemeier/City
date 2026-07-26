@@ -1492,17 +1492,27 @@ func _gable_roof(umin: Vector3i, umax: Vector3i, floors: int, facing: int) -> vo
 		var inset := s
 		var y := top + s
 		if facing == 0 or facing == 1:
-			brush.fill_box(
-				Vector3i(umin.x + inset, y, umin.z),
-				Vector3i(umax.x - inset, y + 1, umax.z),
-				roof_mat
-			)
+			var x0 := umin.x + inset
+			var x1 := umax.x - inset
+			brush.fill_box(Vector3i(x0, y, umin.z), Vector3i(x1, y + 1, umax.z), roof_mat)
+			## Outer eaves of each tread become 45° wedges so the silhouette is a pitch,
+			## not a staircase. Ridge tread (width 1) stays a full cube.
+			if x1 - x0 >= 2:
+				var lo := VoxelMaterial.roof_slope(roof_mat, VoxelMaterial.SLOPE_HIGH_POS_X)
+				var hi := VoxelMaterial.roof_slope(roof_mat, VoxelMaterial.SLOPE_HIGH_NEG_X)
+				for z in range(umin.z, umax.z):
+					brush.set_vox(Vector3i(x0, y, z), lo)
+					brush.set_vox(Vector3i(x1 - 1, y, z), hi)
 		else:
-			brush.fill_box(
-				Vector3i(umin.x, y, umin.z + inset),
-				Vector3i(umax.x, y + 1, umax.z - inset),
-				roof_mat
-			)
+			var z0 := umin.z + inset
+			var z1 := umax.z - inset
+			brush.fill_box(Vector3i(umin.x, y, z0), Vector3i(umax.x, y + 1, z1), roof_mat)
+			if z1 - z0 >= 2:
+				var loz := VoxelMaterial.roof_slope(roof_mat, VoxelMaterial.SLOPE_HIGH_POS_Z)
+				var hiz := VoxelMaterial.roof_slope(roof_mat, VoxelMaterial.SLOPE_HIGH_NEG_Z)
+				for x in range(umin.x, umax.x):
+					brush.set_vox(Vector3i(x, y, z0), loz)
+					brush.set_vox(Vector3i(x, y, z1 - 1), hiz)
 
 
 func _stoop(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:

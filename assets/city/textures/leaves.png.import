@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dpt435nw2nfo8"
-path="res://.godot/imported/leaves.jpg-e225dd39ba2ff0c1a8a7cbb6aba254c3.ctex"
+uid="uid://br6577s3wnaak"
+path="res://.godot/imported/leaves.png-684b156b6200e31e3e4885352670fb4d.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/city/textures/leaves.jpg"
-dest_files=["res://.godot/imported/leaves.jpg-e225dd39ba2ff0c1a8a7cbb6aba254c3.ctex"]
+source_file="res://assets/city/textures/leaves.png"
+dest_files=["res://.godot/imported/leaves.png-684b156b6200e31e3e4885352670fb4d.ctex"]
 
 [params]
 
@@ -23,7 +23,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""

@@ -13,6 +13,8 @@ enum Kind {
 	GLASS,
 	## voxel_water.gdshader
 	WATER,
+	## voxel_foliage.gdshader — UV alpha cutout on leaf / yew cards
+	FOLIAGE,
 }
 
 var kind: Kind = Kind.OPAQUE
@@ -162,7 +164,7 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.tile_meters = Vector2(3.0, 3.0)
 			s.roughness = 0.95
 			s.weathering = 0.4
-		VoxelMaterial.ROOF:
+		VoxelMaterial.ROOF, VoxelMaterial.ROOF_SLOPE_POS_X, VoxelMaterial.ROOF_SLOPE_NEG_X, VoxelMaterial.ROOF_SLOPE_POS_Z, VoxelMaterial.ROOF_SLOPE_NEG_Z:
 			s.albedo_file = "roof.jpg"
 			s.normal_file = "roof_normal.jpg"
 			s.tile_meters = Vector2(2.5, 2.5)
@@ -171,7 +173,7 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.normal_strength = 1.05
 			s.tint_variation = 0.45
 			s.weathering = 0.7
-		VoxelMaterial.ROOF_CLAY:
+		VoxelMaterial.ROOF_CLAY, VoxelMaterial.ROOF_CLAY_SLOPE_POS_X, VoxelMaterial.ROOF_CLAY_SLOPE_NEG_X, VoxelMaterial.ROOF_CLAY_SLOPE_POS_Z, VoxelMaterial.ROOF_CLAY_SLOPE_NEG_Z:
 			## Warm terracotta pantiles — authored courses so pitched roofs read at
 			## distance instead of crushing into a flat slate slab.
 			s.albedo_file = "roof_clay.jpg"
@@ -220,7 +222,8 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.tint_variation = 0.35
 			s.weathering = 0.35
 		VoxelMaterial.LEAVES:
-			s.albedo_file = "leaves.jpg"
+			s.kind = Kind.FOLIAGE
+			s.albedo_file = "leaves.png"
 			s.tile_meters = Vector2(1.0, 1.0)
 			s.roughness = 0.88
 			s.tint_variation = 0.4
@@ -350,14 +353,12 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.grime_height = 1.5
 			s.streaks = 0.6
 		VoxelMaterial.YEW:
-			s.albedo_file = "yew.jpg"
-			s.normal_file = "yew_normal.jpg"
+			s.kind = Kind.FOLIAGE
+			s.albedo_file = "yew.png"
 			s.tile_meters = Vector2(0.9, 0.9)
 			s.tint = Color(0.6, 0.68, 0.62, 1.0)
 			s.roughness = 0.92
-			s.normal_strength = 0.7
 			s.tint_variation = 0.3
-			s.weathering = 0.45
 		_:
 			push_error(
 				"VoxelSurfaceSpec.for_id: no surface spec for voxel material %d — showing magenta"

@@ -929,39 +929,66 @@ func _district_hop_async() -> void:
 	if inst == null:
 		await _finish_district_hop_fail("missing district instance", origin_pos)
 		return
-	var guard := 0
-	while not inst.is_ready and guard < 3600:
-		guard += 1
+	## Wall-clock, not frames: headed runs sit at hundreds of FPS, so a 3600-frame
+	## budget was only a few seconds — too short for Hill / Graveyard bakes.
+	const HOP_WAIT_MS := 180_000
+	const HOP_EARLY_GROUND_MS := 4_000
+	const HOP_STATUS_EVERY_MS := 500
+	var hop_started := Time.get_ticks_msec()
+	var hop_deadline := hop_started + HOP_WAIT_MS
+	var last_status_ms := 0
+	while not inst.is_ready and Time.get_ticks_msec() < hop_deadline:
 		if not is_instance_valid(inst):
 			await _finish_district_hop_fail("district unloaded while hopping", origin_pos)
 			return
-		if guard % 45 == 0 and _loading_splash != null:
+		var elapsed_ms := Time.get_ticks_msec() - hop_started
+		if _loading_splash != null and elapsed_ms - last_status_ms >= HOP_STATUS_EVERY_MS:
+			last_status_ms = elapsed_ms
 			var phase := "ground" if not inst.is_ground_ready else "detail"
+			if inst.is_busy:
+				phase += ", baking"
 			_loading_splash.call(
 				"set_status",
-				"Loading %s %s (%s)…" % [theme.display_name, dest, phase]
+				"Loading %s %s (%s, %ds)…"
+				% [theme.display_name, dest, phase, elapsed_ms / 1000]
 			)
-		## Ground is enough to find a street spawn; keep waiting for full ready when close.
-		if inst.is_ground_ready and inst.generator != null and guard > 900 and not inst.is_busy:
+		## Ground is enough to find a street spawn once the stamp job has paused.
+		## Hill / Graveyard usually stay busy until full ready — that path waits below.
+		if (
+			inst.is_ground_ready
+			and inst.generator != null
+			and not inst.is_busy
+			and elapsed_ms >= HOP_EARLY_GROUND_MS
+		):
 			break
 		await get_tree().process_frame
 	if not is_instance_valid(inst) or inst.generator == null:
-		await _finish_district_hop_fail("district never became ready", origin_pos)
+		await _finish_district_hop_fail(
+			"district never became ready after %ds"
+			% [(Time.get_ticks_msec() - hop_started) / 1000],
+			origin_pos
+		)
+		return
+	if not inst.is_ready and not inst.is_ground_ready:
+		await _finish_district_hop_fail(
+			"district still empty after %ds"
+			% [(Time.get_ticks_msec() - hop_started) / 1000],
+			origin_pos
+		)
 		return
 	if _loading_splash != null:
 		_loading_splash.call("set_status", "Finding spawn in %s…" % theme.display_name)
 	var spawn: Vector3 = inst.generator.find_spawn_world(_tool)
 	if not _has_solid_ground_at(spawn):
-		var gguard := 0
-		while not _has_solid_ground_at(spawn) and gguard < 600:
-			gguard += 1
+		var ground_deadline := Time.get_ticks_msec() + 45_000
+		while not _has_solid_ground_at(spawn) and Time.get_ticks_msec() < ground_deadline:
 			await get_tree().process_frame
 		spawn = inst.generator.find_spawn_world(_tool)
 	walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	walker.velocity = Vector3.ZERO
 	if _loading_splash != null:
 		_loading_splash.call("set_status", "Waiting for ground collisions…")
-	var floor_y := await _wait_floor_collision(spawn, 1800)
+	var floor_y := await _wait_floor_collision_ms(spawn, 60_000)
 	if is_nan(floor_y):
 		await _finish_district_hop_fail("no ground collision at hop spawn", origin_pos)
 		return
@@ -1129,9 +1156,8 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	## Verify stamped ground exists under spawn (voxel data, not just mesh flag).
 	if not _has_solid_ground_at(spawn):
 		_status.text = "Waiting for stamped ground…"
-		var gguard := 0
-		while not _has_solid_ground_at(spawn) and gguard < 600:
-			gguard += 1
+		var ground_deadline := Time.get_ticks_msec() + 45_000
+		while not _has_solid_ground_at(spawn) and Time.get_ticks_msec() < ground_deadline:
 			await get_tree().process_frame
 		spawn = gen.find_spawn_world(_tool)
 
@@ -1244,10 +1270,17 @@ func _has_solid_ground_at(world: Vector3) -> bool:
 
 
 func _wait_floor_collision(spawn: Vector3, max_frames: int = 1800) -> float:
+	## Boot path still passes a frame budget; map it to wall-clock at 60 Hz so a
+	## unlocked render loop cannot burn the whole wait in a few seconds.
+	return await _wait_floor_collision_ms(spawn, maxi(1, max_frames) * 1000 / 60)
+
+
+func _wait_floor_collision_ms(spawn: Vector3, max_ms: int = 60_000) -> float:
 	## Returns floor Y, or NAN if never found. Physics stays disabled until this succeeds.
-	var guard := 0
-	while guard < max_frames:
-		guard += 1
+	var deadline := Time.get_ticks_msec() + max_ms
+	var started := Time.get_ticks_msec()
+	var last_status := 0
+	while Time.get_ticks_msec() < deadline:
 		if _walker == null or not is_instance_valid(_walker):
 			return NAN
 		var space := _walker.get_world_3d().direct_space_state
@@ -1259,8 +1292,15 @@ func _wait_floor_collision(spawn: Vector3, max_frames: int = 1800) -> float:
 		var hit := space.intersect_ray(q)
 		if not hit.is_empty():
 			return float(hit.position.y)
-		if guard % 45 == 0 and _status != null:
-			_status.text = "Waiting for ground collisions… (%d)" % guard
+		var elapsed := Time.get_ticks_msec() - started
+		if elapsed - last_status >= 500:
+			last_status = elapsed
+			if _status != null:
+				_status.text = "Waiting for ground collisions… (%ds)" % (elapsed / 1000)
+			if _loading_splash != null and _district_hopping:
+				_loading_splash.call(
+					"set_status", "Waiting for ground collisions… (%ds)" % (elapsed / 1000)
+				)
 		await get_tree().physics_frame
 	return NAN
 

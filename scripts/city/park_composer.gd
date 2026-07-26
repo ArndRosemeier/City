@@ -5,6 +5,7 @@ extends RefCounted
 var brush: CityBrush
 var rng: RandomNumberGenerator
 var ground_y: int = 1
+var stamper: TreeStamper
 
 
 ## Main promenade / loop path width in voxels (0.5 m each).
@@ -12,6 +13,14 @@ const PROMENADE_W := 5
 const LOOP_W := 3
 ## How far the loop path sits inside the park border.
 const LOOP_INSET := 7
+
+
+func _stamper() -> TreeStamper:
+	if stamper == null:
+		stamper = TreeStamper.new()
+		stamper.brush = brush
+		stamper.rng = rng
+	return stamper
 
 
 func compose_large(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -44,7 +53,7 @@ func compose_pocket(min_v: Vector3i, max_v: Vector3i) -> void:
 		var z := rng.randi_range(min_v.z + 5, max_v.z - 6)
 		if not _is_plantable(x, z):
 			continue
-		_tree_round(x, ground_y, z)
+		_stamper().round_tree(x, ground_y, z)
 	var cz := (min_v.z + max_v.z) / 2
 	var bx := (min_v.x + max_v.x) / 2 - 1
 	var bz := cz + 3
@@ -101,7 +110,7 @@ func compose_courtyard_garden(hole_min: Vector3i, hole_max: Vector3i) -> void:
 	)
 	brush.set_vox(Vector3i(cx, ground_y + 1, cz), VoxelMaterial.PLANTER)
 	brush.set_vox(Vector3i(cx, ground_y + 2, cz), VoxelMaterial.LEAVES)
-	_tree(cx - 2, ground_y, cz - 2)
+	_stamper().plant_random(cx - 2, ground_y, cz - 2)
 
 
 func _lawn(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -280,7 +289,7 @@ func _grove(min_v: Vector3i, max_v: Vector3i, count: int) -> void:
 		var z := rng.randi_range(min_v.z + 2, max_v.z - 3)
 		if brush.get_vox(Vector3i(x, ground_y, z)) == VoxelMaterial.WATER:
 			continue
-		_tree(x, ground_y, z)
+		_stamper().plant_random(x, ground_y, z)
 
 
 func _allee(
@@ -301,7 +310,7 @@ func _allee(
 				continue
 			if not _is_plantable(x, z):
 				continue
-			_tree_tall(x, ground_y, z)
+			_stamper().tall_tree(x, ground_y, z)
 		i += step
 
 
@@ -330,7 +339,7 @@ func _groves(min_v: Vector3i, max_v: Vector3i) -> void:
 				continue
 			if not _is_plantable(tx, tz):
 				continue
-			_tree(tx, ground_y, tz)
+			_stamper().plant_random(tx, ground_y, tz)
 
 
 func _edge_planting(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -440,59 +449,6 @@ func _near_path(x0: int, z0: int, w: int, d: int) -> bool:
 	return false
 
 
-func _tree(x: int, y0: int, z: int) -> void:
-	var recipe := rng.randi() % 3
-	match recipe:
-		0:
-			_tree_round(x, y0, z)
-		1:
-			_tree_tall(x, y0, z)
-		_:
-			_tree_wide(x, y0, z)
-
-
-## Voxels are 0.5 m, so the old 3-voxel trunks and single leaf plate were 1.5 m shrubs
-## on sticks. Park trees are sized in real metres: 3–7 m of trunk under a canopy that is
-## several metres across and tall enough to read as a volume from the ground.
-func _tree_round(x: int, y0: int, z: int) -> void:
-	var trunk_h := 5 + rng.randi() % 3
-	var r := 3 + rng.randi() % 2
-	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	_canopy(x, y0 + trunk_h + r - 2, z, r, r - 1)
-
-
-func _tree_tall(x: int, y0: int, z: int) -> void:
-	## Narrow upright crown — the promenade rows and street accents.
-	var trunk_h := 7 + rng.randi() % 3
-	var ry := 3 + rng.randi() % 2
-	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	_canopy(x, y0 + trunk_h + ry - 2, z, 2 + rng.randi() % 2, ry)
-
-
-func _tree_wide(x: int, y0: int, z: int) -> void:
-	## Low spreading crown — shade tree on the lawn.
-	var trunk_h := 4 + rng.randi() % 3
-	var r := 4 + rng.randi() % 2
-	brush.column(x, z, y0 + 1, y0 + 1 + trunk_h, VoxelMaterial.BARK)
-	_canopy(x, y0 + trunk_h + 1, z, r, 2)
-
-
-func _canopy(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
-	## Ellipsoid leaf mass with a ragged rim so crowns are not identical blobs.
-	for dy in range(-ry, ry + 1):
-		for dz in range(-rxz, rxz + 1):
-			for dx in range(-rxz, rxz + 1):
-				var n := (
-					float(dx * dx + dz * dz) / float(rxz * rxz)
-					+ float(dy * dy) / float(ry * ry)
-				)
-				if n > 1.0:
-					continue
-				if n > 0.68 and rng.randf() < 0.35:
-					continue
-				brush.set_vox(Vector3i(cx + dx, cy + dy, cz + dz), VoxelMaterial.LEAVES)
-
-
 func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	## Cheap far-tile greens: lawn already painted; drop a few canopy blobs only.
 	var w := max_v.x - min_v.x
@@ -503,4 +459,4 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	for _i in range(count):
 		var x := rng.randi_range(min_v.x + 2, max_v.x - 3)
 		var z := rng.randi_range(min_v.z + 2, max_v.z - 3)
-		_tree_round(x, ground_y, z)
+		_stamper().round_tree(x, ground_y, z)

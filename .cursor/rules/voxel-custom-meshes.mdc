@@ -1,0 +1,70 @@
+---
+description: Custom VoxelBlockyModelMesh pitfalls (winding, collision surfaces, tangents) — read before adding non-cube voxel types like roof slopes, curbs, props
+globs: scripts/city/voxel_block_library.gd,scripts/city/voxel_material.gd,scripts/city/voxel_surface_spec.gd,assets/city/shaders/**/*.gdshader*
+alwaysApply: false
+---
+
+# Custom voxel meshes (VoxelBlockyModelMesh)
+
+When adding non-cube block types (slopes, props, inset glass, etc.), follow this — pitched roofs once rendered as a hollow “egg-crate” because of it.
+
+## Face winding (Godot front faces)
+
+Godot culls with **clockwise = front** when viewed from outside. For each triangle, `(b−a)×(c−a)` must point **inward** while vertex **normals stay outward** for lighting.
+
+```gdscript
+# ❌ BAD — RH cross parallel to outward normal → outside views are back faces
+_add_quad(st, a, b, c, d, outward_n)  # if that order makes cross ≈ outward_n
+
+# ✅ GOOD — reverse corner order so cross ≈ -outward_n; keep set_normal(outward_n)
+```
+
+**Symptom if wrong:** axis-aligned leftovers only (vertical/horizontal “waffle”), pitched/diagonal faces missing; brick cubes still look fine.
+
+**Check:** for every tri, `cross.normalized().dot(normal) < -0.9`. See `tools/test_roof_slope_winding.gd`.
+
+Do **not** assume `_box_mesh` / curb order is safe for new shapes — verify with the cross·normal test and a headed MeshInstance with `CULL_BACK` (flat `StandardMaterial3D` first, then the city shader).
+
+## Collision vs visuals (two different bugs)
+
+City terrain uses `generate_collisions` (Godot physics trimeshes from model surfaces). `collision_aabbs` are separate — VoxelBoxMover / voxel raycasts only.
+
+### 1) Egg-crate / hollow waffle (culling)
+
+`_with_collision_box` adds a full-cell mesh as surface 1 with a discard material. That geometry is still **baked into side-culling patterns**. Neighbors drop faces as if the cell were solid; discard hides the cube → holes / egg-crate.
+
+**Never** attach a second full-cell discard mesh to partial fills (roof wedges).
+
+### 2) Legs sunk into walkable slopes (physics)
+
+`generate_collisions` only builds colliders from surfaces with `set_mesh_collision_enabled` true. A **full-cell `collision_aabbs` alone** (mesh collision off) makes the capsule stand on the cube top while the pitched visual cuts through the legs.
+
+| Approach | Result |
+|----------|--------|
+| Visual + discard full-cell collision mesh | Egg-crate cull bug |
+| Mesh collision off + full-cell AABB | Legs sunk into roof |
+| `_mesh_model_slope_collision` | Correct |
+
+**Walkable slopes** (`_mesh_model_slope_collision`):
+
+- One visual surface only; `set_mesh_collision_enabled(0, true)` so physics follows the pitched trimesh
+- Stepped `collision_aabbs` via `_slope_collision_aabbs` (not a single `[0,1]³` box)
+- `culls_neighbors = false`
+
+**Full-cell / dual-surface** (glass): `_with_collision_box` is OK; discard on surface 1, mesh collision on that surface.
+
+**Walk-through props** (leaves, bark, flowers): mesh collision off, empty `collision_aabbs`, `collision_mask = 0`.
+
+## Tangents
+
+`VoxelBlockyLibrary.bake_tangents` stays **false**. City `voxel_surface.gdshader` rebuilds tangent frames from world axes; SurfaceTool UV tangents are unused and have been a source of bad data.
+
+## Verify before calling it done
+
+1. Headless: `tools/test_roof_slope_winding.gd` (winding, single surface, mesh collision on, stepped AABBs — not full-cell).
+2. Headed close-up: MeshInstance + `CULL_BACK` flat color (geometry), then city material.
+3. Same shape via `VoxelTerrain` + `VoxelMesherBlocky` (mesher path ≠ MeshInstance-only).
+4. Walk the surface in-game: feet on the pitch, not floating above or sunk through it.
+5. Optional: count “inner sky” pixels inside the roof silhouette — hollow meshes score high; solid ≈ 0.
+
+Tile albedo/normal maps can look grid-like on a **solid** slope; don’t confuse texture with missing faces — confirm with flat-color render or inner-sky metric.

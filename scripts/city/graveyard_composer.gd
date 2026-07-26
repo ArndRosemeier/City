@@ -10,8 +10,17 @@ extends RefCounted
 var brush: CityBrush
 var rng: RandomNumberGenerator
 var ground_y: int = 6
+var stamper: TreeStamper
 var planner: DistrictPlanner
 var cell_size: int = 28
+
+
+func _stamper() -> TreeStamper:
+	if stamper == null:
+		stamper = TreeStamper.new()
+		stamper.brush = brush
+		stamper.rng = rng
+	return stamper
 
 ## Yard height above the street deck — room for walkable catacombs underneath.
 const YARD_RISE := 8
@@ -600,16 +609,27 @@ func _build_chapel() -> void:
 		Vector3i(wx1 - 1, deck + 2, wz1 - 1),
 		VoxelMaterial.GRAVE_MARBLE
 	)
-	## Pitched roof ridge along X.
+	## Pitched roof ridge along X — solid fill under a 45° slope skin.
 	var roof_peak := wall_top + 4
+	var ridge_z := _oz + cz
 	for z in range(wz0 - 1, wz1 + 1):
 		for x in range(wx0 - 1, wx1 + 1):
-			var dist := absi(z - (_oz + cz))
+			var dist := absi(z - ridge_z)
 			var y_top := roof_peak - dist
 			if y_top < wall_top:
 				continue
-			for y in range(wall_top, y_top + 1):
+			for y in range(wall_top, y_top):
 				brush.set_vox(Vector3i(x, y, z), VoxelMaterial.ROOF)
+			var skin := VoxelMaterial.ROOF
+			if z < ridge_z:
+				skin = VoxelMaterial.roof_slope(
+					VoxelMaterial.ROOF, VoxelMaterial.SLOPE_HIGH_POS_Z
+				)
+			elif z > ridge_z:
+				skin = VoxelMaterial.roof_slope(
+					VoxelMaterial.ROOF, VoxelMaterial.SLOPE_HIGH_NEG_Z
+				)
+			brush.set_vox(Vector3i(x, y_top, z), skin)
 	## Steeple on the north end.
 	var sx := _ox + cx
 	var sz := _oz + cz - 4
@@ -1102,47 +1122,13 @@ func _plant_trees(density: float) -> void:
 ## Churchyard cypress: a narrow black spire, not a round park canopy.
 func _cypress_at(x: int, z: int) -> void:
 	var base := ground_y + _height_at(x, z)
-	var wx := _ox + x
-	var wz := _oz + z
-	var trunk := 4 + rng.randi() % 3
-	var h := 9 + rng.randi() % 7
-	for dy in range(trunk):
-		brush.set_vox(Vector3i(wx, base + 1 + dy, wz), VoxelMaterial.BARK)
-	for dy in range(h):
-		var t := float(dy) / float(h - 1)
-		## Bare trunk, then a spindle crown that tapers to a point.
-		var r := 1 if t < 0.15 else (2 if t < 0.6 else (1 if t < 0.9 else 0))
-		for dz in range(-r, r + 1):
-			for dx in range(-r, r + 1):
-				if absi(dx) == r and absi(dz) == r and r > 1:
-					continue
-				if rng.randf() < 0.1:
-					continue
-				brush.set_vox(
-					Vector3i(wx + dx, base + trunk + dy, wz + dz), VoxelMaterial.YEW
-				)
+	_stamper().cypress(_ox + x, base, _oz + z)
 
 
 ## Bare skeleton tree — silhouette only, no foliage at all.
 func _dead_tree_at(x: int, z: int) -> void:
 	var base := ground_y + _height_at(x, z)
-	var wx := _ox + x
-	var wz := _oz + z
-	var h := 8 + rng.randi() % 5
-	for dy in range(h):
-		brush.set_vox(Vector3i(wx, base + 1 + dy, wz), VoxelMaterial.BARK)
-	for _b in range(3 + rng.randi() % 3):
-		var y := base + 4 + rng.randi() % maxi(h - 3, 1)
-		var dirs: Array[Vector2i] = [
-			Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
-		]
-		var dir := dirs[rng.randi() % 4]
-		var px := wx
-		var pz := wz
-		for step in range(1 + rng.randi() % 2):
-			px += dir.x
-			pz += dir.y
-			brush.set_vox(Vector3i(px, y + step, pz), VoxelMaterial.BARK)
+	_stamper().dead_tree(_ox + x, base, _oz + z)
 
 
 ## ── Catacombs (dressed masonry — boxes and right angles only) ──────────────

@@ -33,6 +33,14 @@ def _save_img(img: Image.Image, name: str) -> None:
     print(f"Wrote {path}")
 
 
+def _save_rgba(arr: np.ndarray, name: str) -> None:
+    """Write an HxWx4 uint8 array as PNG (foliage albedo + cutout alpha)."""
+    path = OUT / name
+    img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="RGBA")
+    img.save(path, "PNG")
+    print(f"Wrote {path}")
+
+
 def _wrap_coords(y: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return y % SIZE, x % SIZE
 
@@ -167,18 +175,27 @@ def make_water() -> None:
 
 
 def make_leaves() -> None:
-    img = Image.new("RGB", (SIZE, SIZE), (45, 95, 40))
-    pixels = img.load()
-    rng = random.Random(19)
-    for y in range(SIZE):
-        for x in range(SIZE):
-            n = rng.randint(-25, 25)
-            blotch = int(18 * math.sin(x * 0.04) * math.cos(y * 0.035))
-            g = 95 + n + blotch
-            r = 45 + n // 2
-            b = 35 + n // 3
-            pixels[x, y] = (max(20, r), max(40, min(160, g)), max(20, b))
-    _save_img(img, "leaves.jpg")
+    """Deciduous card albedo with soft leaf-cluster alpha for scissor cutout."""
+    cover = _value_noise(19, octaves=5, base=10.0)
+    detail = _value_noise(23, octaves=3, base=48.0)
+    holes = _value_noise(29, octaves=4, base=22.0)
+    # Dense clumps with ragged gaps — scissor ~0.45 reads as leaf cards, not cheese.
+    alpha = np.clip((cover - 0.28) * 2.4 + (detail - 0.5) * 0.55 - (holes - 0.55) * 1.1, 0.0, 1.0)
+    alpha = np.power(alpha, 0.85)
+    base = np.array([45.0, 95.0, 40.0])
+    lit = np.array([70.0, 140.0, 55.0])
+    rgb = base + (lit - base) * cover[..., None]
+    rgb += (detail[..., None] - 0.5) * 28.0
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE]
+    blotch = 18.0 * np.sin(xx * 0.04) * np.cos(yy * 0.035)
+    rgb[..., 1] += blotch
+    rgb = np.clip(rgb, 20, 180)
+    rgba = np.dstack([rgb, alpha * 255.0])
+    _save_rgba(rgba, "leaves.png")
+    old = OUT / "leaves.jpg"
+    if old.exists():
+        old.unlink()
+        print(f"Removed {old}")
 
 
 def make_metal() -> None:
@@ -480,10 +497,11 @@ def make_wrought_iron() -> None:
 
 
 def make_yew() -> None:
-    """Churchyard yew: matted near-black needles with a few grey-green highlights."""
+    """Churchyard yew: matted near-black needles + cutout alpha; normal stays JPG."""
     mat = _value_noise(283, octaves=5, base=14.0)
     needle = _value_noise(289, octaves=3, base=96.0)
-    gap = (_value_noise(293, octaves=3, base=20.0) < 0.3).astype(np.float64)
+    gap_n = _value_noise(293, octaves=3, base=20.0)
+    gap = (gap_n < 0.3).astype(np.float64)
     base = np.array([26.0, 42.0, 30.0])
     lit = np.array([58.0, 78.0, 56.0])
     rgb = base + (lit - base) * (mat[..., None] * 0.7)
@@ -495,7 +513,16 @@ def make_yew() -> None:
         ..., None
     ] * 0.6
     height = 0.5 + 0.3 * needle + 0.2 * mat - 0.35 * gap
-    _save_pair(rgb, height, "yew", 9.0)
+    # Needle clumps opaque; gaps and thin mat areas go transparent for cards.
+    alpha = np.clip((mat - 0.22) * 2.2 + (needle - 0.4) * 0.8 - gap_n * 0.9, 0.0, 1.0)
+    alpha = np.power(alpha, 0.9)
+    rgba = np.dstack([np.clip(rgb, 0, 255), alpha * 255.0])
+    _save_rgba(rgba, "yew.png")
+    _save_rgb(_height_to_normal(height, 9.0), "yew_normal.jpg")
+    old = OUT / "yew.jpg"
+    if old.exists():
+        old.unlink()
+        print(f"Removed {old}")
 
 
 def main() -> int:

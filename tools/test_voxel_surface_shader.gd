@@ -1,4 +1,4 @@
-## Voxel surface shader check: compiles the three shared shaders, asserts every uniform
+## Voxel surface shader check: compiles the shared shaders, asserts every uniform
 ## the library sets exists, verifies each voxel type has a surface spec, and renders a
 ## real-scale preview PNG (brick wall / asphalt / grass / glass / water).
 extends SceneTree
@@ -6,6 +6,7 @@ extends SceneTree
 const SURFACE_SHADER := "res://assets/city/shaders/voxel_surface.gdshader"
 const GLASS_SHADER := "res://assets/city/shaders/voxel_glass.gdshader"
 const WATER_SHADER := "res://assets/city/shaders/voxel_water.gdshader"
+const FOLIAGE_SHADER := "res://assets/city/shaders/voxel_foliage.gdshader"
 const OUT_PNG := "res://tools/voxel_surface_preview.png"
 
 ## Names VoxelBlockLibrary sets from GDScript — each must exist as a shader uniform.
@@ -24,6 +25,10 @@ const REQUIRED_UNIFORMS := {
 		"albedo_tex", "tile_meters", "tint", "deep_tint", "roughness_base", "metallic_base",
 		"object_space", "scroll_speed", "wave_scale", "wave_strength", "wave_speed",
 		"fresnel_strength", "sparkle",
+	],
+	FOLIAGE_SHADER: [
+		"albedo_tex", "tint", "roughness_base", "metallic_base", "alpha_scissor",
+		"lot_meters", "tint_variation",
 	],
 }
 
@@ -70,13 +75,16 @@ func _check_specs() -> void:
 			return
 		kinds[spec.kind] = int(kinds.get(spec.kind, 0)) + 1
 	print(
-		"OK specs: %d opaque, %d glass, %d water"
+		"OK specs: %d opaque, %d glass, %d water, %d foliage"
 		% [
 			int(kinds.get(VoxelSurfaceSpec.Kind.OPAQUE, 0)),
 			int(kinds.get(VoxelSurfaceSpec.Kind.GLASS, 0)),
 			int(kinds.get(VoxelSurfaceSpec.Kind.WATER, 0)),
+			int(kinds.get(VoxelSurfaceSpec.Kind.FOLIAGE, 0)),
 		]
 	)
+	if int(kinds.get(VoxelSurfaceSpec.Kind.FOLIAGE, 0)) < 2:
+		_fail("FAIL expected LEAVES+YEW foliage kinds")
 
 
 func _slab(holder: Node3D, size: Vector3, pos: Vector3, id: int) -> void:
@@ -156,12 +164,17 @@ func _process(_delta: float) -> bool:
 	_frames += 1
 	if _frames < 30:
 		return false
-	var img: Image = root.get_texture().get_image()
-	if img == null:
-		_fail("FAIL: no viewport image")
+	## Headless builds use RendererDummy — get_image() errors there. Uniform/spec
+	## checks above are the real gate; the PNG is a headed/dev convenience.
+	if DisplayServer.get_name() == "headless":
+		print("SKIP preview PNG (headless / RendererDummy)")
 	else:
-		img.save_png(OUT_PNG)
-		print("SAVED preview: %s" % OUT_PNG)
+		var img: Image = root.get_texture().get_image()
+		if img == null:
+			_fail("FAIL: no viewport image")
+		else:
+			img.save_png(OUT_PNG)
+			print("SAVED preview: %s" % OUT_PNG)
 	if _failed:
 		print("RESULT: FAILED")
 		quit(1)
