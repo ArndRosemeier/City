@@ -98,22 +98,25 @@ static func _cottage() -> Recipe:
 
 
 static func _pool() -> Recipe:
-	var r := _recipe("pool", "Swimming Pool", "Stone-rimmed pool with water")
-	var rad := 5
+	## ~14 m diameter basin (voxels are 0.5 m); water fills 4 cells deep.
+	var r := _recipe("pool", "Swimming Pool", "Large stone-rimmed pool, 4 voxels deep")
+	var rad := 14
+	var depth := 4
 	for z in range(-rad, rad + 1):
 		for x in range(-rad, rad + 1):
 			var d2 := x * x + z * z
 			if d2 > rad * rad:
 				continue
 			var rim := d2 > (rad - 1) * (rad - 1)
+			_add(r, x, 0, z, VoxelMaterial.STONE)
 			if rim:
-				_add(r, x, 0, z, VoxelMaterial.STONE)
-				_add(r, x, 1, z, VoxelMaterial.STONE)
+				for y in range(1, depth + 1):
+					_add(r, x, y, z, VoxelMaterial.STONE)
 			else:
-				_add(r, x, 0, z, VoxelMaterial.STONE)
-				_add(r, x, 1, z, VoxelMaterial.WATER)
-	## Dive board.
-	_fill(r, -1, 2, rad - 1, 1, 2, rad + 2, VoxelMaterial.PLANTER)
+				for y in range(1, depth + 1):
+					_add(r, x, y, z, VoxelMaterial.WATER)
+	## Dive board above the waterline, sticking out past the rim.
+	_fill(r, -1, depth + 1, rad - 1, 1, depth + 1, rad + 3, VoxelMaterial.PLANTER)
 	return r
 
 

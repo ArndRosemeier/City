@@ -267,7 +267,8 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 		VoxelMaterial.WATER:
 			s.kind = Kind.WATER
 			s.albedo_file = "water.jpg"
-			s.tile_meters = Vector2(3.0, 3.0)
+			## Large tile so a pool shares one ripple sheet, not a per-metre quilt.
+			s.tile_meters = Vector2(8.0, 8.0)
 			s.tint = Color(0.5, 0.78, 0.9, 0.62)
 			s.roughness = 0.06
 			s.metallic = 0.05

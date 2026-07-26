@@ -3,19 +3,26 @@
 class_name VoxelBodyMotion
 extends RefCounted
 
+## Bit 0: solid blocks. Bit 1: water (see VoxelBlockLibrary WATER).
+const MASK_SOLID := 1
+const MASK_WATER := 2
+## Visual water surface height inside a water cell (full-cell mesh top).
+const WATER_SURFACE_LOCAL_Y := 1.0
+
 var _mover: VoxelBoxMover = VoxelBoxMover.new()
 var _terrain: VoxelTerrain
 var _on_floor: bool = false
 var _stepped_up: bool = false
 ## Last requested step height in world metres (export-facing); converted for the mover.
 var _step_height_m: float = 0.55
+var _collide_with_water: bool = true
 
 
 func setup(terrain: VoxelTerrain, max_step_height_m: float = 0.55) -> void:
 	_terrain = terrain
 	_mover.set_step_climbing_enabled(true)
-	## Match VoxelBlockyModel.collision_mask defaults (all solid models use bit 0).
-	_mover.set_collision_mask(1)
+	_collide_with_water = true
+	_apply_collision_mask()
 	set_max_step_height(max_step_height_m)
 
 
@@ -26,6 +33,20 @@ func set_max_step_height(height_m: float) -> void:
 	## converted — passing 0.55 raw only allowed a half-voxel lip.
 	var local_units := _world_metres_to_terrain_local(height_m)
 	_mover.set_max_step_height(local_units)
+
+
+func set_collide_with_water(enabled: bool) -> void:
+	if _collide_with_water == enabled:
+		return
+	_collide_with_water = enabled
+	_apply_collision_mask()
+
+
+func _apply_collision_mask() -> void:
+	var mask := MASK_SOLID
+	if _collide_with_water:
+		mask |= MASK_WATER
+	_mover.set_collision_mask(mask)
 
 
 func _world_metres_to_terrain_local(height_m: float) -> float:
@@ -48,6 +69,43 @@ func has_stepped_up() -> bool:
 
 func has_terrain() -> bool:
 	return _terrain != null and is_instance_valid(_terrain)
+
+
+## Voxel material id at a world-space point, or -1 if terrain/tool unavailable.
+func get_voxel_at_world(world_pos: Vector3) -> int:
+	if not has_terrain():
+		return -1
+	var tool := _terrain.get_voxel_tool()
+	if tool == null:
+		return -1
+	var local := _terrain.to_local(world_pos)
+	var vox := Vector3i(floori(local.x), floori(local.y), floori(local.z))
+	return int(tool.get_voxel(vox))
+
+
+## World Y of the visual water surface above/near `world_pos`, or NAN if none.
+func get_water_surface_world_y(world_pos: Vector3) -> float:
+	if not has_terrain():
+		return NAN
+	var tool := _terrain.get_voxel_tool()
+	if tool == null:
+		return NAN
+	var local := _terrain.to_local(world_pos)
+	var vx := floori(local.x)
+	var vz := floori(local.z)
+	var y_start := floori(local.y)
+	var found := -2147483648
+	for y in range(y_start + 8, y_start - 24, -1):
+		if int(tool.get_voxel(Vector3i(vx, y, vz))) == VoxelMaterial.WATER:
+			found = y
+			break
+	if found == -2147483648:
+		return NAN
+	var top := found
+	while int(tool.get_voxel(Vector3i(vx, top + 1, vz))) == VoxelMaterial.WATER:
+		top += 1
+	var surface_local := Vector3(local.x, float(top) + WATER_SURFACE_LOCAL_Y, local.z)
+	return _terrain.to_global(surface_local).y
 
 
 ## Move `body` by `velocity * delta` against voxel AABBs. Returns the applied motion.

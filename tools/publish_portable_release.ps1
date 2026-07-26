@@ -76,8 +76,10 @@ if not exist "%ROOT%\addons\city_voxel\bin\city_voxel.dll" (
 	pause
 	exit /b 1
 )
-if not exist "%ROOT%\.godot\global_script_class_cache.cfg" goto do_import
-if not exist "%ROOT%\.godot\imported" goto do_import
+dir /b "%ROOT%\.godot\global_script_class_cache.cfg" >nul 2>&1
+if errorlevel 1 goto do_import
+dir /b "%ROOT%\.godot\imported" >nul 2>&1
+if errorlevel 1 goto do_import
 goto launch
 
 :do_import
@@ -85,13 +87,15 @@ echo.
 echo First-time asset import - this can take several minutes. Please wait...
 echo.
 "%GODOT_EXE%" --headless --path "%ROOT%" --import
+dir /b "%ROOT%\.godot\global_script_class_cache.cfg" >nul 2>&1
 if errorlevel 1 (
-	echo ERROR: Godot --import failed.
+	echo ERROR: Import finished but the godot class cache is still missing.
 	pause
 	exit /b 1
 )
-if not exist "%ROOT%\.godot\global_script_class_cache.cfg" (
-	echo ERROR: Import finished but .godot class cache is still missing.
+dir /b "%ROOT%\.godot\imported" >nul 2>&1
+if errorlevel 1 (
+	echo ERROR: Import finished but the godot imported folder is still missing.
 	pause
 	exit /b 1
 )

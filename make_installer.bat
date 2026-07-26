@@ -4,8 +4,8 @@ REM Stages sources, re-imports the staged copy with Godot, then validates
 REM every script + city_poc. Zip yourself if you need an archive.
 REM
 REM Recipients use the folder, then either:
-REM   - double-click EccentriCity.bat            (play in place)
-REM   - double-click install_city.bat    (copy to Programs + shortcuts)
+REM   - double-click EccentriCity.bat            - play in place
+REM   - double-click install_city.bat    - copy to Programs + shortcuts
 REM
 REM Usage:
 REM   make_installer.bat
@@ -64,8 +64,8 @@ if not exist "%ROOT%\tools\godot\%GODOT_NAME%" (
 
 echo.
 echo [2/3] Staging portable folder + baking Godot import...
-echo   ^(Copies sources, then runs headless --import on the staged copy so new
-echo    scripts, class_name types, and preloaded GLBs/audio are always current.^)
+echo   Copies sources, then runs headless --import on the staged copy so new
+echo   scripts, class_name types, and preloaded GLBs/audio are always current.
 if exist "%OUT_DIR%" rmdir /S /Q "%OUT_DIR%"
 mkdir "%OUT_DIR%" 2>nul
 
@@ -79,9 +79,12 @@ if not "!STAGE_ERR!"=="0" (
 
 REM Keep the end-user installer + deps helper inside the package.
 copy /Y "%ROOT%\install_city.bat" "%OUT_DIR%\install_city.bat" >nul
+if not exist "%OUT_DIR%\tools" mkdir "%OUT_DIR%\tools"
 if exist "%ROOT%\tools\ensure_city_deps.ps1" (
-    if not exist "%OUT_DIR%\tools" mkdir "%OUT_DIR%\tools"
     copy /Y "%ROOT%\tools\ensure_city_deps.ps1" "%OUT_DIR%\tools\ensure_city_deps.ps1" >nul
+)
+if exist "%ROOT%\tools\check_godot_import_artifacts.ps1" (
+    copy /Y "%ROOT%\tools\check_godot_import_artifacts.ps1" "%OUT_DIR%\tools\check_godot_import_artifacts.ps1" >nul
 )
 
 (
@@ -98,7 +101,7 @@ echo.
 echo Notes
 echo -----
 echo - Package includes a full Godot import + script class cache.
-echo   Keep the .godot folder; deleting it forces a long re-import.
+echo   Keep the godot cache folder ^(.godot^); deleting it forces a long re-import.
 echo - Needs a 64-bit Windows 10/11 PC. No Rust/Visual Studio required.
 echo - If the engine binary is missing, install_city.bat / EccentriCity.bat can
 echo   re-download Godot 4.6 + Voxel Tools ^(internet required^).

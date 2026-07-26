@@ -3,8 +3,8 @@ render_mode blend_mix, depth_draw_opaque, cull_disabled, diffuse_burley, specula
 
 #include "res://assets/city/shaders/voxel_projection.gdshaderinc"
 
-/// Pond / fountain water. Two texture layers scroll against each other and a noise
-/// gradient perturbs the normal, so a still voxel pool gets moving highlights.
+/// Pond / pool water. UVs and ripples are locked to world XZ so a multi-voxel
+/// body shares one continuous sheet instead of restarting per cube face.
 
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec2 tile_meters = vec2(4.0, 4.0);
@@ -12,6 +12,7 @@ uniform vec4 tint : source_color = vec4(0.35, 0.62, 0.78, 0.62);
 uniform vec4 deep_tint : source_color = vec4(0.08, 0.2, 0.3, 1.0);
 uniform float roughness_base : hint_range(0.0, 1.0) = 0.06;
 uniform float metallic_base : hint_range(0.0, 1.0) = 0.05;
+/// Kept for material API parity with other voxel surface shaders (unused here).
 uniform float object_space : hint_range(0.0, 1.0) = 0.0;
 uniform float scroll_speed : hint_range(0.0, 1.0) = 0.045;
 uniform float wave_scale : hint_range(0.1, 8.0) = 1.6;
@@ -21,30 +22,16 @@ uniform float fresnel_strength : hint_range(0.0, 1.0) = 0.45;
 uniform float sparkle : hint_range(0.0, 4.0) = 1.2;
 
 varying vec3 v_world;
-varying vec3 v_object;
 varying vec3 v_world_normal;
-varying vec3 v_object_normal;
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	v_object = VERTEX;
 	v_world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
-	v_object_normal = normalize(NORMAL);
 }
 
 void fragment() {
-	vec3 p = v_world;
-	vec3 n = v_world_normal;
-	if (object_space > 0.5) {
-		p = v_object;
-		n = v_object_normal;
-	}
-
-	vec2 uv;
-	vec3 axis_u;
-	vec3 axis_v;
-	vx_project(p, n, uv, axis_u, axis_v);
-	uv /= max(tile_meters, vec2(0.01, 0.01));
+	vec2 tile = max(tile_meters, vec2(0.01, 0.01));
+	vec2 uv = v_world.xz / tile;
 
 	vec2 drift = vec2(TIME * scroll_speed, TIME * scroll_speed * 0.6);
 	// The water albedo map is nearly flat, so the look comes from the ripple field;
@@ -64,26 +51,24 @@ void fragment() {
 	float hz = vx_value_noise(q + vec3(0.0, e, 0.0)) * 0.7 + vx_value_noise(q2 + vec3(0.0, e, 0.0)) * 0.3;
 	vec2 grad = vec2(hx - h0, hz - h0) / e;
 
-	mat4 to_view = VIEW_MATRIX;
-	if (object_space > 0.5) {
-		to_view = VIEW_MATRIX * MODEL_MATRIX;
-	}
-	vec3 tv = normalize((to_view * vec4(axis_u, 0.0)).xyz);
-	vec3 bv = normalize((to_view * vec4(axis_v, 0.0)).xyz);
+	// Bend in view space using a fixed XZ tangent frame (same on every face).
+	vec3 tv = normalize((VIEW_MATRIX * vec4(1.0, 0.0, 0.0, 0.0)).xyz);
+	vec3 bv = normalize((VIEW_MATRIX * vec4(0.0, 0.0, 1.0, 0.0)).xyz);
 	vec3 nv = normalize(NORMAL);
 	vec3 bent = normalize(nv - (tv * grad.x + bv * grad.y) * wave_strength);
 	NORMAL = bent;
 
 	float fres = pow(1.0 - clamp(dot(bent, VIEW), 0.0, 1.0), 4.0);
-	// Deeper looking straight down, brighter at grazing angles.
-	vec3 albedo = mix(deep_tint.rgb, surface * tint.rgb, 0.45 + 0.45 * fres);
+	// Side walls of a deep pool face mostly sideways — still tint from the same sheet.
+	float upness = clamp(abs(v_world_normal.y), 0.0, 1.0);
+	vec3 albedo = mix(deep_tint.rgb, surface * tint.rgb, 0.35 + 0.5 * fres * upness);
 	albedo *= 0.85 + 0.3 * h0;
 
 	ALBEDO = albedo;
 	/// MultiMesh debris fades via instance COLOR.a; terrain meshes leave it at 1.
-	ALPHA = clamp(tint.a + fres * fresnel_strength, 0.0, 1.0) * COLOR.a;
+	ALPHA = clamp(tint.a + fres * fresnel_strength * upness, 0.0, 1.0) * COLOR.a;
 	ROUGHNESS = clamp(roughness_base + h0 * 0.05, 0.0, 1.0);
 	METALLIC = metallic_base;
 	SPECULAR = 1.0;
-	EMISSION = vec3(0.06, 0.12, 0.16) * sparkle * pow(h0, 6.0);
+	EMISSION = vec3(0.06, 0.12, 0.16) * sparkle * pow(h0, 6.0) * upness;
 }

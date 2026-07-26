@@ -38,8 +38,17 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			## Trunk visuals only — dense groves were trapping large CharacterBodies.
 			return _mesh_model(id, _mesh_trunk(), false, false, AABB(), false)
 		VoxelMaterial.WATER:
-			## Pool surface only — don't trap the player in an invisible full cell.
-			return _mesh_model(id, _mesh_water(), true, false, AABB(Vector3(0.02, 0.15, 0.02), Vector3(0.96, 0.48, 0.96)))
+			## Full-cell visual + neighbor cull so a pool reads as one volume, not a
+			## grid of inset slabs. Collision stays recessed on bit 1 (swim ignores it).
+			var water := _mesh_model(
+				id,
+				_mesh_water(),
+				true,
+				true,
+				AABB(Vector3(0.02, 0.15, 0.02), Vector3(0.96, 0.48, 0.96))
+			)
+			water.collision_mask = 2
+			return water
 		VoxelMaterial.GLASS:
 			## Visual stays inset, but collision fills the cell. An inset box left
 			## 0.1–0.12 voxel seams between neighbouring panes — the capsule could
@@ -450,9 +459,9 @@ static func _mesh_trunk() -> ArrayMesh:
 	st.index()
 	return st.commit()
 
-## Recessed water surface (pond / fountain pool).
+## Full cell — shared faces cull between adjacent WATER so bodies look continuous.
 static func _mesh_water() -> ArrayMesh:
-	return _box_mesh(Vector3(0.02, 0.15, 0.02), Vector3(0.98, 0.62, 0.98))
+	return _box_mesh(Vector3.ZERO, Vector3.ONE)
 
 
 ## Inset window pane.

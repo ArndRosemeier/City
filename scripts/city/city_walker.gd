@@ -47,7 +47,21 @@ const ANIM_SPRINT := &"Sprint"
 const ANIM_JUMP_START := &"Jump_Start"
 const ANIM_JUMP_LOOP := &"Jump_Loop"
 const ANIM_JUMP_LAND := &"Jump_Land"
+## Godot strips the "_Loop" import suffix — glTF names are Swim_*_Loop.
+const ANIM_SWIM_IDLE := &"Swim_Idle"
+const ANIM_SWIM_FWD := &"Swim_Fwd"
 const LIB_NAME := &"quat"
+## Horizontal move multiplier while standing in WATER voxels.
+const SWIM_SPEED_FACTOR := 0.5
+## How far below the water surface the capsule sole sits while swimming (chest-deep).
+const SWIM_SUBMERGE_M := 1.10
+const UNDERWATER_OVERLAY_SHADER := "res://assets/city/shaders/character_underwater_overlay.gdshader"
+## Keep overlay attached briefly so one dry sample does not pop the tint off.
+const SWIM_OVERLAY_LATCH_SEC := 0.2
+## Forward+up boost when hopping out of a pool (does not require jump key).
+const SWIM_EXIT_BOOST_SEC := 0.4
+## After a rim hop, ignore water so submersion cannot pull us back in.
+const SWIM_EXIT_IMMUNE_SEC := 0.55
 
 @export var walk_speed: float = 5.0
 @export var sprint_speed: float = 8.5
@@ -248,6 +262,15 @@ var _charge_ring_mesh_b: TorusMesh
 var _charge_ring_mat_a: StandardMaterial3D
 var _charge_ring_mat_b: StandardMaterial3D
 var _footstep_accum: float = 0.0
+## True this physics frame when feet/shins occupy a WATER voxel.
+var _swimming: bool = false
+var _underwater_overlay: ShaderMaterial
+var _underwater_meshes: Array[MeshInstance3D] = []
+var _swim_overlay_on: bool = false
+var _swim_overlay_latch: float = 0.0
+var _swim_exit_boost_left: float = 0.0
+var _swim_exit_immune_left: float = 0.0
+var _swim_exit_dir: Vector3 = Vector3.ZERO
 var _climb_mode: ClimbMode = ClimbMode.NONE
 ## Outward wall normal (flattened) while climbing.
 var _climb_wall_n: Vector3 = Vector3.ZERO
@@ -391,6 +414,7 @@ func _spawn_human(female: bool) -> void:
 func _clear_body() -> void:
 	_teardown_eye_laser()
 	_teardown_charged_blast()
+	_set_underwater_overlay(false)
 	_anim_player = null
 	_prop_mod = null
 	_mesh = null
@@ -618,6 +642,10 @@ func _setup_animation_player(body: Node3D) -> void:
 			or key == String(ANIM_WALK)
 			or key == String(ANIM_SPRINT)
 			or key == String(ANIM_JUMP_LOOP)
+			or key == String(ANIM_SWIM_IDLE)
+			or key == String(ANIM_SWIM_FWD)
+			or key == "Swim_Idle_Loop"
+			or key == "Swim_Fwd_Loop"
 			or key == "Crouch_Idle"
 			or key == "Crouch_Idle_Loop"
 		):
@@ -883,6 +911,266 @@ func _floor_contacted() -> bool:
 	if _voxel_motion != null and bool(_voxel_motion.call("has_terrain")):
 		return bool(_voxel_motion.call("is_on_floor"))
 	return is_on_floor() or _was_ray_grounded
+
+
+func _body_in_water() -> bool:
+	if _voxel_motion == null or not bool(_voxel_motion.call("has_terrain")):
+		return false
+	## Sample from sole through torso so both surface-standing and submerged count.
+	var bottom := _capsule_bottom_world_y()
+	var x := global_position.x
+	var z := global_position.z
+	for dy: float in [0.05, 0.35, 0.7, 1.1, 1.5]:
+		var id := int(
+			_voxel_motion.call("get_voxel_at_world", Vector3(x, bottom + dy * character_scale, z))
+		)
+		if id == VoxelMaterial.WATER:
+			return true
+	return false
+
+
+func _apply_swim_submersion() -> void:
+	## Ignore water colliders and hold the capsule chest-deep under the surface.
+	_voxel_motion.call("set_collide_with_water", false)
+	var surface := float(_voxel_motion.call("get_water_surface_world_y", global_position))
+	if is_nan(surface):
+		return
+	var target_bottom := surface - SWIM_SUBMERGE_M * character_scale
+	var delta_y := target_bottom - _capsule_bottom_world_y()
+	if absf(delta_y) >= 0.001:
+		global_position.y += delta_y
+	velocity.y = 0.0
+	## Shallow ponds: don't sink through the stone floor under a thin water layer.
+	if _capsule == null:
+		return
+	var guard := 0
+	while (
+		guard < 16
+		and bool(_voxel_motion.call("intersects_at", self, _capsule, Vector3.ZERO))
+	):
+		global_position.y += 0.05 * character_scale
+		guard += 1
+
+
+func _update_swim_overlay(delta: float, in_water: bool) -> void:
+	var surface := NAN
+	if in_water and _voxel_motion != null:
+		surface = float(_voxel_motion.call("get_water_surface_world_y", global_position))
+		if not is_nan(surface):
+			_swim_overlay_latch = SWIM_OVERLAY_LATCH_SEC
+	else:
+		_swim_overlay_latch = maxf(_swim_overlay_latch - delta, 0.0)
+	if _swim_overlay_latch <= 0.0:
+		_set_underwater_overlay(false)
+		return
+	if not is_nan(surface):
+		_set_underwater_overlay(true, surface)
+	## Else: latch still warm — leave overlay/uniform as-is.
+
+
+func _set_underwater_overlay(active: bool, surface_y: float = 0.0) -> void:
+	if not active:
+		if not _swim_overlay_on:
+			return
+		_swim_overlay_on = false
+		for mi in _underwater_meshes:
+			if is_instance_valid(mi):
+				mi.material_overlay = null
+		_underwater_meshes.clear()
+		return
+	if _underwater_overlay == null:
+		var shader := load(UNDERWATER_OVERLAY_SHADER) as Shader
+		if shader == null:
+			push_error("CityWalker: missing %s" % UNDERWATER_OVERLAY_SHADER)
+			return
+		_underwater_overlay = ShaderMaterial.new()
+		_underwater_overlay.shader = shader
+		_underwater_overlay.set_shader_parameter("tint", Color(0.12, 0.32, 0.48, 0.72))
+		_underwater_overlay.set_shader_parameter("fade_m", 0.18)
+		_underwater_overlay.set_shader_parameter("clip_bias_m", 0.35)
+	if not is_nan(surface_y):
+		_underwater_overlay.set_shader_parameter("water_surface_y", surface_y)
+	if _swim_overlay_on:
+		return
+	_swim_overlay_on = true
+	if _underwater_meshes.is_empty() and _body_root != null:
+		_collect_mesh_instances(_body_root, _underwater_meshes)
+	for mi in _underwater_meshes:
+		if is_instance_valid(mi):
+			mi.material_overlay = _underwater_overlay
+
+
+func _collect_mesh_instances(node: Node, out: Array[MeshInstance3D]) -> void:
+	if node is MeshInstance3D:
+		out.append(node as MeshInstance3D)
+	for child in node.get_children():
+		_collect_mesh_instances(child, out)
+
+
+func _try_swim_exit(forward: Vector3) -> bool:
+	## Any water border ahead (flat shore or raised rim) → hop out.
+	if not _swimming or not _moving:
+		return false
+	if _swim_exit_immune_left > 0.0 or _swim_exit_boost_left > 0.0:
+		return false
+	if _voxel_motion == null or not bool(_voxel_motion.call("has_terrain")):
+		return false
+	var surface := float(_voxel_motion.call("get_water_surface_world_y", global_position))
+	if is_nan(surface):
+		return false
+	var scale := maxf(character_scale, 0.001)
+	var border_dist := -1.0
+	for dist_m: float in [0.35, 0.55, 0.8, 1.1, 1.4]:
+		var probe := global_position + forward * (dist_m * scale)
+		if _column_has_water(probe.x, probe.z, surface, scale):
+			continue
+		border_dist = dist_m
+		break
+	if border_dist < 0.0:
+		return false
+	_begin_swim_exit(forward, surface, border_dist)
+	return true
+
+
+func _voxel_id_at(world: Vector3) -> int:
+	if _voxel_motion == null:
+		return -1
+	return int(_voxel_motion.call("get_voxel_at_world", world))
+
+
+func _column_has_water(x: float, z: float, surface: float, scale: float) -> bool:
+	## Water anywhere from above the lip down through swim depth counts as "in pool".
+	for dy: float in [0.25, 0.0, -0.35, -0.7, -1.1, -1.5]:
+		if _voxel_id_at(Vector3(x, surface + dy * scale, z)) == VoxelMaterial.WATER:
+			return true
+	return false
+
+
+func _stand_bottom_y_at(x: float, z: float, surface: float, scale: float) -> float:
+	## Top of the highest solid non-water near the shore (rim or flat ground).
+	for dy: float in [0.75, 0.5, 0.25, 0.05, -0.2, -0.45, -0.7, -1.0, -1.3, -1.6]:
+		var y := surface + dy * scale
+		var id := _voxel_id_at(Vector3(x, y, z))
+		if id < 0 or id == VoxelMaterial.AIR or id == VoxelMaterial.WATER:
+			continue
+		if not VoxelMaterial.is_solid(id):
+			continue
+		## Sit just above the sample — one voxel is 0.5 m world.
+		return y + 0.28 * scale
+	## Nothing solid found — leave at waterline height.
+	return surface + 0.06 * scale
+
+
+func _begin_swim_exit(forward: Vector3, water_surface: float, border_dist_m: float) -> void:
+	_swimming = false
+	_swim_overlay_latch = 0.0
+	_set_underwater_overlay(false)
+	if _voxel_motion != null:
+		_voxel_motion.call("set_collide_with_water", true)
+	var scale := maxf(character_scale, 0.001)
+	var dir := forward
+	dir.y = 0.0
+	if dir.length_squared() < 0.0001:
+		dir = Vector3(0.0, 0.0, -1.0)
+	else:
+		dir = dir.normalized()
+	_swim_exit_dir = dir
+	## Step clear of the water column, then onto whatever ground is there.
+	var landed := false
+	var start_dist := maxf(border_dist_m + 0.35, 0.7)
+	for dist_m: float in [
+		start_dist, start_dist + 0.35, start_dist + 0.7, start_dist + 1.1, start_dist + 1.6
+	]:
+		var x := global_position.x + dir.x * dist_m * scale
+		var z := global_position.z + dir.z * dist_m * scale
+		if _column_has_water(x, z, water_surface, scale):
+			continue
+		global_position.x = x
+		global_position.z = z
+		var target_bottom := _stand_bottom_y_at(x, z, water_surface, scale)
+		global_position.y += target_bottom - _capsule_bottom_world_y()
+		landed = true
+		break
+	if not landed:
+		global_position += dir * (maxf(border_dist_m, 1.0) + 0.8) * scale
+		var target_bottom2 := _stand_bottom_y_at(
+			global_position.x, global_position.z, water_surface, scale
+		)
+		global_position.y += target_bottom2 - _capsule_bottom_world_y()
+	## Slide forward out of any solid we spawned inside.
+	if _capsule != null and _voxel_motion != null:
+		for _i in range(14):
+			if not bool(_voxel_motion.call("intersects_at", self, _capsule, Vector3.ZERO)):
+				break
+			global_position += dir * (0.12 * scale)
+	## Key-held jump rise would end next frame — use a dedicated boost instead.
+	_jump_rising = false
+	_jumping = true
+	_airborne_was_jump = true
+	_jump_start_y = global_position.y
+	_was_airborne = true
+	_land_anim_left = 0.0
+	_coyote_left = 0.0
+	_swim_exit_boost_left = SWIM_EXIT_BOOST_SEC
+	_swim_exit_immune_left = SWIM_EXIT_IMMUNE_SEC
+	var exit_speed := walk_speed * 1.85 * scale
+	var exit_up := jump_rise_speed_mps * 0.55 * scale
+	velocity = dir * exit_speed + Vector3(0.0, exit_up, 0.0)
+	cancel_action()
+	_play_jump_start_anim()
+
+
+func _update_swim_exit_boost(delta: float) -> void:
+	if _swim_exit_immune_left > 0.0:
+		_swim_exit_immune_left = maxf(_swim_exit_immune_left - delta, 0.0)
+	if _swim_exit_boost_left <= 0.0:
+		return
+	_swim_exit_boost_left = maxf(_swim_exit_boost_left - delta, 0.0)
+	var scale := maxf(character_scale, 0.001)
+	var dir := _swim_exit_dir
+	if dir.length_squared() < 0.0001:
+		return
+	var exit_speed := walk_speed * 1.85 * scale
+	velocity.x = dir.x * exit_speed
+	velocity.z = dir.z * exit_speed
+	## Keep a short upward kick for the first half of the boost.
+	if _swim_exit_boost_left > SWIM_EXIT_BOOST_SEC * 0.45:
+		velocity.y = maxf(velocity.y, jump_rise_speed_mps * 0.55 * scale)
+
+
+func _play_swim_anim(move_speed: float, size_anim: float) -> bool:
+	var idle_path := _anim_path(ANIM_SWIM_IDLE, &"Swim_Idle_Loop")
+	var fwd_path := _anim_path(ANIM_SWIM_FWD, &"Swim_Fwd_Loop")
+	if idle_path.is_empty() and fwd_path.is_empty():
+		return false
+	if _moving and not fwd_path.is_empty():
+		if String(_anim_player.current_animation) != fwd_path:
+			_anim_player.play(fwd_path, 0.2)
+		var unscaled := move_speed / maxf(character_scale, 0.001)
+		var ref := walk_speed * SWIM_SPEED_FACTOR
+		var cadence := unscaled / maxf(ref, 0.01)
+		_anim_player.speed_scale = clampf(cadence * size_anim, 0.05, 4.0)
+		return true
+	if not idle_path.is_empty():
+		if String(_anim_player.current_animation) != idle_path:
+			_anim_player.play(idle_path, 0.25)
+		_anim_player.speed_scale = size_anim
+		return true
+	## Only fwd clip available — use it for idle too.
+	if String(_anim_player.current_animation) != fwd_path:
+		_anim_player.play(fwd_path, 0.25)
+	_anim_player.speed_scale = size_anim
+	return true
+
+
+func _anim_path(primary: StringName, fallback: StringName) -> String:
+	var path := "%s/%s" % [LIB_NAME, primary]
+	if _anim_player != null and _anim_player.has_animation(path):
+		return path
+	var alt := "%s/%s" % [LIB_NAME, fallback]
+	if _anim_player != null and _anim_player.has_animation(alt):
+		return alt
+	return ""
 
 
 func _set_physics_terrain_collision(enabled: bool) -> void:
@@ -1183,11 +1471,18 @@ func _physics_process(delta: float) -> void:
 	var wish := forward * (-input_dir.y)
 	wish.y = 0.0
 
-	var sprinting := ctl.is_key_held("sprint")
-	var speed := sprint_speed if sprinting else walk_speed
+	var exiting_pool := _swim_exit_boost_left > 0.0 or _swim_exit_immune_left > 0.0
+	_swimming = false if exiting_pool else _body_in_water()
+	if _voxel_motion != null and bool(_voxel_motion.call("has_terrain")):
+		_voxel_motion.call("set_collide_with_water", not _swimming)
+	var sprinting := ctl.is_key_held("sprint") and not _swimming
+	var speed := walk_speed * SWIM_SPEED_FACTOR if _swimming else (sprint_speed if sprinting else walk_speed)
 	speed *= character_scale
 	_moving = wish.length_squared() > 0.0001
-	if _moving:
+	if exiting_pool:
+		## Boost owns horizontal velocity — don't overwrite with swim/walk wish.
+		pass
+	elif _moving:
 		wish = wish.normalized() * speed
 		velocity.x = wish.x
 		velocity.z = wish.z
@@ -1196,10 +1491,16 @@ func _physics_process(delta: float) -> void:
 		velocity.z = 0.0
 		sprinting = false
 
-	_update_jump_rise(delta)
+	## Swim into the rim → hop forward onto dry deck (boost applied below).
+	if _swimming and _moving:
+		_try_swim_exit(forward)
+
+	_update_swim_exit_boost(delta)
+	if _swim_exit_boost_left <= 0.0:
+		_update_jump_rise(delta)
 
 	## Climb-down must arm BEFORE we walk off the lip — otherwise we only fall.
-	if not ray_mode and not _jump_rising and back_held and not forward_held:
+	if not ray_mode and not _swimming and not _jump_rising and back_held and not forward_held:
 		if _try_begin_climb_down(forward):
 			_apply_camera_angles()
 			_update_camera_shake(delta)
@@ -1209,27 +1510,37 @@ func _physics_process(delta: float) -> void:
 	var wish_speed := speed if _moving else 0.0
 	_apply_body_motion(delta)
 	_stabilize_vertical(ray_mode)
+	## After physics: sink through water colliders and hold chest-deep.
+	if _swimming and _swim_exit_boost_left <= 0.0:
+		_apply_swim_submersion()
+		_swimming = _body_in_water()
+		if not _swimming and _voxel_motion != null:
+			_voxel_motion.call("set_collide_with_water", true)
+	_update_swim_overlay(delta, _swimming)
 	_update_stuck_timer(delta, wish_speed)
 	## Auto-recover without jumping — still horizontal-only + one ground snap.
 	if _stuck_timer >= stuck_time_sec:
 		if _unstuck_horizontal():
 			_stuck_timer = 0.0
 
-	var airborne_now := not _floor_contacted()
+	var airborne_now := not _floor_contacted() and not _swimming
 	if _jumping and _floor_contacted() and velocity.y <= 0.0:
 		_jumping = false
 		_jump_rising = false
 	## Only real jumps / multi-voxel drops play Jump_Land — a 1-voxel walk-off stays walk.
 	if _was_airborne and not airborne_now:
-		if _airborne_was_jump or _airborne_drop_m() > MICRO_DROP_ANIM_M:
+		if not _swimming and (_airborne_was_jump or _airborne_drop_m() > MICRO_DROP_ANIM_M):
 			_play_jump_land_anim()
 		_airborne_was_jump = false
-	_was_airborne = _jumping or _jump_rising or _airborne_was_jump or _airborne_for_jump_anim()
+	_was_airborne = (
+		not _swimming
+		and (_jumping or _jump_rising or _airborne_was_jump or _airborne_for_jump_anim())
+	)
 
 	## Climb-up after this frame's stuck/slide state is known.
 	## Air-grab climb-down if we already stepped off while holding S.
 	## Don't steal the jump — Space is jump, climb is walk-into-wall.
-	if not ray_mode and not _jumping and not _jump_rising:
+	if not ray_mode and not _swimming and not _jumping and not _jump_rising:
 		if forward_held and not back_held and _try_begin_climb_up(forward, sprinting):
 			_apply_camera_angles()
 			_update_camera_shake(delta)
@@ -1249,7 +1560,13 @@ func _physics_process(delta: float) -> void:
 	_update_blast_charge(delta, _blast_charging)
 	_update_blaster(delta)
 
-	if not ray_mode and _floor_contacted() and not _feet_aligned and _skeleton != null:
+	if (
+		not ray_mode
+		and not _swimming
+		and _floor_contacted()
+		and not _feet_aligned
+		and _skeleton != null
+	):
 		_align_soles_to_floor()
 	## Absolute floor — never fall through the world into the void.
 	if global_position.y < VOID_FLOOR_TOP_Y - 0.15:
@@ -2169,7 +2486,12 @@ func _update_locomotion_anim(move_speed: float, sprinting: bool = false) -> void
 		else:
 			return
 	var size_anim := clampf(1.0 / character_scale, 0.05, 4.0)
-	var airborne := _jumping or _jump_rising or _airborne_for_jump_anim()
+	var airborne := (
+		not _swimming and (_jumping or _jump_rising or _airborne_for_jump_anim())
+	)
+	if _swimming and not _jump_rising and _land_anim_left <= 0.0:
+		if _play_swim_anim(move_speed, size_anim):
+			return
 	if airborne and _land_anim_left <= 0.0:
 		var start_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_START]
 		var loop_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_LOOP]
@@ -2253,6 +2575,9 @@ func _toggle_sound() -> void:
 
 func _update_footstep_sfx(delta: float, move_speed: float) -> void:
 	if not _moving:
+		_footstep_accum = 0.0
+		return
+	if _swimming:
 		_footstep_accum = 0.0
 		return
 	if not _floor_contacted():

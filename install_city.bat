@@ -1,5 +1,5 @@
 @echo off
-REM Eccentri City — install a portable copy + Desktop / Start Menu shortcuts.
+REM Eccentri City - install a portable copy + Desktop / Start Menu shortcuts.
 REM Downloads Godot 4.6 + Voxel Tools when missing. Ships city_voxel.dll from the repo.
 REM
 REM Usage:
@@ -17,24 +17,27 @@ set "GODOT_NAME=Godot_v4.6-voxel_win64.exe"
 
 :parse_args
 if "%~1"=="" goto args_done
-if /I "%~1"=="/S" (
-    set "SILENT=1"
-    shift
-    goto parse_args
-)
-if /I "%~1"=="/D" (
-    if "%~2"=="" (
-        echo ERROR: /D requires a path.
-        exit /b 1
-    )
-    set "INSTALL_DIR=%~2"
-    shift
-    shift
-    goto parse_args
-)
+if /I "%~1"=="/S" goto set_silent
+if /I "%~1"=="/D" goto set_install_dir
 echo Unknown argument: %~1
 echo Usage: install_city.bat [/S] [/D install_dir]
 exit /b 1
+
+:set_silent
+set "SILENT=1"
+shift
+goto parse_args
+
+:set_install_dir
+if "%~2"=="" (
+    echo ERROR: /D requires a path.
+    exit /b 1
+)
+REM Set outside a parenthesized block so %%~2 is not expanded too early.
+set "INSTALL_DIR=%~2"
+shift
+shift
+goto parse_args
 
 :args_done
 if not exist "%ROOT%\project.godot" (
@@ -44,7 +47,7 @@ if not exist "%ROOT%\project.godot" (
 )
 
 echo.
-echo Resolving dependencies (download Godot + Voxel Tools if needed)...
+echo Resolving dependencies - download Godot + Voxel Tools if needed...
 call :ensure_deps
 if errorlevel 1 (
     if "%SILENT%"=="0" pause
@@ -72,7 +75,7 @@ if not exist "%INSTALL_DIR%" (
     exit /b 1
 )
 
-REM Core game data. Skip VCS/dev caches — NEVER copy a stale source .godot.
+REM Core game data. Skip VCS/dev caches - NEVER copy a stale source .godot.
 REM Fresh class_name maps + imported assets are generated on the install copy below
 REM so new scripts / preloads / GLBs do not require installer script edits.
 robocopy "%ROOT%" "%INSTALL_DIR%" /E /NFL /NDL /NJH /NJS /nc /ns /np ^
@@ -97,7 +100,7 @@ if errorlevel 1 (
 )
 set "INSTALL_GODOT=%INSTALL_DIR%\tools\godot\%GODOT_NAME%"
 
-REM Native bake helper (optional but preferred).
+REM Native bake helper - optional but preferred.
 if exist "%ROOT%\addons\city_voxel\bin\city_voxel.dll" (
     if not exist "%INSTALL_DIR%\addons\city_voxel\bin" mkdir "%INSTALL_DIR%\addons\city_voxel\bin"
     copy /Y "%ROOT%\addons\city_voxel\bin\city_voxel.dll" "%INSTALL_DIR%\addons\city_voxel\bin\city_voxel.dll" >nul
@@ -112,29 +115,27 @@ if exist "%ROOT%\tools\ensure_city_deps.ps1" (
 REM Bake .godot for THIS install tree: class cache + imported preloads.
 REM This is what keeps packages current after gameplay changes.
 echo.
-echo Importing assets into install ^(Godot headless — may take a few minutes^)...
+echo Importing assets into install ^(Godot headless - may take a few minutes^)...
 "%INSTALL_GODOT%" --headless --path "%INSTALL_DIR%" --import
+set "IMP_ERR=!ERRORLEVEL!"
+REM Godot often exits non-zero after a successful headless --import, and the
+REM bake folder can land a moment after the process returns. Poll in PowerShell.
+REM Avoid cmd "if exist" on paths that contain a ".godot" segment; that can throw
+REM a parse error about "." being unexpected at this time.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\check_godot_import_artifacts.ps1" -InstallDir "%INSTALL_DIR%"
 if errorlevel 1 (
-    echo ERROR: Godot --import failed on the install folder.
+    echo ERROR: Godot import did not produce class cache / imported assets.
+    echo   Install: %INSTALL_DIR%
+    echo   Godot --import exit code was !IMP_ERR!.
     if "%SILENT%"=="0" pause
     exit /b 1
 )
-if not exist "%INSTALL_DIR%\.godot\global_script_class_cache.cfg" (
-    echo ERROR: .godot\global_script_class_cache.cfg missing after import.
-    if "%SILENT%"=="0" pause
-    exit /b 1
-)
-if not exist "%INSTALL_DIR%\.godot\imported" (
-    echo ERROR: .godot\imported was not created in the install folder.
-    if "%SILENT%"=="0" pause
-    exit /b 1
-)
-echo   Asset import OK.
+echo   Asset import OK ^(godot exit !IMP_ERR!^).
 
 call :write_launcher "%INSTALL_DIR%\EccentriCity.bat"
 call :write_uninstall "%INSTALL_DIR%\Uninstall_EccentriCity.bat"
 
-REM Skip Desktop/Start Menu shortcuts in silent mode (used by make_installer staging).
+REM Skip Desktop/Start Menu shortcuts in silent mode - used by make_installer staging.
 if "%SILENT%"=="1" goto after_shortcuts
 
 set "SHORTCUT_PS=%TEMP%\city_install_shortcuts_%RANDOM%.ps1"
@@ -146,7 +147,7 @@ echo $ws = New-Object -ComObject WScript.Shell
 echo $desktop = [Environment]::GetFolderPath^('Desktop'^)
 echo $start = Join-Path ^([Environment]::GetFolderPath^('StartMenu'^)^) 'Programs\EccentriCity'
 echo New-Item -ItemType Directory -Force -Path $start ^| Out-Null
-echo $items = @(
+echo $items = @^(
 echo   @{ Path = ^(Join-Path $desktop 'EccentriCity.lnk'^); Target = $launch; Desc = 'Eccentri City - procedural voxel city' },
 echo   @{ Path = ^(Join-Path $start 'EccentriCity.lnk'^); Target = $launch; Desc = 'Eccentri City - procedural voxel city' },
 echo   @{ Path = ^(Join-Path $start 'Uninstall Eccentri City.lnk'^); Target = $uninstall; Desc = 'Uninstall Eccentri City' }
@@ -221,7 +222,7 @@ type "%TEMP%\city_ensure_deps_out.txt"
 exit /b 0
 
 :ensure_native
-REM Engine already present — still run deps helper (warns if DLL somehow missing).
+REM Engine already present - still run deps helper; warns if DLL somehow missing.
 if exist "%ROOT%\tools\ensure_city_deps.ps1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\ensure_city_deps.ps1" -Root "%ROOT%" >nul
 )
@@ -245,7 +246,7 @@ echo         pause
 echo         exit /b 1
 echo     ^)
 echo     echo.
-echo     echo Engine missing — downloading Godot 4.6 + Voxel Tools ^(~80 MB^)...
+echo     echo Engine missing - downloading Godot 4.6 + Voxel Tools ^(~80 MB^)...
 echo     echo Internet required for this first-time step.
 echo     echo.
 echo     powershell -NoProfile -ExecutionPolicy Bypass -File "%%ROOT%%\tools\ensure_city_deps.ps1" -Root "%%ROOT%%"
@@ -271,22 +272,26 @@ echo     echo This DLL ships with the release zip and is required to play.
 echo     pause
 echo     exit /b 1
 echo ^)
-echo if not exist "%%ROOT%%\.godot\global_script_class_cache.cfg" goto do_import
-echo if not exist "%%ROOT%%\.godot\imported" goto do_import
+echo dir /b "%%ROOT%%\.godot\global_script_class_cache.cfg" ^>nul 2^>^&1
+echo if errorlevel 1 goto do_import
+echo dir /b "%%ROOT%%\.godot\imported" ^>nul 2^>^&1
+echo if errorlevel 1 goto do_import
 echo goto launch
 echo.
 echo :do_import
 echo echo.
-echo echo First-time asset import — this can take several minutes. Please wait...
+echo echo First-time asset import - this can take several minutes. Please wait...
 echo echo.
 echo "%%GODOT_EXE%%" --headless --path "%%ROOT%%" --import
+echo dir /b "%%ROOT%%\.godot\global_script_class_cache.cfg" ^>nul 2^>^&1
 echo if errorlevel 1 ^(
-echo     echo ERROR: Godot --import failed.
+echo     echo ERROR: Import finished but the godot class cache is still missing.
 echo     pause
 echo     exit /b 1
 echo ^)
-echo if not exist "%%ROOT%%\.godot\global_script_class_cache.cfg" ^(
-echo     echo ERROR: Import finished but .godot class cache is still missing.
+echo dir /b "%%ROOT%%\.godot\imported" ^>nul 2^>^&1
+echo if errorlevel 1 ^(
+echo     echo ERROR: Import finished but the godot imported folder is still missing.
 echo     pause
 echo     exit /b 1
 echo ^)
@@ -310,7 +315,7 @@ echo echo   %%INSTALL%%
 echo echo And Desktop / Start Menu shortcuts.
 echo choice /C YN /M "Uninstall Eccentri City"
 echo if errorlevel 2 exit /b 0
-echo powershell -NoProfile -ExecutionPolicy Bypass -Command ^"Remove-Item -Force -ErrorAction SilentlyContinue ([Environment]::GetFolderPath^('Desktop'^) + '\\EccentriCity.lnk'^); $sm = Join-Path ^([Environment]::GetFolderPath^('StartMenu'^)^) 'Programs\\EccentriCity'; if ^(Test-Path $sm^) { Remove-Item -Recurse -Force $sm }^"
+echo powershell -NoProfile -ExecutionPolicy Bypass -Command ^"Remove-Item -Force -ErrorAction SilentlyContinue ^(^([Environment]::GetFolderPath^('Desktop'^) + '\\EccentriCity.lnk'^)^); $sm = Join-Path ^([Environment]::GetFolderPath^('StartMenu'^)^) 'Programs\\EccentriCity'; if ^(Test-Path $sm^) { Remove-Item -Recurse -Force $sm }^"
 echo cd /d "%%TEMP%%"
 echo rmdir /S /Q "%%INSTALL%%"
 echo echo Eccentri City removed.
