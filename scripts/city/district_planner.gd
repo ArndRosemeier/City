@@ -18,6 +18,8 @@ var grand_plaza: Rect2i = Rect2i()
 var satellite_plazas: Array[Rect2i] = []
 var large_park: Rect2i = Rect2i()
 var pocket_parks: Array[Vector2i] = []
+## Bounding rect of LandUse.HILL cells (Hill theme). Empty when unused.
+var large_hill: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## World-space tips for street lights (cell centers along avenues).
 var avenue_light_cells: Array[Vector2i] = []
@@ -45,15 +47,23 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	pocket_parks.clear()
 	avenue_light_cells.clear()
 	civic_lot = Vector2i(-1, -1)
+	grand_plaza = Rect2i()
+	large_park = Rect2i()
+	large_hill = Rect2i()
 
-	_stamp_world_arterials(district_coord)
-	_stamp_organic_interior_roads()
-	_stamp_grand_plaza()
-	_stamp_satellite_plazas()
-	_stamp_large_park()
-	_stamp_pocket_parks()
-	_assign_zones()
-	_place_civic()
+	if theme.id == DistrictTheme.HILL:
+		## Edge stubs only — a full arterial cross would slice the massif into wedges.
+		_stamp_hill_edge_connectors(district_coord)
+		_build_hill_layout()
+	else:
+		_stamp_world_arterials(district_coord)
+		_stamp_organic_interior_roads()
+		_stamp_grand_plaza()
+		_stamp_satellite_plazas()
+		_stamp_large_park()
+		_stamp_pocket_parks()
+		_assign_zones()
+		_place_civic()
 	_collect_avenue_lights()
 
 
@@ -96,9 +106,98 @@ func faces_park(cx: int, cz: int) -> bool:
 		for dx in range(-1, 2):
 			if dx == 0 and dz == 0:
 				continue
-			if tag_at(cx + dx, cz + dz) == LandUse.PARK:
+			if LandUse.is_open_nature(tag_at(cx + dx, cz + dz)):
 				return true
 	return false
+
+
+## How far a connector stub reaches into a hill tile from each edge (planning cells).
+## Short on purpose: long stubs carved flat valleys deep into the massif.
+const HILL_STUB_CELLS := 2
+## Edge band that must stay fully arterial so neighbouring districts still seam.
+const HILL_EDGE_SEAM := 2
+
+
+## Hill theme: stub the world arterials in from each edge, leave the middle open.
+##
+## A full arterial cross would split the tile into wedges and force the hill to
+## ramp down into every corridor. Instead each arterial only keeps the cells that
+## either sit on a district seam or form a short stub into the hillside, and the
+## inland tip widens into a small turning pad so the road reads as a trailhead.
+func _stamp_hill_edge_connectors(district_coord: Vector2i) -> void:
+	var base_cx := district_coord.x * cells_x
+	var base_cz := district_coord.y * cells_z
+	var keep := PackedByteArray()
+	keep.resize(cells_x * cells_z)
+	for lz in range(cells_z):
+		if not WorldArterialsScript.is_arterial_row(base_cz + lz):
+			continue
+		var on_ns_seam := lz < HILL_EDGE_SEAM or lz >= cells_z - HILL_EDGE_SEAM
+		for lx in range(cells_x):
+			if on_ns_seam or lx < HILL_STUB_CELLS or lx >= cells_x - HILL_STUB_CELLS:
+				keep[lz * cells_x + lx] = 1
+	for lx in range(cells_x):
+		if not WorldArterialsScript.is_arterial_col(base_cx + lx):
+			continue
+		var on_ew_seam := lx < HILL_EDGE_SEAM or lx >= cells_x - HILL_EDGE_SEAM
+		for lz in range(cells_z):
+			if on_ew_seam or lz < HILL_STUB_CELLS or lz >= cells_z - HILL_STUB_CELLS:
+				keep[lz * cells_x + lx] = 1
+	for z in range(cells_z):
+		for x in range(cells_x):
+			if keep[z * cells_x + x] != 0:
+				grid[z][x] = LandUse.AVENUE
+	_stamp_hill_road_endings(base_cx, base_cz)
+
+
+## Widen the inland tip of each stub into a 3×3 avenue pad (turning / trailhead).
+func _stamp_hill_road_endings(base_cx: int, base_cz: int) -> void:
+	for lz in range(cells_z):
+		if not WorldArterialsScript.is_arterial_row(base_cz + lz):
+			continue
+		## Full seam rows have no inland tip — they continue into the neighbour.
+		if lz < HILL_EDGE_SEAM or lz >= cells_z - HILL_EDGE_SEAM:
+			continue
+		_fill_hill_pad(HILL_STUB_CELLS - 1, lz)
+		_fill_hill_pad(cells_x - HILL_STUB_CELLS, lz)
+	for lx in range(cells_x):
+		if not WorldArterialsScript.is_arterial_col(base_cx + lx):
+			continue
+		if lx < HILL_EDGE_SEAM or lx >= cells_x - HILL_EDGE_SEAM:
+			continue
+		_fill_hill_pad(lx, HILL_STUB_CELLS - 1)
+		_fill_hill_pad(lx, cells_z - HILL_STUB_CELLS)
+
+
+func _fill_hill_pad(cx: int, cz: int) -> void:
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var x := cx + dx
+			var z := cz + dz
+			if x < 0 or z < 0 or x >= cells_x or z >= cells_z:
+				continue
+			grid[z][x] = LandUse.AVENUE
+
+
+## Hill theme: everything that is not a connector stub becomes open hillside.
+func _build_hill_layout() -> void:
+	var min_x := cells_x
+	var min_z := cells_z
+	var max_x := -1
+	var max_z := -1
+	for z in range(cells_z):
+		for x in range(cells_x):
+			if LandUse.is_road(grid[z][x]):
+				continue
+			grid[z][x] = LandUse.HILL
+			min_x = mini(min_x, x)
+			min_z = mini(min_z, z)
+			max_x = maxi(max_x, x)
+			max_z = maxi(max_z, z)
+	if max_x >= min_x and max_z >= min_z:
+		large_hill = Rect2i(min_x, min_z, max_x - min_x + 1, max_z - min_z + 1)
+	else:
+		push_error("DistrictPlanner._build_hill_layout: no hill cells after road stamp")
 
 
 func street_facing(cx: int, cz: int) -> int:

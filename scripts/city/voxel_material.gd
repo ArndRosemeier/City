@@ -36,8 +36,11 @@ const INFECTION := 30
 const INFECTION_LEAD := 31
 ## Destructible Game Boy / Tetris cabinet shell.
 const GAMEBOY := 32
+## Hill-cave lining — damp limestone walls and packed earth floors.
+const CAVE_WALL := 33
+const CAVE_FLOOR := 34
 
-const COUNT := 33
+const COUNT := 35
 
 
 static func is_solid(id: int) -> bool:
@@ -45,7 +48,7 @@ static func is_solid(id: int) -> bool:
 
 
 static func is_walkable_surface(id: int) -> bool:
-	## Pedestrians: sidewalks / plazas / parks / crosswalks only — not car asphalt.
+	## Pedestrians: sidewalks / plazas / parks / crosswalks / cave floors — not car asphalt.
 	return (
 		id == PLAZA
 		or id == SIDEWALK
@@ -54,6 +57,7 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == TILES
 		or id == PARK
 		or id == CROSSWALK
+		or id == CAVE_FLOOR
 	)
 
 
@@ -61,7 +65,7 @@ static func is_ground_surface(id: int) -> bool:
 	## Outdoor ground / road deck — meteor auto-spawns land here, never on buildings.
 	## Diggable STONE substrate under the deck is not a landing / ped surface.
 	match id:
-		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES:
+		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR:
 			return true
 		_:
 			return false
@@ -72,10 +76,21 @@ static func is_diggable_substrate(id: int) -> bool:
 	return id == STONE
 
 
+## Rock, soil and turf carry their own weight: a blast leaves a crater, never a
+## collapsing column. Built fabric is the only thing the debris cascade may pull
+## down — a hill is one connected massif, so cascading it eats the whole mountain.
+static func is_self_supporting_terrain(id: int) -> bool:
+	match id:
+		STONE, DIRT, GRAVEL, PARK, CAVE_WALL, CAVE_FLOOR:
+			return true
+		_:
+			return false
+
+
 static func is_building_fabric(id: int) -> bool:
 	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground, road, or diggable stone.
 	match id:
-		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES:
+		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR:
 			return false
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
@@ -185,5 +200,9 @@ static func color(id: int) -> Color:
 		GAMEBOY:
 			## Classic olive DMG plastic.
 			return Color(0.55, 0.62, 0.42)
+		CAVE_WALL:
+			return Color(0.28, 0.32, 0.31)
+		CAVE_FLOOR:
+			return Color(0.26, 0.22, 0.17)
 		_:
 			return Color(1, 0, 1)

@@ -38,6 +38,11 @@ const WALL_IDS: Array[int] = [
 const PARK_IDS: Array[int] = [
 	VoxelMaterial.GRAVEL, VoxelMaterial.LEAVES, VoxelMaterial.WATER, VoxelMaterial.PAINT,
 ]
+## Hill massing: rock strata + planting. Counted separately from park furniture.
+const HILL_IDS: Array[int] = [
+	VoxelMaterial.STONE, VoxelMaterial.DIRT, VoxelMaterial.BRICK, VoxelMaterial.BRICK_DARK,
+	VoxelMaterial.CONCRETE, VoxelMaterial.GRAVEL, VoxelMaterial.LEAVES,
+]
 const STREET_PNG := "res://tools/city_theme_street.png"
 const SKYLINE_PNG := "res://tools/city_theme_skyline.png"
 const NEIGHBOUR_PNG := "res://tools/city_theme_neighbour.png"
@@ -160,7 +165,15 @@ func _summarize(coord: Vector2i, res: Dictionary) -> Dictionary:
 		"town_cells": int(tags.get(LandUse.TOWN_LOT, 0)),
 		"court_cells": int(tags.get(LandUse.COURTYARD_LOT, 0)),
 		"park_cells": int(tags.get(LandUse.PARK, 0)),
+		"hill_cells": int(tags.get(LandUse.HILL, 0)),
 		"road_cells": int(tags.get(LandUse.ROAD, 0)) + int(tags.get(LandUse.AVENUE, 0)),
+		"lot_cells": (
+			int(tags.get(LandUse.CORE_LOT, 0))
+			+ int(tags.get(LandUse.MID_LOT, 0))
+			+ int(tags.get(LandUse.TOWN_LOT, 0))
+			+ int(tags.get(LandUse.COURTYARD_LOT, 0))
+			+ int(tags.get(LandUse.CIVIC_LOT, 0))
+		),
 		"mean_intensity": intensity_sum / cells,
 		"top_m": top_m,
 		"walls": _material_histogram(res["blocks"], int(res["ground_thickness"])),
@@ -183,6 +196,9 @@ func _material_histogram(blocks: Dictionary, ground_thickness: int) -> Dictionar
 		counts[id] = 0
 	for id2: int in PARK_IDS:
 		counts[id2] = 0
+	for id3: int in HILL_IDS:
+		if not counts.has(id3):
+			counts[id3] = 0
 	for key: Variant in blocks.keys():
 		var bp: Vector3i = key
 		var block_y0 := bp.y * BLOCK
@@ -226,11 +242,11 @@ func _print_stat(s: Dictionary) -> void:
 		if int(walls[id]) > 0:
 			wall_parts.append("%d:%d" % [int(id), int(walls[id])])
 	print(
-		"%s %-22s core=%-3d mid=%-3d town=%-3d court=%-3d park=%-2d road=%-3d int=%.2f top=%.0fm %dms"
+		"%s %-22s core=%-3d mid=%-3d town=%-3d court=%-3d park=%-2d hill=%-3d lots=%-3d road=%-3d int=%.2f top=%.0fm %dms"
 		% [
 			s["coord"], s["theme"], s["core_cells"], s["mid_cells"], s["town_cells"],
-			s["court_cells"], s["park_cells"], s["road_cells"], s["mean_intensity"],
-			s["top_m"], s["bake_ms"],
+			s["court_cells"], s["park_cells"], s["hill_cells"], s["lot_cells"], s["road_cells"],
+			s["mean_intensity"], s["top_m"], s["bake_ms"],
 		]
 	)
 	print("    walls %s dominant=%d" % [" ".join(wall_parts), _dominant_wall(walls)])
@@ -246,10 +262,29 @@ func _print_stat(s: Dictionary) -> void:
 func _check_parks(stats: Array) -> void:
 	## Parks have to be composed, not left as lawn: the streamed bake path once skipped
 	## pocket parks entirely and every square came out an empty green rectangle.
+	## Hill tiles are a different open-space recipe (strata + caves + trees).
 	var ponds := 0
+	var urban := 0
+	var hills := 0
 	for s: Variant in stats:
 		var d: Dictionary = s
 		var m: Dictionary = d["walls"]
+		if int(d["theme_id"]) == DistrictTheme.HILL:
+			hills += 1
+			if int(d["lot_cells"]) > 0:
+				_fail("FAIL %s Hill district still has housing lots" % d["coord"])
+				return
+			if int(d["hill_cells"]) <= 0:
+				_fail("FAIL %s Hill district has no hill cells" % d["coord"])
+				return
+			if int(m[VoxelMaterial.STONE]) <= 0 and int(m[VoxelMaterial.BRICK]) <= 0:
+				_fail("FAIL %s Hill district has no rock mass" % d["coord"])
+				return
+			if int(m[VoxelMaterial.LEAVES]) <= 0:
+				_fail("FAIL %s Hill district has no planting" % d["coord"])
+				return
+			continue
+		urban += 1
 		if int(m[VoxelMaterial.GRAVEL]) <= 0:
 			_fail("FAIL %s (%s) has no park paths" % [d["coord"], d["theme"]])
 			return
@@ -258,10 +293,13 @@ func _check_parks(stats: Array) -> void:
 			return
 		if int(m[VoxelMaterial.WATER]) > 0:
 			ponds += 1
-	if ponds < stats.size() - 2:
-		_fail("FAIL only %d of %d tiles got a pond" % [ponds, stats.size()])
+	if urban > 0 and ponds < urban - 2:
+		_fail("FAIL only %d of %d urban tiles got a pond" % [ponds, urban])
 		return
-	print("OK parks: paths + planting everywhere, ponds in %d of %d tiles" % [ponds, stats.size()])
+	print(
+		"OK open space: parks on %d tiles (ponds %d), hills on %d tiles"
+		% [urban, ponds, hills]
+	)
 
 
 func _check_bake_differences(stats: Array) -> void:

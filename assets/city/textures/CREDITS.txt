@@ -33,3 +33,5 @@ Project-authored (see generate_city_textures.py):
 - tiles.jpg / tiles_normal.jpg — glazed diamond ceramic
 - roof.jpg / roof_normal.jpg — standing-seam metal roof
 - roof_clay.jpg / roof_clay_normal.jpg — terracotta pantiles
+- cave_wall.jpg / cave_wall_normal.jpg — damp limestone for hill caves
+- cave_floor.jpg / cave_floor_normal.jpg — packed damp earth cave floors

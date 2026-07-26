@@ -341,6 +341,42 @@ def make_roof_clay() -> None:
     _save_pair(rgb, height, "roof_clay", 11.0)
 
 
+def make_cave_wall() -> None:
+    """Damp limestone: cool grey-green, mineral streaks, pitted surface."""
+    n = _value_noise(61, octaves=5, base=7.0)
+    fine = _value_noise(67, octaves=3, base=36.0)
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE]
+    # Vertical mineral drip / flowstone streaks that wrap.
+    streak = 0.5 + 0.5 * np.sin((xx * 0.35 + n * 40.0) * (2.0 * math.pi / SIZE) * 14.0)
+    streak *= 0.55 + 0.45 * _value_noise(71, octaves=2, base=5.0)
+    pit = (_value_noise(73, octaves=2, base=28.0) > 0.78).astype(np.float64)
+    base = np.array([78.0, 86.0, 82.0])
+    cool = np.array([62.0, 78.0, 86.0])
+    mineral = np.array([140.0, 148.0, 132.0])
+    mix = 0.4 + 0.5 * n
+    rgb = base * (1.0 - mix[..., None]) + cool * mix[..., None]
+    rgb += (streak[..., None] - 0.5) * 26.0
+    rgb = rgb * (1.0 - pit[..., None] * 0.35) + mineral * pit[..., None] * 0.55
+    rgb += (fine[..., None] - 0.5) * 14.0
+    height = 0.45 + 0.3 * n - 0.35 * pit + 0.12 * streak + 0.08 * fine
+    _save_pair(rgb, height, "cave_wall", 12.0)
+
+
+def make_cave_floor() -> None:
+    """Packed damp earth with wet patches and fine grit."""
+    n = _value_noise(83, octaves=5, base=6.0)
+    grit = _value_noise(89, octaves=3, base=42.0)
+    wet = (_value_noise(97, octaves=3, base=9.0) > 0.62).astype(np.float64)
+    wet *= 0.5 + 0.5 * _value_noise(101, octaves=2, base=14.0)
+    dry = np.array([72.0, 58.0, 44.0])
+    damp = np.array([48.0, 52.0, 46.0])
+    rgb = dry + (n[..., None] - 0.5) * 22.0
+    rgb = rgb * (1.0 - wet[..., None] * 0.55) + damp * wet[..., None]
+    rgb += (grit[..., None] - 0.5) * 16.0
+    height = 0.4 + 0.25 * n + 0.2 * grit - 0.15 * wet
+    _save_pair(rgb, height, "cave_floor", 9.0)
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     make_road_line()
@@ -355,6 +391,8 @@ def main() -> int:
     make_tiles()
     make_roof()
     make_roof_clay()
+    make_cave_wall()
+    make_cave_floor()
     print("Generated procedural city textures.")
     return 0
 

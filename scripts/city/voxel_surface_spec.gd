@@ -268,6 +268,25 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.tint = Color(0.5, 0.78, 0.9, 0.62)
 			s.roughness = 0.06
 			s.metallic = 0.05
+		VoxelMaterial.CAVE_WALL:
+			s.albedo_file = "cave_wall.jpg"
+			s.normal_file = "cave_wall_normal.jpg"
+			s.tile_meters = Vector2(3.2, 3.2)
+			s.roughness = 0.94
+			s.normal_strength = 1.05
+			s.tint_variation = 0.25
+			s.weathering = 0.55
+			s.grime = 0.5
+			s.grime_height = 2.5
+			s.streaks = 0.65
+		VoxelMaterial.CAVE_FLOOR:
+			s.albedo_file = "cave_floor.jpg"
+			s.normal_file = "cave_floor_normal.jpg"
+			s.tile_meters = Vector2(2.4, 2.4)
+			s.roughness = 0.96
+			s.normal_strength = 0.85
+			s.tint_variation = 0.2
+			s.weathering = 0.4
 		_:
 			push_error(
 				"VoxelSurfaceSpec.for_id: no surface spec for voxel material %d — showing magenta"

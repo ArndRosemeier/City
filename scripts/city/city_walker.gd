@@ -120,8 +120,9 @@ const LIB_NAME := &"quat"
 @export var scale_factor_step: float = 1.15
 @export var scale_min: float = 0.2
 @export var scale_max: float = 5.0
-## Auto-step onto curbs / low ledges (meters, NOT scaled — giants ignore curbs).
-@export var max_step_height: float = 0.38
+## Auto-step height in world metres (NOT scaled with character size). One voxel is
+## 0.5 m; VoxelBodyMotion converts this into terrain-local units for VoxelBoxMover.
+@export var max_step_height: float = 0.55
 @export var coyote_time_sec: float = 0.12
 ## How long wished move can be blocked before jump-unstuck arms.
 @export var stuck_time_sec: float = 0.55
@@ -188,6 +189,10 @@ var _jump_rising: bool = false
 var _jump_start_y: float = 0.0
 var _was_airborne: bool = false
 var _land_anim_left: float = 0.0
+## Feet Y when last grounded — used to ignore 1-voxel walk-offs for jump anims.
+var _last_grounded_y: float = 0.0
+## Set on Space jump so same-height landings still play Jump_Land.
+var _airborne_was_jump: bool = false
 var _safety_deck: StaticBody3D
 ## Hold forward without pressing W (toggle with R).
 var _auto_run: bool = false
@@ -196,6 +201,8 @@ var _auto_run: bool = false
 const VOID_FLOOR_TOP_Y := 0.5
 ## Street deck top (ground_thickness=6 → world y 3.5). Climb-down needs a real drop.
 const STREET_DECK_TOP_Y := 3.5
+## One voxel is 0.5 m; match max_step_height so curb/scarp walk-offs stay walk anims.
+const MICRO_DROP_ANIM_M := 0.55
 ## Physics layer 8 — player safety deck only (not voxel terrain layer 1).
 const SAFETY_DECK_LAYER := 128
 ## One-shot / emote override from the action bar; blocks Idle/Walk until done.
@@ -1160,6 +1167,7 @@ func _physics_process(delta: float) -> void:
 	var grounded := _floor_contacted()
 	if grounded and not _jumping:
 		_coyote_left = coyote_time_sec
+		_last_grounded_y = global_position.y
 		if velocity.y < 0.0:
 			velocity.y = 0.0
 	else:
@@ -1211,9 +1219,12 @@ func _physics_process(delta: float) -> void:
 	if _jumping and _floor_contacted() and velocity.y <= 0.0:
 		_jumping = false
 		_jump_rising = false
+	## Only real jumps / multi-voxel drops play Jump_Land — a 1-voxel walk-off stays walk.
 	if _was_airborne and not airborne_now:
-		_play_jump_land_anim()
-	_was_airborne = airborne_now or _jumping
+		if _airborne_was_jump or _airborne_drop_m() > MICRO_DROP_ANIM_M:
+			_play_jump_land_anim()
+		_airborne_was_jump = false
+	_was_airborne = _jumping or _jump_rising or _airborne_was_jump or _airborne_for_jump_anim()
 
 	## Climb-up after this frame's stuck/slide state is known.
 	## Air-grab climb-down if we already stepped off while holding S.
@@ -1748,6 +1759,7 @@ func _try_start_jump() -> void:
 	_was_ray_grounded = false
 	_jumping = true
 	_jump_rising = true
+	_airborne_was_jump = true
 	_jump_start_y = global_position.y
 	_was_airborne = true
 	_land_anim_left = 0.0
@@ -1801,6 +1813,19 @@ func _play_jump_land_anim() -> void:
 	_land_anim_left = 0.28
 	_anim_player.play(path, 0.06)
 	_anim_player.speed_scale = clampf(1.15 / maxf(character_scale, 0.001), 0.05, 4.0)
+
+
+## How far the feet have dropped below the last grounded height (0 when standing).
+func _airborne_drop_m() -> float:
+	return maxf(_last_grounded_y - global_position.y, 0.0)
+
+
+## True only when off the floor by more than a single voxel step — walk-offs of one
+## curb/scarp keep Idle/Walk instead of Jump_Loop.
+func _airborne_for_jump_anim() -> bool:
+	if _floor_contacted():
+		return false
+	return _airborne_drop_m() > MICRO_DROP_ANIM_M
 
 
 func _apply_body_motion(delta: float) -> void:
@@ -2144,7 +2169,7 @@ func _update_locomotion_anim(move_speed: float, sprinting: bool = false) -> void
 		else:
 			return
 	var size_anim := clampf(1.0 / character_scale, 0.05, 4.0)
-	var airborne := _jumping or _jump_rising or not _floor_contacted()
+	var airborne := _jumping or _jump_rising or _airborne_for_jump_anim()
 	if airborne and _land_anim_left <= 0.0:
 		var start_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_START]
 		var loop_path := "%s/%s" % [LIB_NAME, ANIM_JUMP_LOOP]

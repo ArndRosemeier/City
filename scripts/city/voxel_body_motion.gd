@@ -7,18 +7,35 @@ var _mover: VoxelBoxMover = VoxelBoxMover.new()
 var _terrain: VoxelTerrain
 var _on_floor: bool = false
 var _stepped_up: bool = false
+## Last requested step height in world metres (export-facing); converted for the mover.
+var _step_height_m: float = 0.55
 
 
-func setup(terrain: VoxelTerrain, max_step_height_m: float = 0.38) -> void:
+func setup(terrain: VoxelTerrain, max_step_height_m: float = 0.55) -> void:
 	_terrain = terrain
 	_mover.set_step_climbing_enabled(true)
-	_mover.set_max_step_height(max_step_height_m)
 	## Match VoxelBlockyModel.collision_mask defaults (all solid models use bit 0).
 	_mover.set_collision_mask(1)
+	set_max_step_height(max_step_height_m)
 
 
 func set_max_step_height(height_m: float) -> void:
-	_mover.set_max_step_height(height_m)
+	_step_height_m = height_m
+	## VoxelBoxMover applies step height in terrain-local space, where one voxel is 1×1×1.
+	## CityRoot scales the terrain by VOXEL_SIZE (0.5), so a world-metre value must be
+	## converted — passing 0.55 raw only allowed a half-voxel lip.
+	var local_units := _world_metres_to_terrain_local(height_m)
+	_mover.set_max_step_height(local_units)
+
+
+func _world_metres_to_terrain_local(height_m: float) -> float:
+	if _terrain == null or not is_instance_valid(_terrain):
+		return height_m
+	var sy := absf(_terrain.global_transform.basis.y.length())
+	if sy < 0.0001:
+		push_error("VoxelBodyMotion: terrain Y scale is degenerate")
+		return height_m
+	return height_m / sy
 
 
 func is_on_floor() -> bool:

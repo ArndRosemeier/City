@@ -1,16 +1,26 @@
 ## Full-bleed EccentriCity title shown while the spawn district boots.
-## Covers the empty VoxelTerrain so the long bake does not look like a hang.
+## Also hosts the starting-district picker before any tile is generated.
 class_name LoadingSplash
 extends CanvasLayer
+
+signal district_chosen(theme_id: int)
 
 const TITLE_TEX := preload("res://assets/branding/eccentricity_title.png")
 ## Warm dusk from the title art — fills letterbox bars if the window aspect differs.
 const BG_COLOR := Color(0.22, 0.14, 0.10, 1.0)
 const FADE_OUT_SEC := 0.55
+const PANEL_BG := Color(0.08, 0.05, 0.04, 0.92)
+const BTN_NORMAL := Color(0.28, 0.18, 0.12, 0.95)
+const BTN_HOVER := Color(0.42, 0.28, 0.16, 1.0)
+const BTN_PRESS := Color(0.55, 0.36, 0.18, 1.0)
+const TEXT_MAIN := Color(1.0, 0.94, 0.82, 0.98)
+const TEXT_MUTED := Color(0.86, 0.78, 0.66, 0.9)
 
 var _root: Control
 var _status: Label
+var _picker: Control
 var _fading: bool = false
+var _awaiting_choice: bool = false
 
 
 func _ready() -> void:
@@ -57,11 +67,13 @@ func _ready() -> void:
 	_status.offset_top = -88.0
 	_status.offset_bottom = -28.0
 	_status.add_theme_font_size_override("font_size", 22)
-	_status.add_theme_color_override("font_color", Color(1.0, 0.94, 0.82, 0.95))
+	_status.add_theme_color_override("font_color", TEXT_MAIN)
 	_status.add_theme_color_override("font_outline_color", Color(0.05, 0.02, 0.02, 0.85))
 	_status.add_theme_constant_override("outline_size", 4)
 	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_status)
+
+	_build_picker()
 
 
 func status_label() -> Label:
@@ -84,6 +96,7 @@ func show_splash(status: String = "Loading EccentriCity…") -> void:
 func hide_splash() -> void:
 	if not visible or _fading:
 		return
+	_hide_picker()
 	_fading = true
 	var tw := create_tween()
 	tw.tween_property(_root, "modulate:a", 0.0, FADE_OUT_SEC).set_ease(Tween.EASE_IN).set_trans(
@@ -95,3 +108,137 @@ func hide_splash() -> void:
 		if _root != null:
 			_root.modulate = Color.WHITE
 	)
+
+
+## Blocks until the player picks a district type. Returns a DistrictTheme id.
+func prompt_district_choice() -> int:
+	if _picker == null:
+		push_error("LoadingSplash.prompt_district_choice: picker missing")
+		return DistrictTheme.CORE_HIGHRISE
+	_fading = false
+	visible = true
+	if _root != null:
+		_root.modulate = Color.WHITE
+	_picker.visible = true
+	_awaiting_choice = true
+	set_status("Choose a starting district")
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var theme_id: int = await district_chosen
+	_awaiting_choice = false
+	_hide_picker()
+	return theme_id
+
+
+func _hide_picker() -> void:
+	if _picker != null:
+		_picker.visible = false
+	_awaiting_choice = false
+
+
+func _build_picker() -> void:
+	_picker = Control.new()
+	_picker.name = "DistrictPicker"
+	_picker.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_picker.mouse_filter = Control.MOUSE_FILTER_STOP
+	_picker.visible = false
+	_root.add_child(_picker)
+
+	var dim := ColorRect.new()
+	dim.name = "Dim"
+	dim.color = Color(0.02, 0.01, 0.01, 0.45)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_picker.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.name = "Center"
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_picker.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "Panel"
+	panel.custom_minimum_size = Vector2(520, 0)
+	var panel_sb := StyleBoxFlat.new()
+	panel_sb.bg_color = PANEL_BG
+	panel_sb.set_corner_radius_all(10)
+	panel_sb.set_border_width_all(1)
+	panel_sb.border_color = Color(0.72, 0.55, 0.32, 0.55)
+	panel_sb.content_margin_left = 22
+	panel_sb.content_margin_right = 22
+	panel_sb.content_margin_top = 18
+	panel_sb.content_margin_bottom = 18
+	panel.add_theme_stylebox_override("panel", panel_sb)
+	center.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "Starting District"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", TEXT_MAIN)
+	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	title.add_theme_constant_override("outline_size", 4)
+	vbox.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "We’ll find the nearest matching tile and spawn you there."
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	subtitle.add_theme_font_size_override("font_size", 15)
+	subtitle.add_theme_color_override("font_color", TEXT_MUTED)
+	vbox.add_child(subtitle)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 4)
+	vbox.add_child(spacer)
+
+	for theme_id in range(DistrictTheme.COUNT):
+		var theme := DistrictTheme.make(theme_id)
+		vbox.add_child(_make_theme_button(theme))
+
+
+func _make_theme_button(theme: DistrictTheme) -> Button:
+	var btn := Button.new()
+	btn.name = "Theme_%d" % theme.id
+	btn.text = "%s\n%s" % [theme.display_name, theme.blurb]
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	btn.custom_minimum_size = Vector2(0, 58)
+	btn.add_theme_font_size_override("font_size", 16)
+	btn.add_theme_color_override("font_color", TEXT_MAIN)
+	btn.add_theme_color_override("font_hover_color", Color(1.0, 0.98, 0.9))
+	btn.add_theme_color_override("font_pressed_color", Color(1.0, 0.98, 0.9))
+	btn.add_theme_constant_override("outline_size", 0)
+
+	var normal := _btn_style(BTN_NORMAL)
+	var hover := _btn_style(BTN_HOVER)
+	var pressed := _btn_style(BTN_PRESS)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("focus", hover)
+
+	var id := theme.id
+	btn.pressed.connect(func() -> void:
+		if not _awaiting_choice:
+			return
+		district_chosen.emit(id)
+	)
+	return btn
+
+
+func _btn_style(color: Color) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = color
+	sb.set_corner_radius_all(6)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(0.7, 0.52, 0.28, 0.4)
+	sb.content_margin_left = 14
+	sb.content_margin_right = 14
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
+	return sb

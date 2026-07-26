@@ -22,6 +22,8 @@ var voxel_size: float = 0.5
 var ground_thickness: int = 6
 var ground_y: float = 3.5
 var origin_vox: Vector3i = Vector3i.ZERO
+## Hill tiles keep only edge stubs, so the road graph is intentionally disconnected.
+var _allow_fragmented: bool = false
 
 
 func is_ready() -> bool:
@@ -41,6 +43,11 @@ func build(
 	voxel_size = vs
 	origin_vox = p_origin_vox
 	ground_y = float(ground_thickness + 1) * vs
+	_allow_fragmented = (
+		planner != null
+		and planner.theme != null
+		and planner.theme.id == DistrictTheme.HILL
+	)
 	crossings.clear()
 	crossing_ped_count.clear()
 	occupied_crossing_ids = PackedInt32Array()
@@ -411,12 +418,12 @@ func _validate() -> void:
 		)
 	var road_ratio := road.largest_component_ratio()
 	var ped_ratio := ped.largest_component_ratio()
-	if road_ratio < 0.55:
+	if not _allow_fragmented and road_ratio < 0.55:
 		push_error(
 			"StreetNavLayers: road graph fragmented (largest=%.2f nodes=%d comps=%d)"
 			% [road_ratio, road.node_count, road.component_count]
 		)
-	if ped_ratio < 0.40:
+	if not _allow_fragmented and ped_ratio < 0.40:
 		push_error(
 			"StreetNavLayers: ped graph fragmented (largest=%.2f nodes=%d comps=%d)"
 			% [ped_ratio, ped.node_count, ped.component_count]

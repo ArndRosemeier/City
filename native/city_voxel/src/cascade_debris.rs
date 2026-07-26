@@ -56,6 +56,10 @@ const BODY_PARAM_ANGULAR_DAMP: i32 = 9;
 const DEBRIS_COLLISION_MASK: i32 = 1 | 4;
 const DEBRIS_COLLISION_LAYER: i32 = 4;
 
+/// Full-opacity hold after spawn, then a linear fade to free.
+const DESPAWN_HOLD_SEC: f32 = 5.0;
+const DESPAWN_FADE_SEC: f32 = 5.0;
+
 /// Temporary cascade diagnostics (console). Turn off after verifying visuals.
 const DEBUG_DEBRIS_LOG: bool = false;
 const DEBUG_LOG_SPAWNS: u32 = 8;
@@ -77,12 +81,14 @@ struct LiveBody {
     last_origin: Vector3,
     /// Seconds spent nearly still — hard-freeze when this exceeds settle_still_sec.
     still_sec: f32,
-    /// Seconds since spawn — force-freeze old jittering piles.
+    /// Seconds since spawn — force-freeze old jittering piles, then despawn fade.
     age_sec: f32,
     /// Frozen as BODY_MODE_STATIC — overlaps cannot wake it.
     settled: bool,
     /// Collision cleared while dropping through stale street collision into a crater.
     phantom_fall: bool,
+    /// Collision stripped for the fade-out so invisible cubes cannot trap the walker.
+    fading: bool,
     half_extent: f32,
 }
 
@@ -203,6 +209,8 @@ impl INode for NativeCascadeDebris {
         self.debug_frame = self.debug_frame.wrapping_add(1);
         self.evict_budget = self.debris_evict_per_frame.max(1);
         let dt = delta as f32;
+        // Age every cube first — settle cutoff and the despawn fade both read age_sec.
+        self.tick_debris_lifetime(dt);
         // Drop through stale street colliders into real voxel support, then freeze piles.
         if self.tool.is_some() && self.terrain.is_some() {
             self.pull_debris_through_phantom_floors(dt);
@@ -517,7 +525,7 @@ impl NativeCascadeDebris {
         while y <= cap {
             let v = Vector3i::new(hit_vox.x, y, hit_vox.z);
             let id = self.get_voxel(v);
-            if !materials::is_destructible(id) {
+            if !materials::cascades(id) {
                 break;
             }
             column.push(ColumnEntry {
@@ -605,7 +613,7 @@ impl NativeCascadeDebris {
                 cleared.y + offset.y,
                 cleared.z + offset.z,
             );
-            if !materials::is_destructible(self.get_voxel(n)) {
+            if !materials::cascades(self.get_voxel(n)) {
                 continue;
             }
             if self.has_support_below(n) {
@@ -651,7 +659,7 @@ impl NativeCascadeDebris {
             return;
         }
         let id = self.get_voxel(n);
-        if !materials::is_destructible(id) {
+        if !materials::cascades(id) {
             return;
         }
         if self.has_support_below(n) {
@@ -684,7 +692,7 @@ impl NativeCascadeDebris {
             for dy in [0, 1, -1, 2, -2] {
                 let fy = from_vox.y + dy;
                 let probe = Vector3i::new(nx, fy, nz);
-                if materials::is_destructible(self.get_voxel(probe)) {
+                if materials::cascades(self.get_voxel(probe)) {
                     found_y = fy;
                     break;
                 }
@@ -1149,6 +1157,7 @@ impl NativeCascadeDebris {
             age_sec: 0.0,
             settled: false,
             phantom_fall: false,
+            fading: false,
             half_extent: half_extents.x,
         });
         self.base_mut()
@@ -1184,7 +1193,7 @@ impl NativeCascadeDebris {
         if self.live.is_empty() || self.space == Rid::Invalid {
             return;
         }
-        let dt = delta.max(0.0);
+        let _dt = delta.max(0.0);
         let mut ps = Self::ps();
         struct Snap {
             index: usize,
@@ -1200,7 +1209,6 @@ impl NativeCascadeDebris {
             if live.settled {
                 continue;
             }
-            live.age_sec += dt;
             let Ok(xf) = ps
                 .call(
                     "body_get_state",
@@ -1280,13 +1288,15 @@ impl NativeCascadeDebris {
                             Vector3::ZERO.to_variant(),
                         ],
                     );
-                    ps.call(
-                        "body_set_collision_mask",
-                        &[
-                            snap.body.to_variant(),
-                            DEBRIS_COLLISION_MASK.to_variant(),
-                        ],
-                    );
+                    if !live.fading {
+                        ps.call(
+                            "body_set_collision_mask",
+                            &[
+                                snap.body.to_variant(),
+                                DEBRIS_COLLISION_MASK.to_variant(),
+                            ],
+                        );
+                    }
                     live.phantom_fall = false;
                     live.last_origin = xf.origin;
                 } else {
@@ -1402,12 +1412,20 @@ impl NativeCascadeDebris {
             "body_set_mode",
             &[live.body.to_variant(), BODY_MODE_STATIC.to_variant()],
         );
+        // Fading cubes stay non-colliding so a late freeze cannot re-solidify a ghost.
+        let mask = if live.fading {
+            0
+        } else {
+            DEBRIS_COLLISION_MASK
+        };
+        let layer = if live.fading { 0 } else { DEBRIS_COLLISION_LAYER };
+        ps.call(
+            "body_set_collision_layer",
+            &[live.body.to_variant(), layer.to_variant()],
+        );
         ps.call(
             "body_set_collision_mask",
-            &[
-                live.body.to_variant(),
-                DEBRIS_COLLISION_MASK.to_variant(),
-            ],
+            &[live.body.to_variant(), mask.to_variant()],
         );
     }
 
@@ -1416,7 +1434,7 @@ impl NativeCascadeDebris {
             let pool = self.max_live_debris.max(1);
             let mut mm = MultiMesh::new_gd();
             mm.set_transform_format(TransformFormat::TRANSFORM_3D);
-            mm.set_use_colors(false);
+            mm.set_use_colors(true);
             // Preallocate once — resizing instance_count every spawn/despawn flickers the buffer.
             mm.set_instance_count(pool);
             mm.set_visible_instance_count(0);
@@ -1455,6 +1473,9 @@ impl NativeCascadeDebris {
             bucket.multimesh.set_custom_aabb(debris_cull_aabb());
         }
         bucket.multimesh.set_instance_transform(vis, xf);
+        bucket
+            .multimesh
+            .set_instance_color(vis, Color::from_rgba(1.0, 1.0, 1.0, 1.0));
         bucket.multimesh.reset_instance_physics_interpolation(vis);
         bucket.multimesh.set_visible_instance_count(vis + 1);
         vis
@@ -1471,7 +1492,9 @@ impl NativeCascadeDebris {
         let last = vis - 1;
         if mm_index != last {
             let xf = bucket.multimesh.get_instance_transform(last);
+            let col = bucket.multimesh.get_instance_color(last);
             bucket.multimesh.set_instance_transform(mm_index, xf);
+            bucket.multimesh.set_instance_color(mm_index, col);
             bucket.multimesh.reset_instance_physics_interpolation(mm_index);
             // Update the live body that held `last`.
             for live in self.live.iter_mut() {
@@ -1493,10 +1516,68 @@ impl NativeCascadeDebris {
         inv * world_xf
     }
 
+    fn despawn_alpha(age_sec: f32) -> f32 {
+        if age_sec <= DESPAWN_HOLD_SEC {
+            return 1.0;
+        }
+        let fade_t = (age_sec - DESPAWN_HOLD_SEC) / DESPAWN_FADE_SEC.max(0.001);
+        (1.0 - fade_t).clamp(0.0, 1.0)
+    }
+
+    /// Infection / meteor / Game Boy share opaque terrain shaders, so they cannot
+    /// read MultiMesh COLOR.a. Shrink those visuals during the fade instead.
+    fn fades_by_scale(mat_id: i32) -> bool {
+        materials::is_infection(mat_id)
+            || mat_id == materials::METEOR_ROCK
+            || mat_id == materials::GAMEBOY
+    }
+
+    fn tick_debris_lifetime(&mut self, dt: f32) {
+        if self.live.is_empty() {
+            return;
+        }
+        let dt = dt.max(0.0);
+        let mut kill: Vec<usize> = Vec::new();
+        let mut strip: Vec<usize> = Vec::new();
+        for (i, live) in self.live.iter_mut().enumerate() {
+            live.age_sec += dt;
+            let alpha = Self::despawn_alpha(live.age_sec);
+            if alpha <= 0.0 {
+                kill.push(i);
+                continue;
+            }
+            if alpha < 1.0 && !live.fading {
+                live.fading = true;
+                strip.push(i);
+            }
+        }
+        // Strip collision before the cube goes translucent so the walker cannot stick.
+        if !strip.is_empty() {
+            let mut ps = Self::ps();
+            for i in strip {
+                let body = self.live[i].body;
+                ps.call(
+                    "body_set_collision_layer",
+                    &[body.to_variant(), 0i32.to_variant()],
+                );
+                ps.call(
+                    "body_set_collision_mask",
+                    &[body.to_variant(), 0i32.to_variant()],
+                );
+            }
+        }
+        // Free highest indices first so removals do not invalidate earlier ones.
+        kill.sort_unstable_by(|a, b| b.cmp(a));
+        for i in kill {
+            self.free_body_at(i);
+        }
+    }
+
     fn sync_multimesh_transforms(&mut self) {
         let mut ps = Self::ps();
         // Collect transforms then apply — avoid borrow issues across buckets.
-        let mut updates: Vec<(i32, i32, Transform3D)> = Vec::with_capacity(self.live.len());
+        let mut updates: Vec<(i32, i32, Transform3D, Color)> =
+            Vec::with_capacity(self.live.len());
         for live in &self.live {
             let Ok(world_xf) = ps
                 .call(
@@ -1512,14 +1593,21 @@ impl NativeCascadeDebris {
                 // the whole debris field flickering in/out).
                 continue;
             };
-            let local_xf = self.world_to_debris_local(world_xf);
-            updates.push((live.mat_id, live.mm_index, local_xf));
+            let alpha = Self::despawn_alpha(live.age_sec);
+            let mut local_xf = self.world_to_debris_local(world_xf);
+            if Self::fades_by_scale(live.mat_id) {
+                let s = alpha.max(0.001);
+                local_xf.basis = local_xf.basis * Basis::from_scale(Vector3::splat(s));
+            }
+            let color = Color::from_rgba(1.0, 1.0, 1.0, alpha);
+            updates.push((live.mat_id, live.mm_index, local_xf, color));
         }
-        for (mat_id, mm_index, xf) in updates {
+        for (mat_id, mm_index, xf, color) in updates {
             if let Some(bucket) = self.buckets.get_mut(&mat_id) {
                 let vis = bucket.multimesh.get_visible_instance_count();
                 if mm_index >= 0 && mm_index < vis {
                     bucket.multimesh.set_instance_transform(mm_index, xf);
+                    bucket.multimesh.set_instance_color(mm_index, color);
                 }
             }
         }

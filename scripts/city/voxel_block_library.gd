@@ -311,6 +311,8 @@ static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 
 
 const SURFACE_SHADER := "res://assets/city/shaders/voxel_surface.gdshader"
+## Debris MultiMesh path — same look as SURFACE_SHADER but instance COLOR.a fades.
+const DEBRIS_SHADER := "res://assets/city/shaders/voxel_debris.gdshader"
 const GLASS_SHADER := "res://assets/city/shaders/voxel_glass.gdshader"
 const WATER_SHADER := "res://assets/city/shaders/voxel_water.gdshader"
 ## World height of the street deck (ground_thickness+1)*voxel_size with thickness=6.
@@ -385,7 +387,9 @@ static func _build_surface_material(id: int, object_space: bool) -> ShaderMateri
 			mat.set_shader_parameter("fresnel_strength", 0.45)
 			mat.set_shader_parameter("sparkle", 1.2)
 		_:
-			mat.shader = _load_shader(SURFACE_SHADER)
+			## Object-space materials are debris Multimeshes; they need a fade-capable
+			## shader. Terrain stays on the opaque surface shader.
+			mat.shader = _load_shader(DEBRIS_SHADER if object_space else SURFACE_SHADER)
 			var ntex: Texture2D = null
 			if spec.normal_file != "":
 				ntex = _tex(spec.normal_file)

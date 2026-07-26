@@ -76,7 +76,8 @@ void fragment() {
 	albedo += vec3(0.35, 0.5, 0.65) * day_sky_tint * (1.0 - night_factor) * fres;
 
 	ALBEDO = albedo;
-	ALPHA = alpha;
+	/// MultiMesh debris fades via instance COLOR.a; terrain meshes leave it at 1.
+	ALPHA = alpha * COLOR.a;
 	ROUGHNESS = roughness_base;
 	METALLIC = metallic_base;
 	SPECULAR = 0.85;

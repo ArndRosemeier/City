@@ -80,7 +80,8 @@ void fragment() {
 	albedo *= 0.85 + 0.3 * h0;
 
 	ALBEDO = albedo;
-	ALPHA = clamp(tint.a + fres * fresnel_strength, 0.0, 1.0);
+	/// MultiMesh debris fades via instance COLOR.a; terrain meshes leave it at 1.
+	ALPHA = clamp(tint.a + fres * fresnel_strength, 0.0, 1.0) * COLOR.a;
 	ROUGHNESS = clamp(roughness_base + h0 * 0.05, 0.0, 1.0);
 	METALLIC = metallic_base;
 	SPECULAR = 1.0;

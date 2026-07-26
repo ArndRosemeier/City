@@ -8,6 +8,7 @@ const StreetNavLayersScript := preload("res://scripts/city/street_nav_layers.gd"
 const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
 const PlazaComposerScript := preload("res://scripts/city/plaza_composer.gd")
 const ParkComposerScript := preload("res://scripts/city/park_composer.gd")
+const HillComposerScript := preload("res://scripts/city/hill_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 
@@ -40,6 +41,7 @@ var _brush: CityBrush
 var _planner: DistrictPlanner
 var _plaza: PlazaComposer
 var _park: ParkComposer
+var _hill: HillComposer
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
@@ -120,6 +122,13 @@ func _setup_composers() -> void:
 	_park.brush = _brush
 	_park.rng = _rng
 	_park.ground_y = ground_thickness
+
+	_hill = HillComposerScript.new()
+	_hill.brush = _brush
+	_hill.rng = _rng
+	_hill.ground_y = ground_thickness
+	_hill.planner = _planner
+	_hill.cell_size = cell_size
 
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
@@ -228,7 +237,7 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			_paint_street_cell(smin, smax, cx, cz, false)
 		LandUse.PLAZA:
 			_brush.fill_box(smin, smax, theme.plaza_mat)
-		LandUse.PARK:
+		LandUse.PARK, LandUse.HILL:
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		_:
 			pass  ## Sidewalk already from slab.
@@ -249,7 +258,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -263,7 +272,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL:
 			return
 		_:
 			pass
@@ -307,8 +316,15 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 
 
 func decorate_open_spaces() -> void:
-	## Fancy plaza/park pass — call only once the full feature AABBs are editable.
-	if _brush == null or _planner == null or _plaza == null or _park == null:
+	## Fancy plaza/park/hill pass — call only once the full feature AABBs are editable.
+	if _brush == null or _planner == null or _plaza == null or _park == null or _hill == null:
+		return
+	var lh := _planner.large_hill
+	if lh.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 3)
+		var hmin := Vector3i(lh.position.x * cell_size, ground_thickness, lh.position.y * cell_size)
+		var hmax := Vector3i(lh.end.x * cell_size, ground_thickness + 1, lh.end.y * cell_size)
+		_hill.compose(hmin, hmax)
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
@@ -342,7 +358,14 @@ func decorate_open_spaces() -> void:
 
 func decorate_open_spaces_far() -> void:
 	## Sparse trees / benches so distant greens aren't empty until upgrade.
-	if _brush == null or _planner == null or _plaza == null or _park == null:
+	if _brush == null or _planner == null or _plaza == null or _park == null or _hill == null:
+		return
+	var lh := _planner.large_hill
+	if lh.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 33)
+		var hmin := Vector3i(lh.position.x * cell_size, ground_thickness, lh.position.y * cell_size)
+		var hmax := Vector3i(lh.end.x * cell_size, ground_thickness + 1, lh.end.y * cell_size)
+		_hill.compose_far_sparse(hmin, hmax)
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
@@ -381,6 +404,16 @@ func open_space_bounds() -> Array[AABB]:
 	var yh := 12.0
 	var ox := float(origin_vox.x)
 	var oz := float(origin_vox.z)
+	var lh := _planner.large_hill
+	if lh.size.x > 0:
+		## Hills reach ~40 m; bounds must cover the full sculpt volume.
+		out.append(
+			AABB(
+				Vector3(ox + lh.position.x * cell_size, y0, oz + lh.position.y * cell_size),
+				Vector3(lh.size.x * cell_size, 90.0, lh.size.y * cell_size)
+			)
+		)
+		return out
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
 		out.append(
@@ -418,6 +451,7 @@ func end_generate() -> void:
 	_brush = null
 	_plaza = null
 	_park = null
+	_hill = null
 	_grammar = null
 
 
@@ -434,6 +468,8 @@ func _paint_cell(cx: int, cz: int) -> void:
 			_paint_plaza_cell(min_v, max_v, cx, cz, _plaza)
 		LandUse.PARK:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
+		LandUse.HILL:
+			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		_:
 			_paint_lot(min_v, max_v, cx, cz, tag, _grammar)
 
@@ -473,6 +509,9 @@ func collect_walkable_world_positions(tool: VoxelTool, stride: int = 2) -> Packe
 
 func find_spawn_world(tool: VoxelTool) -> Vector3:
 	## Feet slightly above the top of the ground voxel so we don't clip/tunnel.
+	## Headroom must clear the walker crown (~2.65 m ≈ 6 voxels at 0.5 m); the old
+	## 3-voxel check let hill-cave spawns start in crawl space.
+	const HEADROOM_VOX := 6
 	_brush = CityBrushScript.new(tool, origin_vox)
 	var vs := voxel_size
 	var floor_top_y := float(ground_thickness + 1) * vs
@@ -489,24 +528,29 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 				if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
 					continue
 				var mat := _brush.get_vox(Vector3i(x, ground_thickness, z))
-				if VoxelMaterial.is_walkable_surface(mat):
-					if (
-						_brush.get_vox(Vector3i(x, ground_thickness + 1, z)) == VoxelMaterial.AIR
-						and _brush.get_vox(Vector3i(x, ground_thickness + 2, z)) == VoxelMaterial.AIR
-						and _brush.get_vox(Vector3i(x, ground_thickness + 3, z)) == VoxelMaterial.AIR
-					):
-						_brush = null
-						return Vector3(
-							(float(origin_vox.x + x) + 0.5) * vs,
-							spawn_y,
-							(float(origin_vox.z + z) + 0.5) * vs
-						)
+				if not VoxelMaterial.is_walkable_surface(mat):
+					continue
+				if not _has_spawn_headroom(x, z, HEADROOM_VOX):
+					continue
+				_brush = null
+				return Vector3(
+					(float(origin_vox.x + x) + 0.5) * vs,
+					spawn_y,
+					(float(origin_vox.z + z) + 0.5) * vs
+				)
 	_brush = null
 	return Vector3(
 		(float(origin_vox.x + cx) + 0.5) * vs,
 		spawn_y,
 		(float(origin_vox.z + cz) + 0.5) * vs
 	)
+
+
+func _has_spawn_headroom(x: int, z: int, air_voxels: int) -> bool:
+	for dy in range(1, air_voxels + 1):
+		if _brush.get_vox(Vector3i(x, ground_thickness + dy, z)) != VoxelMaterial.AIR:
+			return false
+	return true
 
 
 func _sidewalk_depth_vox() -> int:
@@ -628,7 +672,7 @@ func _should_crosswalk(cx: int, cz: int) -> bool:
 	for dz in range(-1, 2):
 		for dx in range(-1, 2):
 			var t := _planner.tag_at(cx + dx, cz + dz)
-			if t == LandUse.PLAZA or t == LandUse.PARK:
+			if t == LandUse.PLAZA or LandUse.is_open_nature(t):
 				return true
 	var roads := 0
 	if LandUse.is_road(_planner.tag_at(cx - 1, cz)):

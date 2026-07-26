@@ -41,8 +41,10 @@ const SPAWN_DISTRICT_RING := 3
 ## Real-time seconds for a full 24h cycle.
 @export var day_length_sec: float = 420.0
 ## District tile the player boots into. Filled at regenerate from the world seed
-## (or --spawn-district=x,z); tools can read it after boot.
+## (or --spawn-district=x,z / --spawn-theme=…); tools can read it after boot.
 var spawn_district_coord: Vector2i = Vector2i.ZERO
+## Theme chosen on the start modal (or via --spawn-theme). -1 = unset / random.
+var spawn_theme_id: int = -1
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
@@ -155,10 +157,33 @@ func _cli_spawn_district() -> Variant:
 	return null
 
 
-func _pick_spawn_district() -> Vector2i:
-	var forced: Variant = _cli_spawn_district()
-	if forced is Vector2i:
-		return forced as Vector2i
+func _cli_spawn_theme() -> int:
+	## Returns a DistrictTheme id when --spawn-theme=… is present, otherwise -1.
+	const FLAG := "--spawn-theme="
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for a: String in args:
+		if not a.begins_with(FLAG):
+			continue
+		return DistrictTheme.parse_theme_id(a.substr(FLAG.length()))
+	return -1
+
+
+func _should_show_spawn_picker() -> bool:
+	## Tools that `add_child(CityRoot.new())` skip the modal; the main scene shows it.
+	## CLI overrides and headless runs also skip.
+	if _cli_spawn_district() is Vector2i:
+		return false
+	if _cli_spawn_theme() >= 0:
+		return false
+	if DisplayServer.get_name() == "headless":
+		return false
+	var tree := get_tree()
+	if tree == null:
+		return false
+	return tree.current_scene == self or get_parent() == tree.root
+
+
+func _pick_spawn_district_random() -> Vector2i:
 	## Stable for a given world seed so --city-seed=N also replays the spawn tile.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = DistrictCoord.feature_seed(city_seed, 0x53504E)  ## "SPN"
@@ -166,6 +191,36 @@ func _pick_spawn_district() -> Vector2i:
 		rng.randi_range(-SPAWN_DISTRICT_RING, SPAWN_DISTRICT_RING),
 		rng.randi_range(-SPAWN_DISTRICT_RING, SPAWN_DISTRICT_RING)
 	)
+
+
+## Resolves the spawn tile: CLI coord, theme search (modal / --spawn-theme), or RNG.
+func _resolve_spawn_district() -> Vector2i:
+	var forced: Variant = _cli_spawn_district()
+	if forced is Vector2i:
+		spawn_theme_id = DistrictTheme.for_district(city_seed, forced as Vector2i).id
+		return forced as Vector2i
+
+	var theme_id := _cli_spawn_theme()
+	if theme_id < 0 and _should_show_spawn_picker():
+		if _loading_splash == null:
+			push_error("CityRoot: spawn picker requested but LoadingSplash is missing")
+		else:
+			_loading_splash.call("show_splash", "Choose a starting district")
+			theme_id = int(await _loading_splash.call("prompt_district_choice"))
+	if theme_id >= 0:
+		spawn_theme_id = theme_id
+		var coord := DistrictTheme.find_coord_for_theme(city_seed, theme_id)
+		var found := DistrictTheme.for_district(city_seed, coord)
+		if found.id != theme_id:
+			push_error(
+				"CityRoot: theme search returned %s for requested %s"
+				% [found.display_name, DistrictTheme.make(theme_id).display_name]
+			)
+		return coord
+
+	var random_coord := _pick_spawn_district_random()
+	spawn_theme_id = DistrictTheme.for_district(city_seed, random_coord).id
+	return random_coord
 
 
 func _build_env() -> void:
@@ -294,7 +349,7 @@ func _build_hud() -> void:
 	_loading_splash = LoadingSplashScript.new()
 	add_child(_loading_splash)
 	_status = _loading_splash.call("status_label") as Label
-	_loading_splash.call("show_splash", "Setting up VoxelTerrain…")
+	_loading_splash.call("show_splash", "Choose a starting district")
 
 	_hud_layer = CanvasLayer.new()
 	_hud_layer.name = "HudLayer"
@@ -960,8 +1015,23 @@ func _regenerate() -> void:
 	_hide_game_over_overlay()
 	if _hud_layer != null:
 		_hud_layer.visible = false
+	## Pick the spawn tile before any district bake so the title modal is first.
 	if _loading_splash != null:
-		_loading_splash.call("show_splash", "Setting up VoxelTerrain…")
+		_loading_splash.call("show_splash", "Choose a starting district")
+	spawn_district_coord = await _resolve_spawn_district()
+	var theme := DistrictTheme.for_district(city_seed, spawn_district_coord)
+	print(
+		"CityRoot: spawn district %s (%s) — pin with --spawn-district=%d,%d or --spawn-theme=%s"
+		% [
+			spawn_district_coord, theme.display_name,
+			spawn_district_coord.x, spawn_district_coord.y,
+			theme.display_name.to_lower().replace(" ", "-"),
+		]
+	)
+	if _loading_splash != null:
+		_loading_splash.call(
+			"show_splash", "Generating %s at %s…" % [theme.display_name, spawn_district_coord]
+		)
 	elif _status != null:
 		_status.visible = true
 		_status.text = "Setting up VoxelTerrain…"
@@ -1037,13 +1107,7 @@ func _regenerate() -> void:
 	_streamer.status_message.connect(_on_streamer_status)
 	_streamer.spawn_district_ready.connect(_on_spawn_district_ready)
 
-	spawn_district_coord = _pick_spawn_district()
-	var theme := DistrictTheme.for_district(city_seed, spawn_district_coord)
-	print(
-		"CityRoot: spawn district %s (%s) — pin with --spawn-district=%d,%d"
-		% [spawn_district_coord, theme.display_name, spawn_district_coord.x, spawn_district_coord.y]
-	)
-	_status.text = "Generating spawn district…"
+	_status.text = "Generating %s…" % theme.display_name
 	_streamer.boot_spawn_district(spawn_district_coord)
 
 
@@ -1281,14 +1345,27 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 		if _cascade.has_method("detach_blast_voxels"):
 			_cascade.call("detach_blast_voxels", detached, hit_world)
 		## Fabric still standing above the hole cascades like melee.
-		if _cascade.has_method("collapse_column_above"):
-			for col_key in column_max_y.keys():
-				var xz: Vector2i = col_key
-				var max_y: int = int(column_max_y[col_key])
-				_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
+		for col_key in column_max_y.keys():
+			var xz: Vector2i = col_key
+			var max_y: int = int(column_max_y[col_key])
+			_cascade_column_above(Vector3i(xz.x, max_y, xz.y))
 	BlastFlashVfxScript.spawn(self, hit_world, radius)
 	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
+
+
+## Drop whatever still stands above a fresh hole — unless it is hillside. Rock is
+## self-supporting, and a hill is one connected massif: cascading it turns a single
+## charged shot inside a cave into a mountain that hollows itself out column by column.
+func _cascade_column_above(top_vox: Vector3i) -> void:
+	if _cascade == null or not is_instance_valid(_cascade):
+		return
+	if not _cascade.has_method("collapse_column_above"):
+		return
+	var above := int(_tool.get_voxel(Vector3i(top_vox.x, top_vox.y + 1, top_vox.z)))
+	if VoxelMaterial.is_self_supporting_terrain(above):
+		return
+	_cascade.collapse_column_above(top_vox)
 
 
 ## Q stomp: same destruction as a max-charge blast at the feet (anim/FX differ on the walker).
@@ -1381,7 +1458,7 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	for col_key in column_max_y.keys():
 		var xz: Vector2i = col_key
 		var max_y: int = int(column_max_y[col_key])
-		_cascade.collapse_column_above(Vector3i(xz.x, max_y, xz.y))
+		_cascade_column_above(Vector3i(xz.x, max_y, xz.y))
 
 	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, 30.0 + 8.0 * scale)
