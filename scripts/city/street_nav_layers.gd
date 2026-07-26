@@ -49,6 +49,7 @@ func build(
 		and (
 			planner.theme.id == DistrictTheme.HILL
 			or planner.theme.id == DistrictTheme.GRAVEYARD
+			or planner.theme.id == DistrictTheme.LAKE
 		)
 	)
 	crossings.clear()

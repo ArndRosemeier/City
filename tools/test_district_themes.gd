@@ -173,6 +173,7 @@ func _summarize(coord: Vector2i, res: Dictionary) -> Dictionary:
 		"park_cells": int(tags.get(LandUse.PARK, 0)),
 		"hill_cells": int(tags.get(LandUse.HILL, 0)),
 		"graveyard_cells": int(tags.get(LandUse.GRAVEYARD, 0)),
+		"lake_cells": int(tags.get(LandUse.LAKE, 0)),
 		"road_cells": int(tags.get(LandUse.ROAD, 0)) + int(tags.get(LandUse.AVENUE, 0)),
 		"lot_cells": (
 			int(tags.get(LandUse.CORE_LOT, 0))
@@ -280,6 +281,7 @@ func _check_parks(stats: Array) -> void:
 	var urban := 0
 	var hills := 0
 	var graveyards := 0
+	var basins := 0
 	for s: Variant in stats:
 		var d: Dictionary = s
 		var m: Dictionary = d["walls"]
@@ -322,6 +324,21 @@ func _check_parks(stats: Array) -> void:
 				_fail("FAIL %s Graveyard district has no hedge / trees" % d["coord"])
 				return
 			continue
+		if int(d["theme_id"]) == DistrictTheme.LAKE:
+			basins += 1
+			if int(d["lot_cells"]) > 0:
+				_fail("FAIL %s Lake district still has housing lots" % d["coord"])
+				return
+			if int(d["lake_cells"]) <= 0:
+				_fail("FAIL %s Lake district has no lake cells" % d["coord"])
+				return
+			if int(m[VoxelMaterial.WATER]) <= 0:
+				_fail("FAIL %s Lake district has no open water" % d["coord"])
+				return
+			if int(m[VoxelMaterial.LEAVES]) <= 0:
+				_fail("FAIL %s Lake district has no shore / island planting" % d["coord"])
+				return
+			continue
 		urban += 1
 		if int(m[VoxelMaterial.GRAVEL]) <= 0:
 			_fail("FAIL %s (%s) has no park paths" % [d["coord"], d["theme"]])
@@ -335,8 +352,8 @@ func _check_parks(stats: Array) -> void:
 		_fail("FAIL only %d of %d urban tiles got a pond" % [ponds, urban])
 		return
 	print(
-		"OK open space: parks on %d tiles (ponds %d), hills on %d, graveyards on %d"
-		% [urban, ponds, hills, graveyards]
+		"OK open space: parks on %d tiles (ponds %d), hills on %d, graveyards on %d, lakes on %d"
+		% [urban, ponds, hills, graveyards, basins]
 	)
 
 

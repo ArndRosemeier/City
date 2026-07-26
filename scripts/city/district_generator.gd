@@ -10,6 +10,7 @@ const PlazaComposerScript := preload("res://scripts/city/plaza_composer.gd")
 const ParkComposerScript := preload("res://scripts/city/park_composer.gd")
 const HillComposerScript := preload("res://scripts/city/hill_composer.gd")
 const GraveyardComposerScript := preload("res://scripts/city/graveyard_composer.gd")
+const LakeComposerScript := preload("res://scripts/city/lake_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 
@@ -44,6 +45,7 @@ var _plaza: PlazaComposer
 var _park: ParkComposer
 var _hill: HillComposer
 var _graveyard: GraveyardComposer
+var _lake: LakeComposer
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
@@ -138,6 +140,13 @@ func _setup_composers() -> void:
 	_graveyard.ground_y = ground_thickness
 	_graveyard.planner = _planner
 	_graveyard.cell_size = cell_size
+
+	_lake = LakeComposerScript.new()
+	_lake.brush = _brush
+	_lake.rng = _rng
+	_lake.ground_y = ground_thickness
+	_lake.planner = _planner
+	_lake.cell_size = cell_size
 
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
@@ -246,7 +255,8 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			_paint_street_cell(smin, smax, cx, cz, false)
 		LandUse.PLAZA:
 			_brush.fill_box(smin, smax, theme.plaza_mat)
-		LandUse.PARK, LandUse.HILL:
+		LandUse.PARK, LandUse.HILL, LandUse.LAKE:
+			## Lake tiles start as meadow; LakeComposer carves the basin into it.
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		LandUse.GRAVEYARD:
 			## Consecrated ground is turned earth, never lawn — park green under the
@@ -271,7 +281,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -285,7 +295,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE:
 			return
 		_:
 			pass
@@ -332,8 +342,19 @@ func decorate_open_spaces() -> void:
 	## Fancy plaza/park/hill pass — call only once the full feature AABBs are editable.
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
-		or _hill == null or _graveyard == null
+		or _hill == null or _graveyard == null or _lake == null
 	):
+		return
+	var ll := _planner.large_lake
+	if ll.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 5)
+		var lmin := Vector3i(
+			ll.position.x * cell_size, ground_thickness, ll.position.y * cell_size
+		)
+		var lmax := Vector3i(
+			ll.end.x * cell_size, ground_thickness + 1, ll.end.y * cell_size
+		)
+		_lake.compose(lmin, lmax)
 		return
 	var lh := _planner.large_hill
 	if lh.size.x > 0:
@@ -387,8 +408,19 @@ func decorate_open_spaces_far() -> void:
 	## Sparse trees / benches so distant greens aren't empty until upgrade.
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
-		or _hill == null or _graveyard == null
+		or _hill == null or _graveyard == null or _lake == null
 	):
+		return
+	var ll := _planner.large_lake
+	if ll.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 35)
+		var lmin := Vector3i(
+			ll.position.x * cell_size, ground_thickness, ll.position.y * cell_size
+		)
+		var lmax := Vector3i(
+			ll.end.x * cell_size, ground_thickness + 1, ll.end.y * cell_size
+		)
+		_lake.compose_far_sparse(lmin, lmax)
 		return
 	var lh := _planner.large_hill
 	if lh.size.x > 0:
@@ -445,6 +477,17 @@ func open_space_bounds() -> Array[AABB]:
 	var yh := 12.0
 	var ox := float(origin_vox.x)
 	var oz := float(origin_vox.z)
+	var ll := _planner.large_lake
+	if ll.size.x > 0:
+		## The basin is carved *below* the deck, so the region has to start at the
+		## world floor — trees on the islands set the top.
+		out.append(
+			AABB(
+				Vector3(ox + ll.position.x * cell_size, 0.0, oz + ll.position.y * cell_size),
+				Vector3(ll.size.x * cell_size, y0 + 30.0, ll.size.y * cell_size)
+			)
+		)
+		return out
 	var lh := _planner.large_hill
 	if lh.size.x > 0:
 		## Hills reach ~40 m; bounds must cover the full sculpt volume.
@@ -504,6 +547,7 @@ func end_generate() -> void:
 	_park = null
 	_hill = null
 	_graveyard = null
+	_lake = null
 	_grammar = null
 
 
@@ -520,7 +564,7 @@ func _paint_cell(cx: int, cz: int) -> void:
 			_paint_plaza_cell(min_v, max_v, cx, cz, _plaza)
 		LandUse.PARK:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
-		LandUse.HILL:
+		LandUse.HILL, LandUse.LAKE:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		LandUse.GRAVEYARD:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.GRAVE_SOIL)

@@ -42,6 +42,7 @@ func _ready() -> void:
 	_build_ui()
 	_sync_controls_from_settings()
 	_sync_bind_buttons()
+	_apply_master_volume()
 	set_process_unhandled_input(true)
 	set_process_input(true)
 
@@ -111,10 +112,14 @@ static func default_settings() -> Dictionary:
 		"crowd_render_m": 40.0,
 		"vehicle_render_m": 70.0,
 		"max_omni_lights": 4,
+		## Linear 0..1 → Master bus. Kept out of graphics presets below.
+		"master_volume": 1.0,
 	}
 
 
 func apply_preset(name: String) -> void:
+	## Graphics presets must not clobber the user's master volume.
+	var vol := float(_settings.get("master_volume", 1.0))
 	match name:
 		"low":
 			_settings = default_settings()
@@ -150,6 +155,7 @@ func apply_preset(name: String) -> void:
 			}
 		_:
 			return
+	_settings["master_volume"] = vol
 	_sync_controls_from_settings()
 	_emit_applied()
 
@@ -248,6 +254,18 @@ func _build_ui() -> void:
 	gfx_scroll.add_child(gfx_root)
 	_build_graphics_tab(gfx_root)
 
+	var audio_scroll := ScrollContainer.new()
+	audio_scroll.name = "Audio"
+	audio_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	audio_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(audio_scroll)
+
+	var audio_root := VBoxContainer.new()
+	audio_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	audio_root.add_theme_constant_override("separation", 8)
+	audio_scroll.add_child(audio_root)
+	_build_audio_tab(audio_root)
+
 	var ctrl_scroll := ScrollContainer.new()
 	ctrl_scroll.name = "Controls"
 	ctrl_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -296,6 +314,15 @@ func _build_graphics_tab(root: VBoxContainer) -> void:
 	_add_slider(root, "crowd_render_m", "Ped render (m)", 20.0, 160.0, 5.0)
 	_add_slider(root, "vehicle_render_m", "Vehicle render (m)", 40.0, 220.0, 10.0)
 	_add_slider(root, "max_omni_lights", "Street lamp lights", 0.0, 24.0, 1.0)
+
+
+func _build_audio_tab(root: VBoxContainer) -> void:
+	var hint := Label.new()
+	hint.text = "Applies to every sound in the game."
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.75, 0.78, 0.82))
+	root.add_child(hint)
+	_add_slider(root, "master_volume", "Master volume", 0.0, 1.0, 0.01)
 
 
 func _build_controls_tab(root: VBoxContainer) -> void:
@@ -399,7 +426,9 @@ func _update_value_label(key: String, value: float) -> void:
 	var lab: Label = _value_labels.get(key) as Label
 	if lab == null:
 		return
-	if key == "render_scale":
+	if key == "master_volume":
+		lab.text = "%d%%" % int(round(value * 100.0))
+	elif key == "render_scale":
 		lab.text = "%.2f" % value
 	elif key.ends_with("_m") or key == "render_scale":
 		lab.text = "%.0f" % value
@@ -412,9 +441,11 @@ func _on_slider(key: String, value: float) -> void:
 		return
 	if key in ["voxel_view_vox", "collision_view_vox", "max_omni_lights"]:
 		_settings[key] = int(round(value))
+	elif key == "master_volume":
+		_settings[key] = clampf(value, 0.0, 1.0)
 	else:
 		_settings[key] = value
-	_update_value_label(key, value)
+	_update_value_label(key, float(_settings[key]))
 	_emit_applied()
 
 
@@ -472,8 +503,24 @@ func _commit_binding(binding: Dictionary) -> void:
 
 
 func _emit_applied() -> void:
+	_apply_master_volume()
 	settings_applied.emit(_settings.duplicate(true))
 	_save_config()
+
+
+## Linear 0..1 → Master bus. Zero mutes; otherwise set_bus_volume_db(linear_to_db).
+func _apply_master_volume() -> void:
+	var linear := clampf(float(_settings.get("master_volume", 1.0)), 0.0, 1.0)
+	var bus := AudioServer.get_bus_index("Master")
+	if bus < 0:
+		push_error("CitySettingsPanel: Master audio bus missing")
+		return
+	if linear <= 0.0001:
+		AudioServer.set_bus_mute(bus, true)
+		AudioServer.set_bus_volume_db(bus, -80.0)
+	else:
+		AudioServer.set_bus_mute(bus, false)
+		AudioServer.set_bus_volume_db(bus, linear_to_db(linear))
 
 
 func _emit_controls() -> void:

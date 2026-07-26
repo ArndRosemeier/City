@@ -22,6 +22,8 @@ var pocket_parks: Array[Vector2i] = []
 var large_hill: Rect2i = Rect2i()
 ## Bounding rect of LandUse.GRAVEYARD cells. Empty when unused.
 var large_graveyard: Rect2i = Rect2i()
+## Bounding rect of LandUse.LAKE cells. Empty when unused.
+var large_lake: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## World-space tips for street lights (cell centers along avenues).
 var avenue_light_cells: Array[Vector2i] = []
@@ -53,6 +55,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	large_park = Rect2i()
 	large_hill = Rect2i()
 	large_graveyard = Rect2i()
+	large_lake = Rect2i()
 
 	if theme.id == DistrictTheme.HILL:
 		## Edge stubs only — a full arterial cross would slice the massif into wedges.
@@ -62,6 +65,10 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 		## Same edge connectors as Hill — the necropolis keeps the middle streetless.
 		_stamp_hill_edge_connectors(district_coord)
 		_build_graveyard_layout()
+	elif theme.id == DistrictTheme.LAKE:
+		## Same edge connectors as Hill — the basin keeps the middle streetless.
+		_stamp_hill_edge_connectors(district_coord)
+		_build_lake_layout()
 	else:
 		_stamp_world_arterials(district_coord)
 		_stamp_organic_interior_roads()
@@ -198,6 +205,13 @@ func _build_graveyard_layout() -> void:
 	large_graveyard = _fill_open_reserve(LandUse.GRAVEYARD)
 	if large_graveyard.size.x <= 0:
 		push_error("DistrictPlanner._build_graveyard_layout: no graveyard cells after road stamp")
+
+
+## Lake theme: non-road cells become the basin reserve for LakeComposer.
+func _build_lake_layout() -> void:
+	large_lake = _fill_open_reserve(LandUse.LAKE)
+	if large_lake.size.x <= 0:
+		push_error("DistrictPlanner._build_lake_layout: no lake cells after road stamp")
 
 
 func _fill_open_reserve(tag: int) -> Rect2i:

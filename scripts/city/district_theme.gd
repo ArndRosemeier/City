@@ -19,7 +19,9 @@ const CIVIC_QUARTER := 4
 const HILL := 5
 ## Outer-ring necropolis: edge stubs only, elevated yard, chapel, catacombs.
 const GRAVEYARD := 6
-const COUNT := 7
+## Outer-ring water: edge stubs only, one natural lake with wooded islands.
+const LAKE := 7
+const COUNT := 8
 
 ## Districts within this many tiles of the world origin are always the high-rise core.
 const CORE_RING := 0
@@ -73,12 +75,13 @@ static func for_district(world_seed: int, coord: Vector2i) -> DistrictTheme:
 		choices = PackedInt32Array([CORE_HIGHRISE, CIVIC_QUARTER, OLD_TOWN, CORE_HIGHRISE])
 	elif ring == 2:
 		choices = PackedInt32Array([
-			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL, GRAVEYARD
+			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL,
+			GRAVEYARD, LAKE
 		])
 	else:
 		choices = PackedInt32Array([
 			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GRAVEYARD,
-			GARDEN_RESIDENTIAL, OLD_TOWN,
+			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN,
 		])
 	return make(choices[pick % choices.size()])
 
@@ -132,6 +135,10 @@ static func parse_theme_id(raw: String) -> int:
 		"cemetery": GRAVEYARD,
 		"necropolis": GRAVEYARD,
 		"churchyard": GRAVEYARD,
+		"lake": LAKE,
+		"lakeside": LAKE,
+		"water": LAKE,
+		"lagoon": LAKE,
 	}
 	if aliases.has(key):
 		return int(aliases[key])
@@ -366,6 +373,37 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.park_count = 0
 			t.road_density = 0.0
 			t.median_planting = false
+		LAKE:
+			t.display_name = "Lake"
+			t.blurb = "One big natural lake with wooded islands — roads only at the edges."
+			## No lots here either, but shore props still read from the palette.
+			t.wall_mats = PackedInt32Array([
+				VoxelMaterial.STONE, VoxelMaterial.PLASTER, VoxelMaterial.BRICK
+			])
+			t.townhouse_mats = PackedInt32Array([VoxelMaterial.PLASTER, VoxelMaterial.STONE])
+			t.roof_mats = PackedInt32Array([VoxelMaterial.ROOF_CLAY])
+			t.base_mat = VoxelMaterial.STONE
+			t.tower_shaft_mat = VoxelMaterial.STONE
+			t.accent_mat = VoxelMaterial.GRAVEL
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.STONE, VoxelMaterial.GRAVEL, VoxelMaterial.DIRT,
+				VoxelMaterial.PLASTER
+			])
+			t.sidewalk_mat = VoxelMaterial.GRAVEL
+			t.plaza_mat = VoxelMaterial.GRAVEL
+			t.plaza_inner_mat = VoxelMaterial.DIRT
+			t.intensity_bias = -0.5
+			t.height_scale = 0.0
+			t.tower_chance = 0.0
+			t.modern_chance = 0.0
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.0
+			t.cylinder_chance = 0.0
+			t.wild_chance = 0.0
+			t.park_count = 0
+			## No interior streets — planner stamps short edge stubs only.
+			t.road_density = 0.0
+			t.median_planting = true
 		_:
 			push_error("DistrictTheme.make: unknown theme id %d" % theme_id)
 	return t
