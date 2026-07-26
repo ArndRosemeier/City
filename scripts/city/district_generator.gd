@@ -9,6 +9,7 @@ const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
 const PlazaComposerScript := preload("res://scripts/city/plaza_composer.gd")
 const ParkComposerScript := preload("res://scripts/city/park_composer.gd")
 const HillComposerScript := preload("res://scripts/city/hill_composer.gd")
+const GraveyardComposerScript := preload("res://scripts/city/graveyard_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 
@@ -42,6 +43,7 @@ var _planner: DistrictPlanner
 var _plaza: PlazaComposer
 var _park: ParkComposer
 var _hill: HillComposer
+var _graveyard: GraveyardComposer
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
@@ -129,6 +131,13 @@ func _setup_composers() -> void:
 	_hill.ground_y = ground_thickness
 	_hill.planner = _planner
 	_hill.cell_size = cell_size
+
+	_graveyard = GraveyardComposerScript.new()
+	_graveyard.brush = _brush
+	_graveyard.rng = _rng
+	_graveyard.ground_y = ground_thickness
+	_graveyard.planner = _planner
+	_graveyard.cell_size = cell_size
 
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
@@ -239,6 +248,10 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			_brush.fill_box(smin, smax, theme.plaza_mat)
 		LandUse.PARK, LandUse.HILL:
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
+		LandUse.GRAVEYARD:
+			## Consecrated ground is turned earth, never lawn — park green under the
+			## composer's mound leaks through every verge it does not overwrite.
+			_brush.fill_box(smin, smax, VoxelMaterial.GRAVE_SOIL)
 		_:
 			pass  ## Sidewalk already from slab.
 
@@ -258,7 +271,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK, LandUse.HILL:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -272,7 +285,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD:
 			return
 		_:
 			pass
@@ -317,7 +330,10 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 
 func decorate_open_spaces() -> void:
 	## Fancy plaza/park/hill pass — call only once the full feature AABBs are editable.
-	if _brush == null or _planner == null or _plaza == null or _park == null or _hill == null:
+	if (
+		_brush == null or _planner == null or _plaza == null or _park == null
+		or _hill == null or _graveyard == null
+	):
 		return
 	var lh := _planner.large_hill
 	if lh.size.x > 0:
@@ -325,6 +341,17 @@ func decorate_open_spaces() -> void:
 		var hmin := Vector3i(lh.position.x * cell_size, ground_thickness, lh.position.y * cell_size)
 		var hmax := Vector3i(lh.end.x * cell_size, ground_thickness + 1, lh.end.y * cell_size)
 		_hill.compose(hmin, hmax)
+		return
+	var lg := _planner.large_graveyard
+	if lg.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 4)
+		var gmin_gy := Vector3i(
+			lg.position.x * cell_size, ground_thickness, lg.position.y * cell_size
+		)
+		var gmax_gy := Vector3i(
+			lg.end.x * cell_size, ground_thickness + 1, lg.end.y * cell_size
+		)
+		_graveyard.compose(gmin_gy, gmax_gy)
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
@@ -358,7 +385,10 @@ func decorate_open_spaces() -> void:
 
 func decorate_open_spaces_far() -> void:
 	## Sparse trees / benches so distant greens aren't empty until upgrade.
-	if _brush == null or _planner == null or _plaza == null or _park == null or _hill == null:
+	if (
+		_brush == null or _planner == null or _plaza == null or _park == null
+		or _hill == null or _graveyard == null
+	):
 		return
 	var lh := _planner.large_hill
 	if lh.size.x > 0:
@@ -366,6 +396,17 @@ func decorate_open_spaces_far() -> void:
 		var hmin := Vector3i(lh.position.x * cell_size, ground_thickness, lh.position.y * cell_size)
 		var hmax := Vector3i(lh.end.x * cell_size, ground_thickness + 1, lh.end.y * cell_size)
 		_hill.compose_far_sparse(hmin, hmax)
+		return
+	var lg := _planner.large_graveyard
+	if lg.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 34)
+		var gmin_gy := Vector3i(
+			lg.position.x * cell_size, ground_thickness, lg.position.y * cell_size
+		)
+		var gmax_gy := Vector3i(
+			lg.end.x * cell_size, ground_thickness + 1, lg.end.y * cell_size
+		)
+		_graveyard.compose_far_sparse(gmin_gy, gmax_gy)
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
@@ -414,6 +455,16 @@ func open_space_bounds() -> Array[AABB]:
 			)
 		)
 		return out
+	var lg := _planner.large_graveyard
+	if lg.size.x > 0:
+		## Elevated yard + chapel steeple + catacombs in the fill.
+		out.append(
+			AABB(
+				Vector3(ox + lg.position.x * cell_size, y0, oz + lg.position.y * cell_size),
+				Vector3(lg.size.x * cell_size, 40.0, lg.size.y * cell_size)
+			)
+		)
+		return out
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
 		out.append(
@@ -452,6 +503,7 @@ func end_generate() -> void:
 	_plaza = null
 	_park = null
 	_hill = null
+	_graveyard = null
 	_grammar = null
 
 
@@ -470,6 +522,8 @@ func _paint_cell(cx: int, cz: int) -> void:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
 		LandUse.HILL:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
+		LandUse.GRAVEYARD:
+			_brush.fill_box(min_v, max_v, VoxelMaterial.GRAVE_SOIL)
 		_:
 			_paint_lot(min_v, max_v, cx, cz, tag, _grammar)
 

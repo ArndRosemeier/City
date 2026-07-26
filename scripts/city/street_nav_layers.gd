@@ -46,7 +46,10 @@ func build(
 	_allow_fragmented = (
 		planner != null
 		and planner.theme != null
-		and planner.theme.id == DistrictTheme.HILL
+		and (
+			planner.theme.id == DistrictTheme.HILL
+			or planner.theme.id == DistrictTheme.GRAVEYARD
+		)
 	)
 	crossings.clear()
 	crossing_ped_count.clear()

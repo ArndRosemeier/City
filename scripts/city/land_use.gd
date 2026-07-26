@@ -14,6 +14,8 @@ const TOWN_LOT := 8
 const COURTYARD_LOT := 9
 ## Open hillside reserve — no buildings; sculpted by HillComposer.
 const HILL := 10
+## Consecrated ground — no housing; sculpted by GraveyardComposer.
+const GRAVEYARD := 11
 
 
 static func is_road(tag: int) -> bool:
@@ -32,4 +34,4 @@ static func is_lot(tag: int) -> bool:
 
 
 static func is_open_nature(tag: int) -> bool:
-	return tag == PARK or tag == HILL
+	return tag == PARK or tag == HILL or tag == GRAVEYARD

@@ -287,6 +287,77 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.normal_strength = 0.85
 			s.tint_variation = 0.2
 			s.weathering = 0.4
+		VoxelMaterial.GRAVE_STONE:
+			## Headstones are 1-2 voxels wide, so the grain has to repeat per metre or
+			## a whole monument samples one flat patch of the map.
+			s.albedo_file = "grave_stone.jpg"
+			s.normal_file = "grave_stone_normal.jpg"
+			s.tile_meters = Vector2(1.0, 1.0)
+			## Deliberately far below mid grey: a churchyard full of pale slabs reads
+			## as a garden-furniture showroom, not a graveyard.
+			s.tint = Color(0.42, 0.41, 0.38, 1.0)
+			s.roughness = 0.93
+			s.normal_strength = 1.0
+			## Low spread: a field of markers that swings from white to black per plot
+			## reads as a bug, not as weathering.
+			s.tint_variation = 0.18
+			s.weathering = 0.6
+			s.grime = 0.8
+			s.grime_height = 1.2
+			s.streaks = 0.6
+		VoxelMaterial.GRAVE_MARBLE:
+			s.albedo_file = "grave_marble.jpg"
+			s.normal_file = "grave_marble_normal.jpg"
+			s.tile_meters = Vector2(0.9, 0.9)
+			## Only just brighter than the granite — enough for a silhouette to read,
+			## nowhere near white.
+			s.tint = Color(0.52, 0.53, 0.56, 1.0)
+			s.roughness = 0.6
+			s.normal_strength = 0.6
+			s.tint_variation = 0.12
+			s.weathering = 0.5
+			s.grime = 0.85
+			s.grime_height = 2.0
+			s.streaks = 0.7
+		VoxelMaterial.GRAVE_SOIL:
+			s.albedo_file = "grave_soil.jpg"
+			s.normal_file = "grave_soil_normal.jpg"
+			s.tile_meters = Vector2(1.8, 1.8)
+			s.roughness = 0.96
+			s.normal_strength = 0.9
+			s.tint_variation = 0.2
+			s.weathering = 0.5
+		VoxelMaterial.GRAVE_PATH:
+			s.albedo_file = "grave_path.jpg"
+			s.normal_file = "grave_path_normal.jpg"
+			s.tile_meters = Vector2(1.6, 1.6)
+			s.tint = Color(0.6, 0.6, 0.62, 1.0)
+			s.roughness = 0.95
+			s.normal_strength = 0.8
+			s.tint_variation = 0.15
+			s.weathering = 0.45
+		VoxelMaterial.WROUGHT_IRON:
+			## Railings and finials are single voxels — one repeat per voxel face.
+			s.albedo_file = "wrought_iron.jpg"
+			s.normal_file = "wrought_iron_normal.jpg"
+			s.tile_meters = Vector2(0.5, 0.5)
+			s.roughness = 0.52
+			s.metallic = 0.7
+			s.normal_strength = 1.1
+			s.tint_variation = 0.2
+			s.weathering = 0.6
+			s.grime = 0.5
+			s.grime_height = 1.5
+			s.streaks = 0.6
+		VoxelMaterial.YEW:
+			s.albedo_file = "yew.jpg"
+			s.normal_file = "yew_normal.jpg"
+			s.tile_meters = Vector2(0.9, 0.9)
+			s.tint = Color(0.6, 0.68, 0.62, 1.0)
+			s.roughness = 0.92
+			s.normal_strength = 0.7
+			s.tint_variation = 0.3
+			s.weathering = 0.45
 		_:
 			push_error(
 				"VoxelSurfaceSpec.for_id: no surface spec for voxel material %d — showing magenta"

@@ -377,6 +377,127 @@ def make_cave_floor() -> None:
     _save_pair(rgb, height, "cave_floor", 9.0)
 
 
+def make_grave_stone() -> None:
+    """Lichen-blackened granite for headstones: coarse speckle, sooty streaks."""
+    speck = _value_noise(211, octaves=3, base=140.0)
+    blotch = _value_noise(213, octaves=4, base=9.0)
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
+    # Chisel tooling: coarse horizontal dressing marks across the face.
+    tooling = 0.5 + 0.5 * np.sin(yy * (2.0 * math.pi / 72.0) + blotch * 4.0)
+    pale = np.array([146.0, 146.0, 140.0])
+    dark = np.array([64.0, 66.0, 64.0])
+    mix = np.clip(0.35 + 0.75 * blotch, 0.0, 1.0)
+    rgb = pale * mix[..., None] + dark * (1.0 - mix)[..., None]
+    # Granite crystals: hard bright/black flecks, not a smooth gradient.
+    rgb += (speck[..., None] - 0.45) * 86.0
+    rgb -= (1.0 - tooling)[..., None] * 14.0
+    # Lichen crust — the only warmth allowed, desaturated sage.
+    lichen = np.clip((_value_noise(217, octaves=3, base=16.0) - 0.6) * 4.0, 0.0, 1.0)
+    lichen *= 0.35 + 0.65 * speck
+    rgb = rgb * (1.0 - lichen[..., None] * 0.55) + np.array([104.0, 112.0, 82.0]) * lichen[
+        ..., None
+    ] * 0.55
+    # Rain-shadow soot pooling where the carving traps water.
+    soot = np.clip((_value_noise(219, octaves=3, base=6.0) - 0.52) * 2.6, 0.0, 1.0)
+    rgb *= 1.0 - soot[..., None] * 0.42
+    height = 0.5 + 0.28 * speck + 0.18 * blotch - 0.22 * lichen
+    _save_pair(rgb, height, "grave_stone", 10.0)
+
+
+def make_grave_marble() -> None:
+    """Cold monument marble — pale field cut by dark veins, grimy in the hollows."""
+    warp = _value_noise(227, octaves=4, base=9.0)
+    fine = _value_noise(229, octaves=4, base=60.0)
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
+    # Veins: hairline warped bands. Fat veins turn a monument into a contour map,
+    # so these stay thin and low contrast.
+    phase = (xx * 0.7 + yy * 0.4) * (2.0 * math.pi / SIZE) * 11.0 + warp * 7.0
+    vein = np.clip(1.0 - np.abs(np.sin(phase)) * 26.0, 0.0, 1.0)
+    hair = np.clip(1.0 - np.abs(np.sin(phase * 2.7 + 1.7)) * 40.0, 0.0, 1.0) * 0.6
+    vein = np.clip(vein + hair, 0.0, 1.0)
+    base = np.array([150.0, 150.0, 152.0])
+    rgb = base + (warp[..., None] - 0.5) * 16.0
+    rgb += (fine[..., None] - 0.5) * 20.0
+    rgb = rgb * (1.0 - vein[..., None] * 0.45) + np.array([64.0, 64.0, 70.0]) * vein[
+        ..., None
+    ] * 0.45
+    # Weather staining so fresh marble never looks like plastic.
+    stain = np.clip((_value_noise(233, octaves=4, base=13.0) - 0.55) * 3.0, 0.0, 1.0)
+    rgb = rgb * (1.0 - stain[..., None] * 0.4) + np.array([78.0, 76.0, 68.0]) * stain[
+        ..., None
+    ] * 0.4
+    height = 0.58 - 0.22 * vein + 0.1 * warp + 0.14 * fine
+    _save_pair(rgb, height, "grave_marble", 6.0)
+
+
+def make_grave_soil() -> None:
+    """Turned consecrated earth: near-black clods, pale grit, no green at all."""
+    clod = _value_noise(241, octaves=5, base=8.0)
+    grit = _value_noise(243, octaves=3, base=52.0)
+    base = np.array([38.0, 33.0, 28.0])
+    deep = np.array([18.0, 16.0, 15.0])
+    rgb = base * clod[..., None] + deep * (1.0 - clod)[..., None]
+    rgb += (grit[..., None] - 0.5) * 18.0
+    # Chalky flecks — crushed stone and old bone meal worked into the plot.
+    fleck = (_value_noise(247, octaves=2, base=90.0) > 0.9).astype(np.float64)
+    rgb += fleck[..., None] * 46.0
+    height = 0.42 + 0.34 * clod + 0.2 * grit + 0.1 * fleck
+    _save_pair(rgb, height, "grave_soil", 9.0)
+
+
+def make_grave_path() -> None:
+    """Cinder aisle: dark crushed slate, compacted, faint wheel ruts."""
+    agg = _value_noise(251, octaves=4, base=70.0)
+    dust = _value_noise(257, octaves=4, base=11.0)
+    base = np.array([62.0, 62.0, 64.0])
+    rgb = base + (agg[..., None] - 0.5) * 52.0
+    rgb -= (1.0 - dust[..., None]) * 14.0
+    # Pale chips of broken headstone in the grit.
+    chip = (_value_noise(263, octaves=2, base=110.0) > 0.93).astype(np.float64)
+    rgb += chip[..., None] * 58.0
+    # Damp patches that never dry under the yews.
+    damp = np.clip((_value_noise(269, octaves=3, base=6.0) - 0.55) * 3.2, 0.0, 1.0)
+    rgb *= 1.0 - damp[..., None] * 0.34
+    height = 0.45 + 0.3 * agg + 0.12 * dust + 0.12 * chip
+    _save_pair(rgb, height, "grave_path", 10.0)
+
+
+def make_wrought_iron() -> None:
+    """Rusted wrought iron for railings and finials — pitted, near black."""
+    pit = _value_noise(271, octaves=3, base=64.0)
+    bloom = _value_noise(277, octaves=4, base=10.0)
+    base = np.array([32.0, 31.0, 33.0])
+    rgb = base + (pit[..., None] - 0.5) * 22.0
+    rust = np.clip((bloom - 0.58) * 3.4, 0.0, 1.0) * (0.4 + 0.6 * pit)
+    rgb = rgb * (1.0 - rust[..., None] * 0.8) + np.array([104.0, 56.0, 34.0]) * rust[
+        ..., None
+    ] * 0.8
+    # Hammered facets catch the sky.
+    facet = np.clip((_value_noise(281, octaves=2, base=22.0) - 0.62) * 4.0, 0.0, 1.0)
+    rgb += facet[..., None] * 26.0
+    height = 0.5 + 0.24 * facet - 0.3 * (1.0 - pit) + 0.14 * rust
+    _save_pair(rgb, height, "wrought_iron", 11.0)
+
+
+def make_yew() -> None:
+    """Churchyard yew: matted near-black needles with a few grey-green highlights."""
+    mat = _value_noise(283, octaves=5, base=14.0)
+    needle = _value_noise(289, octaves=3, base=96.0)
+    gap = (_value_noise(293, octaves=3, base=20.0) < 0.3).astype(np.float64)
+    base = np.array([26.0, 42.0, 30.0])
+    lit = np.array([58.0, 78.0, 56.0])
+    rgb = base + (lit - base) * (mat[..., None] * 0.7)
+    rgb += (needle[..., None] - 0.5) * 26.0
+    rgb *= 1.0 - gap[..., None] * 0.55
+    # Dead brown inner growth.
+    dead = np.clip((_value_noise(307, octaves=3, base=9.0) - 0.66) * 4.0, 0.0, 1.0)
+    rgb = rgb * (1.0 - dead[..., None] * 0.6) + np.array([62.0, 48.0, 30.0]) * dead[
+        ..., None
+    ] * 0.6
+    height = 0.5 + 0.3 * needle + 0.2 * mat - 0.35 * gap
+    _save_pair(rgb, height, "yew", 9.0)
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     make_road_line()
@@ -393,6 +514,12 @@ def main() -> int:
     make_roof_clay()
     make_cave_wall()
     make_cave_floor()
+    make_grave_stone()
+    make_grave_marble()
+    make_grave_soil()
+    make_grave_path()
+    make_wrought_iron()
+    make_yew()
     print("Generated procedural city textures.")
     return 0
 

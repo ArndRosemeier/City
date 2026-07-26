@@ -39,8 +39,23 @@ const GAMEBOY := 32
 ## Hill-cave lining — damp limestone walls and packed earth floors.
 const CAVE_WALL := 33
 const CAVE_FLOOR := 34
+## Graveyard kit. Monuments are their own materials because headstones are one or
+## two voxels wide — facade maps tile far too coarsely to read as carved stone.
+## Lichen-blackened granite: headstones, kerbs, mausoleum walls, gate piers.
+const GRAVE_STONE := 35
+## Cold pale marble with dark veins — obelisks, lids, pediments. The only bright
+## value in the district, so silhouettes still read against the yew.
+const GRAVE_MARBLE := 36
+## Consecrated loam: near-black turned earth on the plots.
+const GRAVE_SOIL := 37
+## Cinder aisle grit — the walkable path surface between plots.
+const GRAVE_PATH := 38
+## Rusted wrought iron: railings, finials, door grilles, crosses.
+const WROUGHT_IRON := 39
+## Churchyard yew — nearly black evergreen for hedges and cypresses.
+const YEW := 40
 
-const COUNT := 35
+const COUNT := 41
 
 
 static func is_solid(id: int) -> bool:
@@ -58,6 +73,8 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == PARK
 		or id == CROSSWALK
 		or id == CAVE_FLOOR
+		or id == GRAVE_PATH
+		or id == GRAVE_SOIL
 	)
 
 
@@ -65,7 +82,7 @@ static func is_ground_surface(id: int) -> bool:
 	## Outdoor ground / road deck — meteor auto-spawns land here, never on buildings.
 	## Diggable STONE substrate under the deck is not a landing / ped surface.
 	match id:
-		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR:
+		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL:
 			return true
 		_:
 			return false
@@ -81,7 +98,7 @@ static func is_diggable_substrate(id: int) -> bool:
 ## down — a hill is one connected massif, so cascading it eats the whole mountain.
 static func is_self_supporting_terrain(id: int) -> bool:
 	match id:
-		STONE, DIRT, GRAVEL, PARK, CAVE_WALL, CAVE_FLOOR:
+		STONE, DIRT, GRAVEL, PARK, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH:
 			return true
 		_:
 			return false
@@ -90,7 +107,7 @@ static func is_self_supporting_terrain(id: int) -> bool:
 static func is_building_fabric(id: int) -> bool:
 	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground, road, or diggable stone.
 	match id:
-		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR:
+		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH:
 			return false
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
@@ -111,7 +128,7 @@ static func is_undead_structure_target(id: int) -> bool:
 
 ## Park / plaza greenery — giants and minions should ignore these.
 static func is_vegetation(id: int) -> bool:
-	return id == BARK or id == LEAVES or id == PLANTER
+	return id == BARK or id == LEAVES or id == PLANTER or id == YEW
 
 
 static func is_destructible(id: int) -> bool:
@@ -204,5 +221,17 @@ static func color(id: int) -> Color:
 			return Color(0.28, 0.32, 0.31)
 		CAVE_FLOOR:
 			return Color(0.26, 0.22, 0.17)
+		GRAVE_STONE:
+			return Color(0.33, 0.34, 0.32)
+		GRAVE_MARBLE:
+			return Color(0.66, 0.66, 0.68)
+		GRAVE_SOIL:
+			return Color(0.14, 0.12, 0.1)
+		GRAVE_PATH:
+			return Color(0.24, 0.24, 0.25)
+		WROUGHT_IRON:
+			return Color(0.12, 0.12, 0.13)
+		YEW:
+			return Color(0.11, 0.18, 0.13)
 		_:
 			return Color(1, 0, 1)

@@ -17,7 +17,9 @@ const GARDEN_RESIDENTIAL := 3
 const CIVIC_QUARTER := 4
 ## Outer-ring wilderness: arterial roads, no mid-tile housing, sculpted hills + caves.
 const HILL := 5
-const COUNT := 6
+## Outer-ring necropolis: edge stubs only, elevated yard, chapel, catacombs.
+const GRAVEYARD := 6
+const COUNT := 7
 
 ## Districts within this many tiles of the world origin are always the high-rise core.
 const CORE_RING := 0
@@ -71,11 +73,12 @@ static func for_district(world_seed: int, coord: Vector2i) -> DistrictTheme:
 		choices = PackedInt32Array([CORE_HIGHRISE, CIVIC_QUARTER, OLD_TOWN, CORE_HIGHRISE])
 	elif ring == 2:
 		choices = PackedInt32Array([
-			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL
+			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL, GRAVEYARD
 		])
 	else:
 		choices = PackedInt32Array([
-			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GARDEN_RESIDENTIAL, OLD_TOWN
+			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GRAVEYARD,
+			GARDEN_RESIDENTIAL, OLD_TOWN,
 		])
 	return make(choices[pick % choices.size()])
 
@@ -125,6 +128,10 @@ static func parse_theme_id(raw: String) -> int:
 		"civic": CIVIC_QUARTER,
 		"civicquarter": CIVIC_QUARTER,
 		"hill": HILL,
+		"graveyard": GRAVEYARD,
+		"cemetery": GRAVEYARD,
+		"necropolis": GRAVEYARD,
+		"churchyard": GRAVEYARD,
 	}
 	if aliases.has(key):
 		return int(aliases[key])
@@ -328,6 +335,37 @@ static func make(theme_id: int) -> DistrictTheme:
 			## No interior streets — planner stamps short edge stubs only.
 			t.road_density = 0.0
 			t.median_planting = true
+		GRAVEYARD:
+			t.display_name = "Graveyard"
+			t.blurb = "An elevated churchyard, hedges and graves — roads only at the edges."
+			t.wall_mats = PackedInt32Array([
+				VoxelMaterial.GRAVE_STONE, VoxelMaterial.STONE, VoxelMaterial.BRICK_DARK
+			])
+			t.townhouse_mats = PackedInt32Array([
+				VoxelMaterial.GRAVE_STONE, VoxelMaterial.BRICK_DARK
+			])
+			t.roof_mats = PackedInt32Array([VoxelMaterial.ROOF, VoxelMaterial.GRAVE_STONE])
+			t.base_mat = VoxelMaterial.GRAVE_STONE
+			t.tower_shaft_mat = VoxelMaterial.GRAVE_STONE
+			t.accent_mat = VoxelMaterial.WROUGHT_IRON
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.GRAVE_STONE, VoxelMaterial.GRAVE_MARBLE,
+				VoxelMaterial.BRICK_DARK, VoxelMaterial.STONE
+			])
+			t.sidewalk_mat = VoxelMaterial.GRAVE_PATH
+			t.plaza_mat = VoxelMaterial.GRAVE_SOIL
+			t.plaza_inner_mat = VoxelMaterial.GRAVE_PATH
+			t.intensity_bias = -0.5
+			t.height_scale = 0.0
+			t.tower_chance = 0.0
+			t.modern_chance = 0.0
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.0
+			t.cylinder_chance = 0.0
+			t.wild_chance = 0.0
+			t.park_count = 0
+			t.road_density = 0.0
+			t.median_planting = false
 		_:
 			push_error("DistrictTheme.make: unknown theme id %d" % theme_id)
 	return t

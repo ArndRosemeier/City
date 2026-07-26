@@ -15,7 +15,9 @@ pub const INFECTION_LEAD: i32 = 31;
 pub const GAMEBOY: i32 = 32;
 pub const CAVE_WALL: i32 = 33;
 pub const CAVE_FLOOR: i32 = 34;
-pub const COUNT: i32 = 35;
+pub const GRAVE_SOIL: i32 = 37;
+pub const GRAVE_PATH: i32 = 38;
+pub const COUNT: i32 = 41;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR
@@ -34,7 +36,10 @@ pub fn is_destructible(id: i32) -> bool {
 /// Rock, soil and turf carry their own weight — a blast leaves a crater, never a
 /// collapsing column.
 pub fn is_self_supporting_terrain(id: i32) -> bool {
-    matches!(id, STONE | DIRT | GRAVEL | PARK | CAVE_WALL | CAVE_FLOOR)
+    matches!(
+        id,
+        STONE | DIRT | GRAVEL | PARK | CAVE_WALL | CAVE_FLOOR | GRAVE_SOIL | GRAVE_PATH
+    )
 }
 
 /// Only built fabric may be pulled down by the debris cascade. A hill is one

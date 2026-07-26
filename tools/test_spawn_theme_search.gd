@@ -7,11 +7,20 @@ func _initialize() -> void:
 	if DistrictTheme.parse_theme_id("hill") != DistrictTheme.HILL:
 		push_error("FAIL parse hill")
 		failed = true
+	if DistrictTheme.parse_theme_id("graveyard") != DistrictTheme.GRAVEYARD:
+		push_error("FAIL parse graveyard")
+		failed = true
+	if DistrictTheme.parse_theme_id("cemetery") != DistrictTheme.GRAVEYARD:
+		push_error("FAIL parse cemetery")
+		failed = true
 	if DistrictTheme.parse_theme_id("Core High-Rise") != DistrictTheme.CORE_HIGHRISE:
 		push_error("FAIL parse Core High-Rise")
 		failed = true
 	if DistrictTheme.parse_theme_id("5") != DistrictTheme.HILL:
 		push_error("FAIL parse id 5")
+		failed = true
+	if DistrictTheme.parse_theme_id("6") != DistrictTheme.GRAVEYARD:
+		push_error("FAIL parse id 6")
 		failed = true
 
 	var seed := 42

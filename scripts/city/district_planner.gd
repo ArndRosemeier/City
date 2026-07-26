@@ -20,6 +20,8 @@ var large_park: Rect2i = Rect2i()
 var pocket_parks: Array[Vector2i] = []
 ## Bounding rect of LandUse.HILL cells (Hill theme). Empty when unused.
 var large_hill: Rect2i = Rect2i()
+## Bounding rect of LandUse.GRAVEYARD cells. Empty when unused.
+var large_graveyard: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## World-space tips for street lights (cell centers along avenues).
 var avenue_light_cells: Array[Vector2i] = []
@@ -50,11 +52,16 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	grand_plaza = Rect2i()
 	large_park = Rect2i()
 	large_hill = Rect2i()
+	large_graveyard = Rect2i()
 
 	if theme.id == DistrictTheme.HILL:
 		## Edge stubs only — a full arterial cross would slice the massif into wedges.
 		_stamp_hill_edge_connectors(district_coord)
 		_build_hill_layout()
+	elif theme.id == DistrictTheme.GRAVEYARD:
+		## Same edge connectors as Hill — the necropolis keeps the middle streetless.
+		_stamp_hill_edge_connectors(district_coord)
+		_build_graveyard_layout()
 	else:
 		_stamp_world_arterials(district_coord)
 		_stamp_organic_interior_roads()
@@ -181,6 +188,19 @@ func _fill_hill_pad(cx: int, cz: int) -> void:
 
 ## Hill theme: everything that is not a connector stub becomes open hillside.
 func _build_hill_layout() -> void:
+	large_hill = _fill_open_reserve(LandUse.HILL)
+	if large_hill.size.x <= 0:
+		push_error("DistrictPlanner._build_hill_layout: no hill cells after road stamp")
+
+
+## Graveyard theme: non-road cells become consecrated ground for GraveyardComposer.
+func _build_graveyard_layout() -> void:
+	large_graveyard = _fill_open_reserve(LandUse.GRAVEYARD)
+	if large_graveyard.size.x <= 0:
+		push_error("DistrictPlanner._build_graveyard_layout: no graveyard cells after road stamp")
+
+
+func _fill_open_reserve(tag: int) -> Rect2i:
 	var min_x := cells_x
 	var min_z := cells_z
 	var max_x := -1
@@ -189,15 +209,14 @@ func _build_hill_layout() -> void:
 		for x in range(cells_x):
 			if LandUse.is_road(grid[z][x]):
 				continue
-			grid[z][x] = LandUse.HILL
+			grid[z][x] = tag
 			min_x = mini(min_x, x)
 			min_z = mini(min_z, z)
 			max_x = maxi(max_x, x)
 			max_z = maxi(max_z, z)
 	if max_x >= min_x and max_z >= min_z:
-		large_hill = Rect2i(min_x, min_z, max_x - min_x + 1, max_z - min_z + 1)
-	else:
-		push_error("DistrictPlanner._build_hill_layout: no hill cells after road stamp")
+		return Rect2i(min_x, min_z, max_x - min_x + 1, max_z - min_z + 1)
+	return Rect2i()
 
 
 func street_facing(cx: int, cz: int) -> int:
