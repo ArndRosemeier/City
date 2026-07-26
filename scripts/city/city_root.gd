@@ -757,6 +757,10 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 	_tool.value = VoxelMaterial.AIR
 	_tool.do_point(vox)
 	_gem_counts[mat_id] = int(_gem_counts.get(mat_id, 0)) + 1
+	if _audio != null and _audio.has_method("play_gem_pickup"):
+		var local := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+		var world := _terrain.to_global(local) if _terrain != null else local * VOXEL_SIZE
+		_audio.call("play_gem_pickup", world, mat_id)
 	return true
 
 

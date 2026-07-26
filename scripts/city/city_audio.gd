@@ -5,6 +5,7 @@ extends Node
 
 const GROUP_NAME := &"city_audio"
 const POOL_SIZE := 12
+const GEM_VOICE_COUNT := 4
 const MAX_DEBRIS_PER_SEC := 14.0
 const MAX_TENDRIL_VOICES := 10
 
@@ -29,12 +30,15 @@ var _meteor_whine_stream: AudioStream
 var _meteor_crash_stream: AudioStream
 var _tendril_drone_stream: AudioStream
 var _tendril_tick_stream: AudioStream
+var _gem_pickup_stream: AudioStream
 
 var _pool: Array[AudioStreamPlayer3D] = []
 var _pool_i: int = 0
 var _rng := RandomNumberGenerator.new()
 var _debris_budget: float = 0.0
 var _ui_player: AudioStreamPlayer
+var _gem_players: Array[AudioStreamPlayer] = []
+var _gem_player_i: int = 0
 var _whine_player: AudioStreamPlayer3D
 var _whine_follow: Node3D
 var _crash_player: AudioStreamPlayer3D
@@ -60,6 +64,12 @@ func _ready() -> void:
 	_ui_player.name = "UiSfx"
 	_ui_player.bus = &"Master"
 	add_child(_ui_player)
+	for i in GEM_VOICE_COUNT:
+		var gp := AudioStreamPlayer.new()
+		gp.name = "GemPickup_%d" % i
+		gp.bus = &"Master"
+		add_child(gp)
+		_gem_players.append(gp)
 	_whine_player = _make_dedicated_player("MeteorWhine", 420.0, 18.0)
 	_crash_player = _make_dedicated_player("MeteorCrash", 720.0, 42.0)
 	_crash_player.attenuation_filter_cutoff_hz = 5000.0
@@ -128,6 +138,20 @@ func play_debris(world_pos: Vector3) -> void:
 	p.global_position = world_pos
 	p.pitch_scale = _rng.randf_range(0.82, 1.28)
 	p.volume_db = _rng.randf_range(-12.0, -5.0)
+	p.play()
+
+
+## Bright non-positional chime — rarer gems ring higher.
+func play_gem_pickup(_world_pos: Vector3, mat_id: int = -1) -> void:
+	if not enabled:
+		return
+	if _gem_pickup_stream == null or _gem_players.is_empty():
+		return
+	var p := _gem_players[_gem_player_i]
+	_gem_player_i = (_gem_player_i + 1) % _gem_players.size()
+	p.stream = _gem_pickup_stream
+	p.pitch_scale = _gem_pickup_pitch(mat_id) * _rng.randf_range(0.985, 1.025)
+	p.volume_db = -5.5
 	p.play()
 
 
@@ -405,6 +429,7 @@ func _load_banks() -> void:
 	_meteor_crash_stream = _build_meteor_crash()
 	_tendril_drone_stream = _build_tendril_drone()
 	_tendril_tick_stream = _build_tendril_tick()
+	_gem_pickup_stream = _build_gem_pickup()
 
 
 func _load_dir(dir_path: String, prefixes: Array[String]) -> Array[AudioStream]:
@@ -559,6 +584,39 @@ func _build_tendril_tick() -> AudioStreamWAV:
 		var chirp := sin(TAU * lerpf(880.0, 220.0, clampf(t / 0.08, 0.0, 1.0)) * t) * exp(-t * 30.0)
 		var wet := (_rng.randf() * 2.0 - 1.0) * 0.55 * exp(-t * 14.0)
 		return (squelch * 0.45 + chirp * 0.55 + wet) * env
+	)
+
+
+func _gem_pickup_pitch(mat_id: int) -> float:
+	## Quartz → diamond: roughly a major sixth climb.
+	match mat_id:
+		VoxelMaterial.GEM_QUARTZ:
+			return 0.92
+		VoxelMaterial.GEM_AMBER:
+			return 1.0
+		VoxelMaterial.GEM_TOPAZ:
+			return 1.08
+		VoxelMaterial.GEM_SAPPHIRE:
+			return 1.18
+		VoxelMaterial.GEM_EMERALD:
+			return 1.28
+		VoxelMaterial.GEM_DIAMOND:
+			return 1.4
+		_:
+			return 1.0
+
+
+func _build_gem_pickup() -> AudioStreamWAV:
+	## Short sparkly arpeggio: fundamental + fifth + octave, with a bright ping attack.
+	return _synthesize(0.28, func(t: float, _i: int) -> float:
+		var attack := smoothstep(0.0, 0.008, t)
+		var env := attack * exp(-t * 14.0)
+		var ping := sin(TAU * 1760.0 * t) * exp(-t * 55.0)
+		var root := sin(TAU * 880.0 * t)
+		var fifth := sin(TAU * 1320.0 * t) * 0.7
+		var octave := sin(TAU * 1760.0 * t) * 0.45
+		var shimmer := sin(TAU * 2340.0 * t + sin(TAU * 40.0 * t) * 0.4) * 0.28 * exp(-t * 20.0)
+		return (ping * 0.85 + root * 0.55 + fifth + octave + shimmer) * env * 0.7
 	)
 
 

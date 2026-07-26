@@ -81,9 +81,9 @@ const CAVE_STEEP_DROP := 7
 const CAVE_HOLLOW_TARGET := 0.30
 
 ## Gem ore: one cluster seed per this many solid host voxels (interior only).
-const GEM_VOXELS_PER_CLUSTER := 1000
+const GEM_VOXELS_PER_CLUSTER := 250
 ## Max cluster seeds attempted relative to the estimate (caps runaway rolls).
-const GEM_CLUSTER_CAP := 220
+const GEM_CLUSTER_CAP := 880
 ## Keep gems off the meadow skin and the outer CAVE_SHELL band.
 const GEM_SURFACE_MARGIN := 3
 
