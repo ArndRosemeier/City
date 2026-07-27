@@ -114,12 +114,15 @@ static func default_settings() -> Dictionary:
 		"max_omni_lights": 4,
 		## Linear 0..1 → Master bus. Kept out of graphics presets below.
 		"master_volume": 1.0,
+		## Diagnostics, also kept out of graphics presets.
+		"hitch_log": false,
 	}
 
 
 func apply_preset(name: String) -> void:
-	## Graphics presets must not clobber the user's master volume.
+	## Graphics presets must not clobber the user's master volume or diagnostics choice.
 	var vol := float(_settings.get("master_volume", 1.0))
+	var hitch_log := bool(_settings.get("hitch_log", false))
 	match name:
 		"low":
 			_settings = default_settings()
@@ -156,6 +159,7 @@ func apply_preset(name: String) -> void:
 		_:
 			return
 	_settings["master_volume"] = vol
+	_settings["hitch_log"] = hitch_log
 	_sync_controls_from_settings()
 	_emit_applied()
 
@@ -314,6 +318,34 @@ func _build_graphics_tab(root: VBoxContainer) -> void:
 	_add_slider(root, "crowd_render_m", "Ped render (m)", 20.0, 160.0, 5.0)
 	_add_slider(root, "vehicle_render_m", "Vehicle render (m)", 40.0, 220.0, 10.0)
 	_add_slider(root, "max_omni_lights", "Street lamp lights", 0.0, 24.0, 1.0)
+
+	var diag := Label.new()
+	diag.text = "Diagnostics"
+	diag.add_theme_font_size_override("font_size", 15)
+	diag.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	root.add_child(diag)
+
+	_add_check(root, "hitch_log", "Log stutters to file")
+
+	var log_hint := Label.new()
+	log_hint.text = (
+		"Every freeze over %.0f ms is written to %s. The file restarts each time you tick the box."
+		% [CityProfiler.hitch_threshold_ms(), CityProfiler.log_file_path()]
+	)
+	log_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	log_hint.add_theme_font_size_override("font_size", 12)
+	log_hint.add_theme_color_override("font_color", Color(0.7, 0.74, 0.78))
+	root.add_child(log_hint)
+
+	var open_log := Button.new()
+	open_log.text = "Open log folder"
+	open_log.focus_mode = Control.FOCUS_NONE
+	open_log.pressed.connect(_on_open_log_folder)
+	root.add_child(open_log)
+
+
+func _on_open_log_folder() -> void:
+	OS.shell_open(ProjectSettings.globalize_path("user://"))
 
 
 func _build_audio_tab(root: VBoxContainer) -> void:

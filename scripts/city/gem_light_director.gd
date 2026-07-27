@@ -48,7 +48,9 @@ func _process(delta: float) -> void:
 	if _accum < REFRESH_SEC:
 		return
 	_accum = 0.0
+	CityProfiler.begin("gem_lights")
 	_refresh()
+	CityProfiler.end("gem_lights")
 
 
 func _dim_all() -> void:

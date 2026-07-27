@@ -107,6 +107,7 @@ func _roll_interval() -> void:
 func _process(delta: float) -> void:
 	if not _enabled:
 		return
+	CityProfiler.begin("undead")
 	_prune_units()
 	_spawn_accum += delta
 	if _spawn_accum >= _spawn_interval_sec:
@@ -117,6 +118,7 @@ func _process(delta: float) -> void:
 	if _scare_accum >= MAGE_SCARE_INTERVAL_SEC:
 		_scare_accum = 0.0
 		_scare_crowd_from_mages()
+	CityProfiler.end("undead")
 
 
 func _scare_crowd_from_mages() -> void:

@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://ctsd2im12axjn"
-path="res://.godot/imported/male_work_01_male_worksuit01_diffuse.png-3d6b4db62e6d6adf2431fff0eb6d5f3d.ctex"
+path.s3tc="res://.godot/imported/male_work_01_male_worksuit01_diffuse.png-3d6b4db62e6d6adf2431fff0eb6d5f3d.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "d50d6e15d33e7f03e347a7cd88e0d0af"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/humans/outfits/male_work_01_male_worksuit01_diffuse.png"
-dest_files=["res://.godot/imported/male_work_01_male_worksuit01_diffuse.png-3d6b4db62e6d6adf2431fff0eb6d5f3d.ctex"]
+dest_files=["res://.godot/imported/male_work_01_male_worksuit01_diffuse.png-3d6b4db62e6d6adf2431fff0eb6d5f3d.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -39,5 +40,5 @@ process/premult_alpha=false
 process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
-process/size_limit=0
+process/size_limit=1024
 detect_3d/compress_to=1

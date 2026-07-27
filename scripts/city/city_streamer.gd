@@ -270,13 +270,20 @@ func _begin_tracked_job(kind: String, inst: DistrictInstance) -> void:
 func _process(delta: float) -> void:
 	if _terrain == null or _tool == null:
 		return
+	CityProfiler.begin("streamer")
+	CityProfiler.set_counter("streamer_jobs", _active_jobs.size())
 	_job_cooldown = maxf(_job_cooldown - delta, 0.0)
 	_rescore_accum += delta
 	if _player != null and is_instance_valid(_player) and _rescore_accum >= 0.2:
 		_rescore_accum = 0.0
+		CityProfiler.begin("streamer_bubble")
 		_update_bubble()
+		CityProfiler.end("streamer_bubble")
 	if _job_cooldown <= 0.0:
+		CityProfiler.begin("streamer_kick")
 		_kick_next_job()
+		CityProfiler.end("streamer_kick")
+	CityProfiler.end("streamer")
 
 
 func _update_bubble() -> void:
@@ -318,6 +325,7 @@ func _edge_distance_m(coord: Vector2i, pos: Vector3) -> float:
 func _request_district(coord: Vector2i, is_boot: bool) -> void:
 	if _districts.has(coord):
 		return
+	CityProfiler.begin("stream_spawn")
 	var inst: DistrictInstance = DistrictInstanceScript.new()
 	inst.configure(coord, voxel_size, world_seed, crowd_per_district, vehicles_per_district, player_view_m)
 	add_child(inst)
@@ -327,6 +335,7 @@ func _request_district(coord: Vector2i, is_boot: bool) -> void:
 	inst.ready_to_play.connect(_on_district_ready)
 	inst.failed.connect(_on_district_failed)
 	inst.stamp_progress.connect(_on_stamp_progress)
+	CityProfiler.end("stream_spawn")
 	if is_boot:
 		_begin_tracked_job("ground", inst)
 		inst.begin_ground(_terrain, _tool, _camera, "full")

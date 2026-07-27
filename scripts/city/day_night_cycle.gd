@@ -88,6 +88,7 @@ func toggle_day_night() -> void:
 func _process(delta: float) -> void:
 	if sun == null or environment == null or sky_material == null:
 		return
+	CityProfiler.begin("day_night")
 	var span := maxf(day_length_sec, 30.0)
 	_hour = fposmod(_hour + delta * (24.0 / span), 24.0)
 	_cloud_time += delta
@@ -97,6 +98,7 @@ func _process(delta: float) -> void:
 	if _accum_broadcast >= 0.2:
 		_accum_broadcast = 0.0
 		night_factor_changed.emit(_night_factor)
+	CityProfiler.end("day_night")
 
 
 func _apply(force_signal: bool) -> void:

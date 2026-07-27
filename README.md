@@ -68,7 +68,7 @@ powershell -File tools\check_tracking.ps1             -> same check
 `tools/check_tracking.ps1` fails on unexpected untracked files and on missing required
 ship files / `.uid` sidecars. CI runs the same check on every push to `main`.
 
-Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **N** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler · **Settings** (top-right) for quality.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **J** jump to district type · **N** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler (hitches ≥80 ms print to console as `CityProfiler HITCH`) · **Settings** (top-right) for quality. Settings → Graphics → Diagnostics → **Log stutters to file** mirrors those hitch reports into `%APPDATA%\Godot\app_userdata\EccentriCity\city_hitches.log` (the same panel has an *Open log folder* button), so a stutter can be reported without a console open.
 
 Build: aim with the mouse, press **F1–F6** to stamp the bound recipe at the cursor (cottage / pool / hot tub / statues by default). **Shift+F1–F6** opens the full recipe list to rebind a slot. Fronts face you. Builds are session-local and disappear when that district streams out.
 
@@ -95,8 +95,10 @@ fully reproducible: the seed is printed at startup and `--city-seed=N` replays i
 `city_seed` in the scene or from code (as the tools do) pins it as well; leaving it at `0`
 means "pick a new one". The player boots into a random district tile within three
 tiles of the world origin (chosen from the same seed, so `--city-seed=N` also
-replays the spawn). Override with `--spawn-district=x,z`. The tile at the world
-origin is still always the downtown core theme, even when you spawn elsewhere.
+replays the spawn). Override with `--spawn-district=x,z` or `--spawn-theme=hill`
+(etc.). In-game, **J** opens a district-type picker and teleports to the nearest
+matching tile. The tile at the world origin is still always the downtown core theme,
+even when you spawn elsewhere.
 
 ## District themes
 

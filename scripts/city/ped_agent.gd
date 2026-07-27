@@ -19,6 +19,8 @@ var outfit: PedOutfit
 var next_decision_at: float = 0.0
 ## Bound skinned visual while inside render distance; null when culled.
 var visual: Node3D = null
+## Avoid duplicate entries in the budgeted visual-creation queue.
+var visual_queued: bool = false
 ## Laser/melee kill — stops simulation; Death01 holds on the visual.
 var dead: bool = false
 ## True while sprinting away from a threat (player destruction or undead mage).

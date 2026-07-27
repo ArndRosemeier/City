@@ -258,6 +258,7 @@ func invalidate_outside_aabb(world_aabb: AABB) -> void:
 func _physics_process(delta: float) -> void:
 	if _tool == null or _tendrils.is_empty():
 		return
+	CityProfiler.begin("infection")
 	## Each tip advances on its own timer at full speed — no shared round-robin budget.
 	var ids := _rr_ids.duplicate()
 	for tid in ids:
@@ -279,6 +280,7 @@ func _physics_process(delta: float) -> void:
 		if bool(t.get("suspended", false)):
 			continue
 		_advance_tendril(tid)
+	CityProfiler.end("infection")
 
 
 func _advance_tendril(tid: int) -> bool:

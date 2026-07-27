@@ -32,10 +32,18 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 @export var flee_trip_min_m: float = 80.0
 @export var flee_trip_max_m: float = 260.0
 @export var flee_repaths_per_frame: int = 2
+## A new visual instantiates the car scene plus one outfit scene per passenger, so
+## promotions are drained against a time budget, once per rendered frame (a long frame runs
+## several physics ticks, which would otherwise multiply the budget).
+@export var visual_create_budget_ms: float = 4.0
 @export var flee_greedy_hops: int = 16
 
 var _agents: Array[VehicleAgent] = []
 var _near_agents: Array[VehicleAgent] = []
+## Agent indices waiting for a visual, oldest first.
+var _pending_visuals: Array[int] = []
+## Process frame the queue was last drained in, so extra physics ticks don't multiply it.
+var _visual_drain_frame: int = -1
 var _roadmap: CarRoadMap
 var _layers: StreetNavLayers
 var _crowd: CrowdDirector
@@ -96,6 +104,7 @@ func clear_vehicles() -> void:
 	_agents.clear()
 	_near_agents.clear()
 	_flee_repath_queue.clear()
+	_pending_visuals.clear()
 	_near_count = 0
 	for child in get_children():
 		if child is RigidBody3D and String(child.name).begins_with("Wreck_"):
@@ -442,18 +451,31 @@ func _physics_process(delta: float) -> void:
 	CityProfiler.set_counter("vehicle_agents", _agents.size())
 	CityProfiler.begin("vehicles")
 	_time += delta
+	CityProfiler.begin("vehicle_repath")
 	_drain_flee_repath_queue()
+	CityProfiler.end("vehicle_repath")
 	_occupancy_accum += delta
 	if _occupancy_accum >= crossing_occupancy_interval_sec:
 		_occupancy_accum = 0.0
+		CityProfiler.begin("vehicle_occupancy")
 		_refresh_crossing_occupancy()
+		CityProfiler.end("vehicle_occupancy")
+	CityProfiler.begin("vehicle_sim")
 	_simulate(delta)
+	CityProfiler.end("vehicle_sim")
 	_lod_accum += delta
 	if _lod_accum >= lod_interval_sec:
 		_lod_accum = 0.0
+		CityProfiler.begin("vehicle_lod")
 		_refresh_lod(false)
+		CityProfiler.end("vehicle_lod")
+	_drain_pending_visuals()
+	CityProfiler.begin("vehicle_frustum")
 	_update_frustum_visibility()
+	CityProfiler.end("vehicle_frustum")
+	CityProfiler.begin("vehicle_sync")
 	_sync_near_visuals()
+	CityProfiler.end("vehicle_sync")
 	CityProfiler.end("vehicles")
 
 
@@ -609,7 +631,7 @@ func _refresh_lod(force: bool) -> void:
 		if force or next_lod != agent.lod:
 			agent.lod = next_lod
 			if agent.lod == VehicleAgent.Lod.NEAR:
-				_ensure_visual(i, agent)
+				_queue_visual(i, agent)
 			else:
 				_release_visual(agent)
 
@@ -631,6 +653,37 @@ func _update_frustum_visibility() -> void:
 			_near_agents.append(agent)
 
 
+func _queue_visual(agent_index: int, agent: VehicleAgent) -> void:
+	if agent.visual_queued:
+		return
+	if agent.visual != null and is_instance_valid(agent.visual):
+		return
+	agent.visual_queued = true
+	_pending_visuals.append(agent_index)
+
+
+## Always makes at least one so the queue drains, then stops once over budget.
+func _drain_pending_visuals() -> void:
+	if _pending_visuals.is_empty():
+		return
+	var frame := Engine.get_process_frames()
+	if frame == _visual_drain_frame:
+		return
+	_visual_drain_frame = frame
+	var deadline := Time.get_ticks_usec() + int(visual_create_budget_ms * 1000.0)
+	while not _pending_visuals.is_empty():
+		var index: int = _pending_visuals.pop_front()
+		if index < 0 or index >= _agents.size():
+			continue
+		var agent := _agents[index]
+		agent.visual_queued = false
+		if agent.wrecked or agent.lod != VehicleAgent.Lod.NEAR:
+			continue
+		_ensure_visual(index, agent)
+		if Time.get_ticks_usec() >= deadline:
+			return
+
+
 func _ensure_visual(agent_index: int, agent: VehicleAgent) -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -640,6 +693,7 @@ func _ensure_visual(agent_index: int, agent: VehicleAgent) -> void:
 	if entry.is_empty():
 		push_error("VehicleDirector: no catalog entry for '%s'" % agent.catalog_id)
 		return
+	CityProfiler.begin("vehicle_visual_new")
 	var visual: VehicleVisual = VehicleVisualScript.new()
 	visual.name = "NearVehicle_%d" % agent_index
 	add_child(visual)
@@ -647,9 +701,11 @@ func _ensure_visual(agent_index: int, agent: VehicleAgent) -> void:
 	if not visual.ready_visual:
 		push_error("VehicleDirector: visual setup failed for agent %d (%s)" % [agent_index, agent.catalog_id])
 		visual.queue_free()
+		CityProfiler.end("vehicle_visual_new")
 		return
 	visual.sync_pose(agent.position, agent.yaw)
 	agent.visual = visual
+	CityProfiler.end("vehicle_visual_new")
 
 
 func _release_visual(agent: VehicleAgent) -> void:

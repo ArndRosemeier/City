@@ -111,7 +111,12 @@ func _spawn_kenney_scene(path: String, id: String, require_glass: bool) -> bool:
 	if not ResourceLoader.exists(path):
 		push_error("VehicleVisual: mesh not importable: %s (id=%s)" % [path, id])
 		return false
+	## First use of a car scene pays disk read + import parse here; later uses are cache hits.
+	if not ResourceLoader.has_cached(path):
+		CityProfiler.note_event("car_scene_first_load %s" % path.get_file())
+	CityProfiler.begin("car_scene_load")
 	var packed := load(path)
+	CityProfiler.end("car_scene_load")
 	if not (packed is PackedScene):
 		push_error(
 			"VehicleVisual: %s is %s, expected PackedScene (id=%s)"
@@ -356,7 +361,11 @@ func _auto_seats() -> Array:
 
 
 func _make_passenger(scene_path: String) -> Node3D:
+	if not ResourceLoader.has_cached(scene_path):
+		CityProfiler.note_event("passenger_scene_first_load %s" % scene_path.get_file())
+	CityProfiler.begin("passenger_scene_load")
 	var packed := load(scene_path)
+	CityProfiler.end("passenger_scene_load")
 	if not (packed is PackedScene):
 		push_error(
 			"VehicleVisual: passenger %s is %s, expected PackedScene"

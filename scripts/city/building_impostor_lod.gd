@@ -177,7 +177,9 @@ func _physics_process(delta: float) -> void:
 	if _accum < refresh_sec:
 		return
 	_accum = 0.0
+	CityProfiler.begin("impostor_lod")
 	_refresh(false)
+	CityProfiler.end("impostor_lod")
 
 
 func _horiz_dist_sq_to_aabb(cam: Vector3, center: Vector3, size: Vector3) -> float:

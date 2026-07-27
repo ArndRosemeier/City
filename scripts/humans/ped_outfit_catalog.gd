@@ -48,6 +48,29 @@ static func count() -> int:
 	return _entries.size()
 
 
+## Every catalog outfit in file order, with deterministic skins — for boot warm-up and the
+## look-inspection tool, which both need the whole set rather than a random pick.
+static func all_outfits() -> Array[PedOutfit]:
+	ensure_loaded()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0
+	var out: Array[PedOutfit] = []
+	for entry in _entries:
+		var outfit := PedOutfit.new()
+		outfit.female = bool(entry.get("female", false))
+		outfit.variant_id = String(entry.get("id", "unknown"))
+		outfit.scene_path = String(entry.get("path", ""))
+		outfit.skin = _pick_skin(rng)
+		var pc: Variant = entry.get("proxy_color", [0.4, 0.4, 0.45])
+		if typeof(pc) == TYPE_ARRAY and (pc as Array).size() >= 3:
+			var a: Array = pc
+			outfit.proxy_color = Color(float(a[0]), float(a[1]), float(a[2]))
+		else:
+			outfit.proxy_color = Color(0.4, 0.4, 0.45)
+		out.append(outfit)
+	return out
+
+
 static func pick(rng: RandomNumberGenerator, female: bool) -> PedOutfit:
 	ensure_loaded()
 	var pool: Array[Dictionary] = []

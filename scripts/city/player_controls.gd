@@ -11,7 +11,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "jump", "label": "Jump (hold to rise)", "group": "Movement"},
 	{"id": "sprint", "label": "Sprint", "group": "Movement"},
 	{"id": "autorun", "label": "Autorun toggle", "group": "Movement"},
-	{"id": "district_hop", "label": "Hop to next district (J)", "group": "Movement"},
+	{"id": "district_hop", "label": "Jump to district type (J)", "group": "Movement"},
 	{"id": "look_up", "label": "Look up", "group": "Camera"},
 	{"id": "look_down", "label": "Look down", "group": "Camera"},
 	{"id": "look", "label": "Hold to look", "group": "Camera"},

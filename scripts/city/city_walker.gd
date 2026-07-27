@@ -1405,7 +1405,9 @@ func _update_camera_shake(delta: float) -> void:
 func _process(_delta: float) -> void:
 	## Independent of physics_process — spawn holds physics off until ground is ready,
 	## and blasting in/out must re-evaluate cover every frame, not on a transition edge.
+	CityProfiler.begin("walker_underground")
 	_update_underground()
+	CityProfiler.end("walker_underground")
 
 
 func _physics_process(delta: float) -> void:

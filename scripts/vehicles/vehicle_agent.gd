@@ -11,6 +11,8 @@ var speed: float = 8.0
 var catalog_id: String = ""
 var passenger_count: int = 1
 var visual: Node3D = null
+## Avoid duplicate entries in the budgeted visual-creation queue.
+var visual_queued: bool = false
 
 var waypoints: PackedVector3Array = PackedVector3Array()
 var path_i: int = 0

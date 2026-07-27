@@ -34,6 +34,11 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 @export var flee_goal_max_m: float = 140.0
 ## Cap expensive flee repaths per physics frame (graph walks).
 @export var flee_repaths_per_frame: int = 3
+## Each new visual instantiates an outfit scene (~10 ms cold, well under 1 ms once cached),
+## so promotions are drained against a time budget rather than a fixed count. Budgeting per
+## rendered frame, not per physics tick: a long frame runs up to 8 ticks, and 14 promotions
+## landing in one frame measured as a 360 ms freeze.
+@export var visual_create_budget_ms: float = 4.0
 @export var flee_greedy_hops: int = 14
 
 var _agents: Array[PedAgent] = []
@@ -46,6 +51,10 @@ var _lod_accum: float = 0.0
 var _ground_y: float = 1.0
 var _skinned_count: int = 0
 var _flee_repath_queue: Array[PedAgent] = []
+## Agent indices waiting for a visual, oldest first.
+var _pending_visuals: Array[int] = []
+## Process frame the queue was last drained in, so extra physics ticks don't multiply it.
+var _visual_drain_frame: int = -1
 var _threat_pos_cache: Vector3 = Vector3.ZERO
 var _threat_pos_frame: int = -1
 
@@ -76,6 +85,7 @@ func clear_crowd() -> void:
 	_agents.clear()
 	_near_agents.clear()
 	_flee_repath_queue.clear()
+	_pending_visuals.clear()
 	_skinned_count = 0
 	for child in get_children():
 		if child is RigidBody3D and String(child.name).begins_with("Corpse_"):
@@ -470,14 +480,25 @@ func _physics_process(delta: float) -> void:
 	CityProfiler.set_counter("crowd_agents", _agents.size())
 	CityProfiler.begin("crowd")
 	_time += delta
+	CityProfiler.begin("crowd_repath")
 	_drain_flee_repath_queue()
+	CityProfiler.end("crowd_repath")
+	CityProfiler.begin("crowd_sim")
 	_simulate_agents(delta)
+	CityProfiler.end("crowd_sim")
 	_lod_accum += delta
 	if _lod_accum >= lod_interval_sec:
 		_lod_accum = 0.0
+		CityProfiler.begin("crowd_lod")
 		_refresh_lod(false)
+		CityProfiler.end("crowd_lod")
+	_drain_pending_visuals()
+	CityProfiler.begin("crowd_frustum")
 	_update_frustum_visibility()
+	CityProfiler.end("crowd_frustum")
+	CityProfiler.begin("crowd_sync")
 	_sync_near_visuals()
+	CityProfiler.end("crowd_sync")
 	CityProfiler.end("crowd")
 
 
@@ -622,7 +643,7 @@ func _refresh_lod(force: bool) -> void:
 			want_near = d2 <= enter_r2
 		if want_near:
 			agent.lod = PedAgent.Lod.NEAR
-			_ensure_visual(i, agent)
+			_queue_visual(i, agent)
 		else:
 			agent.lod = PedAgent.Lod.CULLED
 			_release_visual(agent)
@@ -647,14 +668,47 @@ func _update_frustum_visibility() -> void:
 			_near_agents.append(agent)
 
 
+func _queue_visual(agent_index: int, agent: PedAgent) -> void:
+	if agent.visual_queued:
+		return
+	if agent.visual != null and is_instance_valid(agent.visual):
+		return
+	agent.visual_queued = true
+	_pending_visuals.append(agent_index)
+
+
+## Always makes at least one so the queue drains, then stops once over budget.
+func _drain_pending_visuals() -> void:
+	if _pending_visuals.is_empty():
+		return
+	var frame := Engine.get_process_frames()
+	if frame == _visual_drain_frame:
+		return
+	_visual_drain_frame = frame
+	var deadline := Time.get_ticks_usec() + int(visual_create_budget_ms * 1000.0)
+	while not _pending_visuals.is_empty():
+		var index: int = _pending_visuals.pop_front()
+		if index < 0 or index >= _agents.size():
+			continue
+		var agent := _agents[index]
+		agent.visual_queued = false
+		if agent.dead or agent.lod != PedAgent.Lod.NEAR:
+			continue
+		_ensure_visual(index, agent)
+		if Time.get_ticks_usec() >= deadline:
+			return
+
+
 func _ensure_visual(agent_index: int, agent: PedAgent) -> void:
 	if agent.visual != null and is_instance_valid(agent.visual):
 		return
+	CityProfiler.begin("crowd_visual_new")
 	var visual: CrowdPedVisual = CrowdPedVisualScript.new()
 	visual.name = "NearPed_%d" % agent_index
 	add_child(visual)
 	visual.bind_agent(agent_index, agent.female, agent.body_scale, agent.outfit)
 	agent.visual = visual
+	CityProfiler.end("crowd_visual_new")
 
 
 func _release_visual(agent: PedAgent) -> void:

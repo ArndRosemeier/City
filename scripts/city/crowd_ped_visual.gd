@@ -37,16 +37,24 @@ func ensure_body(female: bool, scene_path: String = "") -> void:
 		_spawn_capsule(female)
 		_ready_visual = true
 		return
+	## First use of an outfit scene pays disk read + import parse on the calling thread;
+	## later uses hit the resource cache. Name the file so hitch logs point at the asset.
+	if not ResourceLoader.has_cached(path):
+		CityProfiler.note_event("ped_scene_first_load %s" % path.get_file())
+	CityProfiler.begin("ped_scene_load")
 	var packed := load(path)
+	CityProfiler.end("ped_scene_load")
 	if not (packed is PackedScene):
 		_spawn_capsule(female)
 		_ready_visual = true
 		return
+	CityProfiler.begin("ped_scene_instantiate")
 	_body = (packed as PackedScene).instantiate() as Node3D
 	_body.name = "Body"
 	_body.rotation.y = PI
 	add_child(_body)
 	_disable_mesh_shadows(_body)
+	CityProfiler.end("ped_scene_instantiate")
 	var skel := _find_skeleton(_body)
 	if skel != null:
 		skel.unique_name_in_owner = true
@@ -125,7 +133,9 @@ func is_playing_death() -> bool:
 func _apply_outfit() -> void:
 	if _outfit == null or _body == null:
 		return
+	CityProfiler.begin("ped_outfit_apply")
 	PedOutfitApplierScript.apply_to_body_root(_body, _outfit, _female)
+	CityProfiler.end("ped_outfit_apply")
 
 
 func _fallback_path(female: bool) -> String:

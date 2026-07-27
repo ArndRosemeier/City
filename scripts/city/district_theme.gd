@@ -28,7 +28,7 @@ const CORE_RING := 0
 
 var id: int = CORE_HIGHRISE
 var display_name: String = "Core High-Rise"
-## One-line pitch for the start-screen district picker.
+## One-line pitch for the district-type picker (J hop).
 var blurb: String = ""
 ## Walls for midrise / large buildings, and for low row housing.
 var wall_mats: PackedInt32Array = PackedInt32Array([VoxelMaterial.CONCRETE])

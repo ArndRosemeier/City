@@ -147,6 +147,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	## Promote a far impostor tile to full voxel buildings.
 	if not needs_upgrade():
 		return
+	CityProfiler.begin("stream_upgrade_reset")
 	is_busy = true
 	is_ready = false
 	is_ground_ready = false
@@ -178,6 +179,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_terrain_ref = terrain
 	_tool_ref = tool
 	_camera_ref = camera
+	CityProfiler.end("stream_upgrade_reset")
 	_stamp_ground_async()
 
 
@@ -187,6 +189,7 @@ func begin_generate(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) ->
 
 
 func destroy_and_clear(_tool: VoxelTool) -> void:
+	CityProfiler.begin("stream_unload")
 	is_ready = false
 	is_busy = false
 	is_ground_ready = false
@@ -208,12 +211,14 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	building_lod = null
 	_clear_proxy_floor()
 	if _anchor != null and is_instance_valid(_anchor):
+		CityProfiler.note_event("voxel_anchor_removed")
 		_anchor.queue_free()
 	_anchor = null
 	_nav_layers = null
 	generator = null
 	## Dropping the data-only anchor unloads this tile's voxels from RAM.
 	queue_free()
+	CityProfiler.end("stream_unload")
 
 
 func _stamp_ground_async() -> void:
@@ -231,6 +236,7 @@ func _stamp_ground_async() -> void:
 		failed.emit(self, "area not editable")
 		return
 
+	CityProfiler.set_counter("stream_phase", 1)  ## 1=ground bake
 	var payload := await _bake_on_worker()
 	if not is_instance_valid(self):
 		return
@@ -239,6 +245,7 @@ func _stamp_ground_async() -> void:
 		failed.emit(self, str(payload.get("error", "bake failed")))
 		return
 
+	var t_ingest := Time.get_ticks_usec()
 	_dseed = int(payload.get("seed", 0))
 	_ground_thickness = int(payload.get("ground_thickness", 6))
 	_bake_impostors = payload.get("impostors", [])
@@ -246,17 +253,22 @@ func _stamp_ground_async() -> void:
 	hill_gem_positions = payload.get("hill_gem_positions", PackedVector3Array()) as PackedVector3Array
 	hill_gem_mats = payload.get("hill_gem_mats", PackedInt32Array()) as PackedInt32Array
 	generator = payload.get("generator") as DistrictGenerator
+	CityProfiler.scope_us("stream_ingest", Time.get_ticks_usec() - t_ingest)
 	if generator == null:
 		is_busy = false
 		failed.emit(self, "bake missing generator")
 		return
 
 	## Ground layer first, nearest-to-player within that layer.
+	var t_sort := Time.get_ticks_usec()
 	_bake_block_keys = OfflineVolumeCommitterScript.sorted_block_keys_near_player(
 		_bake_blocks, origin_vox, _focus_world(_camera_ref), _voxel_size, 0, -1
 	)
+	CityProfiler.scope_us("stream_sort", Time.get_ticks_usec() - t_sort)
 	_bake_key_index = 0
-	var ground_ok := await _commit_blocks_until()
+	CityProfiler.set_counter("stream_phase", 2)  ## 2=ground commit
+	CityProfiler.set_counter("stream_blocks_left", _bake_block_keys.size())
+	var ground_ok := await _commit_blocks_until("stream_commit_ground")
 	if not is_instance_valid(self):
 		return
 	if not ground_ok:
@@ -268,6 +280,7 @@ func _stamp_ground_async() -> void:
 	_pin_data_only()
 	is_ground_ready = true
 	is_busy = false
+	CityProfiler.set_counter("stream_phase", 0)
 	print("DistrictInstance ground ready %s quality=%s" % [str(coord), bake_quality])
 	ground_ready.emit(self)
 
@@ -284,11 +297,15 @@ func _stamp_detail_async() -> void:
 	_pin_data_only()
 
 	## Upper blocks nearest-to-player (re-focus in case the camera moved during ground).
+	var t_sort := Time.get_ticks_usec()
 	_bake_block_keys = OfflineVolumeCommitterScript.sorted_block_keys_near_player(
 		_bake_blocks, origin_vox, _focus_world(camera), _voxel_size, -1, 1
 	)
+	CityProfiler.scope_us("stream_sort", Time.get_ticks_usec() - t_sort)
 	_bake_key_index = 0
-	var detail_ok := await _commit_blocks_until()
+	CityProfiler.set_counter("stream_phase", 3)  ## 3=detail commit
+	CityProfiler.set_counter("stream_blocks_left", _bake_block_keys.size())
+	var detail_ok := await _commit_blocks_until("stream_commit_detail")
 	if not is_instance_valid(self):
 		return
 	if not detail_ok:
@@ -300,6 +317,7 @@ func _stamp_detail_async() -> void:
 
 	## Far tiles: impostors only — skip nav/crowd/traffic until upgraded.
 	if bake_quality == "far":
+		CityProfiler.begin("stream_far_setup")
 		generator.end_generate()
 		building_lod = BuildingImpostorLodScript.new()
 		building_lod.name = "BuildingImpostors"
@@ -316,15 +334,23 @@ func _stamp_detail_async() -> void:
 		## Ground voxels are committed — the streaming failsafe would only be phantom
 		## collision under caves and craters from here on.
 		_clear_proxy_floor()
+		CityProfiler.end("stream_far_setup")
 		is_ready = true
 		is_busy = false
+		CityProfiler.set_counter("stream_phase", 0)
 		ready_to_play.emit(self)
 		print("DistrictInstance far-ready %s seed=%d" % [str(coord), _dseed])
 		return
 
+	CityProfiler.set_counter("stream_phase", 4)  ## 4=detail populate
+	var t_end := Time.get_ticks_usec()
 	generator.end_generate()
+	CityProfiler.scope_us("stream_end_generate", Time.get_ticks_usec() - t_end)
 	await get_tree().process_frame
+
+	CityProfiler.begin("stream_nav")
 	_nav_layers = generator.build_street_nav(tool)
+	CityProfiler.end("stream_nav")
 	if _nav_layers == null or not _nav_layers.is_ready():
 		is_busy = false
 		failed.emit(self, "nav failed")
@@ -336,21 +362,26 @@ func _stamp_detail_async() -> void:
 	var car_map: CarRoadMap = CarRoadMapScript.new()
 	car_map.bind_graph(_nav_layers.road, _nav_layers)
 
+	CityProfiler.begin("stream_crowd")
 	crowd = CrowdDirectorScript.new()
 	crowd.name = "Crowd"
 	crowd.pedestrian_count = _crowd_count
 	add_child(crowd)
 	crowd.setup(ped_map, camera, _dseed)
+	CityProfiler.end("stream_crowd")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_vehicles")
 	vehicles = VehicleDirectorScript.new()
 	vehicles.name = "Traffic"
 	vehicles.vehicle_count = _vehicle_count
 	add_child(vehicles)
 	vehicles.setup(car_map, camera, _dseed)
 	vehicles.bind_crowd(crowd)
+	CityProfiler.end("stream_vehicles")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_props")
 	street_props = StreetPropPlacerScript.new()
 	street_props.name = "StreetProps"
 	add_child(street_props)
@@ -365,8 +396,10 @@ func _stamp_detail_async() -> void:
 	var day_night := get_tree().get_first_node_in_group(&"day_night")
 	if day_night != null and day_night.has_method("get_night_factor"):
 		street_props.set_night_factor(float(day_night.call("get_night_factor")))
+	CityProfiler.end("stream_props")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_pads")
 	scale_pads = ScalePadPlacerScript.new()
 	scale_pads.name = "ScalePads"
 	add_child(scale_pads)
@@ -378,8 +411,10 @@ func _stamp_detail_async() -> void:
 		origin_vox,
 		_dseed
 	)
+	CityProfiler.end("stream_pads")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_impostors")
 	building_lod = BuildingImpostorLodScript.new()
 	building_lod.name = "BuildingImpostors"
 	add_child(building_lod)
@@ -389,6 +424,7 @@ func _stamp_detail_async() -> void:
 	building_lod.setup(camera, impostors, maxf(_player_view_m, 1.0))
 	if day_night != null and day_night.has_method("get_night_factor"):
 		building_lod.set_night_factor(float(day_night.call("get_night_factor")))
+	CityProfiler.end("stream_impostors")
 
 	## Player VoxelViewer remeshes the near field; district anchor stays data-only
 	## so whole-tile remesh storms don't tank FPS while other districts generate.
@@ -396,6 +432,7 @@ func _stamp_detail_async() -> void:
 	_clear_proxy_floor()
 	is_ready = true
 	is_busy = false
+	CityProfiler.set_counter("stream_phase", 0)
 	ready_to_play.emit(self)
 	print("DistrictInstance ready %s seed=%d" % [str(coord), _dseed])
 
@@ -415,6 +452,7 @@ func _bake_on_worker() -> Dictionary:
 	}
 	var mutex := Mutex.new()
 	var state := {"done": false, "payload": {}}
+	CityProfiler.add_counter("bake_tasks", 1)
 	var task_id := WorkerThreadPool.add_task(
 		func() -> void:
 			var result: Dictionary = DistrictBakeJobScript.bake(params)
@@ -430,14 +468,17 @@ func _bake_on_worker() -> Dictionary:
 		if done:
 			break
 		await get_tree().process_frame
+	var t_wait := Time.get_ticks_usec()
 	WorkerThreadPool.wait_for_task_completion(task_id)
+	CityProfiler.scope_us("stream_bake_wait", Time.get_ticks_usec() - t_wait)
+	CityProfiler.add_counter("bake_tasks", -1)
 	mutex.lock()
 	var payload: Dictionary = state["payload"]
 	mutex.unlock()
 	return payload
 
 
-func _commit_blocks_until() -> bool:
+func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 	## Time-budgeted commits. Keys must already be nearest-first for this phase.
 	const BUDGET_MSEC := 3
 	var terrain := _terrain_ref
@@ -452,6 +493,7 @@ func _commit_blocks_until() -> bool:
 			break
 
 		var t0 := Time.get_ticks_msec()
+		var t0_us := Time.get_ticks_usec()
 		var committed := 0
 		while _bake_key_index < _bake_block_keys.size():
 			var bp: Vector3i = _bake_block_keys[_bake_key_index]
@@ -471,6 +513,10 @@ func _commit_blocks_until() -> bool:
 			committed += 1
 			if Time.get_ticks_msec() - t0 >= BUDGET_MSEC:
 				break
+		CityProfiler.scope_us(scope_name, Time.get_ticks_usec() - t0_us)
+		CityProfiler.set_counter(
+			"stream_blocks_left", maxi(_bake_block_keys.size() - _bake_key_index, 0)
+		)
 		if committed > 0:
 			stamp_progress.emit(committed)
 		await get_tree().process_frame
@@ -536,6 +582,7 @@ func _ensure_anchor() -> void:
 	## near visuals/collisions; proxy floor covers walkable gaps; impostors draw far massing.
 	if _anchor != null and is_instance_valid(_anchor):
 		return
+	CityProfiler.note_event("voxel_anchor_added")
 	_anchor = VoxelViewer.new()
 	_anchor.name = "DistrictAnchor"
 	## Cover tile from center (half-diagonal ≈ 482 vox).

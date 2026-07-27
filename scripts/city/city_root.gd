@@ -30,6 +30,10 @@ const GemLightDirectorScript := preload("res://scripts/city/gem_light_director.g
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
+## Frames the warm-up visuals stay on screen (behind the splash) so their pipelines compile.
+const WARMUP_FRAMES := 8
+## Warm-up staging height, far above any generated terrain so nothing intersects the city.
+const WARMUP_ALTITUDE_M := 4000.0
 ## How far from the world origin (in district tiles) the player may spawn.
 const SPAWN_DISTRICT_RING := 3
 ## District layouts hang off this seed plus the district's grid coordinate. Left at
@@ -44,11 +48,13 @@ const SPAWN_DISTRICT_RING := 3
 ## District tile the player boots into. Filled at regenerate from the world seed
 ## (or --spawn-district=x,z / --spawn-theme=…); tools can read it after boot.
 var spawn_district_coord: Vector2i = Vector2i.ZERO
-## Theme chosen on the start modal (or via --spawn-theme). -1 = unset / random.
+## Theme of the spawn tile (from RNG / CLI). -1 = unset.
 var spawn_theme_id: int = -1
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
+## Outfit scenes kept referenced for the session so gameplay loads hit the resource cache.
+var _warm_scenes: Array[PackedScene] = []
 var _streamer: Node
 ## Typed as CharacterBody3D so portable installs work before global class_name cache exists.
 var _walker: CharacterBody3D
@@ -175,21 +181,6 @@ func _cli_spawn_theme() -> int:
 	return -1
 
 
-func _should_show_spawn_picker() -> bool:
-	## Tools that `add_child(CityRoot.new())` skip the modal; the main scene shows it.
-	## CLI overrides and headless runs also skip.
-	if _cli_spawn_district() is Vector2i:
-		return false
-	if _cli_spawn_theme() >= 0:
-		return false
-	if DisplayServer.get_name() == "headless":
-		return false
-	var tree := get_tree()
-	if tree == null:
-		return false
-	return tree.current_scene == self or get_parent() == tree.root
-
-
 func _pick_spawn_district_random() -> Vector2i:
 	## Stable for a given world seed so --city-seed=N also replays the spawn tile.
 	var rng := RandomNumberGenerator.new()
@@ -200,7 +191,7 @@ func _pick_spawn_district_random() -> Vector2i:
 	)
 
 
-## Resolves the spawn tile: CLI coord, theme search (modal / --spawn-theme), or RNG.
+## Resolves the spawn tile: CLI coord, --spawn-theme search, or seeded RNG. No start modal.
 func _resolve_spawn_district() -> Vector2i:
 	var forced: Variant = _cli_spawn_district()
 	if forced is Vector2i:
@@ -208,12 +199,6 @@ func _resolve_spawn_district() -> Vector2i:
 		return forced as Vector2i
 
 	var theme_id := _cli_spawn_theme()
-	if theme_id < 0 and _should_show_spawn_picker():
-		if _loading_splash == null:
-			push_error("CityRoot: spawn picker requested but LoadingSplash is missing")
-		else:
-			_loading_splash.call("show_splash", "Choose a starting district")
-			theme_id = int(await _loading_splash.call("prompt_district_choice"))
 	if theme_id >= 0:
 		spawn_theme_id = theme_id
 		var coord := DistrictTheme.find_coord_for_theme(city_seed, theme_id)
@@ -356,7 +341,7 @@ func _build_hud() -> void:
 	_loading_splash = LoadingSplashScript.new()
 	add_child(_loading_splash)
 	_status = _loading_splash.call("status_label") as Label
-	_loading_splash.call("show_splash", "Choose a starting district")
+	_loading_splash.call("show_splash", "Loading EccentriCity…")
 
 	_hud_layer = CanvasLayer.new()
 	_hud_layer.name = "HudLayer"
@@ -559,6 +544,8 @@ func _on_settings_applied(settings: Dictionary) -> void:
 	var omni := clampi(int(settings.get("max_omni_lights", 12)), 0, 24)
 	_apply_district_runtime_budgets(crowd_m, vehicle_m, omni)
 
+	CityProfiler.set_file_logging(bool(settings.get("hitch_log", false)), settings)
+
 
 func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int) -> void:
 	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
@@ -581,26 +568,36 @@ func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int
 
 
 func _process(delta: float) -> void:
+	CityProfiler.begin("city_root")
 	_fps_accum += delta
 	_infection_stream_accum += delta
 	_gem_pickup_accum += delta
+	CityProfiler.begin("underground")
 	_sync_underground_lighting()
+	CityProfiler.end("underground")
 	if _gem_pickup_accum >= GEM_PICKUP_INTERVAL_SEC:
 		_gem_pickup_accum = 0.0
+		CityProfiler.begin("gem_pickup")
 		_try_collect_nearby_gems()
+		CityProfiler.end("gem_pickup")
 	if _radar_cooldown_left > 0.0:
 		_radar_cooldown_left = maxf(0.0, _radar_cooldown_left - delta)
 	if _radar_reveal_left > 0.0:
 		_radar_reveal_left = maxf(0.0, _radar_reveal_left - delta)
 	if _infection_stream_accum >= 0.5:
 		_infection_stream_accum = 0.0
+		CityProfiler.begin("infection_stream")
 		_invalidate_infection_outside_bubble()
+		CityProfiler.end("infection_stream")
 	if _spawn_meteors_enabled and _walker != null and is_instance_valid(_walker):
 		_meteor_spawn_accum += delta
 		if _meteor_spawn_accum >= _meteor_spawn_interval_sec:
 			_meteor_spawn_accum = 0.0
 			_roll_meteor_spawn_interval()
+			CityProfiler.begin("meteor_spawn")
 			_try_auto_spawn_meteor()
+			CityProfiler.end("meteor_spawn")
+	CityProfiler.end("city_root")
 	if _fps_accum < 0.25:
 		return
 	_fps_accum = 0.0
@@ -652,6 +649,7 @@ func _create_terrain() -> void:
 	_terrain.generate_collisions = true
 	_tool = _terrain.get_voxel_tool()
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	CityProfiler.set_terrain(_terrain)
 
 
 func _ensure_gem_lights(camera: Camera3D) -> void:
@@ -962,7 +960,7 @@ func request_undead_radar() -> bool:
 	return true
 
 
-## Hop one district tile in the direction the walker is facing (J by default).
+## Open the district-type picker, then hop to the nearest matching tile (J by default).
 func request_district_hop() -> bool:
 	if _game_over or _booting or _district_hopping:
 		return false
@@ -970,35 +968,56 @@ func request_district_hop() -> bool:
 		return false
 	if _streamer == null or not is_instance_valid(_streamer):
 		return false
+	if _loading_splash == null:
+		push_error("CityRoot: district hop needs LoadingSplash for the type picker")
+		return false
 	_district_hopping = true
-	_district_hop_async()
+	_district_hop_pick_async()
 	return true
 
 
-func _facing_district_delta(forward: Vector3) -> Vector2i:
-	var f := Vector3(forward.x, 0.0, forward.z)
-	if f.length_squared() < 0.0001:
-		return Vector2i(0, -1)
-	f = f.normalized()
-	## Snap to the dominant axis so diagonal facing still lands on a neighbour tile.
-	if absf(f.x) >= absf(f.z):
-		return Vector2i(1 if f.x >= 0.0 else -1, 0)
-	return Vector2i(0, 1 if f.z >= 0.0 else -1)
-
-
-func _district_hop_async() -> void:
+func _district_hop_pick_async() -> void:
 	var walker := _walker
 	if walker == null or not is_instance_valid(walker):
 		_district_hopping = false
 		return
 	var origin_pos := walker.global_position
+	if _hud_layer != null:
+		_hud_layer.visible = false
+	walker.set_physics_process(false)
+	walker.velocity = Vector3.ZERO
+	var theme_id: int = int(
+		await _loading_splash.call(
+			"prompt_district_choice",
+			"Jump to District",
+			"Pick a type — we'll teleport you to the nearest matching tile.",
+			"Choose a district type"
+		)
+	)
+	if theme_id < 0 or theme_id >= DistrictTheme.COUNT:
+		await _finish_district_hop_fail("no district type chosen", origin_pos)
+		return
+	var dest := DistrictTheme.find_coord_for_theme(city_seed, theme_id)
+	var theme := DistrictTheme.for_district(city_seed, dest)
+	if theme.id != theme_id:
+		await _finish_district_hop_fail(
+			"no %s tile found nearby" % DistrictTheme.make(theme_id).display_name,
+			origin_pos
+		)
+		return
+	await _district_hop_to(dest, origin_pos)
+
+
+func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
+	var walker := _walker
+	if walker == null or not is_instance_valid(walker):
+		_district_hopping = false
+		return
 	var here := DistrictCoord.from_world(origin_pos, VOXEL_SIZE)
-	var delta := _facing_district_delta(-walker.global_transform.basis.z)
-	var dest := here + delta
 	var theme := DistrictTheme.for_district(city_seed, dest)
 	print(
-		"CityRoot: district hop %s → %s (%s) facing=%s"
-		% [here, dest, theme.display_name, delta]
+		"CityRoot: district hop %s → %s (%s)"
+		% [here, dest, theme.display_name]
 	)
 	if _hud_layer != null:
 		_hud_layer.visible = false
@@ -1129,9 +1148,9 @@ func _regenerate() -> void:
 	_hide_game_over_overlay()
 	if _hud_layer != null:
 		_hud_layer.visible = false
-	## Pick the spawn tile before any district bake so the title modal is first.
+	## Splash while the spawn district bakes — no type picker at boot.
 	if _loading_splash != null:
-		_loading_splash.call("show_splash", "Choose a starting district")
+		_loading_splash.call("show_splash", "Loading EccentriCity…")
 	spawn_district_coord = await _resolve_spawn_district()
 	var theme := DistrictTheme.for_district(city_seed, spawn_district_coord)
 	print(
@@ -1207,6 +1226,10 @@ func _regenerate() -> void:
 	_ensure_cascade_debris()
 	await get_tree().process_frame
 	await get_tree().process_frame
+
+	## Before the streamer exists: the spawn district promotes its first pedestrians and cars
+	## while the splash is still up, and those must already be warm.
+	await _warm_visual_pipelines()
 
 	_streamer = CityStreamerScript.new()
 	_streamer.name = "CityStreamer"
@@ -1350,6 +1373,75 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	)
 
 
+## A pedestrian or car visual pays two one-off costs the first time it appears: reading its
+## scene, and compiling the material pipeline when the mesh is first drawn (measured at
+## 113 ms mid-game). Both are paid here instead, behind the opaque splash: every outfit is
+## drawn for a few frames, and the scenes stay referenced for the session so later loads are
+## resource-cache hits.
+func _warm_visual_pipelines() -> void:
+	## The dummy renderer compiles nothing, and its mesh storage is a stub.
+	if DisplayServer.get_name() == "headless":
+		return
+	CityProfiler.note_event("visual_warmup")
+	if _status != null:
+		_status.text = "Warming pedestrian and traffic visuals…"
+	var holder := Node3D.new()
+	holder.name = "VisualWarmup"
+	add_child(holder)
+	## The player camera does not exist yet, and a frustum-culled mesh is never drawn — so it
+	## would compile nothing and the warm-up would be silently useless. Stage the whole set
+	## high above the city in front of a throwaway wide-angle camera instead.
+	var base := Vector3(0.0, WARMUP_ALTITUDE_M, 0.0)
+	var cam := Camera3D.new()
+	cam.name = "WarmupCamera"
+	cam.fov = 75.0
+	holder.add_child(cam)
+	cam.global_position = base + Vector3(0.0, 6.0, 30.0)
+	cam.look_at(base + Vector3(0.0, 1.0, -7.0), Vector3.UP)
+	cam.make_current()
+
+	var outfits := PedOutfitCatalog.all_outfits()
+	for i in outfits.size():
+		var outfit := outfits[i]
+		var packed := load(outfit.scene_path) as PackedScene
+		if packed == null:
+			push_error("CityRoot: outfit scene failed to load: %s" % outfit.scene_path)
+			continue
+		_warm_scenes.append(packed)
+		var visual := CrowdPedVisual.new()
+		visual.name = "WarmPed_%d" % i
+		holder.add_child(visual)
+		visual.bind_agent(i, outfit.female, 1.0, outfit)
+		visual.global_position = base + Vector3(
+			float(i) - float(outfits.size() - 1) * 0.5, 0.0, 0.0
+		)
+
+	## Traffic is procedural per profile, so each catalog entry builds its own materials.
+	VehicleCatalog.ensure_loaded()
+	if not VehicleCatalog.is_ready() or VehicleCatalog.count() <= 0:
+		push_error("CityRoot: vehicle catalog unavailable — car pipelines stay cold")
+	var cars := VehicleCatalog.count()
+	for i in cars:
+		var car := VehicleVisual.new()
+		car.name = "WarmCar_%d" % i
+		holder.add_child(car)
+		## Passengers only on the first: they are outfit scenes, already warm by now.
+		car.setup(VehicleCatalog.entry_at(i), 2 if i == 0 else 0, 11 + i)
+		if not car.ready_visual:
+			push_error("CityRoot: warm-up car visual failed to build for entry %d" % i)
+		var col := i % 5
+		var row := i / 5
+		car.sync_pose(
+			base + Vector3((float(col) - 2.0) * 3.2, 0.0, -8.0 - float(row) * 6.0), 0.0
+		)
+
+	## Pipelines compile on the render thread, so give it real frames to draw in.
+	for _frame in WARMUP_FRAMES:
+		await get_tree().process_frame
+	holder.queue_free()
+	print("CityRoot: warmed %d outfit scenes + %d cars" % [_warm_scenes.size(), cars])
+
+
 func _has_solid_ground_at(world: Vector3) -> bool:
 	if _tool == null:
 		return false
@@ -1437,6 +1529,7 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	if _tool == null or _terrain == null:
 		return
+	CityProfiler.begin("voxel_blast")
 	var radius := maxf(radius_m, 0.35)
 	var local := _terrain.to_local(hit_world)
 	## Cap voxel radius so giant characters don't freeze a frame scanning hundreds of thousands of cells.
@@ -1473,10 +1566,13 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 					column_max_y[col] = y
 				_tool.do_point(vox)
 	_restore_bedrock_floor(local, radius_vox)
+	CityProfiler.end("voxel_blast")
 	if _cascade != null:
 		## Primary blast voxels fly outward from the impact.
 		if _cascade.has_method("detach_blast_voxels"):
+			CityProfiler.begin("cascade_detach")
 			_cascade.call("detach_blast_voxels", detached, hit_world)
+			CityProfiler.end("cascade_detach")
 		## Fabric still standing above the hole cascades like melee.
 		for col_key in column_max_y.keys():
 			var xz: Vector2i = col_key
@@ -1497,7 +1593,9 @@ func _cascade_column_above(top_vox: Vector3i) -> void:
 	var above := int(_tool.get_voxel(Vector3i(top_vox.x, top_vox.y + 1, top_vox.z)))
 	if VoxelMaterial.is_self_supporting_terrain(above):
 		return
+	CityProfiler.begin("cascade")
 	_cascade.collapse_column_above(top_vox)
+	CityProfiler.end("cascade")
 
 
 ## Q stomp: same destruction as a max-charge blast at the feet (anim/FX differ on the walker).
@@ -1598,9 +1696,13 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	)
 	## Punch sphere is already AIR — spawn debris immediately (same as blast).
 	if _cascade.has_method("detach_blast_voxels"):
+		CityProfiler.begin("cascade_detach")
 		_cascade.call("detach_blast_voxels", detached, hit_world)
+		CityProfiler.end("cascade_detach")
 	elif _cascade.has_method("detach_voxels"):
+		CityProfiler.begin("cascade_detach")
 		_cascade.detach_voxels(detached)
+		CityProfiler.end("cascade_detach")
 	## Remaining destructibles above the hole tumble down per column.
 	for col_key in column_max_y.keys():
 		var xz: Vector2i = col_key
@@ -1983,7 +2085,9 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 	)
 	if _cascade != null and is_instance_valid(_cascade):
 		if _cascade.has_method("detach_blast_voxels") and not detached.is_empty():
+			CityProfiler.begin("cascade_detach")
 			_cascade.call("detach_blast_voxels", detached, world_hit)
+			CityProfiler.end("cascade_detach")
 	_notify_tetris_damage(detached)
 	_notify_destruction(world_hit, 36.0)
 	return removed

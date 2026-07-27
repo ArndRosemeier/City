@@ -288,7 +288,9 @@ func _process(delta: float) -> void:
 	if _accum < 0.35:
 		return
 	_accum = 0.0
+	CityProfiler.begin("street_props")
 	_refresh_lights(false)
+	CityProfiler.end("street_props")
 
 
 func _refresh_lights(_force: bool) -> void:

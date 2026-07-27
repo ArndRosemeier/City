@@ -1,5 +1,5 @@
 ## Full-bleed EccentriCity title shown while the spawn district boots.
-## Also hosts the starting-district picker before any tile is generated.
+## Also hosts the mid-game district-type picker (J hop).
 class_name LoadingSplash
 extends CanvasLayer
 
@@ -19,6 +19,8 @@ const TEXT_MUTED := Color(0.86, 0.78, 0.66, 0.9)
 var _root: Control
 var _status: Label
 var _picker: Control
+var _picker_title: Label
+var _picker_subtitle: Label
 var _fading: bool = false
 var _awaiting_choice: bool = false
 
@@ -111,7 +113,11 @@ func hide_splash() -> void:
 
 
 ## Blocks until the player picks a district type. Returns a DistrictTheme id.
-func prompt_district_choice() -> int:
+func prompt_district_choice(
+	title_text: String = "Jump to District",
+	subtitle_text: String = "Pick a type — we'll teleport you to the nearest matching tile.",
+	status_text: String = "Choose a district type",
+) -> int:
 	if _picker == null:
 		push_error("LoadingSplash.prompt_district_choice: picker missing")
 		return DistrictTheme.CORE_HIGHRISE
@@ -119,9 +125,13 @@ func prompt_district_choice() -> int:
 	visible = true
 	if _root != null:
 		_root.modulate = Color.WHITE
+	if _picker_title != null:
+		_picker_title.text = title_text
+	if _picker_subtitle != null:
+		_picker_subtitle.text = subtitle_text
 	_picker.visible = true
 	_awaiting_choice = true
-	set_status("Choose a starting district")
+	set_status(status_text)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	var theme_id: int = await district_chosen
 	_awaiting_choice = false
@@ -175,22 +185,22 @@ func _build_picker() -> void:
 	vbox.add_theme_constant_override("separation", 10)
 	panel.add_child(vbox)
 
-	var title := Label.new()
-	title.text = "Starting District"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", TEXT_MAIN)
-	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	title.add_theme_constant_override("outline_size", 4)
-	vbox.add_child(title)
+	_picker_title = Label.new()
+	_picker_title.text = "Jump to District"
+	_picker_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_picker_title.add_theme_font_size_override("font_size", 28)
+	_picker_title.add_theme_color_override("font_color", TEXT_MAIN)
+	_picker_title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_picker_title.add_theme_constant_override("outline_size", 4)
+	vbox.add_child(_picker_title)
 
-	var subtitle := Label.new()
-	subtitle.text = "We’ll find the nearest matching tile and spawn you there."
-	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	subtitle.add_theme_font_size_override("font_size", 15)
-	subtitle.add_theme_color_override("font_color", TEXT_MUTED)
-	vbox.add_child(subtitle)
+	_picker_subtitle = Label.new()
+	_picker_subtitle.text = "Pick a type — we'll teleport you to the nearest matching tile."
+	_picker_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_picker_subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_picker_subtitle.add_theme_font_size_override("font_size", 15)
+	_picker_subtitle.add_theme_color_override("font_color", TEXT_MUTED)
+	vbox.add_child(_picker_subtitle)
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 4)
