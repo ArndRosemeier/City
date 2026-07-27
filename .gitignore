@@ -1,9 +1,19 @@
-# Godot 4+
+# Eccentri City — git tracking policy
+#
+# Default: TRACK EVERYTHING that belongs to the project.
+# Exceptions MUST be listed explicitly below. If `tools/check_tracking.ps1`
+# reports untracked files, either `git add` them or add a rule here.
+#
+# Player packages are built from `git ls-files` (see tools/pack_release.ps1),
+# so untracked files never ship — and forgotten adds never silently work on
+# your machine while breaking fresh clones.
+
+# Godot 4+ generated cache (rebuilt by EccentriCity.bat / pack import)
 .godot/
 .godot_check_out/
 *.translation
 
-# Imported assets cache
+# Legacy Godot 3 import cache name
 .import/
 
 # OS
@@ -11,7 +21,7 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Editors / IDE
+# Editors / IDE (project rules under .cursor/rules may be tracked deliberately)
 .vscode/
 .idea/
 *.swp
@@ -26,7 +36,7 @@ venv/
 # Large vendor downloads (Blender, MPFB zips, system assets)
 tools/vendor/
 
-# Local Godot voxel engine binary
+# Local Godot voxel engine binary (downloaded by ensure_city_deps.ps1)
 tools/godot/
 
 # Portable install / pack output

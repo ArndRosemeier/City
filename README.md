@@ -2,7 +2,7 @@
 
 Procedural voxel city of weird ideas (product id **EccentriCity**). Skinned MPFB
 pedestrians, Quaternius cars, sidewalks/curbs, crosswalks, street lights, infection,
-and oversized player power. Showcase scene still available via `start.bat`.
+and oversized player power. Human showcase: `start_crowd.bat` / `scenes/main.tscn`.
 
 Title art: `assets/branding/eccentricity_title.png` (cinematic; alt sketch in
 `eccentricity_title_a.png`).
@@ -23,17 +23,18 @@ No Rust or Visual Studio required. `city_voxel.dll` is included in the zip.
 
 - Godot **4.6 + Voxel Tools** (`tools/godot/Godot_v4.6-voxel_win64.exe`) for the city POC
 - **`addons/city_voxel/bin/city_voxel.dll`** (required — bake volume + cascade debris; rebuild with `tools/build_city_voxel.ps1`)
-- Optional stock Godot 4.3+ for the human showcase (`start.bat` / `scenes/main.tscn`)
+- Optional stock Godot 4.3+ for the human showcase (`start_crowd.bat` / `scenes/main.tscn`)
 
 ## Run (city)
 
-Double-click **`start_city.bat`** — endless streamed districts.
+Double-click **`EccentriCity.bat`** — downloads
+the voxel engine if needed, imports assets on first run, then starts the city.
 
 ### Install (Windows) — for players
 
-From an unzipped release (or this repo), double-click **`install_city.bat`**.
-It copies the game into `%LOCALAPPDATA%\Programs\EccentriCity` and adds Desktop /
-Start Menu shortcuts.
+From an unzipped release (or a folder built by `make_installer.bat`), double-click
+**`install_city.bat`**. It copies the game into `%LOCALAPPDATA%\Programs\EccentriCity`
+and adds Desktop / Start Menu shortcuts.
 
 If the engine is missing, **`EccentriCity.bat`** / **`install_city.bat`** download
 Godot 4.6 + Voxel Tools 1.6 from
@@ -46,13 +47,26 @@ install_city.bat /D "D:\Games\EccentriCity"
 
 ### Make / publish a package — for you (developer)
 
-- **`make_installer.bat`** — full local portable under `dist\EccentriCityPortable\`
-  (engine + baked `.godot` import + validation). Handy for offline USB copies.
-- **`publish_portable_release.bat`** — builds a *slim* zip (no engine / no
-  `.godot`; first `EccentriCity.bat` fetches them) and uploads a GitHub Release.
-  Requires `gh auth login` once.
+One pipeline: **`tools/pack_release.ps1`**. It stages **git-tracked files only**
+(so dirty working-tree junk cannot leak in), imports, validates, then emits a folder
+and/or zip.
 
-(`tools\pack_city_portable.bat` is the older folder-only helper; prefer the scripts above.)
+```
+make_installer.bat              -> dist\EccentriCityPortable\   (engine + .godot)
+publish_portable_release.bat    -> slim zip + GitHub Release
+publish_portable_release.bat /SkipUpload   -> zip only
+powershell -File tools\pack_release.ps1 -Mode Check   -> tracking policy only
+powershell -File tools\check_tracking.ps1             -> same check
+```
+
+`city_voxel.dll` must be committed. Player excludes (pack scripts, `native/` sources,
+`.cursor/`, …) live in `tools/ship_excludes.txt`.
+
+### Tracking policy
+
+**Track by default.** Anything not listed in `.gitignore` is expected to be in git.
+`tools/check_tracking.ps1` fails on unexpected untracked files and on missing required
+ship files / `.uid` sidecars. CI runs the same check on every push to `main`.
 
 Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **N** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler · **Settings** (top-right) for quality.
 

@@ -1,5 +1,5 @@
-## Headless package check: prove a staged/portable Eccentri City folder can load scripts + main scene.
-## Exit codes: 0 = OK, non-zero = failed (make_installer must abort).
+## Headless package check: prove a staged/portable Eccentri City folder can boot.
+## Exit codes: 0 = OK, non-zero = failed (pack_release / make_installer must abort).
 extends SceneTree
 
 
@@ -16,6 +16,30 @@ func _run() -> void:
 	if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path("res://.godot/imported")):
 		push_error("PORTABLE_VALIDATE: missing .godot/imported (asset import did not run)")
 		failed += 1
+
+	failed += _require_files([
+		"res://addons/city_voxel/bin/city_voxel.dll",
+		"res://addons/city_voxel/city_voxel.gdextension",
+		"res://scenes/city_poc.tscn",
+		"res://assets/city/shaders/voxel_gem.gdshader",
+		"res://assets/city/shaders/voxel_surface.gdshader",
+		"res://assets/city/shaders/voxel_water.gdshader",
+		"res://scripts/city/city_root.gd",
+		"res://scripts/city/gem_light_director.gd",
+		"res://scripts/city/city_audio.gd",
+		"res://tools/ensure_city_deps.ps1",
+	])
+
+	## Native extension must resolve — missing DLL is a hard player failure.
+	if ClassDB.class_exists("NativeOfflineVoxelVolume"):
+		pass
+	else:
+		## Extension may register under a different path; still require the DLL file above.
+		## Soft-check: gdextension resource loads.
+		var ext := load("res://addons/city_voxel/city_voxel.gdextension")
+		if ext == null:
+			push_error("PORTABLE_VALIDATE: city_voxel.gdextension failed to load")
+			failed += 1
 
 	## Load every gameplay / tool script so new class_name + preload() breakage surfaces here.
 	failed += _load_tree("res://scripts")
@@ -40,13 +64,21 @@ func _run() -> void:
 	quit(0)
 
 
-func _load_tree(res_dir: String) -> int:
+func _require_files(paths: Array) -> int:
 	var fails := 0
+	for path_v in paths:
+		var path := String(path_v)
+		if not FileAccess.file_exists(path):
+			push_error("PORTABLE_VALIDATE: required file missing: %s" % path)
+			fails += 1
+	return fails
+
+
+func _load_tree(res_dir: String) -> int:
 	var abs_dir := ProjectSettings.globalize_path(res_dir)
 	if not DirAccess.dir_exists_absolute(abs_dir):
 		return 0
-	fails += _load_dir_recursive(res_dir)
-	return fails
+	return _load_dir_recursive(res_dir)
 
 
 func _load_dir_recursive(res_dir: String) -> int:
@@ -65,7 +97,6 @@ func _load_dir_recursive(res_dir: String) -> int:
 		if da.current_is_dir():
 			fails += _load_dir_recursive(path)
 		elif name.ends_with(".gd"):
-			## Skip this validator itself if present under tools when scanned later.
 			var script: Resource = load(path)
 			if script == null:
 				push_error("PORTABLE_VALIDATE: script failed to load: %s" % path)

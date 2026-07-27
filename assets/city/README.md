@@ -2,7 +2,7 @@
 
 Procedural district on **Zylann Voxel Tools** (`godot_voxel` module build):
 
-- Engine: `tools/godot/Godot_v4.6-voxel_win64.exe` (Godot 4.6 + Voxel Tools 1.6) via `start_city.bat`
+- Engine: `tools/godot/Godot_v4.6-voxel_win64.exe` (Godot 4.6 + Voxel Tools 1.6) via `EccentriCity.bat`
 - `VoxelTerrain` + `VoxelMesherBlocky` + `VoxelBlockyLibrary` — 0.5 m cubes, collision
 - `textures/` — ambientCG CC0 albedos + project-authored facade/roof maps with normals (see `textures/CREDITS.txt`)
 - Layout: `DistrictPlanner` (avenues, plazas, parks, zones) → `PlazaComposer` / `ParkComposer` → `BuildingGrammar`

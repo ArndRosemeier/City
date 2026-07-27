@@ -231,6 +231,11 @@ exit /b 0
 
 :write_launcher
 set "OUT=%~1"
+if exist "%ROOT%\EccentriCity.bat" (
+    copy /Y "%ROOT%\EccentriCity.bat" "%OUT%" >nul
+    exit /b 0
+)
+REM Fallback if the canonical launcher is missing from an older tree.
 (
 echo @echo off
 echo setlocal EnableExtensions
@@ -241,62 +246,16 @@ echo.
 echo if not exist "%%GODOT_EXE%%" ^(
 echo     if not exist "%%ROOT%%\tools\ensure_city_deps.ps1" ^(
 echo         echo ERROR: Engine missing and tools\ensure_city_deps.ps1 not found.
-echo         echo Place %GODOT_NAME% in tools\godot\ or restore ensure_city_deps.ps1.
 echo         pause
 echo         exit /b 1
 echo     ^)
-echo     echo.
-echo     echo Engine missing - downloading Godot 4.6 + Voxel Tools ^(~80 MB^)...
-echo     echo Internet required for this first-time step.
-echo     echo.
 echo     powershell -NoProfile -ExecutionPolicy Bypass -File "%%ROOT%%\tools\ensure_city_deps.ps1" -Root "%%ROOT%%"
-echo     if errorlevel 1 ^(
-echo         echo ERROR: Could not download the Godot voxel engine.
-echo         pause
-echo         exit /b 1
-echo     ^)
-echo ^)
-echo if not exist "%%GODOT_EXE%%" ^(
-echo     echo ERROR: Engine still missing: %%GODOT_EXE%%
-echo     pause
-echo     exit /b 1
-echo ^)
-echo if not exist "%%ROOT%%\project.godot" ^(
-echo     echo ERROR: project.godot missing in %%ROOT%%
-echo     pause
-echo     exit /b 1
 echo ^)
 echo if not exist "%%ROOT%%\addons\city_voxel\bin\city_voxel.dll" ^(
-echo     echo ERROR: addons\city_voxel\bin\city_voxel.dll missing.
-echo     echo This DLL ships with the release zip and is required to play.
+echo     echo ERROR: city_voxel.dll missing.
 echo     pause
 echo     exit /b 1
 echo ^)
-echo dir /b "%%ROOT%%\.godot\global_script_class_cache.cfg" ^>nul 2^>^&1
-echo if errorlevel 1 goto do_import
-echo dir /b "%%ROOT%%\.godot\imported" ^>nul 2^>^&1
-echo if errorlevel 1 goto do_import
-echo goto launch
-echo.
-echo :do_import
-echo echo.
-echo echo First-time asset import - this can take several minutes. Please wait...
-echo echo.
-echo "%%GODOT_EXE%%" --headless --path "%%ROOT%%" --import
-echo dir /b "%%ROOT%%\.godot\global_script_class_cache.cfg" ^>nul 2^>^&1
-echo if errorlevel 1 ^(
-echo     echo ERROR: Import finished but the godot class cache is still missing.
-echo     pause
-echo     exit /b 1
-echo ^)
-echo dir /b "%%ROOT%%\.godot\imported" ^>nul 2^>^&1
-echo if errorlevel 1 ^(
-echo     echo ERROR: Import finished but the godot imported folder is still missing.
-echo     pause
-echo     exit /b 1
-echo ^)
-echo.
-echo :launch
 echo start "Eccentri City" /MAX "%%GODOT_EXE%%" --path "%%ROOT%%" res://scenes/city_poc.tscn --maximized
 echo endlocal
 ) > "%OUT%"

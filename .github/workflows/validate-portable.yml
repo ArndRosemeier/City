@@ -1,0 +1,59 @@
+name: Validate portable
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tracking-and-portable:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Tracking policy (no unexpected untracked; required files present)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_tracking.ps1 -Root "$env:GITHUB_WORKSPACE"
+
+      - name: Ensure city_voxel.dll is present
+        shell: pwsh
+        run: |
+          $dll = "addons/city_voxel/bin/city_voxel.dll"
+          if (-not (Test-Path $dll) -or ((Get-Item $dll).Length -lt 10KB)) {
+            throw "city_voxel.dll missing from checkout — it must be committed"
+          }
+
+      - name: Download Godot 4.6 + Voxel Tools
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/ensure_city_deps.ps1 -Root "$env:GITHUB_WORKSPACE"
+
+      - name: Headless import
+        shell: pwsh
+        run: |
+          $godot = "tools/godot/Godot_v4.6-voxel_win64.exe"
+          & $godot --headless --path "$env:GITHUB_WORKSPACE" --import
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_godot_import_artifacts.ps1 -InstallDir "$env:GITHUB_WORKSPACE"
+
+      - name: Validate portable boot surface
+        shell: pwsh
+        run: |
+          $godot = "tools/godot/Godot_v4.6-voxel_win64.exe"
+          $log = Join-Path $env:TEMP "ci_portable_validate.log"
+          & $godot --headless --path "$env:GITHUB_WORKSPACE" -s res://tools/validate_portable.gd 2>&1 | Tee-Object -FilePath $log
+          if (-not (Select-String -Path $log -Pattern "PORTABLE_VALIDATE: OK" -Quiet)) {
+            throw "validate_portable failed"
+          }
+
+      - name: Assert ship file list excludes scratch trees
+        shell: pwsh
+        run: |
+          $ex = Get-Content tools/ship_excludes.txt | Where-Object { $_ -and -not $_.StartsWith("#") }
+          $files = git -c core.quotepath=false ls-files
+          $leaks = $files | Where-Object { $_ -match '_kenney_src|tools/vendor|native/.*/target' }
+          if ($leaks) { $leaks | ForEach-Object { $_ }; throw "Forbidden paths are tracked" }
+          Write-Host "Ship excludes loaded: $($ex.Count) patterns; tracked files: $($files.Count)"

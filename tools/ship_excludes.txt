@@ -1,0 +1,24 @@
+# Paths (repo-relative, forward slashes) omitted from player packages even when tracked.
+# One pattern per line. # comments and blank lines ignored.
+# Matching is prefix or glob (* and ?). Used by tools/pack_release.ps1.
+
+.cursor/
+native/
+publish_portable_release.bat
+make_installer.bat
+tools/pack_city_portable.bat
+tools/publish_portable_release.ps1
+tools/pack_release.ps1
+tools/check_tracking.ps1
+tools/ship_excludes.txt
+tools/build_city_voxel.ps1
+tools/bake_mixamo.ps1
+tools/bake_mixamo_library.gd
+tools/export_mpfb_humans.bat
+tools/export_mpfb_humans.py
+tools/export_mpfb_outfits.bat
+tools/blender_export_mpfb_humans.py
+.github/
+tools/carshots/
+tools/*.png
+tools/*.png.import
