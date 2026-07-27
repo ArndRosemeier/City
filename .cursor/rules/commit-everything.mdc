@@ -1,0 +1,13 @@
+---
+description: When asked to commit, stage and commit every changed/untracked project file
+alwaysApply: true
+---
+
+# Commit everything when asked
+
+When the user asks to **commit** (or commit and push):
+
+- Stage **all** modified and untracked project files that belong in git — do not leave related leftovers out of the commit to keep the message “focused.”
+- Do not selectively omit scripts, assets, tools, `.cursor/rules`, launchers, or docs that are part of the current working tree unless they are secrets (`.env`, credentials) or clearly machine-local junk (build caches, `.godot/` imports, personal notes outside the repo).
+- If changes span multiple concerns, prefer **one commit with a message that covers them**, or multiple commits that **together** clear the working tree — never finish with intentional uncommitted project files after a commit request.
+- Still follow the usual git safety rules (no force-push to main, no amend unless allowed, no secrets).

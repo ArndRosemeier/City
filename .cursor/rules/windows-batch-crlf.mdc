@@ -1,0 +1,77 @@
+---
+description: Windows .bat/.cmd must be CRLF; never probe .godot paths from cmd.exe
+globs: "**/*.{bat,cmd}"
+alwaysApply: false
+---
+
+# Windows batch files (cmd.exe)
+
+## CRLF is mandatory
+
+`cmd.exe` mis-parses **LF-only** `.bat` / `.cmd` files. Typical symptom (German Windows):
+
+```text
+"." kann syntaktisch an dieser Stelle nicht verarbeitet werden.
+```
+
+`.gitattributes` already has `*.bat text eol=crlf` and `*.cmd text eol=crlf`, but editor/agent writes often land as LF on disk.
+
+**After creating or editing any `.bat` / `.cmd`**, force CRLF before finishing:
+
+```powershell
+$path = "path\to\file.bat"
+$text = [System.IO.File]::ReadAllText($path) -replace "`r`n", "`n" -replace "`n", "`r`n"
+[System.IO.File]::WriteAllText($path, $text, [System.Text.UTF8Encoding]::new($false))
+```
+
+Verify with `git ls-files --eol -- file.bat` → working tree should show `w/crlf`.
+
+## Never unescaped `(` `)` inside `( ... )` blocks
+
+cmd treats parentheses as block syntax. An `echo ... (~80 MB)...` **inside** `if (...) (` breaks parsing. Symptom is often:
+
+```text
+"..." kann syntaktisch an dieser Stelle nicht verarbeitet werden.
+```
+
+```bat
+REM BAD — paren inside a paren block
+if not exist "%GODOT_EXE%" (
+    echo downloading (~80 MB)...
+)
+
+REM GOOD — no parens in the echo, or escape them
+if not exist "%GODOT_EXE%" (
+    echo downloading ~80 MB...
+    echo downloading ^(~80 MB^)...
+)
+
+REM ALSO GOOD — use goto labels instead of nested blocks for multi-line branches
+```
+
+Prefer `goto` labels for longer branches so echo text cannot break the parser.
+
+## Never probe `.godot` from cmd
+
+Do **not** use `if exist`, `dir`, or similar on paths that contain a **`.godot`** path segment. cmd can treat the `.` as a syntax error (same message as above).
+
+```bat
+REM BAD
+dir /b "%ROOT%\.godot\imported" >nul 2>&1
+if exist "%ROOT%\.godot\global_script_class_cache.cfg" goto launch
+```
+
+Use PowerShell instead — prefer the project helper:
+
+```bat
+REM GOOD
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\check_godot_import_artifacts.ps1" -InstallDir "%ROOT%" -Attempts 1 -DelayMs 0 >nul
+if errorlevel 1 goto do_import
+```
+
+`project.godot` as a **filename** in `if exist` is usually fine; the trap is the **`.godot\` directory**.
+
+## Style
+
+- Prefer ASCII in REM/echo (avoid em-dashes / fancy quotes).
+- Keep parentheses blocks simple; when unsure, `goto` labels instead of deep nesting.
