@@ -5,11 +5,19 @@ extends CharacterBody3D
 signal blast_requested(hit_position: Vector3, collider: Object, radius_m: float)
 ## Melee strike: origin + flat facing direction, range in meters.
 ## CityRoot scales the carve diameter with character_scale (no break below 0.5×).
-signal melee_strike_requested(origin: Vector3, direction: Vector3, max_range_m: float)
+## The source rides along because the same carve is requested by the fist, the eye laser and the
+## blaster, and a creature standing in the way takes a different amount from each.
+signal melee_strike_requested(
+	origin: Vector3, direction: Vector3, max_range_m: float, source: DamageSource.Id
+)
 ## Q stomp: feet world position + max charged-blast radius (destruction == blast).
 signal stomp_requested(feet_position: Vector3, radius_m: float)
 ## Shared combat energy pool (0…energy_max).
 signal energy_changed(current: float, maximum: float)
+## Wounds (0…health_max). A separate pool from the energy above — see `player_health.gd`.
+signal health_changed(current: float, maximum: float)
+## Health hit zero; CityRoot turns this into the game-over screen.
+signal health_depleted(source: DamageSource.Id)
 ## M-key: aim a voxel infection meteor at hit_point (surface normal for VFX only).
 signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
 ## T-key: summon a Game Boy Tetris machine at aim hit_point.
@@ -25,6 +33,8 @@ const BlasterBoltVfxScript := preload("res://scripts/city/blaster_bolt_vfx.gd")
 const ChargedBlastVfxScript := preload("res://scripts/city/charged_blast_vfx.gd")
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const VoxelBodyMotionScript := preload("res://scripts/city/voxel_body_motion.gd")
+const PlayerHealthScript := preload("res://scripts/city/player_health.gd")
+const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 
 const PedOutfitCatalogScript := preload("res://scripts/humans/ped_outfit_catalog.gd")
 const PedOutfitApplierScript := preload("res://scripts/humans/ped_outfit_applier.gd")
@@ -106,6 +116,16 @@ const SWIM_EXIT_IMMUNE_SEC := 0.55
 @export var energy_cost_blaster: float = 1.0
 @export var energy_cost_stomp: float = 10.0
 @export var energy_cost_blast: float = 20.0
+## Wounds, which are not the energy pool above: this one only falls when something hits you,
+## and emptying it ends the run. Four conversion orbs at 25 each, and the fourth is fatal.
+@export var health_max: float = 100.0
+## Slow on purpose. A full pool from empty is a minute and a half, so a bad fight is felt for
+## the rest of the block rather than walked off in the next doorway.
+@export var health_regen_per_sec: float = 4.0
+## Quiet owed after the last hit before any of it comes back.
+@export var health_regen_delay_sec: float = 6.0
+## Flinch played on a survivable hit. One of the Quaternius clips merged into the MPFB rig.
+@export var hit_react_anim: String = "Hit_Chest"
 ## Hold LMB for blaster. Alt+LMB charges the bomb; Q stomps; Ctrl+LMB laser.
 @export var charged_blast_speed_mps: float = 10.0
 @export var charged_blast_charge_sec: float = 1.6
@@ -246,6 +266,7 @@ var _blaster_holding: bool = false
 var _blaster_accum: float = 0.0
 var _live_blaster_bolts: Array[Node] = []
 var _energy: float = 100.0
+var _health := PlayerHealthScript.new()
 var _blast_fire_token: int = 0
 var _blast_pending_aim: Vector3 = Vector3.ZERO
 var _blast_pending_radius: float = 1.0
@@ -293,6 +314,9 @@ func _ready() -> void:
 	_rng.randomize()
 	_zoom = zoom_default
 	_energy = energy_max
+	_health.configure(health_max, health_regen_per_sec, health_regen_delay_sec)
+	_health.changed.connect(_on_health_changed)
+	_health.depleted.connect(_on_health_depleted)
 	collision_layer = 2
 	## Walking uses VoxelBoxMover against live voxels — do not collide with remeshed
 	## terrain (layer 1) or stale dig colliders fight the real shape. Safety deck only.
@@ -316,7 +340,7 @@ func _ready() -> void:
 
 	_female = _rng.randf() < 0.5
 	_proportions = BodyProportions.identity()
-	_outfit = PedOutfitCatalogScript.pick(_rng, _female)
+	_outfit = PedOutfitCatalogScript.pick(_rng, _female, PedOutfit.Faction.CIVILIAN)
 	_spawn_human(_female)
 
 	_pivot = Node3D.new()
@@ -358,8 +382,9 @@ func _ready() -> void:
 func _spawn_human(female: bool) -> void:
 	_clear_body()
 	_female = female
+	## The player is always civilian gear — hostile outfits live in a pool this never reads.
 	if _outfit == null or _outfit.female != female:
-		_outfit = PedOutfitCatalogScript.pick(_rng, female)
+		_outfit = PedOutfitCatalogScript.pick(_rng, female, PedOutfit.Faction.CIVILIAN)
 	var path := ""
 	if _outfit != null and _outfit.scene_path != "" and ResourceLoader.exists(_outfit.scene_path):
 		path = _outfit.scene_path
@@ -771,6 +796,59 @@ func _regen_energy(delta: float) -> void:
 	_energy = minf(_energy + rate * delta, energy_max)
 	if not is_equal_approx(prev, _energy):
 		energy_changed.emit(_energy, energy_max)
+
+
+func get_health() -> float:
+	return _health.current()
+
+
+func get_health_max() -> float:
+	return _health.maximum()
+
+
+func get_health_fraction() -> float:
+	return _health.fraction()
+
+
+func is_health_depleted() -> bool:
+	return _health.is_depleted()
+
+
+## Deliberately not scaled by `character_scale`. Growing is already the strongest thing the
+## player can do — free durability on top of it would make the giant form the only form.
+func take_damage(source: DamageSource.Id) -> float:
+	if _game_over_locked:
+		return 0.0
+	var taken := _health.apply_damage(source)
+	if taken > 0.0 and not _health.is_depleted():
+		_play_hit_reaction()
+	return taken
+
+
+func _regen_health(delta: float) -> void:
+	if _game_over_locked:
+		return
+	_health.tick(delta)
+
+
+func _on_health_changed(current: float, maximum: float) -> void:
+	health_changed.emit(current, maximum)
+
+
+func _on_health_depleted(source: DamageSource.Id) -> void:
+	health_depleted.emit(source)
+
+
+## The flinch, as a one-shot action — `_update_locomotion_anim` already lets those play out and
+## takes the rig back when they finish, so a hit interrupts a walk cycle and nothing else.
+##
+## `Hit_Chest` comes from the Quaternius library merged into every MPFB body, so a missing clip
+## here means the merge changed and every hit in the game just went silent. Loudly, then.
+func _play_hit_reaction() -> void:
+	if not has_action_animation(hit_react_anim):
+		push_error("CityWalker: no hit reaction clip '%s' in the action library" % hit_react_anim)
+		return
+	play_action(hit_react_anim, false)
 
 
 func play_action(anim_name: String, allow_toggle: bool = true) -> void:
@@ -1418,6 +1496,7 @@ func _process(_delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	_regen_energy(delta)
+	_regen_health(delta)
 	if is_blocking_ui_open():
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -2986,12 +3065,22 @@ func _on_laser_impact(hit_point: Vector3, direction: Vector3) -> void:
 		from = hit_point - dir * 0.15
 	var root := _city_root()
 	if root != null and root.has_method("apply_laser_agent_hit"):
-		if bool(root.call("apply_laser_agent_hit", from, hit_point, dir)):
+		if bool(
+			root.call(
+				"apply_laser_agent_hit",
+				from,
+				hit_point,
+				dir,
+				DamageSourceScript.Id.PLAYER_LASER
+			)
+		):
 			return
 	## Short march into fabric at the impact — not the full laser range (avoids
 	## hitting agents behind walls).
 	var origin := hit_point - dir * 0.15
-	melee_strike_requested.emit(origin, dir, maxf(2.5, character_scale * 2.0))
+	melee_strike_requested.emit(
+		origin, dir, maxf(2.5, character_scale * 2.0), DamageSourceScript.Id.PLAYER_LASER
+	)
 
 
 func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: float) -> void:
@@ -3006,10 +3095,23 @@ func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: 
 	elif audio != null and audio.has_method("play_laser_impact"):
 		audio.call("play_laser_impact", hit_point, character_scale)
 	var root := _city_root()
-	## Agents at the impact still die / flip; carved fabric tumbles then cascades columns.
+	## Everything living inside the sphere is hit, then the ped or car nearest the impact —
+	## `creatures` is false on that second pass so a giant the sphere already hit is not hit
+	## twice for standing at the centre of it.
+	if root != null and root.has_method("apply_area_damage"):
+		root.call(
+			"apply_area_damage", hit_point, radius_m, DamageSourceScript.Id.PLAYER_BLAST
+		)
 	if root != null and root.has_method("apply_laser_agent_hit"):
 		var from := hit_point - dir * maxf(radius_m, 0.5)
-		root.call("apply_laser_agent_hit", from, hit_point, dir)
+		root.call(
+			"apply_laser_agent_hit",
+			from,
+			hit_point,
+			dir,
+			DamageSourceScript.Id.PLAYER_BLAST,
+			false
+		)
 	if root != null and root.has_method("apply_charged_blast"):
 		root.call("apply_charged_blast", hit_point, radius_m)
 
@@ -3377,10 +3479,20 @@ func _on_blaster_impact(hit_point: Vector3, direction: Vector3, shot_origin: Vec
 		from = hit_point - dir * 0.15
 	var root := _city_root()
 	if root != null and root.has_method("apply_laser_agent_hit"):
-		if bool(root.call("apply_laser_agent_hit", from, hit_point, dir)):
+		if bool(
+			root.call(
+				"apply_laser_agent_hit",
+				from,
+				hit_point,
+				dir,
+				DamageSourceScript.Id.PLAYER_BLASTER
+			)
+		):
 			return
 	var origin := hit_point - dir * 0.15
-	melee_strike_requested.emit(origin, dir, maxf(2.5, character_scale * 2.0))
+	melee_strike_requested.emit(
+		origin, dir, maxf(2.5, character_scale * 2.0), DamageSourceScript.Id.PLAYER_BLASTER
+	)
 
 
 func _city_root() -> Node:
@@ -3500,7 +3612,7 @@ func _emit_melee_strike(is_punch: bool) -> void:
 	if not is_punch:
 		forward = (forward + Vector3(0.0, -0.12, 0.0)).normalized()
 	var reach := melee_reach_m * character_scale
-	melee_strike_requested.emit(origin, forward, reach)
+	melee_strike_requested.emit(origin, forward, reach, DamageSourceScript.Id.PLAYER_MELEE)
 
 
 func _melee_origin(is_punch: bool) -> Vector3:

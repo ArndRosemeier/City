@@ -7,8 +7,15 @@
     "tags": [
       "casual"
     ],
-    "suit": "female_casualsuit01",
-    "shoes": "shoes01",
+    "garments": [
+      "female_casualsuit01",
+      "shoes01"
+    ],
+    "skin_material": "female_skin",
+    "garment_materials": [
+      "female_body.female_casualsuit01",
+      "female_body.shoes01"
+    ],
     "proxy_color": [
       0.35,
       0.42,
@@ -23,8 +30,15 @@
     "tags": [
       "casual"
     ],
-    "suit": "female_casualsuit02",
-    "shoes": "shoes02",
+    "garments": [
+      "female_casualsuit02",
+      "shoes02"
+    ],
+    "skin_material": "female_skin",
+    "garment_materials": [
+      "female_body.female_casualsuit02",
+      "female_body.shoes02"
+    ],
     "proxy_color": [
       0.35,
       0.42,
@@ -39,8 +53,15 @@
     "tags": [
       "elegant"
     ],
-    "suit": "female_elegantsuit01",
-    "shoes": "shoes05",
+    "garments": [
+      "female_elegantsuit01",
+      "shoes05"
+    ],
+    "skin_material": "female_skin",
+    "garment_materials": [
+      "female_body.female_elegantsuit01",
+      "female_body.shoes05"
+    ],
     "proxy_color": [
       0.18,
       0.18,
@@ -55,12 +76,48 @@
     "tags": [
       "sport"
     ],
-    "suit": "female_sportsuit01",
-    "shoes": "shoes03",
+    "garments": [
+      "female_sportsuit01",
+      "shoes03"
+    ],
+    "skin_material": "female_skin",
+    "garment_materials": [
+      "female_body.female_sportsuit01",
+      "female_body.shoes03"
+    ],
     "proxy_color": [
       0.25,
       0.45,
       0.35
+    ]
+  },
+  {
+    "id": "male_bandit_01",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_bandit_01.glb",
+    "tags": [
+      "bandit"
+    ],
+    "garments": [
+      "donitz_monk_robe",
+      "culturalibre_male_boots",
+      "donitz_monk_robe_hood",
+      "culturalibre_hero_mask_1",
+      "joepal_crude_sword"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.culturalibre_hero_mask_1",
+      "male_body.culturalibre_male_boots",
+      "male_body.donitz_monk_robe",
+      "male_body.donitz_monk_robe_hood",
+      "male_body.joepal_crude_sword"
+    ],
+    "proxy_color": [
+      0.3,
+      0.26,
+      0.24
     ]
   },
   {
@@ -71,8 +128,15 @@
     "tags": [
       "casual"
     ],
-    "suit": "male_casualsuit01",
-    "shoes": "shoes01",
+    "garments": [
+      "male_casualsuit01",
+      "shoes01"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_casualsuit01",
+      "male_body.shoes01"
+    ],
     "proxy_color": [
       0.35,
       0.42,
@@ -87,8 +151,15 @@
     "tags": [
       "casual"
     ],
-    "suit": "male_casualsuit02",
-    "shoes": "shoes02",
+    "garments": [
+      "male_casualsuit02",
+      "shoes02"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_casualsuit02",
+      "male_body.shoes02"
+    ],
     "proxy_color": [
       0.35,
       0.42,
@@ -103,8 +174,15 @@
     "tags": [
       "casual"
     ],
-    "suit": "male_casualsuit03",
-    "shoes": "shoes03",
+    "garments": [
+      "male_casualsuit03",
+      "shoes03"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_casualsuit03",
+      "male_body.shoes03"
+    ],
     "proxy_color": [
       0.35,
       0.42,
@@ -119,8 +197,15 @@
     "tags": [
       "elegant"
     ],
-    "suit": "male_elegantsuit01",
-    "shoes": "shoes05",
+    "garments": [
+      "male_elegantsuit01",
+      "shoes05"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_elegantsuit01",
+      "male_body.shoes05"
+    ],
     "proxy_color": [
       0.18,
       0.18,
@@ -135,8 +220,15 @@
     "tags": [
       "work"
     ],
-    "suit": "male_worksuit01",
-    "shoes": "shoes04",
+    "garments": [
+      "male_worksuit01",
+      "shoes04"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_worksuit01",
+      "male_body.shoes04"
+    ],
     "proxy_color": [
       0.45,
       0.38,

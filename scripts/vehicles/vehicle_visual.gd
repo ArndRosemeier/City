@@ -324,7 +324,7 @@ func _spawn_passengers(count: int) -> void:
 	for i in range(n):
 		var seat: Dictionary = seats[i]
 		var female := _rng.randf() < 0.5
-		var outfit: PedOutfit = PedOutfitScript.random(_rng, female)
+		var outfit: PedOutfit = PedOutfitScript.random(_rng, female, PedOutfit.Faction.CIVILIAN)
 		if outfit == null or outfit.scene_path == "":
 			push_error("VehicleVisual: PedOutfit missing scene_path (female=%s)" % female)
 			continue

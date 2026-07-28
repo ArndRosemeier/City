@@ -267,7 +267,7 @@ func _play_loco_for_speed(speed: float) -> void:
 
 func _spawn_visual() -> void:
 	var female := _rng.randf() < 0.5
-	var outfit: PedOutfit = PedOutfitScript.random(_rng, female)
+	var outfit: PedOutfit = PedOutfitScript.random(_rng, female, PedOutfit.Faction.CIVILIAN)
 	var path := ""
 	if outfit != null:
 		path = outfit.scene_path

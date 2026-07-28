@@ -1,0 +1,54 @@
+{
+  "cortu_cargo_pants": {
+    "author": "Cortu",
+    "category": "Pants",
+    "changed": "2021-01-06",
+    "created": "2021-01-06",
+    "description": "Simple low slung green cargo pants.",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/2798",
+    "thumbnail": "cortu_cargo_pants.png",
+    "type": "clothes"
+  },
+  "cortu_jeans_shorts": {
+    "author": "Cortu",
+    "category": "Pants",
+    "changed": "2021-01-06",
+    "created": "2021-01-06",
+    "description": "Jean shorts.",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/2800",
+    "thumbnail": "cortu_jeans_shorts.png",
+    "type": "clothes"
+  },
+  "toigo_harem_pants": {
+    "author": "MargaretToigo",
+    "category": "Pants",
+    "changed": "2018-11-08",
+    "created": "2018-11-08",
+    "description": "This is a pair of harem-style pants that were made with Blender's cloth simulator. They will fit female and mostly female humans though some adjustment may be needed for toddler senior and plus-size humans. A diffuse texture is included. Illustration shows pants with subsurf of two. Kira is also wearing Sleeveless Crop Top by punkduck http://www.makehumancommunity.org/clothes/sleeveless_crop_top.html which was color adjusted in Blender Green 1.2 Blue 1.2 Brightness 0.6 .",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/1728",
+    "thumbnail": "toigo_harem_pants.png",
+    "type": "clothes"
+  },
+  "toigo_wool_pants": {
+    "author": "MargaretToigo",
+    "category": "Pants",
+    "changed": "2017-12-07",
+    "created": "2017-12-07",
+    "description": "This is a pair of wool pants designed for male humans but will fit other average humans too. Several other colors are in Materials. Illustration also pictures Shoes Monk Strap male by Mindfront. http://www.makehumancommunity.org/clothes/shoes_monk_strap_male.html",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/1194",
+    "thumbnail": "toigo_wool_pants.png",
+    "type": "clothes"
+  }
+}

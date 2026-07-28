@@ -567,7 +567,7 @@ func _spawn_agents() -> void:
 		ped.walk_tendency = clampf(_rng.randfn(walk_decision_chance, 0.04), 0.82, 0.99)
 		ped.walk_speed = _rng.randf_range(1.15, 1.85)
 		ped.body_scale = _rng.randf_range(0.92, 1.08)
-		ped.outfit = PedOutfitScript.random(_rng, ped.female)
+		ped.outfit = PedOutfitScript.random(_rng, ped.female, PedOutfit.Faction.CIVILIAN)
 		ped.lod = PedAgent.Lod.CULLED
 		ped.motor = NavMotor.new()
 		ped.motor.speed_mps = ped.walk_speed

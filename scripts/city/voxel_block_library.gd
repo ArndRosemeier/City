@@ -615,6 +615,8 @@ static func _build_surface_material(id: int, object_space: bool) -> ShaderMateri
 			mat.set_shader_parameter("normal_strength", spec.normal_strength)
 			mat.set_shader_parameter("lot_meters", LOT_METERS)
 			mat.set_shader_parameter("tint_variation", spec.tint_variation)
+			mat.set_shader_parameter("patch_variation", spec.patch_variation)
+			mat.set_shader_parameter("patch_meters", spec.patch_meters)
 			mat.set_shader_parameter("weathering", spec.weathering)
 			mat.set_shader_parameter("grime", spec.grime)
 			mat.set_shader_parameter("ground_y", STREET_DECK_Y)

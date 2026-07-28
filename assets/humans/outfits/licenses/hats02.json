@@ -1,0 +1,80 @@
+{
+  "culturalibre_motorcycle_helmet": {
+    "author": "culturalibre",
+    "category": "Hat/Helmet",
+    "changed": "2019-11-28",
+    "created": "2019-11-28",
+    "description": "Female motorcycle helmet. Original model 'helmet' by kveidem released under Creative Commons Zero Public Domain . Downloaded from http://www.blendswap.com/blends/view/68926",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/2025",
+    "thumbnail": "culturalibre_motorcycle_helmet.png",
+    "type": "clothes"
+  },
+  "culturalibre_skull_helmet": {
+    "author": "culturalibre",
+    "category": "Hat/Helmet",
+    "changed": "2020-03-14",
+    "created": "2020-03-14",
+    "description": "Fantastic prop for male model created by piacenti with CC-0 license.You can download the original from: https://opengameart.org/content/skull-prop.Thanks. Illustration with rigid vertex groups in blender.",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/2349",
+    "thumbnail": "culturalibre_skull_helmet.png",
+    "type": "clothes"
+  },
+  "culturalibre_warrior_helmet": {
+    "author": "culturalibre",
+    "category": "Hat/Helmet",
+    "changed": "2020-03-15",
+    "created": "2020-03-15",
+    "description": "Female fantasy warrior helmet.",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/2351",
+    "thumbnail": "culturalibre_warrior_helmet.png",
+    "type": "clothes"
+  },
+  "grinsegold_corinthian_helmet": {
+    "author": "grinsegold",
+    "category": "Hat/Helmet",
+    "changed": "2017-03-11",
+    "created": "2017-03-11",
+    "description": "modelled after a true archeological find and optimised for subsurf level 2.",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/667",
+    "thumbnail": "grinsegold_corinthian_helmet.png",
+    "type": "clothes"
+  },
+  "javherre_casco_caballero_templario_templar_knight_helmet": {
+    "author": "javherre",
+    "category": "Hat/Helmet",
+    "changed": "2019-11-07",
+    "created": "2019-11-07",
+    "description": "Primer elemento de un kit de legendario caballero medieval. Orden de los templarios. First element of a legendary medieval knight kit. Templar order Note: textures are not applied from Blender. Can anybody help me.",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/2014",
+    "thumbnail": "javherre_casco_caballero_templario_templar_knight_helmet.png",
+    "type": "clothes"
+  },
+  "mrgreaterthan_m1_helmet": {
+    "author": "MrGreaterThan",
+    "category": "Hat/Helmet",
+    "changed": "2020-10-12",
+    "created": "2020-10-12",
+    "description": "Standard Issue Army Helmet",
+    "license": "CC0",
+    "original_author": "",
+    "original_source": "",
+    "source": "http://www.makehumancommunity.org/node/2697",
+    "thumbnail": "mrgreaterthan_m1_helmet.png",
+    "type": "clothes"
+  }
+}

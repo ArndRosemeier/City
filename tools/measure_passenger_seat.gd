@@ -21,7 +21,9 @@ func _run() -> void:
 	var worst_id := ""
 	for female in [false, true]:
 		for i in range(4):
-			var outfit: PedOutfit = PedOutfitScript.random(rng, female)
+			var outfit: PedOutfit = PedOutfitScript.random(
+				rng, female, PedOutfit.Faction.CIVILIAN
+			)
 			if outfit == null or outfit.scene_path == "":
 				push_error("FAIL outfit without scene_path")
 				quit(1)

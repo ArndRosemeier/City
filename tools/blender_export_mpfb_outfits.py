@@ -21,24 +21,48 @@ ASSETS_DIR = VENDOR / "makehuman_system_assets"
 USER_DATA_OVERRIDE = VENDOR / "mpfb_user_data"
 CLOTHES_DIR = USER_DATA_OVERRIDE / "data" / "clothes"
 
-# V1 matrix: system clothes already vendored (suit + shoes).
+# "garments" is the mhclo equip order: suit, shoes, then anything else (masks, helmets and
+# weapons are Clothes-type mhclo assets as well).
 OUTFIT_MATRIX: list[dict] = [
-    {"id": "male_casual_01", "sex": "male", "suit": "male_casualsuit01", "shoes": "shoes01", "tags": ["casual"]},
-    {"id": "male_casual_02", "sex": "male", "suit": "male_casualsuit02", "shoes": "shoes02", "tags": ["casual"]},
-    {"id": "male_casual_03", "sex": "male", "suit": "male_casualsuit03", "shoes": "shoes03", "tags": ["casual"]},
-    {"id": "male_work_01", "sex": "male", "suit": "male_worksuit01", "shoes": "shoes04", "tags": ["work"]},
-    {"id": "male_elegant_01", "sex": "male", "suit": "male_elegantsuit01", "shoes": "shoes05", "tags": ["elegant"]},
-    {"id": "female_casual_01", "sex": "female", "suit": "female_casualsuit01", "shoes": "shoes01", "tags": ["casual"]},
-    {"id": "female_casual_02", "sex": "female", "suit": "female_casualsuit02", "shoes": "shoes02", "tags": ["casual"]},
-    {"id": "female_sport_01", "sex": "female", "suit": "female_sportsuit01", "shoes": "shoes03", "tags": ["sport"]},
-    {"id": "female_elegant_01", "sex": "female", "suit": "female_elegantsuit01", "shoes": "shoes05", "tags": ["elegant"]},
+    {"id": "male_casual_01", "sex": "male", "garments": ["male_casualsuit01", "shoes01"], "tags": ["casual"]},
+    {"id": "male_casual_02", "sex": "male", "garments": ["male_casualsuit02", "shoes02"], "tags": ["casual"]},
+    {"id": "male_casual_03", "sex": "male", "garments": ["male_casualsuit03", "shoes03"], "tags": ["casual"]},
+    {"id": "male_work_01", "sex": "male", "garments": ["male_worksuit01", "shoes04"], "tags": ["work"]},
+    {"id": "male_elegant_01", "sex": "male", "garments": ["male_elegantsuit01", "shoes05"], "tags": ["elegant"]},
+    {"id": "female_casual_01", "sex": "female", "garments": ["female_casualsuit01", "shoes01"], "tags": ["casual"]},
+    {"id": "female_casual_02", "sex": "female", "garments": ["female_casualsuit02", "shoes02"], "tags": ["casual"]},
+    {"id": "female_sport_01", "sex": "female", "garments": ["female_sportsuit01", "shoes03"], "tags": ["sport"]},
+    {"id": "female_elegant_01", "sex": "female", "garments": ["female_elegantsuit01", "shoes05"], "tags": ["elegant"]},
+    # Hostile spike: everything a bandit wears is one mhclo list, weapon included.
+    {
+        "id": "male_bandit_01",
+        "sex": "male",
+        "garments": [
+            "donitz_monk_robe",
+            "culturalibre_male_boots",
+            "donitz_monk_robe_hood",
+            "culturalibre_hero_mask_1",
+            "joepal_crude_sword",
+        ],
+        "tags": ["bandit"],
+    },
 ]
 
+# A freshly exported GLB imports with no retarget bone map, and the shared Quaternius library
+# then silently fails to drive it: no error, just a body frozen in its rest pose. So the import
+# settings are written here, copied verbatim from an outfit that is known to animate, with only
+# the skeleton node path swapped for the sex.
+IMPORT_TEMPLATE_ID = "male_work_01"
+IMPORT_SKELETON_KEY = 'PATH:{sex}_armature/Skeleton3D'
+
+# Keep in step with PedOutfitCatalog.TAG_FACTIONS — a tag the runtime does not know rejects the
+# entry on load.
 PROXY_COLORS = {
     "casual": (0.35, 0.42, 0.55),
     "work": (0.45, 0.38, 0.28),
     "elegant": (0.18, 0.18, 0.22),
     "sport": (0.25, 0.45, 0.35),
+    "bandit": (0.30, 0.26, 0.24),
 }
 
 
@@ -327,6 +351,67 @@ def _find_clothes_objects(basemesh) -> list:
     return list(ObjectService.find_all_objects_of_type_amongst_nearest_relatives(basemesh, "Clothes"))
 
 
+def _garments_of(spec: dict) -> list[str]:
+    garments = spec["garments"]
+    if not garments:
+        raise RuntimeError(f"{spec['id']}: garments list is empty")
+    return garments
+
+
+def _write_import_settings(out_glb: Path, sex: str) -> None:
+    """Give the new GLB the same scene-import settings as an outfit that already animates.
+
+    Godot fills in [remap] uid/path itself on first import; [params] and the _subresources
+    retarget block are what it will not invent, and what the animation library depends on.
+    """
+    template_path = OUT_DIR / f"{IMPORT_TEMPLATE_ID}.glb.import"
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"no import template at {template_path} — cannot set the retarget bone map"
+        )
+    template = template_path.read_text(encoding="utf-8")
+    marker = "[params]"
+    if marker not in template:
+        raise RuntimeError(f"{template_path} has no [params] section")
+    params = template[template.index(marker) :]
+    template_key = IMPORT_SKELETON_KEY.format(sex=_sex_of_import_template())
+    wanted_key = IMPORT_SKELETON_KEY.format(sex=sex)
+    if template_key not in params:
+        raise RuntimeError(f"{template_path} has no {template_key} subresource block")
+    params = params.replace(template_key, wanted_key)
+
+    target = out_glb.with_suffix(".glb.import")
+    if target.exists():
+        existing = target.read_text(encoding="utf-8")
+        if wanted_key in existing:
+            _log(f"Import settings already carry {wanted_key}: {target.name}")
+            return
+        head = existing[: existing.index(marker)] if marker in existing else _import_head()
+        target.write_text(head + params, encoding="utf-8")
+        _log(f"Repaired missing retarget block in {target.name}")
+        return
+    target.write_text(_import_head() + params, encoding="utf-8")
+    _log(f"Wrote import settings with {wanted_key}: {target.name}")
+
+
+def _import_head() -> str:
+    return '[remap]\n\nimporter="scene"\nimporter_version=1\ntype="PackedScene"\n\n'
+
+
+def _sex_of_import_template() -> str:
+    for spec in OUTFIT_MATRIX:
+        if spec["id"] == IMPORT_TEMPLATE_ID:
+            return spec["sex"]
+    raise RuntimeError(f"{IMPORT_TEMPLATE_ID} is not in OUTFIT_MATRIX")
+
+
+def _material_names(obj) -> list[str]:
+    names = [slot.name for slot in obj.data.materials if slot is not None]
+    if not names:
+        raise RuntimeError(f"{obj.name}: no material to name in the catalog")
+    return names
+
+
 def _create_and_export_outfit(spec: dict) -> dict:
     HumanService = _mpfb_import("services.humanservice").HumanService
     sex = spec["sex"]
@@ -350,31 +435,23 @@ def _create_and_export_outfit(spec: dict) -> dict:
         raise RuntimeError("Failed to add game_engine rig")
     armature.name = f"{sex}_armature"
 
-    suit_path = _mhclo_path(spec["suit"])
-    shoes_path = _mhclo_path(spec["shoes"])
-    _log(f"Equipping {suit_path.name} + {shoes_path.name}")
-    HumanService.add_mhclo_asset(
-        str(suit_path),
-        basemesh,
-        asset_type="Clothes",
-        subdiv_levels=0,
-        material_type="GAMEENGINE",
-        set_up_rigging=True,
-        interpolate_weights=True,
-        import_subrig=False,
-        import_weights=True,
-    )
-    HumanService.add_mhclo_asset(
-        str(shoes_path),
-        basemesh,
-        asset_type="Clothes",
-        subdiv_levels=0,
-        material_type="GAMEENGINE",
-        set_up_rigging=True,
-        interpolate_weights=True,
-        import_subrig=False,
-        import_weights=True,
-    )
+    # Weapons and masks ship as Clothes-type mhclo assets too, so everything a variant wears
+    # goes through the same call in equip order.
+    garments = _garments_of(spec)
+    for garment in garments:
+        garment_path = _mhclo_path(garment)
+        _log(f"Equipping {garment_path.name}")
+        HumanService.add_mhclo_asset(
+            str(garment_path),
+            basemesh,
+            asset_type="Clothes",
+            subdiv_levels=0,
+            material_type="GAMEENGINE",
+            set_up_rigging=True,
+            interpolate_weights=True,
+            import_subrig=False,
+            import_weights=True,
+        )
 
     clothes_objs = _find_clothes_objects(basemesh)
     _log(f"Clothes objects: {[o.name for o in clothes_objs]}")
@@ -387,11 +464,16 @@ def _create_and_export_outfit(spec: dict) -> dict:
     _assign_unweighted_verts_to_spine(basemesh)
     _limit_weights_to_four(basemesh)
     _assign_skin_material(basemesh, sex)
+    skin_material = _material_names(basemesh)[0]
 
+    garment_materials: list[str] = []
     for clothes in clothes_objs:
         _apply_non_armature_modifiers(clothes)
         _assign_unweighted_verts_to_spine(clothes)
         _limit_weights_to_four(clothes)
+        garment_materials.extend(_material_names(clothes))
+    if skin_material in garment_materials:
+        raise RuntimeError(f"{outfit_id}: garment reuses the skin material {skin_material}")
 
     bpy.ops.object.select_all(action="DESELECT")
     basemesh.select_set(True)
@@ -416,17 +498,21 @@ def _create_and_export_outfit(spec: dict) -> dict:
         export_yup=True,
     )
     _log(f"Exported {out_glb} ({out_glb.stat().st_size} bytes)")
+    _write_import_settings(out_glb, sex)
 
     tag = spec["tags"][0] if spec["tags"] else "casual"
     rgb = PROXY_COLORS.get(tag, (0.4, 0.4, 0.45))
+    # The runtime tints the skin mesh by matching material names, so record the names that were
+    # actually exported instead of letting Godot re-derive them from node names.
     return {
         "id": outfit_id,
         "sex": sex,
         "female": sex == "female",
         "path": f"res://assets/humans/outfits/{outfit_id}.glb",
         "tags": spec["tags"],
-        "suit": spec["suit"],
-        "shoes": spec["shoes"],
+        "garments": list(garments),
+        "skin_material": skin_material,
+        "garment_materials": garment_materials,
         "proxy_color": list(rgb),
     }
 

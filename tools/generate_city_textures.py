@@ -8,8 +8,8 @@ the ambientCG fillers they replaced were too flat once massing got interesting.
 
 from __future__ import annotations
 
+import json
 import math
-import random
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +18,84 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "assets" / "city" / "textures"
 SIZE = 1024
+
+# Authored feature pitch.
+#
+# Patterns are drawn from a real-world feature size rather than a bare pixel count. The
+# pixel pitch is picked first (and has to divide SIZE, or the pattern will not wrap at
+# the tile seam), the metre figure states how big that feature is meant to read, and one
+# texture repeat then covers SIZE / pitch * metres of world. Those repeat sizes go into
+# tile_meters.json, which tools/test_texture_scale.gd asserts against
+# VoxelSurfaceSpec.tile_meters — otherwise the two drift, which is how a standing-seam
+# roof rib ended up 0.117 m wide next to a 0.5 m voxel.
+TILE_METERS_JSON = "tile_meters.json"
+
+# Standing-seam metal roof.
+ROOF_SEAM_PX = 64
+ROOF_SEAM_M = 0.4
+ROOF_RIB_M = 0.05
+ROOF_BAND_PX = 256
+
+# Terracotta pantiles: wider courses than tiles, so the two pitches differ.
+CLAY_TILE_PX = 64
+CLAY_TILE_M = 0.24
+CLAY_COURSE_PX = 64
+CLAY_COURSE_M = 0.34
+CLAY_JOINT_M = 0.015
+
+# Anodized curtain-wall panels.
+METAL_PANEL_PX = 128
+METAL_PANEL_M = 1.4
+METAL_COURSE_PX = 256
+METAL_COURSE_M = 2.8
+METAL_SEAM_M = 0.06
+# One repeat covers 11 m, so a 3 mm brushed grain is a third of a texel. Fluting is the
+# feature that actually exists at this density.
+METAL_FLUTE_M = 0.175
+
+# Riveted industrial plates.
+PLATE_CELL_PX = 128
+PLATE_CELL_M = 0.9
+PLATE_GROOVE_M = 0.05
+PLATE_RIVET_M = 0.022
+PLATE_RIVET_INSET_M = 0.09
+
+# Glazed diamond ceramic.
+LATTICE_PX = 64
+LATTICE_M = 0.36
+LATTICE_GROUT_M = 0.04
+
+# Curtain-wall glazing: one mullion bay per punched window.
+MULLION_PX = 256
+MULLION_M = 1.0
+MULLION_WIDTH_M = 0.05
+
+
+def _repeat(pitch_px: int, feature_m: float) -> float:
+    """World metres one full texture repeat covers, given an authored feature pitch."""
+    if SIZE % pitch_px != 0:
+        raise ValueError(f"feature pitch {pitch_px} px does not divide the {SIZE} px tile")
+    return SIZE / pitch_px * feature_m
+
+
+def _px(feature_m: float, pitch_px: int, pitch_m: float) -> float:
+    """A physical size in texels, at the density an authored pitch establishes."""
+    return feature_m * pitch_px / pitch_m
+
+
+ROOF_REPEAT = _repeat(ROOF_SEAM_PX, ROOF_SEAM_M)
+PLATE_REPEAT = _repeat(PLATE_CELL_PX, PLATE_CELL_M)
+LATTICE_REPEAT = _repeat(LATTICE_PX, LATTICE_M)
+MULLION_REPEAT = _repeat(MULLION_PX, MULLION_M)
+
+TILE_METERS: dict[str, tuple[float, float]] = {
+    "roof": (ROOF_REPEAT, ROOF_REPEAT),
+    "roof_clay": (_repeat(CLAY_TILE_PX, CLAY_TILE_M), _repeat(CLAY_COURSE_PX, CLAY_COURSE_M)),
+    "metal": (_repeat(METAL_PANEL_PX, METAL_PANEL_M), _repeat(METAL_COURSE_PX, METAL_COURSE_M)),
+    "metal_plate": (PLATE_REPEAT, PLATE_REPEAT),
+    "tiles": (LATTICE_REPEAT, LATTICE_REPEAT),
+    "glass": (MULLION_REPEAT, MULLION_REPEAT),
+}
 
 
 def _save_rgb(arr: np.ndarray, name: str) -> None:
@@ -39,10 +117,6 @@ def _save_rgba(arr: np.ndarray, name: str) -> None:
     img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="RGBA")
     img.save(path, "PNG")
     print(f"Wrote {path}")
-
-
-def _wrap_coords(y: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    return y % SIZE, x % SIZE
 
 
 def _value_noise(seed: int, octaves: int = 4, base: float = 8.0) -> np.ndarray:
@@ -133,33 +207,26 @@ def make_crosswalk() -> None:
     _save_img(img, "crosswalk.jpg")
 
 
-def make_curb() -> None:
-    img = Image.new("RGB", (SIZE, SIZE), (150, 148, 142))
-    pixels = img.load()
-    rng = random.Random(7)
-    for y in range(SIZE):
-        for x in range(SIZE):
-            n = rng.randint(-12, 12)
-            edge = min(x, y, SIZE - 1 - x, SIZE - 1 - y)
-            shade = 150 + n - max(0, 18 - edge // 4)
-            pixels[x, y] = (shade, shade - 2, shade - 6)
-    _save_img(img, "curb.jpg")
-
-
 def make_glass() -> None:
-    img = Image.new("RGB", (SIZE, SIZE), (140, 175, 200))
-    draw = ImageDraw.Draw(img)
-    pixels = img.load()
-    rng = random.Random(11)
-    for y in range(SIZE):
-        for x in range(SIZE):
-            n = rng.randint(-8, 8)
-            pixels[x, y] = (140 + n, 175 + n, 200 + n)
-    step = 128
-    for i in range(0, SIZE, step):
-        draw.line([(i, 0), (i, SIZE)], fill=(110, 140, 165), width=3)
-        draw.line([(0, i), (i, SIZE)], fill=(110, 140, 165), width=3)
-    _save_img(img, "glass.jpg")
+    """Curtain-wall glazing: cool sheet tint on a grid of mullions, one bay per window."""
+    n = _value_noise(11, octaves=4, base=10.0)
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
+    half = _px(MULLION_WIDTH_M, MULLION_PX, MULLION_M) * 0.5
+
+    def bars(coord: np.ndarray) -> np.ndarray:
+        d = coord % MULLION_PX
+        return np.clip(1.0 - np.minimum(d, MULLION_PX - d) / half, 0.0, 1.0)
+
+    mullion = np.clip(bars(xx) + bars(yy), 0.0, 1.0)
+    # Per-pane sheet tint: float glass never reflects identically two bays apart.
+    pane_x = np.floor(xx / MULLION_PX)
+    pane_y = np.floor(yy / MULLION_PX)
+    pane = np.sin(pane_x * 12.9898 + pane_y * 78.233) * 43758.5453
+    pane = pane - np.floor(pane)
+    rgb = np.array([140.0, 175.0, 200.0]) + (pane[..., None] - 0.5) * 18.0
+    rgb += (n[..., None] - 0.5) * 14.0
+    rgb = rgb * (1.0 - mullion[..., None]) + np.array([110.0, 140.0, 165.0]) * mullion[..., None]
+    _save_rgb(rgb, "glass.jpg")
 
 
 def make_water() -> None:
@@ -187,7 +254,9 @@ def make_leaves() -> None:
     rgb = base + (lit - base) * cover[..., None]
     rgb += (detail[..., None] - 0.5) * 28.0
     yy, xx = np.mgrid[0:SIZE, 0:SIZE]
-    blotch = 18.0 * np.sin(xx * 0.04) * np.cos(yy * 0.035)
+    # Whole cycles across the tile, or the blotching cuts a hard seam down the card.
+    wave = 2.0 * math.pi / SIZE
+    blotch = 18.0 * np.sin(xx * wave * 7.0) * np.cos(yy * wave * 6.0)
     rgb[..., 1] += blotch
     rgb = np.clip(rgb, 20, 180)
     rgba = np.dstack([rgb, alpha * 255.0])
@@ -199,16 +268,19 @@ def make_leaves() -> None:
 
 
 def make_metal() -> None:
-    """Anodized curtain-wall panels: cool teal-grey, vertical brush, fine seams."""
+    """Anodized curtain-wall panels: cool teal-grey, vertical fluting, recessed seams."""
     n = _value_noise(41, octaves=5, base=6.0)
     yy, xx = np.mgrid[0:SIZE, 0:SIZE]
-    # Vertical brushed grain — phase wraps so the tile seams.
-    brush = 0.5 + 0.5 * np.sin((xx + n * 18.0) * (2.0 * math.pi / 7.0))
-    panel_u = (xx % 128).astype(np.float64)
-    panel_v = (yy % 192).astype(np.float64)
+    # Vertical fluting — phase wraps so the tile seams.
+    flute = _px(METAL_FLUTE_M, METAL_PANEL_PX, METAL_PANEL_M)
+    brush = 0.5 + 0.5 * np.sin((xx + n * 18.0) * (2.0 * math.pi / flute))
+    panel_u = (xx % METAL_PANEL_PX).astype(np.float64)
+    panel_v = (yy % METAL_COURSE_PX).astype(np.float64)
+    seam_u = _px(METAL_SEAM_M, METAL_PANEL_PX, METAL_PANEL_M) * 0.5
+    seam_v = _px(METAL_SEAM_M, METAL_COURSE_PX, METAL_COURSE_M) * 0.5
     seam = (
-        np.clip(1.0 - np.minimum(panel_u, 128.0 - panel_u) / 3.5, 0.0, 1.0)
-        + np.clip(1.0 - np.minimum(panel_v, 192.0 - panel_v) / 3.5, 0.0, 1.0)
+        np.clip(1.0 - np.minimum(panel_u, METAL_PANEL_PX - panel_u) / seam_u, 0.0, 1.0)
+        + np.clip(1.0 - np.minimum(panel_v, METAL_COURSE_PX - panel_v) / seam_v, 0.0, 1.0)
     )
     seam = np.clip(seam, 0.0, 1.0)
     base = np.array([118.0, 132.0, 142.0])
@@ -216,7 +288,7 @@ def make_metal() -> None:
     mix = 0.35 + 0.45 * n
     rgb = base * (1.0 - mix[..., None]) + teal * mix[..., None]
     rgb += (brush[..., None] - 0.5) * 22.0
-    rgb -= seam[..., None] * 38.0
+    rgb -= seam[..., None] * 54.0
     # Speckle of brighter flakes.
     flake = (_value_noise(77, octaves=2, base=40.0) > 0.82).astype(np.float64)
     rgb += flake[..., None] * 18.0
@@ -228,23 +300,24 @@ def make_metal_plate() -> None:
     """Heavy riveted plates — warm gunmetal for bands and industrial wild forms."""
     n = _value_noise(53, octaves=4, base=5.0)
     yy, xx = np.mgrid[0:SIZE, 0:SIZE]
-    cell = 96
+    cell = PLATE_CELL_PX
     lu = xx % cell
     lv = yy % cell
-    inset = 8
+    groove = _px(PLATE_GROOVE_M, PLATE_CELL_PX, PLATE_CELL_M)
     plate = (
-        (lu >= inset)
-        & (lu < cell - inset)
-        & (lv >= inset)
-        & (lv < cell - inset)
+        (lu >= groove)
+        & (lu < cell - groove)
+        & (lv >= groove)
+        & (lv < cell - groove)
     ).astype(np.float64)
     edge = 1.0 - plate
     # Four rivets near the corners of each raised plate.
+    rivet_r = _px(PLATE_RIVET_M, PLATE_CELL_PX, PLATE_CELL_M)
+    off = _px(PLATE_RIVET_INSET_M, PLATE_CELL_PX, PLATE_CELL_M)
     rivet_f = np.zeros((SIZE, SIZE), dtype=np.float64)
-    for ox, oy in ((inset + 6, inset + 6), (cell - inset - 7, inset + 6),
-                   (inset + 6, cell - inset - 7), (cell - inset - 7, cell - inset - 7)):
+    for ox, oy in ((off, off), (cell - off, off), (off, cell - off), (cell - off, cell - off)):
         d = np.sqrt((lu.astype(np.float64) - ox) ** 2 + (lv.astype(np.float64) - oy) ** 2)
-        rivet_f = np.maximum(rivet_f, np.clip(1.0 - d / 5.0, 0.0, 1.0) * plate)
+        rivet_f = np.maximum(rivet_f, np.clip(1.0 - d / rivet_r, 0.0, 1.0) * plate)
     base = np.array([92.0, 86.0, 78.0])
     rgb = base + (n[..., None] - 0.5) * 28.0
     rgb -= edge[..., None] * 32.0
@@ -276,14 +349,14 @@ def make_tiles() -> None:
     n = _value_noise(61, octaves=4, base=6.0)
     yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
     # Diamond lattice in UV.
-    u = (xx + yy) / 64.0
-    v = (xx - yy) / 64.0
+    u = (xx + yy) / LATTICE_PX
+    v = (xx - yy) / LATTICE_PX
     fu = np.abs(u - np.floor(u) - 0.5)
     fv = np.abs(v - np.floor(v) - 0.5)
-    grout = np.clip(1.0 - np.minimum(fu, fv) * 18.0, 0.0, 1.0)
+    grout = np.clip(1.0 - np.minimum(fu, fv) * (2.0 * LATTICE_M / LATTICE_GROUT_M), 0.0, 1.0)
     # Per-tile tint from lattice cell id.
-    cell_x = np.floor((xx + yy) / 64.0)
-    cell_y = np.floor((xx - yy) / 64.0)
+    cell_x = np.floor((xx + yy) / LATTICE_PX)
+    cell_y = np.floor((xx - yy) / LATTICE_PX)
     cell_n = np.sin(cell_x * 12.9898 + cell_y * 78.233) * 43758.5453
     cell_n = cell_n - np.floor(cell_n)
     glaze_a = np.array([72.0, 118.0, 132.0])
@@ -314,11 +387,11 @@ def make_roof() -> None:
     """Standing-seam metal roof — dark graphite with clear ridge lines."""
     n = _value_noise(37, octaves=4, base=5.0)
     yy, xx = np.mgrid[0:SIZE, 0:SIZE]
-    seam_pitch = 48
-    sx = xx % seam_pitch
-    ridge = np.clip(1.0 - np.minimum(sx, seam_pitch - sx).astype(np.float64) / 3.0, 0.0, 1.0)
+    sx = xx % ROOF_SEAM_PX
+    rib = _px(ROOF_RIB_M, ROOF_SEAM_PX, ROOF_SEAM_M) * 0.5
+    ridge = np.clip(1.0 - np.minimum(sx, ROOF_SEAM_PX - sx).astype(np.float64) / rib, 0.0, 1.0)
     # Subtle horizontal weathering bands.
-    band = 0.5 + 0.5 * np.sin(yy.astype(np.float64) * (2.0 * math.pi / 96.0) + n * 2.0)
+    band = 0.5 + 0.5 * np.sin(yy.astype(np.float64) * (2.0 * math.pi / ROOF_BAND_PX) + n * 2.0)
     base = np.array([58.0, 62.0, 68.0])
     rgb = base + (n[..., None] - 0.5) * 18.0
     rgb += ridge[..., None] * 28.0
@@ -333,8 +406,8 @@ def make_roof_clay() -> None:
     """Terracotta pantiles — warm courses that read at pitched-roof distance."""
     n = _value_noise(29, octaves=4, base=6.0)
     yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
-    course_h = 40.0
-    tile_w = 56.0
+    course_h = float(CLAY_COURSE_PX)
+    tile_w = float(CLAY_TILE_PX)
     # Stagger every other course.
     course = np.floor(yy / course_h)
     stagger = (course % 2) * (tile_w * 0.5)
@@ -342,8 +415,10 @@ def make_roof_clay() -> None:
     ly = yy % course_h
     # Barrel profile per tile.
     barrel = np.sin((lx / tile_w) * math.pi)
-    joint_x = np.clip(1.0 - np.minimum(lx, tile_w - lx) / 2.5, 0.0, 1.0)
-    joint_y = np.clip(1.0 - np.minimum(ly, course_h - ly) / 2.0, 0.0, 1.0)
+    half_u = _px(CLAY_JOINT_M, CLAY_TILE_PX, CLAY_TILE_M) * 0.5
+    half_v = _px(CLAY_JOINT_M, CLAY_COURSE_PX, CLAY_COURSE_M) * 0.5
+    joint_x = np.clip(1.0 - np.minimum(lx, tile_w - lx) / half_u, 0.0, 1.0)
+    joint_y = np.clip(1.0 - np.minimum(ly, course_h - ly) / half_v, 0.0, 1.0)
     joint = np.clip(joint_x + joint_y, 0.0, 1.0)
     base = np.array([168.0, 78.0, 52.0])
     deep = np.array([120.0, 52.0, 36.0])
@@ -364,7 +439,7 @@ def make_cave_wall() -> None:
     fine = _value_noise(67, octaves=3, base=36.0)
     yy, xx = np.mgrid[0:SIZE, 0:SIZE]
     # Vertical mineral drip / flowstone streaks that wrap.
-    streak = 0.5 + 0.5 * np.sin((xx * 0.35 + n * 40.0) * (2.0 * math.pi / SIZE) * 14.0)
+    streak = 0.5 + 0.5 * np.sin((xx * 0.5 + n * 40.0) * (2.0 * math.pi / SIZE) * 14.0)
     streak *= 0.55 + 0.45 * _value_noise(71, octaves=2, base=5.0)
     pit = (_value_noise(73, octaves=2, base=28.0) > 0.78).astype(np.float64)
     base = np.array([78.0, 86.0, 82.0])
@@ -400,7 +475,7 @@ def make_grave_stone() -> None:
     blotch = _value_noise(213, octaves=4, base=9.0)
     yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
     # Chisel tooling: coarse horizontal dressing marks across the face.
-    tooling = 0.5 + 0.5 * np.sin(yy * (2.0 * math.pi / 72.0) + blotch * 4.0)
+    tooling = 0.5 + 0.5 * np.sin(yy * (2.0 * math.pi / 64.0) + blotch * 4.0)
     pale = np.array([146.0, 146.0, 140.0])
     dark = np.array([64.0, 66.0, 64.0])
     mix = np.clip(0.35 + 0.75 * blotch, 0.0, 1.0)
@@ -428,9 +503,9 @@ def make_grave_marble() -> None:
     yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
     # Veins: hairline warped bands. Fat veins turn a monument into a contour map,
     # so these stay thin and low contrast.
-    phase = (xx * 0.7 + yy * 0.4) * (2.0 * math.pi / SIZE) * 11.0 + warp * 7.0
+    phase = (xx + yy * 0.5) * (2.0 * math.pi / SIZE) * 12.0 + warp * 7.0
     vein = np.clip(1.0 - np.abs(np.sin(phase)) * 26.0, 0.0, 1.0)
-    hair = np.clip(1.0 - np.abs(np.sin(phase * 2.7 + 1.7)) * 40.0, 0.0, 1.0) * 0.6
+    hair = np.clip(1.0 - np.abs(np.sin(phase * 3.0 + 1.7)) * 40.0, 0.0, 1.0) * 0.6
     vein = np.clip(vein + hair, 0.0, 1.0)
     base = np.array([150.0, 150.0, 152.0])
     rgb = base + (warp[..., None] - 0.5) * 16.0
@@ -448,11 +523,15 @@ def make_grave_marble() -> None:
 
 
 def make_grave_soil() -> None:
-    """Turned consecrated earth: near-black clods, pale grit, no green at all."""
+    """Turned consecrated earth: dark clods, pale grit, no green at all.
+
+    Warm brown rather than the near-black it was: soil, cinder aisle, granite and iron
+    all sat under 0.13 albedo, so a whole churchyard rendered as one black slab.
+    """
     clod = _value_noise(241, octaves=5, base=8.0)
     grit = _value_noise(243, octaves=3, base=52.0)
-    base = np.array([38.0, 33.0, 28.0])
-    deep = np.array([18.0, 16.0, 15.0])
+    base = np.array([74.0, 58.0, 43.0])
+    deep = np.array([34.0, 28.0, 23.0])
     rgb = base * clod[..., None] + deep * (1.0 - clod)[..., None]
     rgb += (grit[..., None] - 0.5) * 18.0
     # Chalky flecks — crushed stone and old bone meal worked into the plot.
@@ -463,10 +542,14 @@ def make_grave_soil() -> None:
 
 
 def make_grave_path() -> None:
-    """Cinder aisle: dark crushed slate, compacted, faint wheel ruts."""
+    """Cinder aisle: crushed slate, compacted, faint wheel ruts.
+
+    Held a stop brighter than the soil and a stop cooler, so the aisles read as aisles
+    against the plots instead of merging with them.
+    """
     agg = _value_noise(251, octaves=4, base=70.0)
     dust = _value_noise(257, octaves=4, base=11.0)
-    base = np.array([62.0, 62.0, 64.0])
+    base = np.array([98.0, 97.0, 99.0])
     rgb = base + (agg[..., None] - 0.5) * 52.0
     rgb -= (1.0 - dust[..., None]) * 14.0
     # Pale chips of broken headstone in the grit.
@@ -480,10 +563,10 @@ def make_grave_path() -> None:
 
 
 def make_wrought_iron() -> None:
-    """Rusted wrought iron for railings and finials — pitted, near black."""
+    """Rusted wrought iron for railings and finials — pitted, very dark."""
     pit = _value_noise(271, octaves=3, base=64.0)
     bloom = _value_noise(277, octaves=4, base=10.0)
-    base = np.array([32.0, 31.0, 33.0])
+    base = np.array([54.0, 51.0, 54.0])
     rgb = base + (pit[..., None] - 0.5) * 22.0
     rust = np.clip((bloom - 0.58) * 3.4, 0.0, 1.0) * (0.4 + 0.6 * pit)
     rgb = rgb * (1.0 - rust[..., None] * 0.8) + np.array([104.0, 56.0, 34.0]) * rust[
@@ -497,7 +580,11 @@ def make_wrought_iron() -> None:
 
 
 def make_yew() -> None:
-    """Churchyard yew: matted near-black needles + cutout alpha; normal stays JPG."""
+    """Churchyard yew: matted near-black needles + cutout alpha, no normal.
+
+    voxel_foliage.gdshader has no normal uniform, so a yew normal map would be 400 KiB
+    of texture nothing samples.
+    """
     mat = _value_noise(283, octaves=5, base=14.0)
     needle = _value_noise(289, octaves=3, base=96.0)
     gap_n = _value_noise(293, octaves=3, base=20.0)
@@ -512,24 +599,32 @@ def make_yew() -> None:
     rgb = rgb * (1.0 - dead[..., None] * 0.6) + np.array([62.0, 48.0, 30.0]) * dead[
         ..., None
     ] * 0.6
-    height = 0.5 + 0.3 * needle + 0.2 * mat - 0.35 * gap
     # Needle clumps opaque; gaps and thin mat areas go transparent for cards.
     alpha = np.clip((mat - 0.22) * 2.2 + (needle - 0.4) * 0.8 - gap_n * 0.9, 0.0, 1.0)
     alpha = np.power(alpha, 0.9)
     rgba = np.dstack([np.clip(rgb, 0, 255), alpha * 255.0])
     _save_rgba(rgba, "yew.png")
-    _save_rgb(_height_to_normal(height, 9.0), "yew_normal.jpg")
-    old = OUT / "yew.jpg"
-    if old.exists():
-        old.unlink()
-        print(f"Removed {old}")
+    for stale in ("yew.jpg", "yew_normal.jpg", "yew_normal.jpg.import"):
+        old = OUT / stale
+        if old.exists():
+            old.unlink()
+            print(f"Removed {old}")
+
+
+def write_tile_meters() -> None:
+    """Publish the authored repeat sizes so the surface specs can be checked against them."""
+    path = OUT / TILE_METERS_JSON
+    payload = {stem: [round(u, 4), round(v, 4)] for stem, (u, v) in sorted(TILE_METERS.items())}
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"Wrote {path}")
+    for stem, (u, v) in sorted(TILE_METERS.items()):
+        print(f"  {stem}: one repeat covers {u:.2f} x {v:.2f} m")
 
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     make_road_line()
     make_crosswalk()
-    make_curb()
     make_glass()
     make_water()
     make_leaves()
@@ -547,6 +642,17 @@ def main() -> int:
     make_grave_path()
     make_wrought_iron()
     make_yew()
+    write_tile_meters()
+    # curb.jpg was per-pixel white noise paired with the sidewalk herringbone normal;
+    # CURB now points at concrete like the rest of the kerb-height geometry.
+    stale = OUT / "curb.jpg"
+    if stale.exists():
+        stale.unlink()
+        print(f"Removed {stale}")
+    stale_import = OUT / "curb.jpg.import"
+    if stale_import.exists():
+        stale_import.unlink()
+        print(f"Removed {stale_import}")
     print("Generated procedural city textures.")
     return 0
 

@@ -27,6 +27,11 @@ uniform float object_space : hint_range(0.0, 1.0) = 0.0;
 /// Lot footprint in metres — one tint draw per building lot.
 uniform float lot_meters = 14.0;
 uniform float tint_variation : hint_range(0.0, 1.0) = 0.0;
+/// Metre-scale mottling for the big ground planes. A photoscanned lawn carries all its
+/// detail below the blade, which mipmaps average straight back to flat felt, so the only
+/// structure that survives minification is structure authored at patch size.
+uniform float patch_variation : hint_range(0.0, 1.0) = 0.0;
+uniform float patch_meters = 2.5;
 uniform float weathering : hint_range(0.0, 1.0) = 0.0;
 uniform float grime : hint_range(0.0, 1.0) = 0.0;
 /// World height of the street deck; grime fades out this many metres above it.
@@ -92,6 +97,23 @@ void fragment() {
 			bright * (1.0 - (fract(h * 13.77) - 0.5) * 0.07)
 		);
 		albedo *= mix(vec3(1.0), vary, tint_variation);
+	}
+
+	if (patch_variation > 0.0) {
+		// Two octaves an octave apart, so a lawn reads at roughly patch_meters and a
+		// third of it: shaded hollows and scorched patches instead of one flat field.
+		vec3 pp = wp / max(patch_meters, 0.1);
+		float patch = vx_value_noise(pp) * 0.62 + vx_value_noise(pp * 2.7) * 0.38;
+		// Value noise clusters hard around 0.5, so it is worthless until stretched — at
+		// unit gain this whole block is a 4% wobble, which is to say invisible.
+		patch = clamp((patch - 0.5) * 3.4 + 0.5, 0.0, 1.0);
+		albedo *= mix(1.0, 0.72 + 0.56 * patch, patch_variation);
+		// Brightness alone reads as a lighting artefact. The dry end shifts to straw and
+		// the damp end to a cooler green, which is what makes it read as ground cover.
+		float dry = smoothstep(0.55, 1.0, patch) * patch_variation;
+		albedo = mix(albedo, albedo * vec3(1.18, 1.06, 0.62), dry * 0.6);
+		float lush = (1.0 - smoothstep(0.0, 0.45, patch)) * patch_variation;
+		albedo = mix(albedo, albedo * vec3(0.82, 1.04, 0.86), lush * 0.5);
 	}
 
 	// Two octaves at building scale, shared by all three weathering effects: the

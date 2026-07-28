@@ -12,6 +12,8 @@ const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
 const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd")
+const PlayerHealthHudScript := preload("res://scripts/city/player_health_hud.gd")
+const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
 const DayNightCycleScript := preload("res://scripts/city/day_night_cycle.gd")
@@ -73,6 +75,7 @@ var _status: Label
 var _loading_splash: CanvasLayer
 var _action_bar: Node
 var _energy_hud: Node
+var _health_hud: Node
 var _debris_root: Node3D
 var _cascade: Node
 var _gem_lights: Node
@@ -109,6 +112,8 @@ const RADAR_COOLDOWN_SEC := 30.0
 const RADAR_REVEAL_SEC := 12.0
 const GEM_PICKUP_INTERVAL_SEC := 0.12
 const GEM_PICKUP_REACH_M := 1.35
+## How close to a giant's fresh facade strip is close enough to be under it.
+const GIANT_DEBRIS_HURT_RADIUS_M := 6.0
 var _audio: Node
 var _day_night: Node
 var _settings_panel: Node
@@ -427,6 +432,10 @@ func _build_hud() -> void:
 	_energy_hud = PlayerEnergyHudScript.new()
 	_energy_hud.name = "PlayerEnergyHud"
 	add_child(_energy_hud)
+
+	_health_hud = PlayerHealthHudScript.new()
+	_health_hud.name = "PlayerHealthHud"
+	add_child(_health_hud)
 
 	_undead_hud = UndeadInvasionHudScript.new()
 	_undead_hud.name = "UndeadInvasionHud"
@@ -1022,6 +1031,29 @@ func get_player_target_position() -> Vector3:
 	return _walker.global_position + Vector3(0.0, 1.05 * s, 0.0)
 
 
+## Hurt the player. Returns the points actually taken, which is zero when the run is already
+## over or the hit found nobody to hurt.
+##
+## The only route from an enemy to the player's health, so the game-over screen has exactly one
+## place it can come from: this drains the pool, the pool tells the walker it is empty, and the
+## walker's signal brings us back here to `_on_player_health_depleted`. Nothing else calls
+## `trigger_game_over` for damage any more.
+func damage_player(source: DamageSource.Id) -> float:
+	if not is_player_alive():
+		return 0.0
+	if DamageSourceScript.target(source) != DamageSourceScript.Target.PLAYER:
+		push_error(
+			"CityRoot: %s hurts creatures, not the player"
+			% DamageSourceScript.source_name(source)
+		)
+		return 0.0
+	return float(_walker.call("take_damage", source))
+
+
+func _on_player_health_depleted(source: DamageSource.Id) -> void:
+	trigger_game_over(DamageSourceScript.death_reason(source))
+
+
 func trigger_game_over(reason: String = "Converted by undead") -> void:
 	if _game_over:
 		return
@@ -1328,6 +1360,8 @@ func _regenerate() -> void:
 		_tendril_hud.call("clear_display")
 	if _energy_hud != null and is_instance_valid(_energy_hud):
 		_energy_hud.call("clear_display")
+	if _health_hud != null and is_instance_valid(_health_hud):
+		_health_hud.call("clear_display")
 	if _undead_hud != null and is_instance_valid(_undead_hud):
 		_undead_hud.call("clear_display")
 	if _minimap != null and is_instance_valid(_minimap):
@@ -1415,6 +1449,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.blast_requested.connect(_on_blast)
 	_walker.melee_strike_requested.connect(_on_melee_strike)
 	_walker.stomp_requested.connect(_on_stomp)
+	_walker.health_depleted.connect(_on_player_health_depleted)
 	_walker.meteor_requested.connect(_on_meteor_requested)
 	_walker.tetris_requested.connect(_on_tetris_requested)
 	_walker.pedestrian_requested.connect(_on_pedestrian_requested)
@@ -1489,6 +1524,8 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_refresh_hud_visibility()
 	if _energy_hud != null and is_instance_valid(_energy_hud):
 		_energy_hud.call("bind_walker", _walker)
+	if _health_hud != null and is_instance_valid(_health_hud):
+		_health_hud.call("bind_walker", _walker)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
 		_apply_saved_controls()
@@ -1729,11 +1766,31 @@ func _cascade_column_above(top_vox: Vector3i) -> void:
 
 
 ## Q stomp: same destruction as a max-charge blast at the feet (anim/FX differ on the walker).
+##
+## The stomp used to hurt nothing living at all — it carved a crater and the skeleton standing in
+## it walked out. It is an area attack, so it hits everything in the crater and always did look
+## like it should.
 func _on_stomp(feet_position: Vector3, radius_m: float) -> void:
+	apply_area_damage(feet_position, radius_m, DamageSourceScript.Id.PLAYER_STOMP)
 	apply_charged_blast(feet_position, radius_m)
 
 
-func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -> void:
+## Every creature inside the sphere takes one hit. Returns how many were reached.
+##
+## Area attacks cannot go through `_apply_agent_hit`: that answers "the nearest body along a
+## line", which for a two-metre blast sphere in a wave of skeletons is one skeleton.
+func apply_area_damage(center: Vector3, radius: float, source: DamageSource.Id) -> int:
+	if radius <= 0.0:
+		push_error("CityRoot: an area attack of radius %f reaches nothing" % radius)
+		return 0
+	if _undead == null or not is_instance_valid(_undead):
+		return 0
+	return int(_undead.call("damage_units_in_sphere", center, radius, source))
+
+
+func _on_melee_strike(
+	origin: Vector3, direction: Vector3, max_range_m: float, source: DamageSource.Id
+) -> void:
 	## March to the first destructible voxel, then carve a sphere whose diameter (in voxels)
 	## equals character_scale. Below 0.5× the fist/foot is too small to break anything.
 	if _tool == null or _terrain == null or _walker == null:
@@ -1744,8 +1801,10 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	dir = dir.normalized()
 	var max_range := maxf(max_range_m, 0.05)
 	var end := origin + dir * max_range
-	## Pedestrians / cars take priority over voxel fabric along the same strike.
-	if _apply_agent_hit(origin, end, dir):
+	## Bodies take priority over voxel fabric along the same strike: a punch that lands on a
+	## skeleton is not also a punch into the wall behind it, which is the whole of how damage
+	## stays out of the carving path — one strike is one or the other, never both.
+	if _apply_agent_hit(origin, end, dir, source):
 		return
 	var scale := float(_walker.get_character_scale())
 	if scale < 0.5:
@@ -2084,6 +2143,9 @@ func scare_crowd_from_mages(threats: Array, trigger_m: float, clear_m: float) ->
 
 
 ## Hit player or convert nearest ped near world_pos. Returns former position or null.
+##
+## An orb used to end the run outright. It now takes a quarter of the pool, so the fourth one
+## converts you and the first three are a reason to leave the street.
 func try_orb_hit_player(world_pos: Vector3, radius: float) -> bool:
 	if not is_player_alive():
 		return false
@@ -2091,7 +2153,7 @@ func try_orb_hit_player(world_pos: Vector3, radius: float) -> bool:
 	var hit_r := radius + 0.45 * float(_walker.get_character_scale())
 	if world_pos.distance_squared_to(ppos) > hit_r * hit_r:
 		return false
-	trigger_game_over("Undead conversion orb")
+	damage_player(DamageSourceScript.Id.UNDEAD_ORB)
 	return true
 
 
@@ -2223,7 +2285,19 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 			CityProfiler.end("cascade_detach")
 	_notify_tetris_damage(detached)
 	_notify_destruction(world_hit, 36.0)
+	_damage_player_in_debris(world_hit)
 	return removed
+
+
+## Standing under a facade a giant is peeling. Giants take many hits now, which only makes them
+## a threat if they can answer — this is the answer, and it is positional rather than aimed: a
+## tenth of the pool per strip, and the counter is to not be there.
+func _damage_player_in_debris(world_hit: Vector3) -> void:
+	if not is_player_alive():
+		return
+	if _walker.global_position.distance_to(world_hit) > GIANT_DEBRIS_HURT_RADIUS_M:
+		return
+	damage_player(DamageSourceScript.Id.GIANT_DEBRIS)
 
 
 ## Minion bite: remove one nearby building voxel (−1 score). No cascade.
@@ -2618,14 +2692,23 @@ func resolve_laser_aim(cam_from: Vector3, wall_aim: Vector3, eye_from: Vector3) 
 	return hit["point"] as Vector3
 
 
-## True when a ped died or a car flipped along the segment (no voxel carve).
-func apply_laser_agent_hit(from: Vector3, to: Vector3, direction: Vector3) -> bool:
+## True when the shot landed on a body along the segment (no voxel carve).
+##
+## `source` is which of the player's attacks arrived, because a creature now cares: the eye laser
+## chips a monster the fist would have to hit twice.
+func apply_laser_agent_hit(
+	from: Vector3,
+	to: Vector3,
+	direction: Vector3,
+	source: DamageSource.Id,
+	creatures: bool = true
+) -> bool:
 	var dir := direction
 	if dir.length_squared() < 0.0001:
 		dir = (to - from)
 	if dir.length_squared() < 0.0001:
 		return false
-	return _apply_agent_hit(from, to, dir.normalized())
+	return _apply_agent_hit(from, to, dir.normalized(), source, creatures)
 
 
 ## Mid-flight probe: distance along from→tip to the nearest agent, or -1.
@@ -2636,7 +2719,24 @@ func laser_probe_agent_distance(from: Vector3, tip: Vector3) -> float:
 	return float(hit["distance"])
 
 
-func _apply_agent_hit(from: Vector3, to: Vector3, direction: Vector3) -> bool:
+## Pedestrians and cars stay one-hit: they are scenery that screams, not opponents, and giving a
+## commuter a health bar would mean a laser dart that only annoys them. Creatures take `source`
+## through the director and decide for themselves whether that was fatal.
+##
+## `creatures` is false for the area attacks, whose sphere pass has already hit every body with
+## health in the blast — this pass is then only there to still flatten the ped and flip the car.
+func _apply_agent_hit(
+	from: Vector3,
+	to: Vector3,
+	direction: Vector3,
+	source: DamageSource.Id,
+	creatures: bool = true
+) -> bool:
+	if DamageSourceScript.target(source) != DamageSourceScript.Target.CREATURE:
+		push_error(
+			"CityRoot: %s hurts the player, not agents" % DamageSourceScript.source_name(source)
+		)
+		return false
 	var hit := _query_closest_agent_hit(from, to)
 	if hit.is_empty():
 		return false
@@ -2652,9 +2752,11 @@ func _apply_agent_hit(from: Vector3, to: Vector3, direction: Vector3) -> bool:
 		var v_agent: VehicleAgent = hit["agent"]
 		ok = vehicles.wreck_agent(v_agent, point, direction)
 	elif kind == "undead":
+		if not creatures:
+			return false
 		var undead: Node = hit["undead"]
 		var unit: Node = hit["unit"]
-		ok = bool(undead.call("kill_unit", unit))
+		ok = bool(undead.call("damage_unit", unit, source))
 	if ok:
 		_notify_destruction(point, 34.0)
 	return ok

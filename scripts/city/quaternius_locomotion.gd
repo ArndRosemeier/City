@@ -25,7 +25,7 @@ static func get_library() -> AnimationLibrary:
 	if _library_built:
 		return _cached_library
 	_library_built = true
-	_cached_library = _build_library(
+	_cached_library = build_library(
 		[String(ANIM_IDLE), String(ANIM_WALK), String(ANIM_RUN), String(ANIM_DEATH)],
 		{String(ANIM_DEATH): Animation.LOOP_NONE}
 	)
@@ -35,7 +35,7 @@ static func get_library() -> AnimationLibrary:
 static func get_passenger_library() -> AnimationLibrary:
 	if _cached_passenger_library != null:
 		return _cached_passenger_library
-	_cached_passenger_library = _build_library(
+	_cached_passenger_library = build_library(
 		[String(ANIM_DRIVING), String(ANIM_SITTING), String(ANIM_IDLE)]
 	)
 	return _cached_passenger_library
@@ -45,7 +45,7 @@ static func get_npc_library() -> AnimationLibrary:
 	## Idle/Walk + Interact / Idle_Talking for scripted prop use (Tetris players, etc.).
 	if _cached_npc_library != null:
 		return _cached_npc_library
-	_cached_npc_library = _build_library(
+	_cached_npc_library = build_library(
 		[
 			String(ANIM_IDLE),
 			String(ANIM_WALK),
@@ -179,7 +179,10 @@ static func _attach_library(player: AnimationPlayer, library: AnimationLibrary, 
 		player.play("%s/%s" % [LIB_NAME, library.get_animation_list()[0]])
 
 
-static func _build_library(
+## Any clip set from the shared library. Public because locomotion is not the only need: a
+## sword-armed actor wants Sword_Idle / Sword_Attack, and the outfit inspection tool plays
+## whatever clip it is asked for.
+static func build_library(
 	anim_names: Array[String],
 	loop_overrides: Dictionary = {}
 ) -> AnimationLibrary:

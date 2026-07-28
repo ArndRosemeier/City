@@ -33,6 +33,18 @@ const MAX_FRAMES := 700
 ## needs a collider, close enough that none of them drops to interpolation.
 const OBSERVER_OFFSET_M := 45.0
 
+## Model choice and body build come from a unit's seed, so both are pinned here: what is
+## under test is the ladder, not whichever creature the catalogue happened to roll.
+const BODY_SEED := 20260728
+const DEFAULT_BODY: Dictionary[int, String] = {
+	int(UndeadUnit.Role.MAGE): "kaykit/Skeleton_Mage",
+	int(UndeadUnit.Role.MINION): "kaykit/Skeleton_Minion",
+	int(UndeadUnit.Role.GIANT): "kaykit/Skeleton_Mage",
+}
+## A Quaternius Big body, three metres tall, which is the whole reason the mid-size profile
+## exists.
+const MONSTER_BODY := "big/Orc"
+
 var _failed := false
 var _nav: NavService
 var _city: TestCity
@@ -149,6 +161,10 @@ func _ready() -> void:
 		_quit()
 		return
 	await _test_mage_closes_to_orb_range()
+	if _failed:
+		_quit()
+		return
+	await _test_mid_size_monster_walks_its_own_profile()
 	if _failed:
 		_quit()
 		return
@@ -306,6 +322,68 @@ func _test_mage_closes_to_orb_range() -> void:
 	_city.prey_at = Vector3.INF
 
 
+## A three-metre Quaternius body is neither a minion nor a giant. It registers on the
+## mid-size profile, which is two cells of clearance and seven of headroom, and it has to
+## cross the same open deck the minion does without ever asking the giant profile for the
+## eleven cells it does not need.
+func _test_mid_size_monster_walks_its_own_profile() -> void:
+	var start := _w(Vector3i(90, 1, 95))
+	_city.fabric_at = _vox_centre(Vector3i(TOWER_MIN.x, 3, 66))
+	_city.nibble_hits = true
+	var unit := _spawn(UndeadUnit.Role.MINION, start, MONSTER_BODY)
+	if unit == null:
+		return
+	if unit.nav_profile_id() != NavProfile.Id.MONSTER:
+		_fail(
+			"FAIL a %s navigates on profile %d, not the mid-size one"
+			% [MONSTER_BODY, unit.nav_profile_id()]
+		)
+		return
+	var profile := _nav.profile(NavProfile.Id.MONSTER)
+	if profile == null or profile.radius_cells != 2 or profile.height_cells != 7:
+		_fail("FAIL the mid-size profile is not 2 cells wide by 7 of headroom")
+		return
+	## The capsule has to have followed the body up, or a 3 m monster collides as a minion.
+	var minion_radius := UndeadUnit.HIT_RADIUS_BASE_M
+	if unit.hit_radius() <= minion_radius * 1.1:
+		_fail(
+			"FAIL a %.2f m body still hits at %.2f m, the reference skeleton's radius"
+			% [unit.creature_entry().measured_height, unit.hit_radius()]
+		)
+		return
+	NavAgent.reset_events()
+
+	var frames := await _run(
+		unit, func() -> bool: return unit.state == UndeadUnit.State.NIBBLE
+	)
+	if unit.state != UndeadUnit.State.NIBBLE:
+		_fail(
+			"FAIL the monster is %d after %d ticks, %.1f m from the wall (ladder %s)"
+			% [
+				unit.state,
+				frames,
+				unit.global_position.distance_to(_city.fabric_at),
+				NavLadder.state_name(unit.nav_state()),
+			]
+		)
+		return
+	if NavAgent.trapped_events() != 0:
+		_fail("FAIL the monster reported %d entombments crossing an open deck" % NavAgent.trapped_events())
+		return
+	print(
+		"monster: %s, %.2f m tall, hit radius %.2f (minion base %.2f), reached the wall in %d ticks"
+		% [
+			MONSTER_BODY,
+			unit.creature_entry().measured_height,
+			unit.hit_radius(),
+			minion_radius,
+			frames,
+		]
+	)
+	_despawn(unit)
+	_city.fabric_at = Vector3.INF
+
+
 # ---------------------------------------------------------------------------
 # The ladder, where the old code teleported
 # ---------------------------------------------------------------------------
@@ -458,9 +536,14 @@ func _test_giant_digs_out_through_the_brush() -> void:
 # Harness
 # ---------------------------------------------------------------------------
 
-func _spawn(spawn_role: UndeadUnit.Role, at: Vector3) -> UndeadUnit:
+## Bodies are pinned by name and by seed. Model choice is now content, and a nav test that
+## rolled a different creature every run would be testing a different capsule every run.
+func _spawn(spawn_role: UndeadUnit.Role, at: Vector3, body_id: String = "") -> UndeadUnit:
 	_city.player_at = at + Vector3(0.0, 0.0, OBSERVER_OFFSET_M)
-	var unit := _director._spawn_unit(spawn_role, at)
+	var wanted := body_id
+	if wanted.is_empty():
+		wanted = DEFAULT_BODY[int(spawn_role)]
+	var unit := _director._spawn_unit(spawn_role, at, BODY_SEED, wanted)
 	if unit == null:
 		_fail("FAIL the director refused to spawn a %d at %.1f,%.1f" % [spawn_role, at.x, at.z])
 		return null

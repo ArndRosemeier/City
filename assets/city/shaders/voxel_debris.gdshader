@@ -17,6 +17,8 @@ uniform float metallic_base : hint_range(0.0, 1.0) = 0.0;
 uniform float object_space : hint_range(0.0, 1.0) = 1.0;
 uniform float lot_meters = 14.0;
 uniform float tint_variation : hint_range(0.0, 1.0) = 0.0;
+uniform float patch_variation : hint_range(0.0, 1.0) = 0.0;
+uniform float patch_meters = 2.5;
 uniform float weathering : hint_range(0.0, 1.0) = 0.0;
 uniform float grime : hint_range(0.0, 1.0) = 0.0;
 uniform float ground_y = 1.0;
@@ -77,6 +79,17 @@ void fragment() {
 			bright * (1.0 - (fract(h * 13.77) - 0.5) * 0.07)
 		);
 		albedo *= mix(vec3(1.0), vary, tint_variation);
+	}
+
+	if (patch_variation > 0.0) {
+		vec3 pp = wp / max(patch_meters, 0.1);
+		float patch = vx_value_noise(pp) * 0.62 + vx_value_noise(pp * 2.7) * 0.38;
+		patch = clamp((patch - 0.5) * 3.4 + 0.5, 0.0, 1.0);
+		albedo *= mix(1.0, 0.72 + 0.56 * patch, patch_variation);
+		float dry = smoothstep(0.55, 1.0, patch) * patch_variation;
+		albedo = mix(albedo, albedo * vec3(1.18, 1.06, 0.62), dry * 0.6);
+		float lush = (1.0 - smoothstep(0.0, 0.45, patch)) * patch_variation;
+		albedo = mix(albedo, albedo * vec3(0.82, 1.04, 0.86), lush * 0.5);
 	}
 
 	float n_lo = 0.0;

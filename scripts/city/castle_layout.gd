@@ -46,9 +46,31 @@ var crown_stair: CastleStair = null
 ## Crown column the ramp arrives at, three voxels in from the curtain's outer face.
 var crown_walk: Vector2i = Vector2i.ZERO
 
-## Voxel band the Phase 3 dungeon carves into, inclusive.
+## Voxel band the dungeon is carved into, inclusive.
 var dungeon_y0: int = 0
 var dungeon_y1: int = 0
+## Levels stacked inside the band, and the pitch of one: its slab plus the air above it.
+var dungeon_levels: int = 0
+var dungeon_level_h: int = 0
+var dungeon_slab_thick: int = 0
+## Outer face of the substructure, and the area its chambers are cut in. The plate is the
+## curtain's own footprint, so a corner tower stands on a plate corner and a flight can drop
+## out of its base straight into the dungeon.
+var dungeon_rect: Rect2i = Rect2i()
+var dungeon_plate_rect: Rect2i = Rect2i()
+## Cross-wall bays. Shared by every level, the way a real substructure's cross walls carry
+## down, which is also what lets a chamber reach up through the level above it.
+var dungeon_bays: Array[Rect2i] = []
+## The grain the bays and the per-level partitions were rolled at, kept because it is what a
+## seed comparison is actually measuring.
+var dungeon_bay_min: int = 0
+var dungeon_room_min: int = 0
+## Every chamber on every level, in plan order.
+var dungeon_vaults: Array[CastleVault] = []
+var dungeon_doorways: Array[CastleDoorway] = []
+## Flights between two dungeon levels. `from_storey`/`to_storey` are level indices here.
+var dungeon_stairs: Array[CastleStair] = []
+var dungeon_entries: Array[CastleDungeonEntry] = []
 
 ## Cardinal direction the gate faces, chosen so it looks at a road stub.
 var gate_dir: Vector2i = Vector2i.ZERO
@@ -58,6 +80,10 @@ var gate_width: int = 0
 ## Clear height of the passage at its centre line.
 var gate_height: int = 0
 var gatehouse_rect: Rect2i = Rect2i()
+## The gate passage as a doorway record, so the most prominent door on the fortress is the
+## same kind of thing as the keep's and the dungeon's rather than a special case. It covers
+## the curtain's own thickness; the gatehouse passage carries on either side of it.
+var gate_doorway: CastleDoorway = null
 
 ## Half-width of the causeway deck, parapets included.
 var causeway_hw: int = 0
@@ -99,6 +125,103 @@ func keep_doorways_on(storey: int) -> Array[CastleDoorway]:
 	return out
 
 
+## Deepest level is 0, so the topmost one sits immediately under the courtyard slab.
+func dungeon_top_level() -> int:
+	assert(dungeon_levels > 0)
+	return dungeon_levels - 1
+
+
+## Walking surface of a dungeon level: Y of the topmost solid voxel of its slab.
+func dungeon_floor_y(level: int) -> int:
+	assert(level >= 0 and level < dungeon_levels)
+	return dungeon_y0 + dungeon_slab_thick - 1 + level * dungeon_level_h
+
+
+## Chambers floored on one level. A tall vault belongs to the level it stands on; the levels
+## it reaches up through have no floor over it at all.
+func dungeon_vaults_on(level: int) -> Array[CastleVault]:
+	var out: Array[CastleVault] = []
+	for v: CastleVault in dungeon_vaults:
+		if v.level == level:
+			out.append(v)
+	return out
+
+
+func dungeon_doorways_on(level: int) -> Array[CastleDoorway]:
+	var out: Array[CastleDoorway] = []
+	for d: CastleDoorway in dungeon_doorways:
+		if d.storey == level:
+			out.append(d)
+	return out
+
+
+## Every opening in the fortress that carries a door, gate first. One list, because a door
+## placer and the checks that measure the doors both want all three tiers at once.
+func doorways() -> Array[CastleDoorway]:
+	var out: Array[CastleDoorway] = []
+	if gate_doorway != null:
+		out.append(gate_doorway)
+	if keep_entrance != null:
+		out.append(keep_entrance)
+	out.append_array(keep_doorways)
+	out.append_array(dungeon_doorways)
+	return out
+
+
+func doorway_link_count(link: int) -> int:
+	var n := 0
+	for d: CastleDoorway in doorways():
+		if d.link == link:
+			n += 1
+	return n
+
+
+func dungeon_tall_count() -> int:
+	var n := 0
+	for v: CastleVault in dungeon_vaults:
+		if v.is_tall():
+			n += 1
+	return n
+
+
+func dungeon_wide_count() -> int:
+	var n := 0
+	for v: CastleVault in dungeon_vaults:
+		if v.is_wide():
+			n += 1
+	return n
+
+
+func dungeon_small_count() -> int:
+	var n := 0
+	for v: CastleVault in dungeon_vaults:
+		if v.is_small():
+			n += 1
+	return n
+
+
+## Bit per CastleDungeonEntry kind present, so a seed's entrance mix is one comparable number.
+func dungeon_entry_mask() -> int:
+	var mask := 0
+	for e: CastleDungeonEntry in dungeon_entries:
+		mask |= 1 << e.kind
+	return mask
+
+
+func dungeon_entry_names() -> String:
+	var parts: Array[String] = []
+	for e: CastleDungeonEntry in dungeon_entries:
+		parts.append(e.kind_name())
+	return "+".join(parts)
+
+
+func dungeon_entry_of(kind: int) -> CastleDungeonEntry:
+	for e: CastleDungeonEntry in dungeon_entries:
+		if e.kind == kind:
+			return e
+	return null
+
+
 func tower_count(kind: int) -> int:
 	var n := 0
 	for t: CastleTower in towers:
@@ -124,8 +247,24 @@ func matches(other: CastleLayout) -> bool:
 		or keep_floors.size() != other.keep_floors.size()
 		or keep_doorways.size() != other.keep_doorways.size()
 		or keep_stairs.size() != other.keep_stairs.size()
+		or dungeon_vaults.size() != other.dungeon_vaults.size()
+		or dungeon_doorways.size() != other.dungeon_doorways.size()
+		or dungeon_stairs.size() != other.dungeon_stairs.size()
+		or dungeon_entries.size() != other.dungeon_entries.size()
 	):
 		return false
+	for i in range(dungeon_vaults.size()):
+		if not (dungeon_vaults[i] as CastleVault).matches(other.dungeon_vaults[i]):
+			return false
+	for i in range(dungeon_doorways.size()):
+		if not (dungeon_doorways[i] as CastleDoorway).matches(other.dungeon_doorways[i]):
+			return false
+	for i in range(dungeon_stairs.size()):
+		if not (dungeon_stairs[i] as CastleStair).matches(other.dungeon_stairs[i]):
+			return false
+	for i in range(dungeon_entries.size()):
+		if not (dungeon_entries[i] as CastleDungeonEntry).matches(other.dungeon_entries[i]):
+			return false
 	for i in range(keep_floors.size()):
 		if not (keep_floors[i] as CastleFloor).matches(other.keep_floors[i]):
 			return false
@@ -136,6 +275,8 @@ func matches(other: CastleLayout) -> bool:
 		if not (keep_stairs[i] as CastleStair).matches(other.keep_stairs[i]):
 			return false
 	if not keep_entrance.matches(other.keep_entrance):
+		return false
+	if not gate_doorway.matches(other.gate_doorway):
 		return false
 	if not crown_stair.matches(other.crown_stair):
 		return false
@@ -177,6 +318,16 @@ func matches(other: CastleLayout) -> bool:
 		and causeway_run == other.causeway_run
 		and causeway_line == other.causeway_line
 		and road_target == other.road_target
+		and dungeon_y0 == other.dungeon_y0
+		and dungeon_y1 == other.dungeon_y1
+		and dungeon_levels == other.dungeon_levels
+		and dungeon_level_h == other.dungeon_level_h
+		and dungeon_slab_thick == other.dungeon_slab_thick
+		and dungeon_rect == other.dungeon_rect
+		and dungeon_plate_rect == other.dungeon_plate_rect
+		and dungeon_bays == other.dungeon_bays
+		and dungeon_bay_min == other.dungeon_bay_min
+		and dungeon_room_min == other.dungeon_room_min
 	)
 
 
@@ -185,8 +336,9 @@ func describe() -> String:
 		(
 			"castle plateau=%s wall=%s inset=%d thick=%d h=%d courtyard_y=%d"
 			+ " gate=%s dir=%s %dx%d towers=%d (corner=%d mid=%d gate=%d) top=%d"
-			+ " causeway run=%d width=%d keep=%s dungeon=Y%d..%d"
+			+ " causeway run=%d width=%d keep=%s"
 			+ " storeys=%d hall=%d roof=%d rooms=%d doors=%d flights=%d"
+			+ " leaves=%d (tree=%d loop=%d) | %s"
 		)
 		% [
 			plateau_rect,
@@ -207,14 +359,45 @@ func describe() -> String:
 			causeway_run,
 			causeway_hw * 2 + 1,
 			keep_rect,
-			dungeon_y0,
-			dungeon_y1,
 			keep_floors.size(),
 			keep_hall_storey,
 			keep_roof_y,
 			keep_room_count(),
 			keep_doorways.size(),
 			keep_stairs.size(),
+			doorways().size(),
+			doorway_link_count(CastleDoorway.LINK_TREE),
+			doorway_link_count(CastleDoorway.LINK_LOOP),
+			dungeon_describe(),
+		]
+	)
+
+
+## The numbers a seed comparison reads: what makes one dungeon a different place from the
+## next rather than the same plan with the walls moved.
+func dungeon_describe() -> String:
+	var per_level: Array[String] = []
+	for l in range(dungeon_levels):
+		per_level.append("%d" % dungeon_vaults_on(l).size())
+	return (
+		(
+			"dungeon Y%d..%d %d levels plate=%s bays=%d(min=%d) rooms=%d [%s]"
+			+ " wide=%d small=%d tall=%d flights=%d entries=%s"
+		)
+		% [
+			dungeon_y0,
+			dungeon_y1,
+			dungeon_levels,
+			dungeon_plate_rect,
+			dungeon_bays.size(),
+			dungeon_bay_min,
+			dungeon_vaults.size(),
+			"/".join(per_level),
+			dungeon_wide_count(),
+			dungeon_small_count(),
+			dungeon_tall_count(),
+			dungeon_stairs.size(),
+			dungeon_entry_names(),
 		]
 	)
 

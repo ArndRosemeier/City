@@ -22,6 +22,9 @@ var lane_w: int = 0
 var rise: int = 0
 var y_from: int = 0
 ## Keep storeys the flight links. -1 marks the courtyard ramp to the curtain crown.
+##
+## On the dungeon's flights these are dungeon *level* indices instead, and -1 in `to_storey`
+## marks a flight that arrives on the courtyard datum rather than on another level.
 var from_storey: int = -1
 var to_storey: int = -1
 

@@ -1,0 +1,94 @@
+[
+  {
+    "id": "fixture_bandit_male",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_work_01.glb",
+    "tags": [
+      "bandit"
+    ],
+    "garments": [
+      "male_worksuit01",
+      "shoes04"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_worksuit01",
+      "male_body.shoes04"
+    ],
+    "proxy_color": [
+      0.3,
+      0.26,
+      0.24
+    ]
+  },
+  {
+    "id": "fixture_bandit_female",
+    "sex": "female",
+    "female": true,
+    "path": "res://assets/humans/outfits/female_sport_01.glb",
+    "tags": [
+      "bandit"
+    ],
+    "garments": [
+      "female_sportsuit01",
+      "shoes03"
+    ],
+    "skin_material": "female_skin",
+    "garment_materials": [
+      "female_body.female_sportsuit01",
+      "female_body.shoes03"
+    ],
+    "proxy_color": [
+      0.3,
+      0.26,
+      0.24
+    ]
+  },
+  {
+    "id": "fixture_civilian_male",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_casual_01.glb",
+    "tags": [
+      "casual"
+    ],
+    "garments": [
+      "male_casualsuit01",
+      "shoes01"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_casualsuit01",
+      "male_body.shoes01"
+    ],
+    "proxy_color": [
+      0.35,
+      0.42,
+      0.55
+    ]
+  },
+  {
+    "id": "fixture_civilian_female",
+    "sex": "female",
+    "female": true,
+    "path": "res://assets/humans/outfits/female_casual_01.glb",
+    "tags": [
+      "casual"
+    ],
+    "garments": [
+      "female_casualsuit01",
+      "shoes01"
+    ],
+    "skin_material": "female_skin",
+    "garment_materials": [
+      "female_body.female_casualsuit01",
+      "female_body.shoes01"
+    ],
+    "proxy_color": [
+      0.35,
+      0.42,
+      0.55
+    ]
+  }
+]

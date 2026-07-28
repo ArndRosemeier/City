@@ -1,0 +1,25 @@
+[
+  {
+    "id": "fixture_unregistered_tag",
+    "sex": "male",
+    "female": false,
+    "path": "res://assets/humans/outfits/male_work_01.glb",
+    "tags": [
+      "brigand"
+    ],
+    "garments": [
+      "male_worksuit01",
+      "shoes04"
+    ],
+    "skin_material": "male_skin",
+    "garment_materials": [
+      "male_body.male_worksuit01",
+      "male_body.shoes04"
+    ],
+    "proxy_color": [
+      0.3,
+      0.26,
+      0.24
+    ]
+  }
+]

@@ -12,7 +12,7 @@ func _run() -> void:
 	PedOutfitCatalogScript.reload()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 11
-	var o: PedOutfit = PedOutfitScript.random(rng, false)
+	var o: PedOutfit = PedOutfitScript.random(rng, false, PedOutfit.Faction.CIVILIAN)
 	if o.scene_path == "":
 		push_error("FAIL outfit missing scene_path")
 		quit(1)

@@ -194,14 +194,32 @@ func _count_role(want_role: UndeadUnit.Role) -> int:
 
 ## Null when the nav world is not up yet: an undead with no span field to read would spend
 ## its whole life on the TRAPPED rung, which is noise rather than a signal.
-func _spawn_unit(spawn_role: UndeadUnit.Role, world_pos: Vector3) -> UndeadUnit:
+##
+## `body_seed` picks the model and every procedural variation on it. A negative one is
+## rolled here, so ordinary waves are varied while a test can pin a body down, and
+## `body_id` names a catalogue entry outright for a tool that wants one creature.
+func _spawn_unit(
+	spawn_role: UndeadUnit.Role,
+	world_pos: Vector3,
+	body_seed: int = -1,
+	body_id: String = ""
+) -> UndeadUnit:
 	if not NavService.instance().is_configured():
 		push_warning("UndeadInvasion: no undead spawned, the nav world is not built yet")
 		return null
 	var unit := UndeadUnit.new()
 	unit.name = "Undead_%d" % _units.size()
 	add_child(unit)
-	unit.setup(spawn_role, self, _city, world_pos, _terrain, _lod)
+	unit.setup(
+		spawn_role,
+		self,
+		_city,
+		world_pos,
+		_terrain,
+		_lod,
+		body_seed if body_seed >= 0 else randi(),
+		body_id
+	)
 	unit.died.connect(_on_unit_died)
 	_units.append(unit)
 	return unit
@@ -269,15 +287,42 @@ func query_segment_hit(from: Vector3, to: Vector3) -> Dictionary:
 	return best
 
 
-func kill_unit(unit: UndeadUnit) -> bool:
+## One hit on one body, which replaced `kill_unit` — a director that can still kill outright is
+## a way for a hit to skip the health pool by accident. True when the hit landed, whether or not
+## it killed: the caller only wants to know whether the shot was spent on a creature instead of
+## on the wall behind it.
+##
+## The score is credited here and only on the hit that finishes the body, so a monster that now
+## takes four punches is still worth fifty points once.
+func damage_unit(unit: UndeadUnit, source: DamageSource.Id) -> bool:
 	if unit == null or not is_instance_valid(unit):
 		return false
 	if not unit.is_alive():
 		return false
-	var award := unit.kill_from_player()
-	if _city != null and award != 0:
-		_city.adjust_player_score(award)
+	_award(unit.apply_damage(source))
 	return true
+
+
+## Every living body standing inside a sphere takes one hit of `source`. The player's stomp is
+## the only area attack in the game and this is what makes it one; the count is how many bodies
+## it reached.
+func damage_units_in_sphere(center: Vector3, radius: float, source: DamageSource.Id) -> int:
+	_prune_units()
+	var hit := 0
+	for u in _units:
+		if not u.is_alive():
+			continue
+		var chest := u.global_position + Vector3(0.0, u.hit_half_height() * 0.85, 0.0)
+		if chest.distance_to(center) > radius + u.hit_radius():
+			continue
+		_award(u.apply_damage(source))
+		hit += 1
+	return hit
+
+
+func _award(score: int) -> void:
+	if _city != null and score != 0:
+		_city.adjust_player_score(score)
 
 
 func _on_unit_died(unit: UndeadUnit, was_giant: bool) -> void:

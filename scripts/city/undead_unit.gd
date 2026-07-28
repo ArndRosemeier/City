@@ -1,5 +1,10 @@
 ## One undead soldier: Mage (convert), Minion (melee fodder), or Giant (grown + stomp).
 ##
+## Toughness is not a property of the role: it comes off whichever body the catalogue handed
+## this unit, through `creature_health.gd`, so a two-metre skeleton and a four-metre monster
+## wearing the same behaviour take a different number of hits. `kill_from_player` is unchanged
+## and is now what happens when the last of that runs out rather than what happens on contact.
+##
 ## Movement is NavAgent + NavMotor over the baked span field. An UndeadGoalProvider says what
 ## this body wants and the six-rung ladder says what happens when it cannot get there, so
 ## there is deliberately no local unstick code here: TRAPPED is the only escape hatch, and it
@@ -10,9 +15,12 @@ extends CharacterBody3D
 enum Role { MAGE, MINION, GIANT }
 enum State { IDLE, SEEK_PED, CAST, NIBBLE, SEEK_PAD, GROWING, STOMP, SCRAPE, DEAD }
 
-const MAGE_PACKED: PackedScene = preload("res://assets/monsters/kaykit_skeletons/characters/Skeleton_Mage.glb")
-const MINION_PACKED: PackedScene = preload("res://assets/monsters/kaykit_skeletons/characters/Skeleton_Minion.glb")
 const OrbScript := preload("res://scripts/city/undead_orb_projectile.gd")
+const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
+const CreatureClipsScript := preload("res://scripts/city/creature_clips.gd")
+const CreatureHealthScript := preload("res://scripts/city/creature_health.gd")
+const CreatureVariationScript := preload("res://scripts/city/creature_variation.gd")
+const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 
 ## Slightly slower than the slowest walking pedestrian (1.15–1.85).
 const MOVE_SPEED_MAGE := 1.05
@@ -42,9 +50,21 @@ const GIANT_SCRAPE_DIST_M := 3.6
 const GIANT_APPROACH_DIST_M := 5.5
 const HIT_SCORE_NORMAL := 50
 const HIT_SCORE_GIANT := 1000
+## Longest a body holds its flinch before locomotion may have the rig back. The clip's own
+## length wins under this — the KayKit flinch is a third of a second and the Blob one shorter —
+## and the cap is here so a family that ships a two-second stagger cannot stop a body walking.
+const HIT_REACT_MAX_HOLD_SEC := 0.6
 ## Collision stays walkable — full 10× body scale on the capsule embeds in buildings.
 const COL_RADIUS_MAX_M := 1.25
 const COL_HEIGHT_MAX_M := 3.4
+## Capsule and hit volume for a body the size of CreatureCatalog.REFERENCE_HEIGHT. Every
+## other body multiplies these by its own height ratio and its rolled build, so a monster
+## that is drawn half a metre wider is also hit half a metre wider.
+const COL_RADIUS_BASE_M := 0.28
+const COL_HEIGHT_BASE_M := 1.15
+const HIT_RADIUS_BASE_M := 0.55
+const HIT_HALF_HEIGHT_BASE_M := 0.95
+const MUZZLE_BASE_M := 1.35
 ## How often prey is re-acquired for a running hunt.
 const PED_QUERY_INTERVAL_SEC := 0.28
 const ANIM_FAR_DIST_M := 90.0
@@ -91,7 +111,20 @@ var _target_pad: ScalePad
 var _retarget_cd: float = 0.0
 var _current_anim: String = ""
 var _anim_clips: PackedStringArray = PackedStringArray()
+## Which body this unit wears, and the roll that made it look like nobody else.
+var _entry: CreatureCatalog.Entry = null
+var _variation: CreatureVariation = null
+var _seed: int = 0
+## Catalogue entry asked for by name, empty when the seed chooses.
+var _body_id: String = ""
 var _nibble_cd: float = 0.0
+## Points of punishment left, and how many this body started with. Both come from the
+## catalogue's measurement of it, so a bigger monster is a tougher one without a table of
+## fifty-four hand-written numbers.
+var _health: float = 0.0
+var _health_max: float = 0.0
+## Seconds the flinch still owns the rig.
+var _hit_react_left: float = 0.0
 ## The orb is away; hold CAST one more frame so the spellcast clip is not stomped by the
 ## walking states' idle.
 var _cast_fired: bool = false
@@ -99,19 +132,27 @@ var _cast_fired: bool = false
 var _facade_target: Vector3 = Vector3.INF
 
 
+## `p_seed` decides which body out of the catalogue this unit wears and every procedural
+## variation on top of it, so the same seed is the same monster everywhere. `p_body_id` names
+## a catalogue entry instead of rolling for one, for tools and tests that are about a
+## particular creature rather than about the roster.
 func setup(
 	p_role: Role,
 	director: UndeadInvasionDirector,
 	city: CityRoot,
 	world_pos: Vector3,
 	terrain: VoxelTerrain,
-	lod: NavLod
+	lod: NavLod,
+	p_seed: int,
+	p_body_id: String = ""
 ) -> void:
 	role = p_role
+	_body_id = p_body_id
 	_director = director
 	_city = city
 	_terrain = terrain
 	_lod = lod
+	_seed = p_seed
 	global_position = world_pos
 	character_scale = 1.0
 	_alive = true
@@ -119,13 +160,14 @@ func setup(
 	collision_mask = 1
 	_build_body()
 	_load_model()
+	_reset_health()
 	_apply_scale()
 	if role == Role.MINION:
 		## Stagger nibbles so a pack doesn't all bite on the same frame.
 		_nibble_cd = randf_range(0.0, MINION_NIBBLE_INTERVAL_SEC)
 	state = State.STOMP if role == Role.GIANT else State.SEEK_PED
 	_build_nav()
-	_play_anim(["Idle", "Idle_A", "idle"])
+	_play_action(CreatureClips.Action.IDLE)
 
 
 func is_alive() -> bool:
@@ -144,12 +186,35 @@ func can_cast() -> bool:
 	return _cast_cd <= 0.0
 
 
+## The body this unit is wearing, so a tool or a test can name it. Null before `setup`.
+func creature_entry() -> CreatureCatalog.Entry:
+	return _entry
+
+
+func creature_variation() -> CreatureVariation:
+	return _variation
+
+
+## How much bigger the drawn body is than the one the hit volume was measured on, split into
+## the model's own height and the build this unit rolled.
+func _span_wide() -> float:
+	if _entry == null:
+		return 1.0
+	return _entry.collider_span() * (1.0 if _variation == null else _variation.width)
+
+
+func _span_tall() -> float:
+	if _entry == null:
+		return 1.0
+	return _entry.collider_span() * (1.0 if _variation == null else _variation.height)
+
+
 func hit_radius() -> float:
-	return 0.55 * character_scale
+	return HIT_RADIUS_BASE_M * _span_wide() * character_scale
 
 
 func hit_half_height() -> float:
-	return 0.95 * character_scale
+	return HIT_HALF_HEIGHT_BASE_M * _span_tall() * character_scale
 
 
 ## Which LOD tier the navigation is running this body at. Used to skip crowd queries for
@@ -172,6 +237,43 @@ func nav_agent() -> NavAgent:
 	return _nav_agent
 
 
+func health() -> float:
+	return _health
+
+
+func health_max() -> float:
+	return _health_max
+
+
+func health_fraction() -> float:
+	if _health_max <= 0.0:
+		return 0.0
+	return clampf(_health / _health_max, 0.0, 1.0)
+
+
+## One hit from `source`. Returns the score award when this hit was the fatal one and 0 when the
+## body is still standing, which is exactly the contract `kill_from_player` had when every hit
+## was fatal — so the caller's bookkeeping never had to learn about health.
+func apply_damage(source: DamageSource.Id) -> int:
+	if not _alive:
+		return 0
+	if DamageSourceScript.target(source) != DamageSourceScript.Target.CREATURE:
+		push_error(
+			"UndeadUnit %s: %s hurts the player, not a creature"
+			% [name, DamageSourceScript.source_name(source)]
+		)
+		return 0
+	_health -= DamageSourceScript.amount(source)
+	if CreatureHealthScript.is_dead(_health):
+		_health = 0.0
+		return kill_from_player()
+	_play_hit_reaction()
+	return 0
+
+
+## Death itself, unchanged: navigation disposed, the death clip played, `died` emitted, the body
+## freed 1.6 s later, and the score award returned. What changed is who calls it — the hit that
+## empties the pool, rather than any hit at all.
 func kill_from_player() -> int:
 	if not _alive:
 		return 0
@@ -179,7 +281,7 @@ func kill_from_player() -> int:
 	state = State.DEAD
 	velocity = Vector3.ZERO
 	_dispose_nav()
-	_play_anim(["Death_A", "Death", "death"])
+	_play_action(CreatureClips.Action.DEATH)
 	var award := HIT_SCORE_GIANT if is_giant() else HIT_SCORE_NORMAL
 	died.emit(self, is_giant())
 	var tree := get_tree()
@@ -205,53 +307,113 @@ func _build_body() -> void:
 	_col_shape = CollisionShape3D.new()
 	_col_shape.name = "BodyShape"
 	_capsule = CapsuleShape3D.new()
-	_capsule.radius = 0.28
-	_capsule.height = 1.15
+	_capsule.radius = COL_RADIUS_BASE_M
+	_capsule.height = COL_HEIGHT_BASE_M
 	_col_shape.shape = _capsule
 	_col_shape.position = Vector3(0.0, 0.9, 0.0)
 	add_child(_col_shape)
 
 
+## Which kind of body this unit's behaviour asks the catalogue for. A giant keeps whatever it
+## grew out of, so this only ever runs at spawn.
+func _catalog_slot() -> CreatureCatalog.Slot:
+	match role:
+		Role.MAGE:
+			return CreatureCatalog.Slot.CASTER
+		Role.GIANT:
+			return CreatureCatalog.Slot.BRUTE
+		Role.MINION:
+			return CreatureCatalog.Slot.FODDER
+	push_error("UndeadUnit %s: no catalogue slot for role %d" % [name, int(role)])
+	return CreatureCatalog.Slot.FODDER
+
+
+## The loader contract every catalogue entry has to satisfy: the root casts to Node3D, the
+## asset stands feet-on-floor over its own pivot and faces +Z, and exactly one
+## AnimationPlayer is found depth-first. Nothing here carries root motion — NavMotor owns the
+## body's position.
+##
+## A body that does not stand over its pivot gets its correction from the catalogue rather
+## than from a rule here: `model_offset` and `model_yaw` are per-entry data, measured off the
+## file by `tools/test_creature_assets.tscn` and zero for all but three of fifty-four.
 func _load_model() -> void:
-	var packed: PackedScene = MAGE_PACKED if role == Role.MAGE or role == Role.GIANT else MINION_PACKED
+	if _body_id.is_empty():
+		var rng := RandomNumberGenerator.new()
+		rng.seed = _seed
+		_entry = CreatureCatalogScript.pick(_catalog_slot(), rng)
+	else:
+		_entry = CreatureCatalogScript.by_id(_body_id)
+	if _entry == null:
+		return
+	var packed: PackedScene = load(_entry.path) as PackedScene
+	if packed == null:
+		push_error("UndeadUnit: %s did not load a scene from %s" % [_entry.id, _entry.path])
+		return
 	var inst: Node = packed.instantiate()
 	_model = inst as Node3D
 	if _model == null:
-		push_error("UndeadUnit: KayKit root is not Node3D (got %s)" % inst.get_class())
+		push_error(
+			"UndeadUnit: %s root is not Node3D (got %s)" % [_entry.id, inst.get_class()]
+		)
 		inst.queue_free()
 		return
-	_model.name = "KayKitModel"
+	_model.name = "CreatureModel"
 	add_child(_model)
-	## KayKit roots are already ground-aligned.
-	_model.position = Vector3.ZERO
-	_model.rotation = Vector3.ZERO
+	_model.rotation = Vector3(0.0, _entry.model_yaw, 0.0)
 	_anim = _find_anim(_model)
 	if _anim == null:
-		push_error("UndeadUnit: no AnimationPlayer in KayKit model (role=%d)" % int(role))
+		push_error("UndeadUnit: no AnimationPlayer in %s" % _entry.id)
 		return
 	_anim.active = true
 	_anim_clips = _anim.get_animation_list()
+	_variation = CreatureVariationScript.roll(_entry, _anim_clips, _seed)
+	_attach_prop()
+	_variation.apply(_model, _entry)
 	_configure_locomotion_loops()
 	_apply_far_visibility(_model)
 
 
+## Hang the body's prop off the rig's hand slot. KayKit exposes `handslot.l` / `handslot.r`
+## bones for exactly this, and the staff has been sitting unreferenced in the repo since the
+## pack was vendored.
+func _attach_prop() -> void:
+	if _entry.prop_path.is_empty() or _entry.prop_bone.is_empty():
+		return
+	var skeleton := CreatureVariationScript.find_skeleton(_model)
+	if skeleton == null:
+		push_error("UndeadUnit: %s has no Skeleton3D to hang %s off" % [_entry.id, _entry.prop_path])
+		return
+	if skeleton.find_bone(_entry.prop_bone) < 0:
+		push_error("UndeadUnit: %s has no bone '%s'" % [_entry.id, _entry.prop_bone])
+		return
+	var packed: PackedScene = load(_entry.prop_path) as PackedScene
+	if packed == null:
+		push_error("UndeadUnit: prop %s did not load a scene" % _entry.prop_path)
+		return
+	var prop: Node3D = packed.instantiate() as Node3D
+	if prop == null:
+		push_error("UndeadUnit: prop %s is not a Node3D" % _entry.prop_path)
+		return
+	var mount := BoneAttachment3D.new()
+	mount.name = "PropMount"
+	skeleton.add_child(mount)
+	mount.bone_name = _entry.prop_bone
+	mount.add_child(prop)
+
+
+## Clips imported as one-shots freeze mid-stride and the body keeps sliding, which reads as
+## floating. Only the two cycles this unit will actually hold are looped: the attack and the
+## death are one-shots on purpose.
 func _configure_locomotion_loops() -> void:
-	## KayKit walk/run clips are often imported as one-shots — without LOOP they freeze mid-stride
-	## and the body keeps sliding (reads as floating).
 	if _anim == null:
 		return
-	for n in _anim_clips:
-		var nl := str(n).to_lower()
-		var loop := (
-			nl.contains("walk")
-			or nl.contains("run")
-			or nl.contains("idle")
-			or nl.contains("spellcast")
-		)
-		if not loop:
+	for action: CreatureClips.Action in [CreatureClips.Action.IDLE, CreatureClips.Action.LOCOMOTION]:
+		var clip := _clip_for(action)
+		if clip.is_empty():
 			continue
-		var anim := _anim.get_animation(n)
+		var anim := _anim.get_animation(clip)
 		if anim == null:
+			push_error("UndeadUnit: %s resolved %s to a clip it does not have" % [_entry.id, clip])
 			continue
 		anim.loop_mode = Animation.LOOP_LINEAR
 
@@ -279,10 +441,34 @@ func _find_anim(n: Node) -> AnimationPlayer:
 	return null
 
 
+func _reset_health() -> void:
+	_health_max = CreatureHealthScript.for_scale(_entry, character_scale)
+	_health = _health_max
+
+
+## Growing on a pad makes a body tougher as it happens rather than all at once when it finishes,
+## and a monster halfway through a fight stays halfway through it — a giant that healed to full
+## by growing would be a giant nobody could ever wear down.
+func _update_health_for_scale() -> void:
+	var next := CreatureHealthScript.for_scale(_entry, character_scale)
+	if is_equal_approx(next, _health_max):
+		return
+	var kept := 1.0 if _health_max <= 0.0 else _health / _health_max
+	_health_max = next
+	_health = next * kept
+
+
 func _apply_scale() -> void:
-	## Visual only — never scale the CharacterBody3D (that blows up physics).
+	_update_health_for_scale()
+	## Visual only — never scale the CharacterBody3D (that blows up physics). The build is
+	## non-uniform, so squat bodies really are squat rather than merely painted that way.
 	if _model != null and is_instance_valid(_model):
-		_model.scale = Vector3.ONE * character_scale
+		var w := 1.0 if _variation == null else _variation.width
+		var h := 1.0 if _variation == null else _variation.height
+		var build := Vector3(w, h, w) * character_scale
+		_model.scale = build
+		## The pivot correction is measured in the body's own units, so it grows with it.
+		_model.position = _entry.model_offset * build
 	_update_collision_for_scale()
 	if _nav_motor != null:
 		_nav_motor.speed_mps = _move_speed()
@@ -291,9 +477,13 @@ func _apply_scale() -> void:
 func _update_collision_for_scale() -> void:
 	if _capsule == null or _col_shape == null:
 		return
-	## Grow with sqrt so giants stay street-capable; hard-clamp for 10×.
-	var r := clampf(0.28 * sqrt(character_scale), 0.28, COL_RADIUS_MAX_M)
-	var h := clampf(1.15 * sqrt(character_scale), 1.15, COL_HEIGHT_MAX_M)
+	## Grow with sqrt so giants stay street-capable; hard-clamp for 10×. The floor is this
+	## body's own size rather than the reference skeleton's, so a three-metre monster never
+	## collides as if it were a minion.
+	var base_r := COL_RADIUS_BASE_M * _span_wide()
+	var base_h := COL_HEIGHT_BASE_M * _span_tall()
+	var r := clampf(base_r * sqrt(character_scale), base_r, COL_RADIUS_MAX_M)
+	var h := clampf(base_h * sqrt(character_scale), base_h, COL_HEIGHT_MAX_M)
 	_capsule.radius = r
 	_capsule.height = maxf(h, r * 2.0 + 0.05)
 	_col_shape.position = Vector3(0.0, h * 0.5, 0.0)
@@ -303,11 +493,16 @@ func _update_collision_for_scale() -> void:
 # Navigation
 # ---------------------------------------------------------------------------
 
-## Mages and minions read the span field as `undead`; a giant reads it as `giant`, which is
-## 11 cells of clearance and `can_break` — the wall stops being a dead end and becomes a
-## priced routing decision.
+## The body decides, not the behaviour: a skeleton or a blob reads the span field as
+## `undead`, a Quaternius Big monster at its native three metres reads it as `monster`, and
+## a grown giant reads it as `giant`, which is 11 cells of clearance and `can_break` — the
+## wall stops being a dead end and becomes a priced routing decision.
 func nav_profile_id() -> int:
-	return NavProfile.Id.GIANT if role == Role.GIANT else NavProfile.Id.UNDEAD
+	if role == Role.GIANT:
+		return NavProfile.Id.GIANT
+	if _entry == null:
+		return NavProfile.Id.UNDEAD
+	return _entry.nav_profile
 
 
 func _build_nav() -> void:
@@ -434,7 +629,7 @@ func on_facade_in_reach(point: Vector3, working: State) -> void:
 
 func on_pad_in_reach() -> void:
 	state = State.GROWING
-	_play_anim(["Idle", "Idle_A", "idle"])
+	_play_action(CreatureClips.Action.IDLE)
 
 
 ## The ladder abandoned a goal — GOAL_UNREACHABLE or TRAPPED, both already reported by
@@ -490,6 +685,7 @@ func tick(delta: float) -> void:
 	_scrape_cd = maxf(0.0, _scrape_cd - delta)
 	_nibble_cd = maxf(0.0, _nibble_cd - delta)
 	_retarget_cd = maxf(0.0, _retarget_cd - delta)
+	_hit_react_left = maxf(0.0, _hit_react_left - delta)
 
 	## Far units: skip anim switches most frames.
 	var far := _distance_to_player() > ANIM_FAR_DIST_M
@@ -533,7 +729,7 @@ func _tick_cast() -> void:
 		state = State.SEEK_PED
 		return
 	_cast_fired = true
-	_play_anim(["Spellcast_Shoot", "Spellcast_Raise", "Attack", "Spellcast"])
+	_play_action(CreatureClips.Action.CAST)
 	## Fresh aim — never fire at the position the hunt goal was built from.
 	var prey := _city.find_nearest_ped_position(global_position, ORB_RANGE_M)
 	if prey == Vector3.INF:
@@ -546,7 +742,8 @@ func _tick_cast() -> void:
 ## Locked on a facade — keep swinging the whole time; the voxel only dies every 15 s.
 func _tick_nibble() -> void:
 	_look_at_flat(_facade_target)
-	_play_anim_looping(["Kick_A", "Punch_A", "Attack", "Hit_A", "Spellcast_Shoot"])
+	if _hit_react_left <= 0.0:
+		_replay_action(CreatureClips.Action.MELEE)
 	if _nibble_cd > 0.0:
 		return
 	if _city.undead_nibble_building_near(global_position, MINION_NIBBLE_REACH_M + 1.2):
@@ -587,7 +784,7 @@ func _become_giant() -> void:
 	## A giant is a different body to the field: it re-registers on the giant profile.
 	_rebuild_nav()
 	_director.notify_giant_ready(self)
-	_play_anim(["Idle", "Idle_A", "idle"])
+	_play_action(CreatureClips.Action.IDLE)
 
 
 ## Peel a full-height strip off whatever the corridor walked the giant up to. A scrape that
@@ -617,7 +814,7 @@ func _fire_orb(toward: Vector3) -> void:
 	orb.name = "UndeadOrb"
 	var parent: Node = _director if _director != null else self
 	parent.add_child(orb)
-	var muzzle := global_position + Vector3(0.0, 1.35 * character_scale, 0.0)
+	var muzzle := global_position + Vector3(0.0, MUZZLE_BASE_M * _span_tall() * character_scale, 0.0)
 	if orb.has_method("launch"):
 		orb.call("launch", muzzle, toward + Vector3(0.0, 1.0, 0.0), _director)
 
@@ -648,11 +845,15 @@ func _animate_motion(moved: Vector3, delta: float) -> void:
 	var flat := Vector3(moved.x, 0.0, moved.z)
 	var ground_speed := flat.length() / delta
 	if ground_speed < MOVE_ANIM_EPS_MPS:
-		## Casting, chewing and peeling drive their own clips.
+		## Casting, chewing, peeling and flinching drive their own clips.
 		if state != State.CAST and state != State.NIBBLE and state != State.SCRAPE:
-			_play_anim(["Idle", "Idle_A", "idle"])
+			if _hit_react_left <= 0.0:
+				_play_action(CreatureClips.Action.IDLE)
 		return
 	_face_direction(flat, delta)
+	## A staggered body still turns and still walks its corridor — only the rig is busy.
+	if _hit_react_left > 0.0:
+		return
 	_play_locomotion(ground_speed)
 
 
@@ -662,7 +863,7 @@ func _play_locomotion(ground_speed: float) -> void:
 		_set_anim_speed(GIANT_ANIM_SPEED)
 	else:
 		_set_anim_speed(clampf(ground_speed / WALK_ANIM_REF_MPS, 0.4, 1.4))
-	_play_anim_looping(["Walking_A", "Walking_B", "Walking_C", "Walk", "Running_A", "Run"])
+	_replay_action(CreatureClips.Action.LOCOMOTION)
 
 
 func _set_anim_speed(scale: float) -> void:
@@ -692,33 +893,66 @@ func _look_at_flat(world: Vector3) -> void:
 	rotation.y = _yaw
 
 
-func _play_anim(candidates: Array) -> void:
+## The take this unit rolled for `action`. Empty only when the rig has no clip for it at all,
+## which CreatureClips has already reported by name at load — there is nothing left to say
+## about it once per frame.
+func _clip_for(action: CreatureClips.Action) -> String:
+	if _variation == null:
+		return ""
+	return _variation.clip_for(action)
+
+
+## The visible half of a non-fatal hit. Every rig family in the catalogue ships a flinch, so a
+## body with nothing to play here is a content bug rather than a body that stoically ignores
+## being hit, and it says so by name.
+func _play_hit_reaction() -> void:
+	if _anim == null:
+		return
+	var clip := _clip_for(CreatureClips.Action.HIT_REACT)
+	if clip.is_empty():
+		push_error(
+			"UndeadUnit %s: %s has no hit reaction to play"
+			% [name, "no body" if _entry == null else _entry.id]
+		)
+		return
+	var anim := _anim.get_animation(clip)
+	if anim == null:
+		push_error(
+			"UndeadUnit: %s resolved its hit reaction to %s, a clip it does not have"
+			% [_entry.id, clip]
+		)
+		return
+	_hit_react_left = minf(anim.length, HIT_REACT_MAX_HOLD_SEC)
+	if not _anim.active:
+		## Ninety metres out with nobody to see it. The clip resolved, which is what mattered.
+		return
+	_set_anim_speed(1.0 if not is_giant() else GIANT_ANIM_SPEED)
+	## Restarted rather than continued: two hits inside one flinch are two flinches, and
+	## `_start` would keep the first one running because the clip name has not changed.
+	_current_anim = clip
+	_anim.play(clip)
+	_anim.seek(0.0, true)
+
+
+func _play_action(action: CreatureClips.Action) -> void:
 	if _anim == null or not _anim.active:
 		return
 	_set_anim_speed(1.0 if not is_giant() else GIANT_ANIM_SPEED)
-	for want in candidates:
-		var w := str(want).to_lower()
-		for n in _anim_clips:
-			var nl := str(n).to_lower()
-			if nl == w or nl.contains(w):
-				if _current_anim == n and _anim.is_playing():
-					return
-				_current_anim = n
-				_anim.play(n)
-				return
+	_start(_clip_for(action))
 
 
-## Keep a one-shot attack clip restarting so minions look busy between voxel kills.
-func _play_anim_looping(candidates: Array) -> void:
+## Let a finished one-shot come round again, so a minion keeps swinging between voxel kills
+## instead of standing in the last frame of a punch.
+func _replay_action(action: CreatureClips.Action) -> void:
 	if _anim == null or not _anim.active:
 		return
-	for want in candidates:
-		var w := str(want).to_lower()
-		for n in _anim_clips:
-			var nl := str(n).to_lower()
-			if nl == w or nl.contains(w):
-				if _current_anim == n and _anim.is_playing():
-					return
-				_current_anim = n
-				_anim.play(n)
-				return
+	_start(_clip_for(action))
+
+
+func _start(clip: String) -> void:
+	if clip.is_empty():
+		return
+	if _current_anim == clip and _anim.is_playing():
+		return
+	_current_anim = clip
+	_anim.play(clip)

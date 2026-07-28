@@ -25,14 +25,26 @@ MANIFEST: dict[str, str] = {
     "PavingStones128": "stone.jpg",
 }
 
-# Normals for materials that drive near-field walls / ground.
+# Normals, one per albedo. Every ambientCG zip the colour maps come from already ships a
+# NormalGL map, so a surface that renders as printed lino is a map we downloaded and threw
+# away — including the largest ground planes in the game (lawn, plaza, gravel, dirt).
 NORMAL_MANIFEST: dict[str, str] = {
     "Asphalt031": "asphalt_normal.jpg",
+    "Bark014": "bark_normal.jpg",
     "Bricks075A": "brick_normal.jpg",
+    # Bricks097 is real coursed brick; brick_dark.jpg used to borrow the rough rubble
+    # relief of Bricks075A, so the bump never followed its own courses.
+    "Bricks097": "brick_dark_normal.jpg",
     "Concrete034": "concrete_normal.jpg",
-    "Plaster001": "plaster_normal.jpg",
+    "Grass001": "grass_normal.jpg",
+    "Gravel023": "gravel_normal.jpg",
+    "Ground054": "dirt_normal.jpg",
     "PavingStones037": "sidewalk_normal.jpg",
+    "PavingStones070": "plaza_normal.jpg",
     "PavingStones128": "stone_normal.jpg",
+    "Plaster001": "plaster_normal.jpg",
+    "Rock050": "rock_normal.jpg",
+    "Wood051": "wood_normal.jpg",
 }
 
 
@@ -90,6 +102,42 @@ def download_normal(asset_id: str, dest: Path) -> None:
         print(f"  -> {dest.name} ({dest.stat().st_size} bytes) from {normal_name}")
 
 
+# Colour maps fetched before this script kept a MANIFEST. They are still ambientCG CC0
+# and still shipped, so they have to stay credited even though nothing re-downloads them.
+LEGACY_COLOR: dict[str, str] = {
+    "asphalt.jpg": "Asphalt031",
+    "brick.jpg": "Bricks075A",
+    "concrete.jpg": "Concrete034",
+    "sidewalk.jpg": "PavingStones037",
+    "plaza.jpg": "PavingStones070",
+    "grass.jpg": "Grass001",
+    "wood.jpg": "Wood051",
+    "rock.jpg": "Rock050",
+}
+
+# Everything generate_city_textures.py authors, in the order it writes them.
+AUTHORED: list[str] = [
+    "road_line.jpg, crosswalk.jpg — street markings",
+    "glass.jpg — curtain-wall glazing with mullions",
+    "water.jpg — pond / lake ripple sheet",
+    "leaves.png — deciduous canopy cards (alpha cutout)",
+    "metal.jpg / metal_normal.jpg — anodized curtain-wall panels",
+    "metal_plate.jpg / metal_plate_normal.jpg — riveted industrial plates",
+    "paint.jpg / paint_normal.jpg — painted plaster with crackle",
+    "tiles.jpg / tiles_normal.jpg — glazed diamond ceramic",
+    "roof.jpg / roof_normal.jpg — standing-seam metal roof",
+    "roof_clay.jpg / roof_clay_normal.jpg — terracotta pantiles",
+    "cave_wall.jpg / cave_wall_normal.jpg — damp limestone for hill caves",
+    "cave_floor.jpg / cave_floor_normal.jpg — packed damp earth cave floors",
+    "grave_stone.jpg / grave_stone_normal.jpg — lichen-blackened granite",
+    "grave_marble.jpg / grave_marble_normal.jpg — monument marble",
+    "grave_soil.jpg / grave_soil_normal.jpg — turned grave plots",
+    "grave_path.jpg / grave_path_normal.jpg — cinder aisles",
+    "wrought_iron.jpg / wrought_iron_normal.jpg — railings and finials",
+    "yew.png — churchyard yew cards (alpha cutout)",
+]
+
+
 def write_credits() -> None:
     credits = OUT / "CREDITS.txt"
     lines = [
@@ -97,41 +145,20 @@ def write_credits() -> None:
         "License: CC0 1.0 Universal (public domain dedication)",
         "",
         "Asset IDs used (1K-JPG Color/albedo maps):",
-        "- asphalt.jpg <- Asphalt031",
-        "- brick.jpg <- Bricks075A",
-        "- concrete.jpg <- Concrete034",
-        "- sidewalk.jpg <- PavingStones037",
-        "- plaza.jpg <- PavingStones070",
-        "- grass.jpg <- Grass001",
-        "- roof.jpg <- RoofingTiles014A",
-        "- wood.jpg <- Wood051",
-        "- rock.jpg <- Rock050",
     ]
+    colors = dict(LEGACY_COLOR)
     for asset_id, fname in MANIFEST.items():
+        colors[fname] = asset_id
+    for fname in sorted(colors):
+        lines.append(f"- {fname} <- {colors[fname]}")
+    lines.extend(["", "Normal maps (1K-JPG NormalGL):"])
+    for fname in sorted(NORMAL_MANIFEST.values()):
+        asset_id = next(a for a, f in NORMAL_MANIFEST.items() if f == fname)
         lines.append(f"- {fname} <- {asset_id}")
-    lines.extend(
-        [
-            "",
-            "Normal maps (1K-JPG NormalGL where available):",
-        ]
-    )
-    for asset_id, fname in NORMAL_MANIFEST.items():
-        lines.append(f"- {fname} <- {asset_id}")
-    lines.extend(
-        [
-            "",
-            "Project-authored (see generate_city_textures.py):",
-            "- glass.jpg, water.jpg, leaves.png, curb.jpg, road_line.jpg, crosswalk.jpg",
-            "- yew.png / yew_normal.jpg — churchyard foliage cards (alpha cutout)",
-            "- metal.jpg / metal_normal.jpg — anodized curtain-wall panels",
-            "- metal_plate.jpg / metal_plate_normal.jpg — riveted industrial plates",
-            "- paint.jpg / paint_normal.jpg — painted plaster with crackle",
-            "- tiles.jpg / tiles_normal.jpg — glazed diamond ceramic",
-            "- roof.jpg / roof_normal.jpg — standing-seam metal roof",
-            "- roof_clay.jpg / roof_clay_normal.jpg — terracotta pantiles",
-            "",
-        ]
-    )
+    lines.extend(["", "Project-authored (see generate_city_textures.py):"])
+    for entry in AUTHORED:
+        lines.append(f"- {entry}")
+    lines.append("")
     credits.write_text("\n".join(lines), encoding="utf-8")
     print(f"Wrote {credits}")
 

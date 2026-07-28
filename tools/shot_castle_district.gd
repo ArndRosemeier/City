@@ -1,34 +1,40 @@
 ## Castle district look inspection: boots the live city into a Castle tile and saves the
 ## views the fortress has to survive — the whole thing from the air, the causeway seen from
-## street level, the gatehouse, the bailey, a wall/tower elevation, and the Phase 2
-## interiors: the keep from the bailey, the great hall, a stairwell, an ordinary room and
-## the rampart from the crown landing.
+## street level, the gatehouse, the bailey, a wall/tower elevation, the Phase 2 interiors
+## (the keep from the bailey, the great hall, a stairwell, an ordinary room and the rampart
+## from the crown landing) and the Phase 3 dungeon: every way down this seed happens to have,
+## a wide hall, a cramped cell, a tall vault, a corridor and a flight between levels.
+##
+## Every file is named for the world seed, because the dungeon's whole point is that two seeds
+## differ: run this two or three times over and compare the same view side by side.
 ##
 ## Run (-Command, not -File: the -File binder flattens a comma list into one argument):
 ##   powershell -Command "& '.\tools\run_test.ps1' -Scene shot_castle_district -Rendered
 ##     -GodotArgs @('--spawn-theme=castle','--city-seed=42')"
 extends Node
 
-const AERIAL_PNG := "res://tools/castle_aerial.png"
-const APPROACH_PNG := "res://tools/castle_approach.png"
-const GATEHOUSE_PNG := "res://tools/castle_gatehouse.png"
-const COURTYARD_PNG := "res://tools/castle_courtyard.png"
-const ELEVATION_PNG := "res://tools/castle_elevation.png"
-const KEEP_PNG := "res://tools/castle_keep.png"
-const HALL_PNG := "res://tools/castle_hall.png"
-const STAIR_PNG := "res://tools/castle_stair.png"
-const ROOM_PNG := "res://tools/castle_room.png"
-const RAMPART_PNG := "res://tools/castle_rampart.png"
-
 const VOX := 0.5
 ## Standing eye height, in metres above the walking surface.
 const EYE := 1.7
+## Columns in from a chamber's corner a camera stands, so it is not inside the wall it is
+## photographing and has the clearance the chamber's own floor plan promises.
+const INSET := 3
+
+
+## World seed the shots are named for, read back after CityRoot resolved the CLI flag.
+var _seed: int = 0
+var _city: CityRoot = null
+## The tile's hung doors, so every frame can be aimed at the camera it is captured from
+## instead of at the player's. Null until the district is found; still null on a tile with no
+## castle, which is a state this tool already refuses before it gets that far.
+var _doors: CastleDoorPlacer = null
 
 
 func _ready() -> void:
 	var city := CityRoot.new()
 	city.city_seed = 42
 	add_child(city)
+	_city = city
 
 	var deadline := Time.get_ticks_msec() + 120_000
 	while city.get_node_or_null("Walker") == null:
@@ -37,10 +43,12 @@ func _ready() -> void:
 			get_tree().quit(1)
 			return
 		await get_tree().process_frame
+	_seed = city.city_seed
 	var walker: Node3D = city.get_node_or_null("Walker")
 	## The walker is only here to keep voxels meshed around the camera; inside a room its
 	## own body is all the frame would contain.
 	_hide_meshes(walker)
+	_hide_overlays(city)
 
 	var coord := city.spawn_district_coord
 	var theme := DistrictTheme.for_district(city.city_seed, coord)
@@ -62,6 +70,12 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 	print(layout.describe())
+	_doors = inst.castle_doors
+	if _doors == null:
+		push_error("FAIL the streamed castle district hung no doors")
+		get_tree().quit(1)
+		return
+	print("doors: %d hung" % _doors.door_count())
 
 	var deck := float(inst.generator.ground_thickness) * VOX
 	var court := float(layout.courtyard_y) * VOX
@@ -82,7 +96,7 @@ func _ready() -> void:
 		walker,
 		middle + out * 75.0 + Vector3(45.0, 85.0, 0.0),
 		middle,
-		AERIAL_PNG
+		_png("aerial")
 	)
 
 	## Standing on the meadow at the foot of the ramp, looking up the causeway at the gate.
@@ -90,7 +104,7 @@ func _ready() -> void:
 		walker,
 		foot + out * 16.0 + Vector3(0.0, deck + 1.7, 0.0),
 		Vector3(gate_face.x, court + 6.0, gate_face.z),
-		APPROACH_PNG
+		_png("approach")
 	)
 
 	## Half way up the ramp — the gatehouse and its turrets at eye height.
@@ -98,7 +112,7 @@ func _ready() -> void:
 		walker,
 		foot.lerp(gate_face, 0.55) + Vector3(0.0, 5.0, 0.0),
 		Vector3(gate_face.x, court + 5.0, gate_face.z),
-		GATEHOUSE_PNG
+		_png("gatehouse")
 	)
 
 	## Inside the bailey, looking back at the gatehouse across the courtyard. Well clear of
@@ -108,7 +122,7 @@ func _ready() -> void:
 		walker,
 		bailey + Vector3(0.0, 8.0, 0.0),
 		Vector3(gate_face.x, court + 8.0, gate_face.z),
-		COURTYARD_PNG
+		_png("courtyard")
 	)
 
 	## Outside a corner tower at ground level: the batter of the plinth, the curtain above
@@ -125,7 +139,7 @@ func _ready() -> void:
 		walker,
 		tower_at + away * 55.0 + Vector3(0.0, deck + 12.0, 0.0),
 		Vector3(tower_at.x, float(corner.top_y) * VOX * 0.7, tower_at.z),
-		ELEVATION_PNG
+		_png("elevation")
 	)
 
 	## The keep across the bailey. Three-quarter on rather than square, so two faces and the
@@ -142,7 +156,7 @@ func _ready() -> void:
 			_rect_centre(layout.keep_rect),
 			(layout.courtyard_y + layout.keep_roof_y) / 2
 		),
-		KEEP_PNG
+		_png("keep")
 	)
 
 	## Standing in the great hall at one gable end, looking down its length. Aimed above
@@ -163,7 +177,7 @@ func _ready() -> void:
 		_stand(coord, hall_a, hall_floor.floor_y),
 		_at(coord, hall_b, hall_floor.floor_y)
 			+ Vector3(0.0, float(hall_floor.air_h) * VOX * 0.5, 0.0),
-		HALL_PNG,
+		_png("hall"),
 		40.0
 	)
 
@@ -178,7 +192,7 @@ func _ready() -> void:
 		walker,
 		_stand(coord, flight.center_column(0), flight.y_from) - climb * 1.2 + side * 0.6,
 		_at(coord, flight.center_column(mid), flight.surface_at(mid) + 1),
-		STAIR_PNG,
+		_png("stair"),
 		30.0
 	)
 
@@ -189,7 +203,7 @@ func _ready() -> void:
 		walker,
 		_stand(coord, room.position + Vector2i(3, 3), top.floor_y),
 		_stand(coord, room.end - Vector2i(3, 3), top.floor_y),
-		ROOM_PNG,
+		_png("room"),
 		30.0
 	)
 
@@ -202,11 +216,199 @@ func _ready() -> void:
 		walker,
 		crown_eye,
 		crown_eye + along * 40.0 - Vector3(0.0, 1.0, 0.0),
-		RAMPART_PNG
+		_png("rampart")
 	)
+
+	await _shoot_dungeon(walker, coord, layout)
 
 	print("RESULT: OK")
 	get_tree().quit(0)
+
+
+# ---------------------------------------------------------------------------
+# Dungeon — Phase 3
+# ---------------------------------------------------------------------------
+
+## Every way down this seed rolled, then one of each kind of chamber it has. Which files appear
+## is therefore itself a record of the seed, which is the point: a castle with one entrance and
+## no tall vault should not photograph like a castle with three and two.
+func _shoot_dungeon(walker: Node3D, coord: Vector2i, layout: CastleLayout) -> void:
+	print(
+		"dungeon: %s, %d chambers, wide=%d small=%d tall=%d, %d flights between levels"
+		% [
+			layout.dungeon_entry_names(),
+			layout.dungeon_vaults.size(),
+			layout.dungeon_wide_count(),
+			layout.dungeon_small_count(),
+			layout.dungeon_tall_count(),
+			layout.dungeon_stairs.size(),
+		]
+	)
+	for e: CastleDungeonEntry in layout.dungeon_entries:
+		await _shoot_entry(walker, coord, layout, e)
+
+	## Widest chamber of one storey height. A tall one is wide by construction, so excluding
+	## them is what makes this shot say something the vault shot does not.
+	var wide := _pick_vault(layout, "wide")
+	await _shoot_along(
+		walker, coord, wide, _png("dungeon_wide"), 55.0, 0.45
+	)
+
+	var small := _pick_vault(layout, "small")
+	await _shoot_along(
+		walker, coord, small, _png("dungeon_cell"), 22.0, 0.5
+	)
+
+	## Aimed high up the far wall: what a vault is for is the section, and at eye level a
+	## three-storey hall photographs exactly like a one-storey room.
+	var tall := _pick_vault(layout, "tall")
+	if tall != null:
+		await _shoot_along(
+			walker, coord, tall, _png("dungeon_vault"), 60.0, 0.85
+		)
+
+	## Longest chamber relative to its width — what the plan uses for a passage, since a
+	## dungeon corridor here is a room cut thin rather than a separate kind of thing.
+	var run := _pick_vault(layout, "long")
+	await _shoot_along(
+		walker, coord, run, _png("dungeon_corridor"), 45.0, 0.4
+	)
+
+	var flight: CastleStair = layout.dungeon_stairs[0]
+	await _shoot_flight(walker, coord, flight, _png("dungeon_stair"))
+
+
+## A way down, seen from the side a body arrives on.
+##
+## The two routes that surface in the open are shot from a step behind the top tread, looking
+## down the shaft. The tower base cannot be: its head stands under the tower with the plate's
+## solid mass behind it, and the only place to stand is the passage that reaches it, so that is
+## where the camera goes — which is also how a player meets it.
+func _shoot_entry(
+	walker: Node3D, coord: Vector2i, layout: CastleLayout, e: CastleDungeonEntry
+) -> void:
+	var st := e.stair
+	var climb := Vector3(float(st.dir.x), 0.0, float(st.dir.y))
+	var stem := "dungeon_from_%s" % e.kind_name().replace("-", "_")
+	if e.kind == CastleDungeonEntry.KIND_TOWER_BASE:
+		## The bailey end of the passage rather than its middle: it is four columns wide, and
+		## from the middle of it the frame is two walls. Dim, because at arm's length from the
+		## passage wall the lamp the open chambers need burns the frame out white.
+		await _shoot_lit(
+			walker,
+			_stand(coord, _far_end(e.chamber_rect, e.head()), layout.courtyard_y),
+			_at(coord, e.head(), layout.courtyard_y + 2),
+			_png(stem),
+			30.0,
+			1.4
+		)
+		return
+	await _shoot_lit(
+		walker,
+		_stand(coord, e.head(), layout.courtyard_y) + climb * 1.2,
+		_at(coord, e.foot(), st.y_from + 2),
+		_png(stem),
+		34.0
+	)
+
+
+## Stands `INSET` in from one end of a chamber and looks at the other, aiming `up` of the way
+## up the far wall.
+func _shoot_along(
+	walker: Node3D,
+	coord: Vector2i,
+	v: CastleVault,
+	path: String,
+	reach: float,
+	up: float
+) -> void:
+	var r := v.rect
+	var long_x := r.size.x >= r.size.y
+	var run := r.size.x if long_x else r.size.y
+	## Cut back in a closet: below five columns apart the two ends collapse onto each other and
+	## the camera ends up aimed at the floor by its own feet.
+	var inset := clampi((run - 5) / 2, 0, INSET)
+	var mid := _rect_centre(r)
+	var a := (
+		Vector2i(r.position.x + inset, mid.y)
+		if long_x
+		else Vector2i(mid.x, r.position.y + inset)
+	)
+	var b := (
+		Vector2i(r.end.x - 1 - inset, mid.y)
+		if long_x
+		else Vector2i(mid.x, r.end.y - 1 - inset)
+	)
+	print("  %s from %s to %s" % [v.describe(), a, b])
+	await _shoot_lit(
+		walker,
+		_stand(coord, a, v.floor_y),
+		_at(coord, b, v.floor_y) + Vector3(0.0, float(v.air_h) * VOX * up, 0.0),
+		path,
+		reach
+	)
+
+
+## From the foot of a flight, level on a middle tread. Same framing as the keep's stairwell
+## shot: from the top the frame is all well lip, from below it is all slab soffit.
+func _shoot_flight(
+	walker: Node3D, coord: Vector2i, st: CastleStair, path: String
+) -> void:
+	var climb := Vector3(float(st.dir.x), 0.0, float(st.dir.y))
+	var side := Vector3(float(st.across.x), 0.0, float(st.across.y))
+	var mid := st.rise / 2
+	await _shoot_lit(
+		walker,
+		_stand(coord, st.center_column(0), st.y_from) - climb * 1.2 + side * 0.6,
+		_at(coord, st.center_column(mid), st.surface_at(mid) + 1),
+		path,
+		26.0
+	)
+
+
+## The chamber that best answers `want`. Null only for "tall", which a seed is allowed not to
+## have; the others are guaranteed by the plan, so their absence is a failure worth hearing.
+func _pick_vault(layout: CastleLayout, want: String) -> CastleVault:
+	var best: CastleVault = null
+	var score := 0
+	for v: CastleVault in layout.dungeon_vaults:
+		var s := 0
+		match want:
+			"wide":
+				s = v.rect.size.x * v.rect.size.y if v.is_wide() and not v.is_tall() else 0
+			"small":
+				## Smallest by area, not narrowest: the narrowest chamber is usually also a
+				## long one, and that is the corridor shot below.
+				s = 10000 - v.rect.size.x * v.rect.size.y if v.is_small() else 0
+			"tall":
+				s = v.span_levels * v.rect.size.x * v.rect.size.y if v.is_tall() else 0
+			"long":
+				s = 100 * maxi(v.rect.size.x, v.rect.size.y) / v.narrow_span()
+			_:
+				push_error("unknown vault wanted: %s" % want)
+		if s > score:
+			score = s
+			best = v
+	if best == null and want != "tall":
+		push_error("FAIL the dungeon has no %s chamber to photograph" % want)
+	return best
+
+
+## End of `r`'s long axis furthest from `from`, centred across — a corner would put the camera
+## against two walls at once.
+func _far_end(r: Rect2i, from: Vector2i) -> Vector2i:
+	var mid := _rect_centre(r)
+	var lo := (
+		Vector2i(r.position.x, mid.y) if r.size.x >= r.size.y else Vector2i(mid.x, r.position.y)
+	)
+	var hi := (
+		Vector2i(r.end.x - 1, mid.y) if r.size.x >= r.size.y else Vector2i(mid.x, r.end.y - 1)
+	)
+	return lo if Vector2(lo - from).length() > Vector2(hi - from).length() else hi
+
+
+func _png(name: String) -> String:
+	return "res://tools/castle_%s_s%d.png" % [name, _seed]
 
 
 func _keep_flight(layout: CastleLayout) -> CastleStair:
@@ -246,6 +448,18 @@ func _crown_along(layout: CastleLayout) -> Vector3:
 	var west := walk.x - w.position.x
 	var east := w.end.x - 1 - walk.x
 	return Vector3(-1.0 if west > east else 1.0, 0.0, 0.0)
+
+
+## The HUD, the radar, the build slots and the error popup all sit in front of the camera. The
+## popup is the one that matters: the project is missing a few outfit textures, so it opens over
+## every frame and an interior shot is nothing but the popup.
+func _hide_overlays(city: CityRoot) -> void:
+	for child: Node in city.get_children():
+		if child is CanvasLayer:
+			(child as CanvasLayer).visible = false
+	var errors := get_node_or_null("/root/ErrorOverlay")
+	assert(errors is CanvasLayer, "the ErrorOverlay autoload is what covers the frame")
+	(errors as CanvasLayer).visible = false
 
 
 func _hide_meshes(node: Node) -> void:
@@ -306,14 +520,24 @@ func _shoot_near(walker: Node3D, eye: Vector3, target: Vector3, path: String) ->
 ## An interior frame, lit by a lamp at the camera. Enclosed keep rooms read as underground
 ## and go torch-lit, which is the accepted behaviour but leaves nothing to inspect.
 func _shoot_lit(
-	walker: Node3D, eye: Vector3, target: Vector3, path: String, reach: float
+	walker: Node3D,
+	eye: Vector3,
+	target: Vector3,
+	path: String,
+	reach: float,
+	energy: float = 6.0
 ) -> void:
 	walker.global_position = eye
 	await _settle(10.0)
-	await _shoot(eye, target, path, reach)
+	await _shoot(eye, target, path, reach, energy)
 
 
-func _shoot(eye: Vector3, target: Vector3, path: String, lamp_reach: float) -> void:
+func _shoot(
+	eye: Vector3, target: Vector3, path: String, lamp_reach: float, lamp_energy: float = 6.0
+) -> void:
+	## Re-hidden per frame: the popup reopens on every new error, and streaming a fresh district
+	## is exactly when the missing textures are asked for again.
+	_hide_overlays(_city)
 	var cam := Camera3D.new()
 	cam.position = eye
 	cam.fov = 70.0
@@ -321,12 +545,17 @@ func _shoot(eye: Vector3, target: Vector3, path: String, lamp_reach: float) -> v
 	add_child(cam)
 	cam.look_at(target, Vector3.UP)
 	cam.make_current()
+	## Doors open on proximity to *their* camera, and the one the district was streamed with
+	## is the player's, which is nowhere near where this frame is taken from. Re-aim them, and
+	## the settle below then gives the leaves time to finish swinging.
+	if _doors != null:
+		_doors.set_camera(cam)
 	var lamp: OmniLight3D = null
 	if lamp_reach > 0.0:
 		lamp = OmniLight3D.new()
 		lamp.position = eye
 		lamp.omni_range = lamp_reach
-		lamp.light_energy = 6.0
+		lamp.light_energy = lamp_energy
 		lamp.shadow_enabled = false
 		add_child(lamp)
 	await _settle(3.0)

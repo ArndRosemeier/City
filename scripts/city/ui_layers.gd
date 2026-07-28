@@ -17,6 +17,9 @@ const HUD_UNDEAD := 12
 const HUD_MINIMAP := 13
 const HUD_ENERGY := 14
 const HUD_ACTION_BAR := 15
+## Wounds. Above the energy bar because the two never overlap on screen and, if a future layout
+## ever puts them close, the one that decides whether the run continues should be the one on top.
+const HUD_HEALTH := 16
 const HUD_MAX := 19
 
 ## Panels that own the screen while open. Above every HUD surface, below every takeover.

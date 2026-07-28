@@ -9,6 +9,7 @@ const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
 const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
 const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
+const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -31,6 +32,8 @@ var crowd: CrowdDirector
 var vehicles: VehicleDirector
 var street_props: StreetPropPlacer
 var scale_pads: Node
+## Mesh doors hung in the castle's openings. Null on every tile that is not a Castle.
+var castle_doors: CastleDoorPlacer
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -96,6 +99,8 @@ func bind_camera(camera: Camera3D) -> void:
 		building_lod._camera = camera
 	if street_props != null and is_instance_valid(street_props):
 		street_props._camera = camera
+	if castle_doors != null and is_instance_valid(castle_doors):
+		castle_doors.set_camera(camera)
 
 
 func world_aabb_center() -> Vector3:
@@ -180,6 +185,10 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		street_props.clear_props()
 		street_props.queue_free()
 	street_props = null
+	if castle_doors != null and is_instance_valid(castle_doors):
+		castle_doors.clear_doors()
+		castle_doors.queue_free()
+	castle_doors = null
 	_topology = null
 	generator = null
 	_terrain_ref = terrain
@@ -212,6 +221,10 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		street_props.clear_props()
 		street_props.queue_free()
 	street_props = null
+	if castle_doors != null and is_instance_valid(castle_doors):
+		castle_doors.clear_doors()
+		castle_doors.queue_free()
+	castle_doors = null
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
 		building_lod.queue_free()
@@ -419,6 +432,19 @@ func _stamp_detail_async() -> void:
 		_dseed
 	)
 	CityProfiler.end("stream_pads")
+	await get_tree().process_frame
+
+	## Mesh doors for the fortress openings. `get_castle_layout()` is null on every other
+	## district, and the placer treats that as "no doors" rather than an error, so this stays a
+	## single unconditional step in the detail stream.
+	CityProfiler.begin("stream_castle_doors")
+	castle_doors = CastleDoorPlacerScript.new()
+	castle_doors.name = "CastleDoors"
+	add_child(castle_doors)
+	castle_doors.place_from_layout(
+		generator.get_castle_layout(), _voxel_size, origin_vox, camera
+	)
+	CityProfiler.end("stream_castle_doors")
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_impostors")

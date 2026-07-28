@@ -15,6 +15,7 @@ enum Id {
 	UNDEAD = 1,
 	GIANT = 2,
 	CAR = 3,
+	MONSTER = 4,
 }
 
 var id: int = Id.PEDESTRIAN
@@ -74,7 +75,7 @@ func duplicate_as(new_id: int, new_name: String) -> _Self:
 
 ## Everything NavService registers at boot.
 static func defaults() -> Array[_Self]:
-	return [pedestrian(), undead(), giant(), car()]
+	return [pedestrian(), undead(), giant(), car(), monster()]
 
 
 ## A person: 1 m across, 2 m tall, steps a curb, drops off a kerb but not a roof.
@@ -135,6 +136,32 @@ static func giant() -> _Self:
 	p.max_drop = 8.0
 	p.max_wade = 6
 	p.can_break = true
+	p.surface_cost = _surface_costs({})
+	return p
+
+
+## The Quaternius Big monsters at native scale: 2.7-4.0 m of body, so 2 m across and 3.5 m
+## of headroom. The rung between UNDEAD (1 m wide, 2 m headroom) and GIANT (11 m wide, known
+## not to fit indoors) that these bodies had no profile for.
+##
+## No climbing: a two-metre body pulling itself up a facade on the climb links a minion uses
+## is not what those links were baked for. It keeps `can_jump` so it can still take the gap
+## links, and it cannot break, so a wall is a wall — being blocked is a ladder report, which
+## is the behaviour this project wants over a monster that quietly walks through masonry.
+##
+## `max_drop` has to clear the link envelope's `min_drop` of 1.7 voxels: a body that walks
+## less than that meets descents it can neither walk down nor take a link for, which is the
+## bug the `car()` profile shipped with.
+static func monster() -> _Self:
+	var p: _Self = _Self.new()
+	p.id = Id.MONSTER
+	p.display_name = "monster"
+	p.radius_cells = 2
+	p.height_cells = 7
+	p.max_step = 1.75
+	p.max_drop = 6.0
+	p.max_wade = 3
+	p.can_jump = true
 	p.surface_cost = _surface_costs({})
 	return p
 
