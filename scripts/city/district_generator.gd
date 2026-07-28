@@ -2,13 +2,14 @@
 class_name DistrictGenerator
 extends RefCounted
 
-const StreetNavLayersScript := preload("res://scripts/city/street_nav_layers.gd")
+const StreetTopologyScript := preload("res://scripts/city/street_topology.gd")
 const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
 const PlazaComposerScript := preload("res://scripts/city/plaza_composer.gd")
 const ParkComposerScript := preload("res://scripts/city/park_composer.gd")
 const HillComposerScript := preload("res://scripts/city/hill_composer.gd")
 const GraveyardComposerScript := preload("res://scripts/city/graveyard_composer.gd")
 const LakeComposerScript := preload("res://scripts/city/lake_composer.gd")
+const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 
@@ -44,12 +45,15 @@ var _park: ParkComposer
 var _hill: HillComposer
 var _graveyard: GraveyardComposer
 var _lake: LakeComposer
+var _castle: CastleComposer
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
 ## Hill gem ore (world voxel coords + material ids) collected during compose.
 var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
+## Castle plan from the compose pass; outlives the composer so the bake can hand it on.
+var _castle_layout: CastleLayout = null
 ## World voxel origin of this district tile (local paint stays 0..size).
 var origin_vox: Vector3i = Vector3i.ZERO
 var district_coord: Vector2i = Vector2i.ZERO
@@ -105,6 +109,12 @@ func get_offline_volume():
 	if _brush == null:
 		return null
 	return _brush.volume
+
+
+## The castle plan in *district-local* voxel coords, or null outside Castle districts.
+## Survives end_generate() so a finished bake can still be asked what it built.
+func get_castle_layout() -> CastleLayout:
+	return _castle_layout
 
 
 ## World-voxel gem ore placed by the hill compose pass (empty outside Hill districts).
@@ -165,6 +175,14 @@ func _setup_composers() -> void:
 	_lake.ground_y = ground_thickness
 	_lake.planner = _planner
 	_lake.cell_size = cell_size
+
+	_castle = CastleComposerScript.new()
+	_castle.brush = _brush
+	_castle.rng = _rng
+	_castle.ground_y = ground_thickness
+	_castle.planner = _planner
+	_castle.cell_size = cell_size
+	_castle_layout = null
 
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
@@ -273,8 +291,9 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			_paint_street_cell(smin, smax, cx, cz, false)
 		LandUse.PLAZA:
 			_brush.fill_box(smin, smax, theme.plaza_mat)
-		LandUse.PARK, LandUse.HILL, LandUse.LAKE:
-			## Lake tiles start as meadow; LakeComposer carves the basin into it.
+		LandUse.PARK, LandUse.HILL, LandUse.LAKE, LandUse.CASTLE:
+			## Lake tiles start as meadow; LakeComposer carves the basin into it. Castle
+			## tiles keep the meadow as the open field the fortress stands in.
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		LandUse.GRAVEYARD:
 			## Consecrated ground is turned earth, never lawn — park green under the
@@ -299,7 +318,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -313,7 +332,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE:
 			return
 		_:
 			pass
@@ -360,8 +379,20 @@ func decorate_open_spaces() -> void:
 	## Fancy plaza/park/hill pass — call only once the full feature AABBs are editable.
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
-		or _hill == null or _graveyard == null or _lake == null
+		or _hill == null or _graveyard == null or _lake == null or _castle == null
 	):
+		return
+	var lc := _planner.large_castle
+	if lc.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 6)
+		var cmin := Vector3i(
+			lc.position.x * cell_size, ground_thickness, lc.position.y * cell_size
+		)
+		var cmax := Vector3i(
+			lc.end.x * cell_size, ground_thickness + 1, lc.end.y * cell_size
+		)
+		_castle.compose(cmin, cmax)
+		_castle_layout = _castle.layout
 		return
 	var ll := _planner.large_lake
 	if ll.size.x > 0:
@@ -428,8 +459,23 @@ func decorate_open_spaces_far() -> void:
 	## Sparse trees / benches so distant greens aren't empty until upgrade.
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
-		or _hill == null or _graveyard == null or _lake == null
+		or _hill == null or _graveyard == null or _lake == null or _castle == null
 	):
+		return
+	var lc := _planner.large_castle
+	if lc.size.x > 0:
+		## Same feature seed as the near pass on purpose: the castle *is* the landmark of
+		## its quarter, so the distant silhouette has to be the fortress the player will
+		## walk up to, not a differently-planned one that swaps out on approach.
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 6)
+		var cmin := Vector3i(
+			lc.position.x * cell_size, ground_thickness, lc.position.y * cell_size
+		)
+		var cmax := Vector3i(
+			lc.end.x * cell_size, ground_thickness + 1, lc.end.y * cell_size
+		)
+		_castle.compose_far_sparse(cmin, cmax)
+		_castle_layout = _castle.layout
 		return
 	var ll := _planner.large_lake
 	if ll.size.x > 0:
@@ -497,6 +543,19 @@ func open_space_bounds() -> Array[AABB]:
 	var yh := 12.0
 	var ox := float(origin_vox.x)
 	var oz := float(origin_vox.z)
+	var lc := _planner.large_castle
+	if lc.size.x > 0:
+		## Plinth, curtain, towers and keep — the causeway stays inside the same reserve, so
+		## one box covers the whole fortress. The keep is the tallest of them: an 18-voxel
+		## plinth, five storeys at nine voxels each and a corner turret over that, so the box
+		## has to reach as high as the hill sculpt's does.
+		out.append(
+			AABB(
+				Vector3(ox + lc.position.x * cell_size, y0, oz + lc.position.y * cell_size),
+				Vector3(lc.size.x * cell_size, 90.0, lc.size.y * cell_size)
+			)
+		)
+		return out
 	var ll := _planner.large_lake
 	if ll.size.x > 0:
 		## The basin is carved *below* the deck, so the region has to start at the
@@ -568,6 +627,7 @@ func end_generate() -> void:
 	_hill = null
 	_graveyard = null
 	_lake = null
+	_castle = null
 	_grammar = null
 
 
@@ -584,7 +644,7 @@ func _paint_cell(cx: int, cz: int) -> void:
 			_paint_plaza_cell(min_v, max_v, cx, cz, _plaza)
 		LandUse.PARK:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
-		LandUse.HILL, LandUse.LAKE:
+		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		LandUse.GRAVEYARD:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.GRAVE_SOIL)
@@ -596,13 +656,17 @@ func get_planner() -> DistrictPlanner:
 	return _planner
 
 
-func build_street_nav(tool: VoxelTool) -> StreetNavLayers:
+## The planner-derived lane and pavement annotations for this district. No voxels are read:
+## the span field owns heights, so this is pure topology and costs nothing on the main thread.
+func build_street_topology() -> StreetTopology:
 	if _planner == null:
-		push_error("DistrictGenerator.build_street_nav: planner missing — call generate() first")
+		push_error(
+			"DistrictGenerator.build_street_topology: planner missing — call generate() first"
+		)
 		return null
-	var layers: StreetNavLayers = StreetNavLayersScript.new()
-	layers.build(_planner, tool, cell_size, ground_thickness, voxel_size, origin_vox)
-	return layers
+	var topology: StreetTopology = StreetTopologyScript.new()
+	topology.build(_planner, cell_size, voxel_size, ground_thickness, origin_vox)
+	return topology
 
 
 func find_spawn_world(tool: VoxelTool) -> Vector3:

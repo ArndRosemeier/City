@@ -74,7 +74,7 @@ func duplicate_as(new_id: int, new_name: String) -> _Self:
 
 ## Everything NavService registers at boot.
 static func defaults() -> Array[_Self]:
-	return [pedestrian(), undead(), giant()]
+	return [pedestrian(), undead(), giant(), car()]
 
 
 ## A person: 1 m across, 2 m tall, steps a curb, drops off a kerb but not a roof.
@@ -153,7 +153,10 @@ static func car() -> _Self:
 	p.radius_cells = 2
 	p.height_cells = 4
 	p.max_step = 0.75
-	p.max_drop = 1.0
+	## A metre is a hard landing for a saloon and half of one would be kinder, but drop links
+	## do not start until 1.7 voxels: a car that walked less than that would meet descents it
+	## could neither drive down nor take a link for, and would sit on the ledge forever.
+	p.max_drop = 2.0
 	p.max_wade = 0
 	p.surface_cost = _surface_costs({
 		VoxelMaterial.SIDEWALK: 4.0,

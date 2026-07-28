@@ -21,7 +21,9 @@ const HILL := 5
 const GRAVEYARD := 6
 ## Outer-ring water: edge stubs only, one natural lake with wooded islands.
 const LAKE := 7
-const COUNT := 8
+## Outer-ring fortress: edge stubs only, walled castle on a plinth reached by a causeway.
+const CASTLE := 8
+const COUNT := 9
 
 ## Districts within this many tiles of the world origin are always the high-rise core.
 const CORE_RING := 0
@@ -76,12 +78,12 @@ static func for_district(world_seed: int, coord: Vector2i) -> DistrictTheme:
 	elif ring == 2:
 		choices = PackedInt32Array([
 			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL,
-			GRAVEYARD, LAKE
+			GRAVEYARD, LAKE, CASTLE
 		])
 	else:
 		choices = PackedInt32Array([
 			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GRAVEYARD,
-			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN,
+			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE,
 		])
 	return make(choices[pick % choices.size()])
 
@@ -139,6 +141,10 @@ static func parse_theme_id(raw: String) -> int:
 		"lakeside": LAKE,
 		"water": LAKE,
 		"lagoon": LAKE,
+		"castle": CASTLE,
+		"fortress": CASTLE,
+		"keep": CASTLE,
+		"citadel": CASTLE,
 	}
 	if aliases.has(key):
 		return int(aliases[key])
@@ -404,6 +410,39 @@ static func make(theme_id: int) -> DistrictTheme:
 			## No interior streets — planner stamps short edge stubs only.
 			t.road_density = 0.0
 			t.median_planting = true
+		CASTLE:
+			t.display_name = "Castle"
+			t.blurb = "A walled fortress on a plinth, reached by a causeway — roads only at the edges."
+			t.wall_mats = PackedInt32Array([
+				VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.CASTLE_BLOCK_MOSSY,
+				VoxelMaterial.STONE
+			])
+			t.townhouse_mats = PackedInt32Array([
+				VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.STONE
+			])
+			t.roof_mats = PackedInt32Array([VoxelMaterial.ROOF_CLAY, VoxelMaterial.CASTLE_BLOCK])
+			t.base_mat = VoxelMaterial.CASTLE_BLOCK
+			t.tower_shaft_mat = VoxelMaterial.CASTLE_BLOCK
+			t.accent_mat = VoxelMaterial.WROUGHT_IRON
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.CASTLE_BLOCK_MOSSY,
+				VoxelMaterial.STONE, VoxelMaterial.BRICK_DARK
+			])
+			t.sidewalk_mat = VoxelMaterial.GRAVEL
+			t.plaza_mat = VoxelMaterial.GRAVEL
+			t.plaza_inner_mat = VoxelMaterial.DIRT
+			t.intensity_bias = -0.5
+			t.height_scale = 0.0
+			t.tower_chance = 0.0
+			t.modern_chance = 0.0
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.0
+			t.cylinder_chance = 0.0
+			t.wild_chance = 0.0
+			t.park_count = 0
+			## No interior streets — planner stamps short edge stubs only.
+			t.road_density = 0.0
+			t.median_planting = false
 		_:
 			push_error("DistrictTheme.make: unknown theme id %d" % theme_id)
 	return t

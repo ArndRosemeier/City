@@ -7,16 +7,16 @@
 ##
 ## An errand is a short list of world points, and the ped walks one NavGoal per point. Almost
 ## always that list is one point, a pavement destination; the exceptions are the crossings on
-## the way, which are the pavement intent the retired roadmap encoded as graph topology:
+## the way, which are the pavement intent `SidewalkMap` holds as topology:
 ##
 ## - Destinations are pavement nodes, never carriageway mids, so a ped's errands begin and end
 ##   on the pavement and it never idles in the road. That replaces the curb teleport in the old
 ##   `_leave_carriageway_if_needed`, which shoved a ped onto the nearest curb after every walk.
 ## - Where an errand crosses a carriageway it goes through a crossing, as three points: the
 ##   near curb pad, the carriageway mid, the far curb pad. Those are exactly the three nodes
-##   StreetNavLayers links a crossing out of, so a ped enters and leaves the road inside the
+##   SidewalkMap links a crossing out of, so a ped enters and leaves the road inside the
 ##   painted crossing — and it stands on the crossing mid, which is what makes cars yield to it
-##   through `StreetNavLayers.refresh_crossing_occupancy_agents`.
+##   through `SidewalkMap.refresh_occupancy`.
 ##
 ## The legs are not a workaround for smoothing any more. `NavWorld::smooth` is cost-aware and
 ## does keep the crossing the search paid for — `tools/test_ped_nav.gd` asserts a corridor
@@ -35,7 +35,7 @@ extends NavGoalProvider
 
 const NavGoalScript := preload("res://scripts/city/nav_goal.gd")
 
-## Destinations drawn before an errand gives up, in case the roadmap keeps offering
+## Destinations drawn before an errand gives up, in case the pavement keeps offering
 ## carriageway mids.
 const DEST_TRIES := 6
 ## Snap attempts for one waypoint before the errand is dropped.
@@ -63,7 +63,7 @@ var flee_run_max_m: float = 140.0
 ## Arrival distance for one leg of an errand. Tighter than a curb pad is wide, so a ped that
 ## arrived at a crossing is standing on it.
 var arrive_radius_m: float = 1.25
-## How far from a roadmap node a pedestrian span may be and still count as that node.
+## How far from a pavement node a pedestrian span may be and still count as that node.
 var snap_radius_m: float = 4.0
 ## Ambient path queries per second this crowd may cause, over the whole district.
 var goal_queries_per_sec: float = 12.0
@@ -77,7 +77,7 @@ var _rng := RandomNumberGenerator.new()
 var _time: float = 0.0
 var _tokens: float = 0.0
 ## The street layout, read for errand endpoints and crossings only. Never steered along.
-var _roadmap: PedRoadMap = null
+var _pavement: SidewalkMap = null
 var _pavement_nodes: int = 0
 
 var _errands: int = 0
@@ -100,21 +100,19 @@ func setup(nav: NavService, profile_id: int, seed_value: int) -> void:
 	_tokens = goal_queries_per_sec
 
 
-## Adopt the district's street layout. Returns the number of pavement nodes errands can start
-## and end on; zero means this crowd has nowhere to walk and should not be spawned.
-func bind_roadmap(roadmap: PedRoadMap) -> int:
-	_roadmap = roadmap
+## Adopt the district's pavement. Returns the number of nodes errands can start and end on;
+## zero means this crowd has nowhere to walk and should not be spawned.
+func bind_pavement(pavement: SidewalkMap) -> int:
+	_pavement = pavement
 	_pavement_nodes = 0
-	if roadmap == null or roadmap.is_empty():
-		push_error("PedGoalProvider.bind_roadmap: no roadmap, so the crowd has no pavement")
+	if pavement == null or pavement.is_empty():
+		push_error("PedGoalProvider.bind_pavement: no pavement, so the crowd has nowhere to be")
 		return 0
-	for node in range(roadmap.node_count):
-		if not roadmap.is_crossing_node(node):
-			_pavement_nodes += 1
+	_pavement_nodes = pavement.pavement_count()
 	if _pavement_nodes == 0:
 		push_error(
-			"PedGoalProvider.bind_roadmap: %d roadmap nodes and every one is a carriageway mid"
-			% roadmap.node_count
+			"PedGoalProvider.bind_pavement: %d nodes and every one is a carriageway mid"
+			% pavement.node_count
 		)
 	return _pavement_nodes
 
@@ -137,15 +135,15 @@ func advance(delta: float) -> void:
 
 ## A spawn point on the pavement, on a span a pedestrian can stand on, in the largest
 ## connected part of the street layout so the ped has errands to run. Vector3.INF without a
-## roadmap; the raw node when no span was found near it, so the spawned count stays what the
+## pavement; the raw node when no span was found near it, so the spawned count stays what the
 ## director asked for and the failure ladder reports the rest.
 func random_spawn() -> Vector3:
-	if _roadmap == null or _roadmap.is_empty():
+	if _pavement == null or _pavement.is_empty():
 		return Vector3.INF
-	var node := _roadmap.random_node(_rng)
+	var node := _pavement.random_node(_rng)
 	if node < 0:
 		return Vector3.INF
-	var at := _roadmap.positions[node]
+	var at := _pavement.positions[node]
 	var hit := _nav.nearest_surface(_profile_id, at, snap_radius_m)
 	if not hit.found:
 		_snap_misses += 1
@@ -157,25 +155,25 @@ func random_spawn() -> Vector3:
 ## Public because it is the whole of the pavement policy and worth testing on its own.
 func plan_errand(from_world: Vector3) -> Array[Vector3]:
 	var legs: Array[Vector3] = []
-	if _roadmap == null or _roadmap.is_empty():
+	if _pavement == null or _pavement.is_empty():
 		return legs
-	var from_node := _roadmap.nearest_sidewalk_node(from_world)
+	var from_node := _pavement.nearest_sidewalk_node(from_world)
 	if from_node < 0:
 		return legs
 	var to_node := -1
 	for _try in range(DEST_TRIES):
-		var cand := _roadmap.random_goal_node(
+		var cand := _pavement.random_goal_node(
 			from_node, walk_goal_min_m, walk_goal_max_m, _rng
 		)
 		if cand < 0 or cand == from_node:
 			continue
-		if _roadmap.is_crossing_node(cand):
+		if _pavement.is_crossing_node(cand):
 			continue
 		to_node = cand
 		break
 	if to_node < 0:
 		return legs
-	var nodes := _roadmap.find_path(from_node, to_node)
+	var nodes := _pavement.find_path(from_node, to_node)
 	if nodes.size() < 2:
 		push_error(
 			"PedGoalProvider: no route from node %d to %d, which the layout said were connected"
@@ -183,15 +181,15 @@ func plan_errand(from_world: Vector3) -> Array[Vector3]:
 		)
 		return legs
 	for i in range(nodes.size()):
-		if not _roadmap.is_crossing_node(nodes[i]):
+		if not _pavement.is_crossing_node(nodes[i]):
 			continue
 		_crossings_used += 1
 		if i > 0:
-			_append_leg(legs, _roadmap.positions[nodes[i - 1]])
-		_append_leg(legs, _roadmap.positions[nodes[i]])
+			_append_leg(legs, _pavement.positions[nodes[i - 1]])
+		_append_leg(legs, _pavement.positions[nodes[i]])
 		if i + 1 < nodes.size():
-			_append_leg(legs, _roadmap.positions[nodes[i + 1]])
-	_append_leg(legs, _roadmap.positions[to_node])
+			_append_leg(legs, _pavement.positions[nodes[i + 1]])
+	_append_leg(legs, _pavement.positions[to_node])
 	_errands += 1
 	return legs
 
@@ -319,7 +317,7 @@ func idled() -> int:
 	return _idled
 
 
-## Roadmap nodes with no pedestrian span within `snap_radius_m`. Pavement the span field
+## Pavement nodes with no pedestrian span within `snap_radius_m`. Pavement the span field
 ## disagrees with, so worth seeing rather than swallowing.
 func snap_misses() -> int:
 	return _snap_misses
@@ -364,8 +362,8 @@ func _spend_token() -> bool:
 	return true
 
 
-## A roadmap node is a position from the street layout; the span field decides the height it is
-## actually standable at. Vector3.INF when there is no span there at all.
+## A pavement node is a position from the street layout; the span field decides the height it
+## is actually standable at. Vector3.INF when there is no span there at all.
 func _snap(at: Vector3) -> Vector3:
 	for _try in range(SNAP_TRIES):
 		var hit := _nav.nearest_surface(_profile_id, at, snap_radius_m)

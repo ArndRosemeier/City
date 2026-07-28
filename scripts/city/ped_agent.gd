@@ -8,7 +8,7 @@
 ## a physics presence here would change that.
 ##
 ## `position` is the inherited Node3D translation, and every consumer — the visual, crossing
-## occupancy in street_nav_layers.gd, the vehicle director — reads it as a world position, so
+## occupancy in sidewalk_map.gd, the vehicle director — reads it as a world position, so
 ## CrowdDirector asserts that the crowd hangs off an untransformed parent chain.
 class_name PedAgent
 extends CharacterBody3D

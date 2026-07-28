@@ -10,8 +10,6 @@ const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
 const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
-const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
-const CarRoadMapScript := preload("res://scripts/city/car_roadmap.gd")
 
 signal ready_to_play(instance: DistrictInstance)
 signal failed(instance: DistrictInstance, reason: String)
@@ -36,9 +34,11 @@ var scale_pads: Node
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
-var _nav_layers: StreetNavLayers
-## This tile's span field is in the world-level NavService (peds and cars still use the
-## planner-derived _nav_layers; both stacks run until the consumers are ported).
+## Planner-derived lane and pavement annotations. Not a navigation graph: it says which side
+## of a carriageway is which lane and where the crossings are, and the span field in
+## NavService does the routing.
+var _topology: StreetTopology
+## True once this tile's span field is registered with the world-level NavService.
 var _nav_registered: bool = false
 
 var _voxel_size: float = 0.5
@@ -180,7 +180,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		street_props.clear_props()
 		street_props.queue_free()
 	street_props = null
-	_nav_layers = null
+	_topology = null
 	generator = null
 	_terrain_ref = terrain
 	_tool_ref = tool
@@ -221,7 +221,7 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		CityProfiler.note_event("voxel_anchor_removed")
 		_anchor.queue_free()
 	_anchor = null
-	_nav_layers = null
+	_topology = null
 	generator = null
 	## Dropping the data-only anchor unloads this tile's voxels from RAM.
 	queue_free()
@@ -360,25 +360,21 @@ func _stamp_detail_async() -> void:
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_nav")
-	_nav_layers = generator.build_street_nav(tool)
+	_topology = generator.build_street_topology()
 	CityProfiler.end("stream_nav")
-	if _nav_layers == null or not _nav_layers.is_ready():
+	if _topology == null or not _topology.is_ready():
 		is_busy = false
-		failed.emit(self, "nav failed")
+		failed.emit(self, "street topology failed")
 		return
 
 	await get_tree().process_frame
-	var ped_map: PedRoadMap = PedRoadMapScript.new()
-	ped_map.bind_graph(_nav_layers.ped)
-	var car_map: CarRoadMap = CarRoadMapScript.new()
-	car_map.bind_graph(_nav_layers.road, _nav_layers)
 
 	CityProfiler.begin("stream_crowd")
 	crowd = CrowdDirectorScript.new()
 	crowd.name = "Crowd"
 	crowd.pedestrian_count = _crowd_count
 	add_child(crowd)
-	crowd.setup(ped_map, camera, _dseed)
+	crowd.setup(_topology.sidewalks, camera, _dseed)
 	CityProfiler.end("stream_crowd")
 	await get_tree().process_frame
 
@@ -387,7 +383,7 @@ func _stamp_detail_async() -> void:
 	vehicles.name = "Traffic"
 	vehicles.vehicle_count = _vehicle_count
 	add_child(vehicles)
-	vehicles.setup(car_map, camera, _dseed)
+	vehicles.setup(_topology, camera, _dseed)
 	vehicles.bind_crowd(crowd)
 	CityProfiler.end("stream_vehicles")
 	await get_tree().process_frame

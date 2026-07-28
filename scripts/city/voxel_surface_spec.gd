@@ -362,6 +362,35 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.tint = Color(0.6, 0.68, 0.62, 1.0)
 			s.roughness = 0.92
 			s.tint_variation = 0.3
+		VoxelMaterial.CASTLE_BLOCK:
+			## Dressed ashlar: tile at roughly one course per metre so a curtain wall reads
+			## as coursed blocks rather than one smeared cliff of rock.
+			s.albedo_file = "stone.jpg"
+			s.normal_file = "stone_normal.jpg"
+			s.tile_meters = Vector2(1.5, 1.0)
+			s.tint = Color(0.62, 0.6, 0.55, 1.0)
+			s.roughness = 0.9
+			s.normal_strength = 1.1
+			s.tint_variation = 0.22
+			s.weathering = 0.55
+			s.grime = 0.7
+			## Tall walls: the wash has to run much further down than a two-storey facade.
+			s.grime_height = 8.0
+			s.streaks = 0.5
+		VoxelMaterial.CASTLE_BLOCK_MOSSY:
+			## Same ashlar, greened. Used for lower courses and weathered patches, so it has
+			## to read as the *same* wall at a different age, not as a second material.
+			s.albedo_file = "stone.jpg"
+			s.normal_file = "stone_normal.jpg"
+			s.tile_meters = Vector2(1.5, 1.0)
+			s.tint = Color(0.42, 0.47, 0.36, 1.0)
+			s.roughness = 0.95
+			s.normal_strength = 1.1
+			s.tint_variation = 0.28
+			s.weathering = 0.75
+			s.grime = 0.85
+			s.grime_height = 8.0
+			s.streaks = 0.65
 		_:
 			push_error(
 				"VoxelSurfaceSpec.for_id: no surface spec for voxel material %d — showing magenta"

@@ -72,8 +72,13 @@ const GEM_TOPAZ := 51
 const GEM_SAPPHIRE := 52
 const GEM_EMERALD := 53
 const GEM_DIAMOND := 54
+## Castle kit: dressed ashlar for the plinth, curtain wall, towers and gatehouse, plus a
+## weathered variant. Both destructible and cascading like ordinary built stone — blasting
+## a breach into the curtain is meant to work.
+const CASTLE_BLOCK := 55
+const CASTLE_BLOCK_MOSSY := 56
 
-const COUNT := 55
+const COUNT := 57
 
 ## Rarity weights for pick_gem (sum = 100).
 const GEM_WEIGHT_QUARTZ := 48
@@ -214,6 +219,12 @@ static func is_gem(id: int) -> bool:
 	return id >= GEM_QUARTZ and id <= GEM_DIAMOND
 
 
+## Dressed castle masonry, either course. The plinth, curtain and towers are all built
+## from these two, so "is this the castle" is one predicate rather than two comparisons.
+static func is_castle_block(id: int) -> bool:
+	return id == CASTLE_BLOCK or id == CASTLE_BLOCK_MOSSY
+
+
 static func gem_rarity_weight(id: int) -> int:
 	match id:
 		GEM_QUARTZ:
@@ -348,5 +359,9 @@ static func color(id: int) -> Color:
 			return Color(0.18, 0.85, 0.42)
 		GEM_DIAMOND:
 			return Color(0.92, 0.96, 1.0)
+		CASTLE_BLOCK:
+			return Color(0.52, 0.5, 0.46)
+		CASTLE_BLOCK_MOSSY:
+			return Color(0.4, 0.44, 0.34)
 		_:
 			return Color(1, 0, 1)

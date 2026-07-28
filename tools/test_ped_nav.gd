@@ -1,11 +1,11 @@
 ## Pedestrians on the voxel navigation stack: CrowdDirector, PedGoalProvider and the
 ## `pedestrian` profile, on stated geometry first and a real baked district second.
 ##
-## The hand-painted street tile is what pins the intent the retired roadmap encoded as graph
+## The hand-painted street tile is what pins the intent the retired ped graph encoded as
 ## topology: two pavements either side of a carriageway with a marked crossing every 10 m. If
-## the profile's surface costs and the pavement anchor table work, a crowd walking between
-## anchors stays on the pavement, crosses at the crossings, and never idles in the road. If they
-## do not, this tile says so in one number.
+## the profile's surface costs and the kerb pads work, a crowd walking between pads stays on
+## the pavement, crosses at the crossings, and never idles in the road. If they do not, this
+## tile says so in one number.
 ##
 ## The real district then answers the density questions the tile cannot: three LOD tiers at
 ## once, and whether a crowd keeps the shared NavService queue bounded while it walks.
@@ -15,8 +15,7 @@ extends Node
 
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const DistrictBakeJobScript := preload("res://scripts/city/district_bake_job.gd")
-const NavGraphScript := preload("res://scripts/city/nav_graph.gd")
-const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
+const SidewalkMapScript := preload("res://scripts/city/sidewalk_map.gd")
 const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
 
 const VOXEL_SIZE := 0.5
@@ -70,15 +69,6 @@ const DRIVE_BUDGET_MS := 30000
 
 enum Ground { PAVEMENT, CROSSWALK, CARRIAGEWAY }
 
-## Curb pad sides of a road cell, as StreetNavLayers numbers them. N/S are the pair a crossing
-## along X joins, W/E the pair a crossing along Z joins.
-const SIDE_N := 0
-const SIDE_S := 1
-const SIDE_W := 2
-const SIDE_E := 3
-const SIDE_NORMALS: Array[Vector2i] = [
-	Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)
-]
 ## A crowd spawns in the largest connected part of the layout, so a fragmented one strands it
 ## on a handful of anchors instead of failing outright. Assert the shape before the density.
 const MIN_LARGEST_COMPONENT := 0.8
@@ -144,7 +134,7 @@ func _ready() -> void:
 # The intent, as cost
 # ---------------------------------------------------------------------------
 
-## The old ped roadmap held sidewalk nodes and explicit crossing edges, so "stay on the
+## The old ped graph held sidewalk nodes and explicit crossing edges, so "stay on the
 ## pavement, cross at a crossing" was a property of the graph. On the span field it is a
 ## property of the profile, and this is the shape it has to have.
 func _test_profile_costs() -> void:
@@ -243,13 +233,13 @@ func _test_corridor_keeps_its_crossing() -> void:
 ## Eight metres of asphalt at 2.5x is worth about five metres of pavement each way, so beyond
 ## that the search jaywalks on purpose and no smoothing rule will change its mind.
 func _test_errand_crosses_at_crossings() -> void:
-	var roadmap := _street_roadmap()
+	var pavement := _street_pavement()
 	var provider := PedGoalProvider.new()
 	provider.walk_goal_min_m = 12.0
 	provider.walk_goal_max_m = 55.0
 	provider.setup(_nav, NavProfile.Id.PEDESTRIAN, 7)
-	if provider.bind_roadmap(roadmap) <= 0:
-		_fail("FAIL the street roadmap has no pavement nodes")
+	if provider.bind_pavement(pavement) <= 0:
+		_fail("FAIL the street pavement has no kerb pads")
 		return
 	var from := _street_world(Vector3i(PAIR_X, 1, WALK_N_Z))
 	var crossed := 0
@@ -329,22 +319,22 @@ func _walk_stays_off_the_carriageway(from: Vector3, to: Vector3) -> bool:
 # ---------------------------------------------------------------------------
 
 func _test_street_crowd() -> void:
-	var roadmap := _street_roadmap()
+	var pavement := _street_pavement()
 	var camera := _make_camera(_street_world(Vector3i(STREET_SX / 2, 4, STREET_SZ / 2)))
 	var crowd := _make_crowd(STREET_PEDS, camera)
-	crowd.setup(roadmap, camera, 11)
+	crowd.setup(pavement, camera, 11)
 	if crowd.agent_count() != STREET_PEDS:
 		_fail("FAIL %d of %d peds spawned" % [crowd.agent_count(), STREET_PEDS])
 		return
 	var provider := crowd.goal_provider()
-	var sidewalk_nodes := 0
-	for node in range(roadmap.node_count):
-		if not roadmap.is_crossing_node(node):
-			sidewalk_nodes += 1
-	if provider.pavement_count() != sidewalk_nodes:
+	var kerb_pads := 0
+	for node in range(pavement.node_count):
+		if not pavement.is_crossing_node(node):
+			kerb_pads += 1
+	if provider.pavement_count() != kerb_pads:
 		_fail(
-			"FAIL %d pavement nodes from %d sidewalk and %d crossing nodes"
-			% [provider.pavement_count(), sidewalk_nodes, roadmap.node_count - sidewalk_nodes]
+			"FAIL %d pavement nodes from %d kerb pads and %d carriageway mids"
+			% [provider.pavement_count(), kerb_pads, pavement.node_count - kerb_pads]
 		)
 		return
 	for i in range(crowd.agent_count()):
@@ -452,28 +442,37 @@ func _test_real_district_crowd() -> void:
 	if planner == null:
 		_fail("FAIL the real bake returned no planner to read the street layout from")
 		return
-	var ground_y := float(int(bake.get("ground_thickness", 6)) + 1) * VOXEL_SIZE
-	var roadmap := _planner_roadmap(planner, ground_y)
-	if roadmap.is_empty():
-		_fail("FAIL the planner produced no pavement anchors")
+	var ground_thickness := int(bake.get("ground_thickness", 6))
+	var ground_y := float(ground_thickness + 1) * VOXEL_SIZE
+	var topology := StreetTopology.new()
+	topology.build(
+		planner,
+		DistrictCoord.CELL_SIZE,
+		VOXEL_SIZE,
+		ground_thickness,
+		DistrictCoord.origin_vox(REAL_TILE)
+	)
+	if not topology.is_ready():
+		_fail("FAIL the planner produced no street topology")
 		return
-	if roadmap.largest_component_ratio() < MIN_LARGEST_COMPONENT:
+	var pavement := topology.sidewalks
+	if pavement.largest_component_ratio() < MIN_LARGEST_COMPONENT:
 		_fail(
 			(
-				"FAIL the largest connected part of the layout holds %.0f%% of its %d nodes,"
+				"FAIL the largest connected part of the pavement holds %.0f%% of its %d nodes,"
 				+ " so a crowd spawned in it has almost nowhere to walk"
 			)
-			% [roadmap.largest_component_ratio() * 100.0, roadmap.node_count]
+			% [pavement.largest_component_ratio() * 100.0, pavement.node_count]
 		)
 		return
 	print(
-		"real district %s: bake=%d ms roadmap nodes=%d edges=%d largest_component=%.2f ground_y=%.2f"
+		"real district %s: bake=%d ms pavement nodes=%d edges=%d largest_component=%.2f ground_y=%.2f"
 		% [
 			str(REAL_TILE),
 			Time.get_ticks_msec() - t0,
-			roadmap.node_count,
-			roadmap.edge_count,
-			roadmap.largest_component_ratio(),
+			pavement.node_count,
+			pavement.edge_count,
+			pavement.largest_component_ratio(),
 			ground_y,
 		]
 	)
@@ -485,7 +484,7 @@ func _test_real_district_crowd() -> void:
 	)
 	var camera := _make_camera(centre)
 	var crowd := _make_crowd(REAL_PEDS, camera)
-	crowd.setup(roadmap, camera, 23)
+	crowd.setup(pavement, camera, 23)
 	if crowd.agent_count() != REAL_PEDS:
 		_fail("FAIL %d of %d peds spawned" % [crowd.agent_count(), REAL_PEDS])
 		return
@@ -736,11 +735,12 @@ func _bake_street() -> RefCounted:
 	return bake as RefCounted
 
 
-## What StreetNavLayers would hand the crowd for this street: a run of pavement nodes down
-## each side, and one crossing per crosswalk linking the two curb pads through a carriageway
-## mid — the only edge across the road, exactly as `_make_crossing` builds it.
-func _street_roadmap() -> PedRoadMap:
-	var graph: NavGraph = NavGraphScript.new()
+## The pavement this street carries: a run of kerb pads down each side, and one crossing per
+## crosswalk joining the two pads that face each other across the carriageway. Laid by hand
+## rather than derived from a planner, because the point of the tile is that its geometry is
+## stated and the crossings are exactly where the paint is.
+func _street_pavement() -> SidewalkMap:
+	var pavement: SidewalkMap = SidewalkMapScript.new()
 	var pads: Dictionary[Vector2i, int] = {}
 	for z: int in [WALK_N_Z, WALK_S_Z]:
 		var prev := -1
@@ -748,28 +748,21 @@ func _street_roadmap() -> PedRoadMap:
 			var on_crossing := _is_crosswalk_centre(x)
 			if not on_crossing and posmod(x - ANCHOR_PITCH / 2, ANCHOR_PITCH) != 0:
 				continue
-			var node := graph.add_node(_street_world(Vector3i(x, 1, z)))
+			var node := pavement.add_pad(_street_world(Vector3i(x, 1, z)))
 			if prev >= 0:
-				graph.link(prev, node)
+				pavement.link(prev, node)
 			prev = node
 			if on_crossing:
 				pads[Vector2i(x, z)] = node
-	var crossings: Array[int] = []
 	for x in range(STREET_SX):
 		if not _is_crosswalk_centre(x):
 			continue
-		var mid := graph.add_node(
-			_street_world(Vector3i(x, 1, (ROAD_Z0 + ROAD_Z1) / 2))
+		pavement.add_crossing(
+			PackedInt32Array([pads[Vector2i(x, WALK_N_Z)], pads[Vector2i(x, WALK_S_Z)]]),
+			Vector2i(x, 0)
 		)
-		graph.link(pads[Vector2i(x, WALK_N_Z)], mid)
-		graph.link(pads[Vector2i(x, WALK_S_Z)], mid)
-		crossings.append(mid)
-	graph.finalize(VOXEL_SIZE)
-	for i in range(crossings.size()):
-		graph.set_crossing_id(crossings[i], i)
-	var map: PedRoadMap = PedRoadMapScript.new()
-	map.bind_graph(graph)
-	return map
+	pavement.finalize()
+	return pavement
 
 
 func _is_crosswalk_centre(vx: int) -> bool:
@@ -826,152 +819,6 @@ func _street_world(vox: Vector3i) -> Vector3:
 		float(STREET_ORIGIN.y + vox.y),
 		float(STREET_ORIGIN.z + vox.z) + 0.5
 	) * VOXEL_SIZE
-
-
-# ---------------------------------------------------------------------------
-# The real district
-# ---------------------------------------------------------------------------
-
-## The street layout a real district hands the crowd, built from planner topology exactly the
-## way StreetNavLayers builds its ped graph: pads along the run a road cell belongs to, all four
-## at an intersection, linked along their runs and around every corner, and crossings — pad,
-## carriageway mid, pad — as the only edges over a carriageway. Crossings sit at every
-## intersection, plus the generator's own sparse mid-block hash.
-##
-## Which pads a cell gets is what decides whether the crowd has a district to walk or a
-## scrapheap of stubs: keying them on "this edge borders something that is not a road" breaks
-## every run where a side street joins, and a graph whose largest component is a twentieth of
-## its nodes strands the whole crowd on a handful of anchors.
-##
-## Built here rather than taken from StreetNavLayers because that needs a live VoxelTool to
-## snap node heights, and a headless bake has no terrain. The deck is flat at this quality, so
-## one ground height is the right answer for every node.
-func _planner_roadmap(planner: DistrictPlanner, ground_y: float) -> PedRoadMap:
-	var graph: NavGraph = NavGraphScript.new()
-	var origin := DistrictCoord.origin_world(REAL_TILE, VOXEL_SIZE)
-	var cell_m := float(DistrictCoord.CELL_SIZE) * VOXEL_SIZE
-	var inset := cell_m * 0.5 - 1.5
-	var pads: Dictionary[Vector3i, int] = {}
-	for cz in range(planner.cells_z):
-		for cx in range(planner.cells_x):
-			if not LandUse.is_road(planner.tag_at(cx, cz)):
-				continue
-			var centre := origin + Vector3(
-				(float(cx) + 0.5) * cell_m, ground_y, (float(cz) + 0.5) * cell_m
-			)
-			for side: int in _pad_sides(planner, cx, cz):
-				var normal := SIDE_NORMALS[side]
-				pads[Vector3i(cx, cz, side)] = graph.add_node(
-					centre + Vector3(float(normal.x) * inset, 0.0, float(normal.y) * inset)
-				)
-	if pads.is_empty():
-		return PedRoadMapScript.new() as PedRoadMap
-	for cz in range(planner.cells_z):
-		for cx in range(planner.cells_x):
-			if not LandUse.is_road(planner.tag_at(cx, cz)):
-				continue
-			var horiz := _is_run(planner, cx, cz, true)
-			var vert := _is_run(planner, cx, cz, false)
-			## The two pads flanking a run continue into the next cell of that run.
-			if (horiz or vert) and LandUse.is_road(planner.tag_at(cx + 1, cz)):
-				_link_pads(graph, pads, Vector3i(cx, cz, SIDE_N), Vector3i(cx + 1, cz, SIDE_N))
-				_link_pads(graph, pads, Vector3i(cx, cz, SIDE_S), Vector3i(cx + 1, cz, SIDE_S))
-			if (horiz or vert) and LandUse.is_road(planner.tag_at(cx, cz + 1)):
-				_link_pads(graph, pads, Vector3i(cx, cz, SIDE_W), Vector3i(cx, cz + 1, SIDE_W))
-				_link_pads(graph, pads, Vector3i(cx, cz, SIDE_E), Vector3i(cx, cz + 1, SIDE_E))
-			if not (horiz and vert):
-				continue
-			## An intersection's four pads ring the corner, which is how a ped turns without
-			## stepping into the carriageway.
-			var ring: Array[int] = [SIDE_N, SIDE_E, SIDE_S, SIDE_W]
-			for i in range(ring.size()):
-				_link_pads(
-					graph,
-					pads,
-					Vector3i(cx, cz, ring[i]),
-					Vector3i(cx, cz, ring[(i + 1) % ring.size()])
-				)
-	var crossings: Array[int] = []
-	for cz in range(planner.cells_z):
-		for cx in range(planner.cells_x):
-			if not LandUse.is_road(planner.tag_at(cx, cz)):
-				continue
-			var horiz := _is_run(planner, cx, cz, true)
-			var vert := _is_run(planner, cx, cz, false)
-			var intersection := horiz and vert
-			if not intersection and not _has_crosswalk(cx, cz):
-				continue
-			var centre := origin + Vector3(
-				(float(cx) + 0.5) * cell_m, ground_y, (float(cz) + 0.5) * cell_m
-			)
-			if intersection or horiz:
-				_add_crossing(graph, pads, crossings, centre, cx, cz, SIDE_N, SIDE_S)
-			if intersection or vert:
-				_add_crossing(graph, pads, crossings, centre, cx, cz, SIDE_W, SIDE_E)
-	graph.finalize(VOXEL_SIZE)
-	for i in range(crossings.size()):
-		graph.set_crossing_id(crossings[i], i)
-	var map: PedRoadMap = PedRoadMapScript.new()
-	map.bind_graph(graph)
-	return map
-
-
-## Which sides of a road cell carry a curb pad: both flanks of the run it belongs to, and all
-## four where two runs meet.
-func _pad_sides(planner: DistrictPlanner, cx: int, cz: int) -> Array[int]:
-	var horiz := _is_run(planner, cx, cz, true)
-	var vert := _is_run(planner, cx, cz, false)
-	if horiz and vert:
-		return [SIDE_N, SIDE_S, SIDE_W, SIDE_E]
-	if horiz:
-		return [SIDE_N, SIDE_S]
-	return [SIDE_W, SIDE_E]
-
-
-## Does this road cell continue along X (or along Z)?
-func _is_run(planner: DistrictPlanner, cx: int, cz: int, along_x: bool) -> bool:
-	if along_x:
-		return (
-			LandUse.is_road(planner.tag_at(cx - 1, cz))
-			or LandUse.is_road(planner.tag_at(cx + 1, cz))
-		)
-	return (
-		LandUse.is_road(planner.tag_at(cx, cz - 1))
-		or LandUse.is_road(planner.tag_at(cx, cz + 1))
-	)
-
-
-func _link_pads(
-	graph: NavGraph, pads: Dictionary[Vector3i, int], a: Vector3i, b: Vector3i
-) -> void:
-	if not pads.has(a) or not pads.has(b):
-		return
-	graph.link(pads[a], pads[b])
-
-
-func _add_crossing(
-	graph: NavGraph,
-	pads: Dictionary[Vector3i, int],
-	crossings: Array[int],
-	centre: Vector3,
-	cx: int,
-	cz: int,
-	side_a: int,
-	side_b: int
-) -> void:
-	var a := Vector3i(cx, cz, side_a)
-	var b := Vector3i(cx, cz, side_b)
-	if not pads.has(a) or not pads.has(b):
-		return
-	var mid := graph.add_node(centre)
-	graph.link(pads[a], mid)
-	graph.link(pads[b], mid)
-	crossings.append(mid)
-
-
-## The generator's own sparse mid-block crossing rule, mirrored from StreetNavLayers.
-func _has_crosswalk(cx: int, cz: int) -> bool:
-	return ((cx * 17 + cz * 31) % 7) == 0
 
 
 func _quit() -> void:

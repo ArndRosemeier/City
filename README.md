@@ -218,9 +218,17 @@ plus a counter line on the debug HUD layer. Blocks come back out of `NavService`
 (`is_column_blocked`, `blocked_columns`, expiring against the clock the native world was last
 advanced to), so the overlay also draws blocks it did not write.
 
+Peds, undead and cars all run on this: there is no second movement system left. Cars keep one
+thing the span field cannot carry, which is lane semantics — `StreetTopology` holds a
+`SidewalkMap` of kerb pads and crossings and a `CarLaneGraph` of directed lanes, both derived
+from the district planner and neither of them walked. The lane graph says which side of a
+carriageway runs which way and which turns a junction allows, and `NavService` routes between
+two lane points over whatever spans are actually there, so blowing a hole in a road reroutes
+the traffic and takes the lane points over the crater out of service until it is filled in.
+
 Checks: `tools/test_nav_bake`, `test_nav_links`, `test_nav_service`, `test_nav_agent`,
 `test_nav_dirty_rebuild`, `test_nav_debug_overlay`, `test_nav_lazy_repath`, `test_ped_nav`,
-`test_undead_nav` and `test_hill_district` (run as scenes). Looks:
+`test_undead_nav`, `test_car_nav` and `test_hill_district` (run as scenes). Looks:
 `tools/shot_nav_overlay.tscn` for the synthetic span field,
 `tools/shot_nav_overlay_city.tscn` for the overlay over the streamed city and the water case.
 

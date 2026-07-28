@@ -7,10 +7,10 @@
 ## around that: spawning, the three nav LOD tiers, the near-tier capsules and crowd separation,
 ## the skinned visuals, panic, and the query budget the crowd is allowed to spend.
 ##
-## The roadmap this is handed is no longer walked. It supplies the goal provider with errand
-## endpoints on the pavement and with the crossings to use on the way; routing, heights and
-## reachability all come from the span field, which is why `_ground_y` and the curb teleport
-## are gone.
+## The pavement this is handed is no longer walked. It supplies the goal provider with errand
+## endpoints and with the crossings to use on the way; routing, heights and reachability all
+## come from the span field, so there is no one ground height per district any more and no
+## teleport onto the kerb when a ped ends up somewhere the flat plane did not allow.
 class_name CrowdDirector
 extends Node3D
 
@@ -104,7 +104,7 @@ var _threat_pos_cache: Vector3 = Vector3.ZERO
 var _threat_pos_frame: int = -1
 
 
-func setup(roadmap: PedRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
+func setup(pavement: SidewalkMap, camera: Camera3D, seed_value: int = -1) -> void:
 	clear_crowd()
 	if seed_value >= 0:
 		_rng.seed = seed_value
@@ -128,7 +128,7 @@ func setup(roadmap: PedRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
 	_provider = PedGoalProvider.new()
 	_configure_provider()
 	_provider.setup(_nav, NavProfile.Id.PEDESTRIAN, _rng.randi())
-	if _provider.bind_roadmap(roadmap) <= 0:
+	if _provider.bind_pavement(pavement) <= 0:
 		return
 	_terrain = _find_terrain()
 	if _terrain == null:

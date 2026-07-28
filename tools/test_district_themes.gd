@@ -49,6 +49,10 @@ const GRAVEYARD_IDS: Array[int] = [
 	VoxelMaterial.GRAVE_STONE, VoxelMaterial.GRAVE_MARBLE, VoxelMaterial.GRAVE_SOIL,
 	VoxelMaterial.GRAVE_PATH, VoxelMaterial.WROUGHT_IRON, VoxelMaterial.YEW,
 ]
+## Castle kit: the plinth, curtain and towers are all dressed ashlar.
+const CASTLE_IDS: Array[int] = [
+	VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.CASTLE_BLOCK_MOSSY,
+]
 const STREET_PNG := "res://tools/city_theme_street.png"
 const SKYLINE_PNG := "res://tools/city_theme_skyline.png"
 const NEIGHBOUR_PNG := "res://tools/city_theme_neighbour.png"
@@ -174,6 +178,7 @@ func _summarize(coord: Vector2i, res: Dictionary) -> Dictionary:
 		"hill_cells": int(tags.get(LandUse.HILL, 0)),
 		"graveyard_cells": int(tags.get(LandUse.GRAVEYARD, 0)),
 		"lake_cells": int(tags.get(LandUse.LAKE, 0)),
+		"castle_cells": int(tags.get(LandUse.CASTLE, 0)),
 		"road_cells": int(tags.get(LandUse.ROAD, 0)) + int(tags.get(LandUse.AVENUE, 0)),
 		"lot_cells": (
 			int(tags.get(LandUse.CORE_LOT, 0))
@@ -210,6 +215,9 @@ func _material_histogram(blocks: Dictionary, ground_thickness: int) -> Dictionar
 	for id4: int in GRAVEYARD_IDS:
 		if not counts.has(id4):
 			counts[id4] = 0
+	for id5: int in CASTLE_IDS:
+		if not counts.has(id5):
+			counts[id5] = 0
 	for key: Variant in blocks.keys():
 		var bp: Vector3i = key
 		var block_y0 := bp.y * BLOCK
@@ -282,6 +290,7 @@ func _check_parks(stats: Array) -> void:
 	var hills := 0
 	var graveyards := 0
 	var basins := 0
+	var castles := 0
 	for s: Variant in stats:
 		var d: Dictionary = s
 		var m: Dictionary = d["walls"]
@@ -339,6 +348,24 @@ func _check_parks(stats: Array) -> void:
 				_fail("FAIL %s Lake district has no shore / island planting" % d["coord"])
 				return
 			continue
+		if int(d["theme_id"]) == DistrictTheme.CASTLE:
+			castles += 1
+			if int(d["lot_cells"]) > 0:
+				_fail("FAIL %s Castle district still has housing lots" % d["coord"])
+				return
+			if int(d["castle_cells"]) <= 0:
+				_fail("FAIL %s Castle district has no castle cells" % d["coord"])
+				return
+			if int(m[VoxelMaterial.CASTLE_BLOCK]) <= 0:
+				_fail("FAIL %s Castle district has no masonry" % d["coord"])
+				return
+			if int(m[VoxelMaterial.CASTLE_BLOCK_MOSSY]) <= 0:
+				_fail("FAIL %s Castle district has no weathering" % d["coord"])
+				return
+			if int(m[VoxelMaterial.GRAVEL]) <= 0:
+				_fail("FAIL %s Castle district has no approach track" % d["coord"])
+				return
+			continue
 		urban += 1
 		if int(m[VoxelMaterial.GRAVEL]) <= 0:
 			_fail("FAIL %s (%s) has no park paths" % [d["coord"], d["theme"]])
@@ -352,8 +379,11 @@ func _check_parks(stats: Array) -> void:
 		_fail("FAIL only %d of %d urban tiles got a pond" % [ponds, urban])
 		return
 	print(
-		"OK open space: parks on %d tiles (ponds %d), hills on %d, graveyards on %d, lakes on %d"
-		% [urban, ponds, hills, graveyards, basins]
+		(
+			"OK open space: parks on %d tiles (ponds %d), hills on %d, graveyards on %d,"
+			+ " lakes on %d, castles on %d"
+		)
+		% [urban, ponds, hills, graveyards, basins, castles]
 	)
 
 

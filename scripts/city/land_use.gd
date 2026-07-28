@@ -18,6 +18,8 @@ const HILL := 10
 const GRAVEYARD := 11
 ## Open water reserve — no housing; sculpted by LakeComposer.
 const LAKE := 12
+## Fortress reserve — no housing; built by CastleComposer.
+const CASTLE := 13
 
 
 static func is_road(tag: int) -> bool:
@@ -36,4 +38,10 @@ static func is_lot(tag: int) -> bool:
 
 
 static func is_open_nature(tag: int) -> bool:
-	return tag == PARK or tag == HILL or tag == GRAVEYARD or tag == LAKE
+	return (
+		tag == PARK
+		or tag == HILL
+		or tag == GRAVEYARD
+		or tag == LAKE
+		or tag == CASTLE
+	)

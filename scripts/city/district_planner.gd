@@ -24,6 +24,8 @@ var large_hill: Rect2i = Rect2i()
 var large_graveyard: Rect2i = Rect2i()
 ## Bounding rect of LandUse.LAKE cells. Empty when unused.
 var large_lake: Rect2i = Rect2i()
+## Bounding rect of LandUse.CASTLE cells. Empty when unused.
+var large_castle: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## World-space tips for street lights (cell centers along avenues).
 var avenue_light_cells: Array[Vector2i] = []
@@ -56,6 +58,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	large_hill = Rect2i()
 	large_graveyard = Rect2i()
 	large_lake = Rect2i()
+	large_castle = Rect2i()
 
 	if theme.id == DistrictTheme.HILL:
 		## Edge stubs only — a full arterial cross would slice the massif into wedges.
@@ -69,6 +72,11 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 		## Same edge connectors as Hill — the basin keeps the middle streetless.
 		_stamp_hill_edge_connectors(district_coord)
 		_build_lake_layout()
+	elif theme.id == DistrictTheme.CASTLE:
+		## Same edge connectors as Hill — the fortress owns the middle, and the causeway
+		## is the only way in, so an interior street grid would defeat the point.
+		_stamp_hill_edge_connectors(district_coord)
+		_build_castle_layout()
 	else:
 		_stamp_world_arterials(district_coord)
 		_stamp_organic_interior_roads()
@@ -90,6 +98,16 @@ func tag_at(cx: int, cz: int) -> int:
 	if cx < 0 or cz < 0 or cx >= cells_x or cz >= cells_z:
 		return LandUse.ROAD
 	return int(grid[cz][cx])
+
+
+## Is this cell a road belonging to *this* district? `tag_at` calls everything outside the
+## planner a road so that streets run off the edge and meet the neighbouring tile's, which is
+## right for stamping voxels and wrong for anything building per-district topology: a lane or
+## a kerb pad out there was never created, so asking for one is a bug rather than a border.
+func has_road_cell(cx: int, cz: int) -> bool:
+	if cx < 0 or cz < 0 or cx >= cells_x or cz >= cells_z:
+		return false
+	return LandUse.is_road(int(grid[cz][cx]))
 
 
 func is_corner_lot(cx: int, cz: int) -> bool:
@@ -212,6 +230,13 @@ func _build_lake_layout() -> void:
 	large_lake = _fill_open_reserve(LandUse.LAKE)
 	if large_lake.size.x <= 0:
 		push_error("DistrictPlanner._build_lake_layout: no lake cells after road stamp")
+
+
+## Castle theme: non-road cells become the fortress reserve for CastleComposer.
+func _build_castle_layout() -> void:
+	large_castle = _fill_open_reserve(LandUse.CASTLE)
+	if large_castle.size.x <= 0:
+		push_error("DistrictPlanner._build_castle_layout: no castle cells after road stamp")
 
 
 func _fill_open_reserve(tag: int) -> Rect2i:

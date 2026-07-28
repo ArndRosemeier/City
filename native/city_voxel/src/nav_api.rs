@@ -13,7 +13,8 @@ type Dict = Dictionary<Variant, Variant>;
 
 use crate::nav::{
     bake_field, link_reach, link_reach_y, LinkParams, NavField, Profile, Solidity, SpanId,
-    VoxelSource, LINK_CLIMB, LINK_DROP, LINK_JUMP, LINK_WALK,
+    VoxelSource, LINK_CLIMB, LINK_DROP, LINK_JUMP, LINK_WALK, SOL_PARTIAL, SOL_PASSABLE,
+    SOL_SOLID, SOL_WATER,
 };
 use crate::nav_world::{NavWorld, PathStatus};
 use crate::NativeOfflineVoxelVolume;
@@ -60,6 +61,9 @@ impl VoxelSource for BufferSource<'_> {
     }
 }
 
+/// A class byte outside the four known values would fall through every `SOL_*` match and
+/// read as thin air, so a typo in the GDScript table would quietly turn a wall into a
+/// doorway. Such a material keeps the default of solid and says so instead.
 fn solidity_from(
     class: &PackedByteArray,
     top: &PackedFloat32Array,
@@ -69,7 +73,16 @@ fn solidity_from(
     let mut sol = Solidity::default();
     for i in 0..256usize {
         if i < class.len() {
-            sol.class[i] = class[i];
+            let c = class[i];
+            if !(SOL_PASSABLE..=SOL_PARTIAL).contains(&c) {
+                godot_error!(
+                    "NavSolidity: material {i} has class {c}, and the classes are \
+                     {SOL_PASSABLE} passable, {SOL_WATER} water, {SOL_SOLID} solid, \
+                     {SOL_PARTIAL} partial"
+                );
+            } else {
+                sol.class[i] = c;
+            }
         }
         if i < top.len() {
             sol.top[i] = top[i];

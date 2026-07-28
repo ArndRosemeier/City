@@ -23,7 +23,13 @@ pub const GRAVE_SOIL: i32 = 37;
 pub const GRAVE_PATH: i32 = 38;
 pub const GEM_QUARTZ: i32 = 49;
 pub const GEM_DIAMOND: i32 = 54;
-pub const COUNT: i32 = 55;
+/// Castle ashlar. Ordinary built stone as far as native code is concerned: destructible
+/// and cascading, which the generic rules below already give it.
+#[allow(dead_code)]
+pub const CASTLE_BLOCK: i32 = 55;
+#[allow(dead_code)]
+pub const CASTLE_BLOCK_MOSSY: i32 = 56;
+pub const COUNT: i32 = 57;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR

@@ -38,10 +38,8 @@ pub const MAX_CLEARANCE: u8 = 15;
 
 pub const NO_COMP: u16 = u16::MAX;
 
-/// The standing surface itself is under water (lake bed) rather than dry ground.
-pub const FLAG_SUBMERGED: u8 = 1 << 0;
 /// The supporting voxel can be destroyed, so this span may vanish.
-pub const FLAG_DESTRUCTIBLE: u8 = 1 << 1;
+pub const FLAG_DESTRUCTIBLE: u8 = 1 << 0;
 
 pub const LINK_WALK: u8 = 255;
 pub const LINK_CLIMB: u8 = 0;
@@ -112,20 +110,14 @@ pub struct Span {
     pub surface_y: f32,
     /// Free cells above the surface, saturating at [`MAX_HEADROOM`].
     pub headroom: u8,
-    /// Water cells stacked directly on the surface (0 = dry).
+    /// Water cells stacked directly on the surface. Zero is dry ground, and anything
+    /// above it is how deep an agent has to wade to stand here.
     pub water_depth: u8,
     /// Geodesic distance in cells to the edge of walkable space, saturating.
     pub clearance: u8,
     /// Material of the supporting voxel, used for surface cost.
     pub mat: u8,
     pub flags: u8,
-}
-
-impl Span {
-    #[inline]
-    pub fn is_submerged(&self) -> bool {
-        self.flags & FLAG_SUBMERGED != 0
-    }
 }
 
 /// Identifies a span inside one field.
@@ -311,9 +303,6 @@ pub fn extract_column<S: VoxelSource>(
 
         if headroom > 0 {
             let mut flags = 0u8;
-            if water_depth > 0 {
-                flags |= FLAG_SUBMERGED;
-            }
             if sol.destructible[mat as usize] {
                 flags |= FLAG_DESTRUCTIBLE;
             }
@@ -1776,7 +1765,6 @@ mod tests {
         extract_column(&Lake, &sol, 0, 0, 0, 12, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].water_depth, 3);
-        assert!(out[0].is_submerged());
     }
 
     #[test]
@@ -1858,7 +1846,7 @@ mod tests {
             water_depth: 4,
             clearance: 8,
             mat: 3,
-            flags: FLAG_SUBMERGED,
+            flags: 0,
         };
         let walker = Profile {
             max_wade: 1,
