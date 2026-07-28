@@ -1,0 +1,257 @@
+## Photographs both city modals over the live city and proves the draw order around them.
+##
+## The inventory panel used to be half-covered by the energy bar and the F1–F6 build strip,
+## because every CanvasLayer picked its own number. So each modal is opened here and the whole
+## tree of CanvasLayers is read back: nothing outside the debug band may sit in front of the
+## open panel, and no HUD surface may be left switched on underneath its translucent dim. The
+## last shot pushes the profiler overlay and an error report on top of an open modal, because
+## the one thing a panel must never be able to do is hide a failure.
+##
+## Needs a renderer: the panel previews are SubViewport render targets.
+##
+## Run: powershell -File tools\run_test.ps1 shot_modal_layers -Rendered
+extends Node
+
+const WORLD_SEED := 42
+const WALKER_TIMEOUT_MS := 120000
+const INVENTORY_PNG := "res://tools/modal_inventory.png"
+const SETTINGS_PNG := "res://tools/modal_settings.png"
+const DEBUG_PNG := "res://tools/modal_debug_above.png"
+## One stack per gem type, so the panel has something to show.
+const GEM_TALLIES: Array[int] = [7, 3, 11, 2, 40, 1]
+const TRAP_COST := 5
+const SHOT_HOUR := 11.0
+
+var _failed := false
+
+
+func _fail(msg: String) -> void:
+	push_error(msg)
+	_failed = true
+
+
+func _ready() -> void:
+	var city := CityRoot.new()
+	city.city_seed = WORLD_SEED
+	add_child(city)
+
+	var walker := await _await_walker(city)
+	if walker == null:
+		return
+	if not await _await_boot(city, walker):
+		return
+
+	var inventory := city.get_node_or_null("PlayerInventory") as PlayerInventoryPanel
+	var settings := city.get_node_or_null("CitySettings") as CitySettingsPanel
+	if inventory == null or settings == null:
+		_fail("FAIL CityRoot built no PlayerInventory / CitySettings panel")
+		_finish()
+		return
+	if not _stock_inventory(city):
+		_finish()
+		return
+
+	_pin_hour(city)
+	_set_error_panel_shown(false)
+
+	inventory.open_panel()
+	await _frames(30)
+	if not inventory.is_open():
+		_fail("FAIL the inventory panel refused to open")
+	_check_modal_owns_screen("inventory", inventory.layer)
+	await _shoot(INVENTORY_PNG)
+	inventory.close_panel()
+	await _frames(6)
+	_check_hud_returned()
+
+	settings.open_panel()
+	await _frames(20)
+	if not settings.is_open():
+		_fail("FAIL the settings panel refused to open")
+	_check_modal_owns_screen("settings", settings.layer)
+	await _shoot(SETTINGS_PNG)
+
+	_check_debug_outranks(settings.layer)
+	await _frames(10)
+	await _shoot(DEBUG_PNG)
+	settings.close_panel()
+
+	_finish()
+
+
+func _finish() -> void:
+	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
+	get_tree().quit(1 if _failed else 0)
+
+
+## An open modal owns the screen: only the debug band may draw in front of it, and the HUD it
+## replaced must be switched off rather than left bleeding through the dim.
+func _check_modal_owns_screen(label: String, modal_layer: int) -> void:
+	var over: PackedStringArray = PackedStringArray()
+	var hud_up: PackedStringArray = PackedStringArray()
+	for canvas in _canvas_layers():
+		if not canvas.visible:
+			continue
+		if canvas.layer >= UiLayers.HUD_MIN and canvas.layer <= UiLayers.HUD_MAX:
+			hud_up.append("%s (layer %d)" % [canvas.name, canvas.layer])
+		if canvas.layer > modal_layer and canvas.layer < UiLayers.DEBUG_NAV_COUNTERS:
+			over.append("%s (layer %d)" % [canvas.name, canvas.layer])
+	for entry in over:
+		_fail("FAIL %s draws over the open %s modal on layer %d" % [entry, label, modal_layer])
+	for entry in hud_up:
+		_fail("FAIL HUD surface %s is still on with the %s modal open" % [entry, label])
+	if over.is_empty() and hud_up.is_empty():
+		print("OK %s modal on layer %d: nothing above it, HUD band off" % [label, modal_layer])
+
+
+## The HUD has to come back, or the fix traded a covered panel for a lost readout.
+func _check_hud_returned() -> void:
+	var off: PackedStringArray = PackedStringArray()
+	var on := 0
+	for canvas in _canvas_layers():
+		if canvas.layer < UiLayers.HUD_MIN or canvas.layer > UiLayers.HUD_MAX:
+			continue
+		if canvas.visible:
+			on += 1
+		else:
+			off.append("%s (layer %d)" % [canvas.name, canvas.layer])
+	for entry in off:
+		_fail("FAIL HUD surface %s stayed hidden after the modal closed" % entry)
+	if off.is_empty():
+		print("OK %d HUD surfaces back on after the modal closed" % on)
+
+
+## Errors and hitch reports outrank every panel. Both surfaces are switched on over the open
+## modal so the shot shows what a failure would look like from behind one.
+func _check_debug_outranks(modal_layer: int) -> void:
+	var profiler := get_tree().root.get_node_or_null("CityProfiler") as CanvasLayer
+	var errors := get_tree().root.get_node_or_null("ErrorOverlay") as CanvasLayer
+	if profiler == null or errors == null:
+		_fail("FAIL no CityProfiler / ErrorOverlay autoload")
+		return
+	if profiler.layer <= modal_layer:
+		_fail("FAIL the profiler overlay (layer %d) is not above the modal on layer %d"
+			% [profiler.layer, modal_layer])
+	if errors.layer <= profiler.layer:
+		_fail("FAIL the error panel (layer %d) is not above the profiler (layer %d)"
+			% [errors.layer, profiler.layer])
+	profiler.call("set_overlay_enabled", true)
+	_set_error_panel_shown(true)
+	errors.call(
+		"enqueue_error",
+		"SCRIPT",
+		"Sample report: an open modal must never be able to hide this panel.",
+		"tools/shot_modal_layers.gd",
+		0
+	)
+	print("OK profiler on layer %d and errors on layer %d, both over the modal on %d"
+		% [profiler.layer, errors.layer, modal_layer])
+
+
+func _canvas_layers() -> Array[CanvasLayer]:
+	var out: Array[CanvasLayer] = []
+	for node in get_tree().root.find_children("*", "CanvasLayer", true, false):
+		var canvas := node as CanvasLayer
+		if canvas != null:
+			out.append(canvas)
+	return out
+
+
+func _stock_inventory(city: CityRoot) -> bool:
+	var inv := city.get_inventory()
+	inv.clear()
+	var mats := _gem_materials()
+	if mats.size() != GEM_TALLIES.size():
+		_fail("FAIL %d gem materials but %d tallies" % [mats.size(), GEM_TALLIES.size()])
+		return false
+	for i in mats.size():
+		var item_id := InventoryCatalog.item_id_for_gem(mats[i])
+		var over := inv.add(item_id, GEM_TALLIES[i] + (TRAP_COST if i == 0 else 0))
+		if over != 0:
+			_fail("FAIL %s did not fit (%d left)" % [item_id, over])
+			return false
+	if not inv.craft(InventoryCatalog.RECIPE_TRAP):
+		_fail("FAIL could not craft the trap for the seventh slot")
+		return false
+	return true
+
+
+func _await_walker(city: CityRoot) -> CityWalker:
+	var deadline := Time.get_ticks_msec() + WALKER_TIMEOUT_MS
+	while Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+		var walker := city.get_node_or_null("Walker") as CityWalker
+		if walker != null:
+			return walker
+	_fail("FAIL no walker after %d ms" % WALKER_TIMEOUT_MS)
+	_finish()
+	return null
+
+
+## Boot is over when the walker has physics and the title splash has let go of the screen.
+## CityRoot holds physics off until ground collision exists, and the splash then fades out over
+## half a second — long enough that a wait counted in frames photographs the title art instead.
+func _await_boot(city: CityRoot, walker: CityWalker) -> bool:
+	var splash := _splash(city)
+	if splash == null:
+		_finish()
+		return false
+	var deadline := Time.get_ticks_msec() + WALKER_TIMEOUT_MS
+	while Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+		if walker.is_physics_processing() and not splash.visible:
+			await _frames(4)
+			return true
+	_fail("FAIL the walker never got physics in %d ms" % WALKER_TIMEOUT_MS)
+	_finish()
+	return false
+
+
+## CityRoot leaves the splash unnamed, so it is found by the layer it reserves.
+func _splash(city: CityRoot) -> CanvasLayer:
+	for child in city.get_children():
+		var canvas := child as CanvasLayer
+		if canvas != null and canvas.layer == UiLayers.LOADING_SPLASH:
+			return canvas
+	_fail("FAIL no loading splash on layer %d" % UiLayers.LOADING_SPLASH)
+	return null
+
+
+## Boot warnings would otherwise leave the error panel over the middle of every shot, which is
+## exactly where the modals are. The last shot switches it back on deliberately.
+func _set_error_panel_shown(shown: bool) -> void:
+	var panel := get_tree().root.get_node_or_null("ErrorOverlay") as CanvasLayer
+	if panel == null:
+		_fail("FAIL no ErrorOverlay autoload")
+		return
+	panel.visible = shown
+
+
+func _pin_hour(city: CityRoot) -> void:
+	var cycle := city.get_node_or_null("DayNightCycle")
+	if cycle == null:
+		_fail("FAIL no DayNightCycle to pin")
+		return
+	cycle.call("set_hour", SHOT_HOUR)
+
+
+func _shoot(path: String) -> void:
+	await _frames(6)
+	var img := get_viewport().get_texture().get_image()
+	if img == null:
+		_fail("FAIL no viewport image for %s" % path)
+		return
+	img.save_png(path)
+	print("SAVED %s" % path)
+
+
+func _frames(count: int) -> void:
+	for _i in range(count):
+		await get_tree().process_frame
+
+
+func _gem_materials() -> Array[int]:
+	var out: Array[int] = []
+	for mat_id in range(VoxelMaterial.GEM_QUARTZ, VoxelMaterial.GEM_DIAMOND + 1):
+		out.append(mat_id)
+	return out

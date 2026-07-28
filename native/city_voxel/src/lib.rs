@@ -3,6 +3,9 @@ use std::collections::HashMap;
 
 mod cascade_debris;
 mod materials;
+mod nav;
+mod nav_api;
+mod nav_world;
 
 struct CityVoxelExtension;
 
@@ -152,6 +155,21 @@ impl NativeOfflineVoxelVolume {
 }
 
 impl NativeOfflineVoxelVolume {
+    /// Material id without the Godot marshalling, for in-process consumers such as the
+    /// navigation bake.
+    #[inline]
+    pub(crate) fn raw(&self, pos: Vector3i) -> u8 {
+        let bp = block_pos(pos);
+        match self.blocks.get(&bp) {
+            Some(data) => {
+                let lp =
+                    Vector3i::new(pos.x - bp.0 * BLOCK, pos.y - bp.1 * BLOCK, pos.z - bp.2 * BLOCK);
+                data[index(lp)]
+            }
+            None => 0,
+        }
+    }
+
     fn ensure_block(&mut self, bp: (i32, i32, i32)) -> &mut Vec<u8> {
         self.blocks
             .entry(bp)

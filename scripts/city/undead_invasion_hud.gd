@@ -14,7 +14,7 @@ var _pulse: float = 0.0
 
 
 func _ready() -> void:
-	layer = 13
+	layer = UiLayers.HUD_UNDEAD
 	var root := Control.new()
 	root.name = "Root"
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)

@@ -30,7 +30,7 @@ var _suppress: bool = false
 
 
 func _ready() -> void:
-	layer = 20
+	layer = UiLayers.MODAL_CHARACTER_EDITOR
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_build_ui()
 	visible = false

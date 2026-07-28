@@ -7,12 +7,13 @@ extends RefCounted
 static func place(
 	terrain: VoxelTerrain,
 	tool: VoxelTool,
+	brush: CityBrush,
 	recipe: BuildCatalog.Recipe,
 	hit_world: Vector3,
 	player_world: Vector3
 ) -> int:
-	if terrain == null or tool == null:
-		push_error("BuildPlacer.place: terrain/tool required")
+	if terrain == null or tool == null or brush == null:
+		push_error("BuildPlacer.place: terrain/tool/brush required")
 		return 0
 	if recipe == null or recipe.voxels.is_empty():
 		push_error("BuildPlacer.place: empty recipe")
@@ -28,7 +29,8 @@ static func place(
 
 	var written := 0
 	tool.channel = VoxelBuffer.CHANNEL_TYPE
-	tool.mode = VoxelTool.MODE_SET
+	## One recipe stamp is one logical edit.
+	brush.begin_edit()
 	var n := recipe.voxels.size() / 4
 	for i in range(n):
 		var o := i * 4
@@ -41,9 +43,9 @@ static func place(
 		var existing := int(tool.get_voxel(vox))
 		if existing == VoxelMaterial.BEDROCK:
 			continue
-		tool.value = mat
-		tool.do_point(vox)
+		brush.set_vox(vox, mat)
 		written += 1
+	brush.end_edit()
 	return written
 
 

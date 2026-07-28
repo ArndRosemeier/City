@@ -1,9 +1,20 @@
-## Pedestrian crowd: full skinned bodies when near, culled when far (no mid proxies).
+## Pedestrian crowd on the voxel navigation stack: full skinned bodies when near, culled when
+## far (no mid proxies).
+##
+## Every ped is a PedAgent body driven by a NavAgent, a NavMotor and the `pedestrian` profile,
+## and the whole crowd shares one PedGoalProvider — NavGoalRequest carries the body, so one
+## provider serves a thousand peds instead of one per ped. What the director owns is everything
+## around that: spawning, the three nav LOD tiers, the near-tier capsules and crowd separation,
+## the skinned visuals, panic, and the query budget the crowd is allowed to spend.
+##
+## The roadmap this is handed is no longer walked. It supplies the goal provider with errand
+## endpoints on the pavement and with the crossings to use on the way; routing, heights and
+## reachability all come from the span field, which is why `_ground_y` and the curb teleport
+## are gone.
 class_name CrowdDirector
 extends Node3D
 
 const CrowdPedVisualScript := preload("res://scripts/city/crowd_ped_visual.gd")
-const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
 const PedOutfitScript := preload("res://scripts/humans/ped_outfit.gd")
 const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 
@@ -30,27 +41,61 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 ## Keep fleeing until at least this far from the player.
 @export var flee_clear_distance_m: float = 200.0
 @export var flee_speed_mul: float = 2.65
+## How far one flee goal asks to get from the threat. A threat is rarely left behind in a
+## single corridor, so a partial one is walked and the goal re-evaluated from there.
 @export var flee_goal_min_m: float = 40.0
 @export var flee_goal_max_m: float = 140.0
-## Cap expensive flee repaths per physics frame (graph walks).
+## Cap flee goals handed out per physics frame, so a blast cannot make the whole crowd queue
+## a path in the same tick.
 @export var flee_repaths_per_frame: int = 3
 ## Each new visual instantiates an outfit scene (~10 ms cold, well under 1 ms once cached),
 ## so promotions are drained against a time budget rather than a fixed count. Budgeting per
 ## rendered frame, not per physics tick: a long frame runs up to 8 ticks, and 14 promotions
 ## landing in one frame measured as a 360 ms freeze.
 @export var visual_create_budget_ms: float = 4.0
-@export var flee_greedy_hops: int = 14
+## Physics frames between ticks of a far-tier ped. Past 80 m its motion is a lerp along a
+## corridor nobody can see, so stepping it every frame buys nothing; the skipped time is owed
+## and paid on the next tick, so the walking speed is unchanged.
+@export var far_tick_stride: int = 4
+## How far outside the near band a ped is given its capsule. The motor needs the collider
+## before NavLod switches it to the near tier, not in the same frame.
+@export var collider_margin_m: float = 8.0
+## Near-tier separation: peds with colliders nudge each other apart instead of overlapping.
+@export var separation_radius_m: float = 0.9
+@export var separation_strength: float = 0.7
+## Neighbours one ped separates from per frame, so a dense knot stays bounded.
+@export var separation_neighbours_max: int = 6
+## Ambient path queries per second the whole crowd may cause. NavService serves 8 per frame
+## for every consumer together, so a district's peds take a modest share of it.
+@export var goal_queries_per_sec: float = 12.0
+## Hand out no new goals while NavService already holds this many queries: undead, cars and
+## the debug overlay share that queue, and a crowd must not be why they wait.
+@export var queue_pause_size: int = 24
+## Ped corridors fed to the F8 overlay at once.
+@export var overlay_corridor_limit: int = 12
+## How long a parked ped waits before asking the provider for work again.
+@export var goal_retry_sec: float = 0.25
 
 var _agents: Array[PedAgent] = []
 var _near_agents: Array[PedAgent] = []
-var _roadmap: PedRoadMap
 var _rng := RandomNumberGenerator.new()
 var _camera: Camera3D
-var _time: float = 0.0
 var _lod_accum: float = 0.0
-var _ground_y: float = 1.0
 var _skinned_count: int = 0
-var _flee_repath_queue: Array[PedAgent] = []
+
+var _nav: NavService = null
+var _profile: NavProfile = null
+var _lod: NavLod = null
+var _provider: PedGoalProvider = null
+var _terrain: VoxelTerrain = null
+var _overlay: NavDebugOverlay = null
+## Corridors currently drawn in the overlay, so they can be taken back out again.
+var _overlay_ids: Array[StringName] = []
+## Near-tier bodies bucketed for separation: cell -> indices into `_agents`.
+var _near_grid: Dictionary[Vector2i, PackedInt32Array] = {}
+var _colliders_built: int = 0
+
+var _flee_queue: Array[PedAgent] = []
 ## Agent indices waiting for a visual, oldest first.
 var _pending_visuals: Array[int] = []
 ## Process frame the queue was last drained in, so extra physics ticks don't multiply it.
@@ -66,26 +111,68 @@ func setup(roadmap: PedRoadMap, camera: Camera3D, seed_value: int = -1) -> void:
 	else:
 		_rng.randomize()
 	_camera = camera
-	_roadmap = roadmap
-	if _roadmap == null or _roadmap.is_empty():
-		push_warning("CrowdDirector: empty roadmap; crowd empty")
+	_nav = NavService.instance()
+	if not _nav.is_configured():
+		push_error("CrowdDirector: NavService is not configured, so the crowd stays empty")
 		return
-	_ground_y = _roadmap.ground_y
+	if not global_transform.is_equal_approx(Transform3D.IDENTITY):
+		push_error(
+			"CrowdDirector: %s is not at the world origin, and every consumer reads a ped's"
+			% get_path()
+			+ " Node3D position as a world position"
+		)
+	_profile = _nav.profile(NavProfile.Id.PEDESTRIAN)
+	if _profile == null:
+		return
+	_lod = NavLod.new()
+	_provider = PedGoalProvider.new()
+	_configure_provider()
+	_provider.setup(_nav, NavProfile.Id.PEDESTRIAN, _rng.randi())
+	if _provider.bind_roadmap(roadmap) <= 0:
+		return
+	_terrain = _find_terrain()
+	if _terrain == null:
+		## Real in a live city, expected in a tool or test scene that has no CityRoot at all:
+		## VoxelBodyMotion integrates the wish velocity as given, so a near-tier ped walks
+		## through digs and holes instead of over them.
+		push_warning(
+			"CrowdDirector: %s — near-tier peds move without voxel collision"
+			% (
+				"no CityRoot in the city_root group"
+				if _city_root() == null
+				else "the CityRoot has no VoxelTerrain yet"
+			)
+		)
+	_overlay = _find_overlay()
 	_spawn_agents()
 	_refresh_lod(true)
 	print(
-		"CrowdDirector: agents=%d roadmap_nodes=%d skinned=%d render=%.0fm"
-		% [_agents.size(), _roadmap.node_count, _skinned_count, render_distance]
+		"CrowdDirector: agents=%d %s skinned=%d render=%.0fm near=%.0fm terrain=%s"
+		% [
+			_agents.size(),
+			_provider.describe_load(),
+			_skinned_count,
+			render_distance,
+			_lod.near_radius_m,
+			_terrain != null,
+		]
 	)
 
 
 func clear_crowd() -> void:
-	for agent in _agents:
-		_release_visual(agent)
+	for ped in _agents:
+		if ped == null:
+			continue
+		if ped.nav != null:
+			ped.nav.dispose()
+		_release_visual(ped)
+		ped.queue_free()
 	_agents.clear()
 	_near_agents.clear()
-	_flee_repath_queue.clear()
+	_flee_queue.clear()
 	_pending_visuals.clear()
+	_near_grid.clear()
+	_forget_overlay_corridors()
 	_skinned_count = 0
 	for child in get_children():
 		if child is RigidBody3D and String(child.name).begins_with("Corpse_"):
@@ -94,6 +181,28 @@ func clear_crowd() -> void:
 
 func agent_count() -> int:
 	return _agents.size()
+
+
+func agent_at(index: int) -> PedAgent:
+	if index < 0 or index >= _agents.size():
+		push_error("CrowdDirector.agent_at: %d of %d" % [index, _agents.size()])
+		return null
+	return _agents[index]
+
+
+## The one goal provider the whole crowd shares.
+func goal_provider() -> PedGoalProvider:
+	return _provider
+
+
+func nav_lod() -> NavLod:
+	return _lod
+
+
+## Near-tier capsules built so far. They are never taken back, because NavMotor has no way to
+## drop a collider, so this only ever grows to the number of peds the player has walked past.
+func collider_count() -> int:
+	return _colliders_built
 
 
 func adjust_near_distance(direction: float) -> void:
@@ -122,61 +231,68 @@ func collect_positions() -> Array:
 	var out: Array = []
 	out.resize(_agents.size())
 	for i in range(_agents.size()):
-		out[i] = _agents[i].position
+		out[i] = _agents[i].global_position
 	return out
 
 
 func agents_for_occupancy() -> Array:
 	var live: Array = []
-	for agent in _agents:
-		if agent != null and not agent.dead:
-			live.append(agent)
+	for ped in _agents:
+		if ped != null and not ped.dead:
+			live.append(ped)
 	return live
 
 
+## x=near, y=mid, z=far — the navigation LOD tiers.
 func count_lod_tiers() -> Vector3i:
-	## x=visible, y=0 (no mid), z=culled
-	var near_n := 0
-	var culled_n := 0
-	for agent in _agents:
-		if agent.lod == PedAgent.Lod.NEAR:
-			near_n += 1
-		else:
-			culled_n += 1
-	return Vector3i(near_n, 0, culled_n)
+	var out := Vector3i.ZERO
+	for ped in _agents:
+		if ped == null or ped.dead:
+			continue
+		match ped.nav.tier():
+			NavLod.Tier.NEAR:
+				out.x += 1
+			NavLod.Tier.MID:
+				out.y += 1
+			_:
+				out.z += 1
+	return out
 
 
-## Nearby living peds sprint away along the sidewalk graph.
+# ---------------------------------------------------------------------------
+# Panic
+# ---------------------------------------------------------------------------
+
+## Nearby living peds sprint away from the threat.
 func react_to_destruction(world_pos: Vector3, radius_m: float = -1.0) -> void:
 	var radius := radius_m if radius_m > 0.0 else flee_radius_m
 	var r2 := radius * radius
 	## Destruction panic still treats the player as the lasting threat to clear from.
 	var threat := _threat_position(world_pos)
-	for agent in _agents:
-		if agent == null or agent.dead:
+	for ped in _agents:
+		if ped == null or ped.dead:
 			continue
-		var dx := agent.position.x - world_pos.x
-		var dz := agent.position.z - world_pos.z
+		var dx := ped.global_position.x - world_pos.x
+		var dz := ped.global_position.z - world_pos.z
 		if dx * dx + dz * dz > r2:
 			continue
-		_start_flee(agent, threat, flee_clear_distance_m)
+		_start_flee(ped, threat, flee_clear_distance_m)
 
 
 ## Scare peds near undead mages. threats = Array of Vector3.
-## force_away_path: always budget a flee repath (mages) instead of only sprinting the current walk.
 func scare_from_threats(threats: Array, trigger_m: float, clear_m: float) -> void:
 	if threats.is_empty():
 		return
 	var trigger_r2 := trigger_m * trigger_m
-	for agent in _agents:
-		if agent == null or agent.dead:
+	for ped in _agents:
+		if ped == null or ped.dead:
 			continue
 		var best := Vector3.INF
 		var best_d2 := trigger_r2
 		for t in threats:
 			var tp: Vector3 = t as Vector3
-			var dx := agent.position.x - tp.x
-			var dz := agent.position.z - tp.z
+			var dx := ped.global_position.x - tp.x
+			var dz := ped.global_position.z - tp.z
 			var d2 := dx * dx + dz * dz
 			if d2 > best_d2:
 				continue
@@ -184,24 +300,20 @@ func scare_from_threats(threats: Array, trigger_m: float, clear_m: float) -> voi
 			best = tp
 		if best == Vector3.INF:
 			continue
-		## First panic: path away. Already fleeing: refresh threat, keep current flee route.
-		var force_path := not agent.fleeing
-		_start_flee(agent, best, clear_m, force_path)
+		_start_flee(ped, best, clear_m)
 
 
-func _start_flee(agent: PedAgent, danger: Vector3, clear_m: float = -1.0, force_away_path: bool = false) -> void:
-	agent.fleeing = true
-	agent.flee_from = danger
-	agent.flee_clear_m = clear_m if clear_m > 0.0 else flee_clear_distance_m
-	agent.next_decision_at = _time + 600.0
-	## Destruction panic: keep current route and only sprint. Mage scare: path away.
-	if (
-		not force_away_path
-		and agent.state == PedAgent.State.WALK
-		and agent.path_i < agent.waypoints.size()
-	):
+## Sprinting starts this frame; the corridor away from the threat is queued, because a blast
+## that made three hundred peds ask for a path in one tick is what the budget exists for.
+func _start_flee(ped: PedAgent, danger: Vector3, clear_m: float) -> void:
+	ped.fleeing = true
+	ped.flee_from = danger
+	ped.flee_clear_m = clear_m if clear_m > 0.0 else flee_clear_distance_m
+	ped.paused_until = 0.0
+	if ped.flee_goal_queued:
 		return
-	_enqueue_flee_repath(agent)
+	ped.flee_goal_queued = true
+	_flee_queue.append(ped)
 
 
 func _threat_position(fallback: Vector3 = Vector3.ZERO) -> Vector3:
@@ -217,62 +329,22 @@ func _threat_position(fallback: Vector3 = Vector3.ZERO) -> Vector3:
 	return _threat_pos_cache
 
 
-func _enqueue_flee_repath(agent: PedAgent) -> void:
-	if agent == null or agent.dead or agent.flee_repath_queued:
-		return
-	agent.flee_repath_queued = true
-	_flee_repath_queue.append(agent)
-
-
-func _drain_flee_repath_queue() -> void:
+func _drain_flee_queue() -> void:
 	var budget := maxi(flee_repaths_per_frame, 1)
-	while budget > 0 and not _flee_repath_queue.is_empty():
-		var agent: PedAgent = _flee_repath_queue.pop_front()
-		if agent == null:
+	while budget > 0 and not _flee_queue.is_empty():
+		var ped: PedAgent = _flee_queue.pop_front()
+		if ped == null:
 			continue
-		agent.flee_repath_queued = false
-		if agent.dead or not agent.fleeing:
+		ped.flee_goal_queued = false
+		if ped.dead or not ped.fleeing:
 			continue
-		_assign_flee_path(agent)
+		ped.nav.set_goal(_provider.flee_goal(ped))
 		budget -= 1
 
 
-func _assign_flee_path(agent: PedAgent) -> void:
-	## Cheap greedy hop away from the stored threat — no multi-sample BFS storm.
-	if _roadmap == null or _roadmap.is_empty():
-		return
-	var from_node := _roadmap.nearest_node(agent.position)
-	if from_node < 0:
-		return
-	var danger := agent.flee_from
-	var path := PackedVector3Array()
-	var node := from_node
-	var prev := -1
-	var hops := maxi(flee_greedy_hops, 4)
-	for _i in hops:
-		var nbrs: PackedInt32Array = _roadmap.neighbors[node]
-		if nbrs.is_empty():
-			break
-		var best := -1
-		var best_d2 := -1.0
-		for n in nbrs:
-			if n == prev:
-				continue
-			var p: Vector3 = _roadmap.positions[n]
-			var d2 := Vector2(p.x - danger.x, p.z - danger.z).length_squared()
-			if d2 > best_d2:
-				best_d2 = d2
-				best = n
-		if best < 0:
-			best = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
-		prev = node
-		node = best
-		path.append(_roadmap.positions[node])
-	if path.is_empty():
-		return
-	agent.set_path(path)
-	agent.next_decision_at = _time + 600.0
-
+# ---------------------------------------------------------------------------
+# Hit queries
+# ---------------------------------------------------------------------------
 
 ## Closest living ped along segment [from, to]. Empty if none.
 ## Keys: distance (float), point (Vector3), agent (PedAgent), index (int).
@@ -288,10 +360,10 @@ func query_segment_hit(from: Vector3, to: Vector3) -> Dictionary:
 	const HIT_RADIUS := 0.85
 	const HIT_HALF_H := 1.05
 	for i in range(_agents.size()):
-		var agent: PedAgent = _agents[i]
-		if agent == null or agent.dead:
+		var ped: PedAgent = _agents[i]
+		if ped == null or ped.dead:
 			continue
-		var center := agent.position + Vector3(0.0, HIT_HALF_H * 0.85, 0.0)
+		var center := ped.global_position + Vector3(0.0, HIT_HALF_H * 0.85, 0.0)
 		var hit := _segment_hits_capsule(from, dir, seg_len, center, HIT_RADIUS, HIT_HALF_H)
 		if hit.is_empty():
 			continue
@@ -302,7 +374,7 @@ func query_segment_hit(from: Vector3, to: Vector3) -> Dictionary:
 		best = {
 			"distance": dist,
 			"point": hit["point"],
-			"agent": agent,
+			"agent": ped,
 			"index": i,
 		}
 	return best
@@ -313,53 +385,51 @@ func find_nearest_agent(world_pos: Vector3, max_dist: float) -> Dictionary:
 	var best: Dictionary = {}
 	var best_d2 := max_dist * max_dist
 	for i in range(_agents.size()):
-		var agent: PedAgent = _agents[i]
-		if agent == null or agent.dead:
+		var ped: PedAgent = _agents[i]
+		if ped == null or ped.dead:
 			continue
-		var d2 := Vector2(agent.position.x - world_pos.x, agent.position.z - world_pos.z).length_squared()
+		var d2 := Vector2(
+			ped.global_position.x - world_pos.x, ped.global_position.z - world_pos.z
+		).length_squared()
 		if d2 > best_d2:
 			continue
 		best_d2 = d2
-		best = {"agent": agent, "index": i, "position": agent.position}
+		best = {"agent": ped, "index": i, "position": ped.global_position}
 	return best
 
 
 ## Remove a ped with no corpse (undead conversion). Returns former world position.
-func convert_agent_silent(agent: PedAgent) -> Vector3:
-	if agent == null or agent.dead:
+func convert_agent_silent(ped: PedAgent) -> Vector3:
+	if ped == null or ped.dead:
 		return Vector3.INF
-	var pos := agent.position
-	agent.dead = true
-	agent.clear_path()
-	agent.next_decision_at = _time + 1.0e9
-	if agent.visual != null and is_instance_valid(agent.visual):
-		agent.visual.queue_free()
-	agent.visual = null
-	agent.lod = PedAgent.Lod.CULLED
+	var pos := ped.global_position
+	_retire(ped)
+	if ped.visual != null and is_instance_valid(ped.visual):
+		ped.visual.queue_free()
+	ped.visual = null
+	ped.lod = PedAgent.Lod.CULLED
 	return pos
 
 
-func kill_agent(agent: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bool:
-	if agent == null or agent.dead:
+func kill_agent(ped: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bool:
+	if ped == null or ped.dead:
 		return false
-	agent.dead = true
-	agent.clear_path()
-	agent.next_decision_at = _time + 1.0e9
-	var idx := _agents.find(agent)
+	var idx := _agents.find(ped)
 	if idx < 0:
 		return false
-	agent.lod = PedAgent.Lod.NEAR
-	_ensure_visual(idx, agent)
-	var vis := agent.visual as CrowdPedVisual
+	_retire(ped)
+	ped.lod = PedAgent.Lod.NEAR
+	_ensure_visual(idx, ped)
+	var vis := ped.visual as CrowdPedVisual
 	if vis == null or not is_instance_valid(vis):
 		push_error("CrowdDirector: kill_agent missing visual")
 		return false
 	vis.visible = true
 	vis.process_mode = Node.PROCESS_MODE_INHERIT
-	vis.global_position = agent.position
-	vis.rotation.y = agent.yaw
+	vis.global_position = ped.global_position
+	vis.rotation.y = ped.yaw
 	vis.play_death()
-	agent.visual = null
+	ped.visual = null
 
 	var dir := impulse_dir
 	if dir.length_squared() < 0.0001:
@@ -367,8 +437,8 @@ func kill_agent(agent: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bo
 	else:
 		dir = dir.normalized()
 
-	var body_h := 1.7 * agent.body_scale
-	var body_r := 0.28 * agent.body_scale
+	var body_h := 1.7 * ped.body_scale
+	var body_r := 0.28 * ped.body_scale
 	var com := Vector3(0.0, body_h * 0.5, 0.0)
 
 	var body := RigidBody3D.new()
@@ -379,7 +449,7 @@ func kill_agent(agent: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bo
 	body.contact_monitor = false
 	body.linear_damp = 0.4
 	body.angular_damp = 0.5
-	body.mass = 72.0 * agent.body_scale
+	body.mass = 72.0 * ped.body_scale
 	body.center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
 	body.center_of_mass = com
 
@@ -417,6 +487,17 @@ func kill_agent(agent: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bo
 	return true
 
 
+## Out of the simulation for good: the nav agent is disposed so NavService stops serving a
+## body nobody drives any more.
+func _retire(ped: PedAgent) -> void:
+	ped.dead = true
+	ped.fleeing = false
+	ped.flee_goal_queued = false
+	ped.state = PedAgent.State.STAY
+	if ped.nav != null:
+		ped.nav.dispose()
+
+
 func _freeze_corpse(body: RigidBody3D) -> void:
 	if body == null or not is_instance_valid(body):
 		return
@@ -451,37 +532,73 @@ static func _segment_hits_capsule(
 	return {"point": closest, "distance": t}
 
 
+# ---------------------------------------------------------------------------
+# Spawning
+# ---------------------------------------------------------------------------
+
+func _configure_provider() -> void:
+	_provider.walk_goal_min_m = walk_goal_min_m
+	_provider.walk_goal_max_m = walk_goal_max_m
+	_provider.stay_min_sec = stay_min_sec
+	_provider.stay_max_sec = stay_max_sec
+	_provider.rewalk_min_sec = rewalk_min_sec
+	_provider.rewalk_max_sec = rewalk_max_sec
+	_provider.flee_run_min_m = flee_goal_min_m
+	_provider.flee_run_max_m = flee_goal_max_m
+	_provider.goal_queries_per_sec = goal_queries_per_sec
+	_provider.queue_pause_size = queue_pause_size
+
+
 func _spawn_agents() -> void:
-	var n := pedestrian_count
-	if _roadmap == null or _roadmap.is_empty():
-		return
+	var n := maxi(pedestrian_count, 0)
 	_agents.resize(n)
 	for i in range(n):
-		var agent := PedAgent.new()
-		var spawn_node := _roadmap.random_node(_rng)
-		agent.position = _roadmap.positions[spawn_node]
-		agent.yaw = _rng.randf_range(0.0, TAU)
-		agent.female = _rng.randf() < 0.5
-		agent.walk_tendency = clampf(_rng.randfn(walk_decision_chance, 0.04), 0.82, 0.99)
-		agent.walk_speed = _rng.randf_range(1.15, 1.85)
-		agent.body_scale = _rng.randf_range(0.92, 1.08)
-		agent.outfit = PedOutfitScript.random(_rng, agent.female)
-		agent.next_decision_at = _time + _rng.randf_range(0.0, 0.8)
-		agent.clear_path()
-		agent.lod = PedAgent.Lod.CULLED
-		agent.visual = null
-		_decide(agent)
-		_agents[i] = agent
+		var ped := PedAgent.new()
+		ped.name = "Ped_%d" % i
+		## Peds have never had a physics presence: cars, corpses and the player must keep
+		## passing through them. The capsule the near tier adds is for VoxelBoxMover only.
+		ped.collision_layer = 0
+		ped.collision_mask = 0
+		add_child(ped)
+		ped.global_position = _provider.random_spawn()
+		ped.last_pos = ped.global_position
+		ped.yaw = _rng.randf_range(0.0, TAU)
+		ped.female = _rng.randf() < 0.5
+		ped.walk_tendency = clampf(_rng.randfn(walk_decision_chance, 0.04), 0.82, 0.99)
+		ped.walk_speed = _rng.randf_range(1.15, 1.85)
+		ped.body_scale = _rng.randf_range(0.92, 1.08)
+		ped.outfit = PedOutfitScript.random(_rng, ped.female)
+		ped.lod = PedAgent.Lod.CULLED
+		ped.motor = NavMotor.new()
+		ped.motor.speed_mps = ped.walk_speed
+		ped.motor.separation_weight = 1.0
+		ped.nav = NavAgent.new()
+		ped.nav.idle_retry_sec = goal_retry_sec
+		ped.nav.setup(ped, NavProfile.Id.PEDESTRIAN, ped.motor, _provider, _lod)
+		ped.nav.seed_rng(_rng.randi())
+		## Staggered, so a fresh district does not ask for a thousand paths in one frame.
+		ped.paused_until = _rng.randf_range(0.0, 0.8)
+		_agents[i] = ped
 
+
+# ---------------------------------------------------------------------------
+# Simulation
+# ---------------------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
+	simulate(delta)
+
+
+## One step of the whole crowd. Public so a test or tool can drive it at a fixed step instead
+## of at whatever rate the physics clock happens to run at.
+func simulate(delta: float) -> void:
 	if _agents.is_empty():
 		return
 	CityProfiler.set_counter("crowd_agents", _agents.size())
 	CityProfiler.begin("crowd")
-	_time += delta
+	_provider.advance(delta)
 	CityProfiler.begin("crowd_repath")
-	_drain_flee_repath_queue()
+	_drain_flee_queue()
 	CityProfiler.end("crowd_repath")
 	CityProfiler.begin("crowd_sim")
 	_simulate_agents(delta)
@@ -503,120 +620,153 @@ func _physics_process(delta: float) -> void:
 
 
 func _simulate_agents(delta: float) -> void:
-	for agent in _agents:
-		if agent.dead:
+	var observer := _observer_position()
+	var frame := Engine.get_physics_frames()
+	var stride := maxi(far_tick_stride, 1)
+	_apply_separation()
+	for i in range(_agents.size()):
+		var ped := _agents[i]
+		if ped == null or ped.dead:
 			continue
-		if agent.fleeing:
-			var clear_m := agent.flee_clear_m if agent.flee_clear_m > 0.0 else flee_clear_distance_m
-			var clear_r2 := clear_m * clear_m
-			var fdx := agent.position.x - agent.flee_from.x
-			var fdz := agent.position.z - agent.flee_from.z
-			if fdx * fdx + fdz * fdz >= clear_r2:
-				agent.fleeing = false
-				agent.flee_repath_queued = false
-				agent.next_decision_at = _time + _rng.randf_range(rewalk_min_sec, rewalk_max_sec)
-		if _time >= agent.next_decision_at:
-			_decide(agent)
-		if agent.state != PedAgent.State.WALK:
+		_update_flee(ped)
+		_sync_speed(ped)
+		_ensure_collider(ped, observer)
+		ped.owed_delta += delta
+		if ped.nav.tier() == NavLod.Tier.FAR and (frame + i) % stride != 0:
 			continue
-		if agent.path_i >= agent.waypoints.size():
-			_finish_walk(agent)
+		var owed := ped.owed_delta
+		ped.owed_delta = 0.0
+		ped.nav.tick(owed, observer)
+		_after_tick(ped)
+
+
+## What the LOD tiers are measured from. Without a camera the crowd keeps walking, at the
+## coarsest tier, which is what a district streaming in before the player has one wants.
+func _observer_position() -> Vector3:
+	if _camera != null and is_instance_valid(_camera):
+		return _camera.global_position
+	return global_position
+
+
+func _after_tick(ped: PedAgent) -> void:
+	var pos := ped.global_position
+	var moved := Vector3(pos.x - ped.last_pos.x, 0.0, pos.z - ped.last_pos.z)
+	if moved.length_squared() > 0.000001:
+		var dir := moved.normalized()
+		ped.yaw = atan2(-dir.x, -dir.z)
+	ped.last_pos = pos
+	ped.state = PedAgent.State.WALK if ped.nav.has_corridor() else PedAgent.State.STAY
+
+
+## Panic ends by distance, not by the goal: a flee goal can also be abandoned as unreachable,
+## and a ped that stopped running has to stop sprinting too.
+func _update_flee(ped: PedAgent) -> void:
+	if not ped.fleeing:
+		return
+	var clear_m := ped.flee_clear_m if ped.flee_clear_m > 0.0 else flee_clear_distance_m
+	var dx := ped.global_position.x - ped.flee_from.x
+	var dz := ped.global_position.z - ped.flee_from.z
+	if dx * dx + dz * dz < clear_m * clear_m:
+		return
+	ped.fleeing = false
+	ped.flee_goal_queued = false
+	ped.paused_until = _provider.now() + _rng.randf_range(rewalk_min_sec, rewalk_max_sec)
+
+
+func _sync_speed(ped: PedAgent) -> void:
+	var want := ped.move_speed(flee_speed_mul)
+	if not is_equal_approx(ped.motor.speed_mps, want):
+		ped.motor.speed_mps = want
+
+
+## The near tier moves a ped through VoxelBoxMover, which needs a capsule to sweep. It is
+## built a little outside the band so it exists before NavLod asks for it, and never removed:
+## NavMotor has no way to give a collider back.
+func _ensure_collider(ped: PedAgent, observer: Vector3) -> void:
+	if ped.has_collider():
+		return
+	var reach := _lod.near_radius_m + _lod.hysteresis_m + collider_margin_m
+	var dx := ped.global_position.x - observer.x
+	var dz := ped.global_position.z - observer.z
+	if dx * dx + dz * dz > reach * reach:
+		return
+	var shape := CapsuleShape3D.new()
+	shape.radius = 0.28 * ped.body_scale
+	shape.height = maxf(1.7 * ped.body_scale, shape.radius * 2.0)
+	var capsule := CollisionShape3D.new()
+	capsule.name = "Capsule"
+	capsule.shape = shape
+	capsule.position = Vector3(0.0, shape.height * 0.5, 0.0)
+	ped.add_child(capsule)
+	var motion := VoxelBodyMotion.new()
+	motion.setup(_terrain, _profile.max_step * _nav.voxel_size())
+	ped.capsule = capsule
+	ped.motion = motion
+	ped.motor.attach_collider(ped, capsule, motion)
+	if _terrain == null:
+		## Nothing to collide against: VoxelBodyMotion integrates the velocity as given, so
+		## gravity would pull the body through a floor that is not there.
+		ped.motor.gravity = 0.0
+	_colliders_built += 1
+
+
+## Near-tier peds push each other apart. Only they have colliders, so only they can resolve
+## the push; bucketing by separation radius keeps a dense knot from going quadratic.
+func _apply_separation() -> void:
+	if separation_strength <= 0.0 or separation_radius_m <= 0.0:
+		return
+	_near_grid.clear()
+	var cell := separation_radius_m
+	for i in range(_agents.size()):
+		var ped := _agents[i]
+		if ped == null or ped.dead or ped.nav.tier() != NavLod.Tier.NEAR:
 			continue
-		var target: Vector3 = agent.waypoints[agent.path_i]
-		var to := target - agent.position
-		to.y = 0.0
-		var dist_sq := to.length_squared()
-		if dist_sq < 0.16:
-			agent.path_i += 1
-			if agent.path_i >= agent.waypoints.size():
-				_finish_walk(agent)
-			continue
-		var step := agent.move_speed(flee_speed_mul) * delta
-		if dist_sq <= step * step:
-			agent.position = Vector3(target.x, _ground_y, target.z)
-			agent.path_i += 1
-			if agent.path_i >= agent.waypoints.size():
-				_finish_walk(agent)
-		else:
-			var dir := to / sqrt(dist_sq)
-			agent.yaw = atan2(-dir.x, -dir.z)
-			agent.position += dir * step
-			agent.position.y = _ground_y
+		var key := Vector2i(
+			floori(ped.global_position.x / cell), floori(ped.global_position.z / cell)
+		)
+		var bucket: PackedInt32Array = _near_grid.get(key, PackedInt32Array())
+		bucket.append(i)
+		_near_grid[key] = bucket
+	if _near_grid.is_empty():
+		return
+	var r2 := separation_radius_m * separation_radius_m
+	for key: Vector2i in _near_grid.keys():
+		for index: int in _near_grid[key]:
+			var ped := _agents[index]
+			var push := _separation_push(ped, key, r2)
+			if push.length_squared() > 0.000001:
+				ped.motor.add_separation(push * separation_strength)
 
 
-func _finish_walk(agent: PedAgent) -> void:
-	agent.clear_path()
-	## Skip expensive nearest-node scans while sprinting away.
-	if not agent.is_fleeing():
-		_leave_carriageway_if_needed(agent)
-	if agent.is_fleeing():
-		_enqueue_flee_repath(agent)
-		return
-	agent.next_decision_at = _time + _rng.randf_range(rewalk_min_sec, rewalk_max_sec)
+func _separation_push(ped: PedAgent, key: Vector2i, r2: float) -> Vector3:
+	var push := Vector3.ZERO
+	var seen := 0
+	var pos := ped.global_position
+	for oz in range(-1, 2):
+		for ox in range(-1, 2):
+			var bucket: PackedInt32Array = _near_grid.get(
+				key + Vector2i(ox, oz), PackedInt32Array()
+			)
+			for index: int in bucket:
+				var other := _agents[index]
+				if other == ped:
+					continue
+				var dx := pos.x - other.global_position.x
+				var dz := pos.z - other.global_position.z
+				var d2 := dx * dx + dz * dz
+				if d2 > r2 or d2 < 0.000001:
+					continue
+				var d := sqrt(d2)
+				push += Vector3(dx / d, 0.0, dz / d) * (1.0 - d / separation_radius_m)
+				seen += 1
+				if seen >= separation_neighbours_max:
+					return push
+	return push
 
 
-func _leave_carriageway_if_needed(agent: PedAgent) -> void:
-	if _roadmap == null or _roadmap.is_empty():
-		return
-	var node := _roadmap.nearest_node(agent.position)
-	if node < 0 or not _roadmap.is_crossing_node(node):
-		return
-	var curb := _roadmap.nearest_sidewalk_node(agent.position)
-	if curb < 0:
-		return
-	agent.position = _roadmap.positions[curb]
-	agent.position.y = _ground_y
-
-
-func _decide(agent: PedAgent) -> void:
-	if agent.is_fleeing():
-		agent.next_decision_at = _time + 600.0
-		_enqueue_flee_repath(agent)
-		return
-	if _roadmap == null or _roadmap.is_empty():
-		agent.clear_path()
-		agent.next_decision_at = _time + stay_max_sec
-		return
-	_leave_carriageway_if_needed(agent)
-	var will_walk := _rng.randf() <= agent.walk_tendency
-	if not will_walk:
-		agent.clear_path()
-		_leave_carriageway_if_needed(agent)
-		agent.next_decision_at = _time + _rng.randf_range(stay_min_sec, stay_max_sec)
-		return
-	var from_node := _roadmap.nearest_sidewalk_node(agent.position)
-	if from_node < 0:
-		from_node = _roadmap.nearest_node(agent.position)
-	if from_node < 0:
-		agent.clear_path()
-		agent.next_decision_at = _time + stay_max_sec
-		return
-	var to_node := _roadmap.random_goal_node(
-		from_node, walk_goal_min_m, walk_goal_max_m, _rng
-	)
-	if to_node < 0 or to_node == from_node:
-		var nbrs: PackedInt32Array = _roadmap.neighbors[from_node]
-		if nbrs.is_empty():
-			agent.clear_path()
-			agent.next_decision_at = _time + stay_max_sec
-			return
-		to_node = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
-		for _pick in range(mini(nbrs.size(), 4)):
-			var cand: int = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
-			if not _roadmap.is_crossing_node(cand):
-				to_node = cand
-				break
-	var nodes := _roadmap.find_path(from_node, to_node)
-	if nodes.size() < 2:
-		var nbrs2: PackedInt32Array = _roadmap.neighbors[from_node]
-		if nbrs2.is_empty():
-			agent.clear_path()
-			agent.next_decision_at = _time + stay_max_sec
-			return
-		nodes = PackedInt32Array([from_node, nbrs2[_rng.randi_range(0, nbrs2.size() - 1)]])
-	agent.set_path(_roadmap.path_to_world(nodes))
-	agent.next_decision_at = _time + 600.0
-
+# ---------------------------------------------------------------------------
+# Visual LOD
+# ---------------------------------------------------------------------------
 
 func _refresh_lod(force: bool) -> void:
 	if _camera == null or not is_instance_valid(_camera):
@@ -626,15 +776,15 @@ func _refresh_lod(force: bool) -> void:
 	var exit_r := render_distance + lod_hysteresis_m
 	var exit_r2 := exit_r * exit_r
 	for i in range(_agents.size()):
-		var agent: PedAgent = _agents[i]
-		if agent.dead:
+		var ped: PedAgent = _agents[i]
+		if ped.dead:
 			## Visual already reparented onto a RigidBody corpse.
-			agent.lod = PedAgent.Lod.CULLED
+			ped.lod = PedAgent.Lod.CULLED
 			continue
-		var dx := agent.position.x - cam_pos.x
-		var dz := agent.position.z - cam_pos.z
+		var dx := ped.global_position.x - cam_pos.x
+		var dz := ped.global_position.z - cam_pos.z
 		var d2 := dx * dx + dz * dz
-		var want_near := agent.lod == PedAgent.Lod.NEAR
+		var want_near := ped.lod == PedAgent.Lod.NEAR
 		if want_near:
 			want_near = d2 <= exit_r2
 		else:
@@ -642,11 +792,12 @@ func _refresh_lod(force: bool) -> void:
 		if force:
 			want_near = d2 <= enter_r2
 		if want_near:
-			agent.lod = PedAgent.Lod.NEAR
-			_queue_visual(i, agent)
+			ped.lod = PedAgent.Lod.NEAR
+			_queue_visual(i, ped)
 		else:
-			agent.lod = PedAgent.Lod.CULLED
-			_release_visual(agent)
+			ped.lod = PedAgent.Lod.CULLED
+			_release_visual(ped)
+	_refresh_overlay_corridors()
 
 
 func _update_frustum_visibility() -> void:
@@ -654,26 +805,26 @@ func _update_frustum_visibility() -> void:
 	_skinned_count = 0
 	if _camera == null or not is_instance_valid(_camera):
 		return
-	for agent in _agents:
-		if agent.dead:
+	for ped in _agents:
+		if ped.dead:
 			continue
-		var vis := agent.visual as CrowdPedVisual
+		var vis := ped.visual as CrowdPedVisual
 		if vis == null or not is_instance_valid(vis):
 			continue
-		var in_view := _camera.is_position_in_frustum(agent.position + Vector3(0.0, 1.1, 0.0))
+		var in_view := _camera.is_position_in_frustum(ped.global_position + Vector3(0.0, 1.1, 0.0))
 		vis.visible = in_view
 		vis.process_mode = Node.PROCESS_MODE_INHERIT if in_view else Node.PROCESS_MODE_DISABLED
 		if in_view:
 			_skinned_count += 1
-			_near_agents.append(agent)
+			_near_agents.append(ped)
 
 
-func _queue_visual(agent_index: int, agent: PedAgent) -> void:
-	if agent.visual_queued:
+func _queue_visual(agent_index: int, ped: PedAgent) -> void:
+	if ped.visual_queued:
 		return
-	if agent.visual != null and is_instance_valid(agent.visual):
+	if ped.visual != null and is_instance_valid(ped.visual):
 		return
-	agent.visual_queued = true
+	ped.visual_queued = true
 	_pending_visuals.append(agent_index)
 
 
@@ -690,39 +841,114 @@ func _drain_pending_visuals() -> void:
 		var index: int = _pending_visuals.pop_front()
 		if index < 0 or index >= _agents.size():
 			continue
-		var agent := _agents[index]
-		agent.visual_queued = false
-		if agent.dead or agent.lod != PedAgent.Lod.NEAR:
+		var ped := _agents[index]
+		ped.visual_queued = false
+		if ped.dead or ped.lod != PedAgent.Lod.NEAR:
 			continue
-		_ensure_visual(index, agent)
+		_ensure_visual(index, ped)
 		if Time.get_ticks_usec() >= deadline:
 			return
 
 
-func _ensure_visual(agent_index: int, agent: PedAgent) -> void:
-	if agent.visual != null and is_instance_valid(agent.visual):
+func _ensure_visual(agent_index: int, ped: PedAgent) -> void:
+	if ped.visual != null and is_instance_valid(ped.visual):
 		return
 	CityProfiler.begin("crowd_visual_new")
 	var visual: CrowdPedVisual = CrowdPedVisualScript.new()
 	visual.name = "NearPed_%d" % agent_index
 	add_child(visual)
-	visual.bind_agent(agent_index, agent.female, agent.body_scale, agent.outfit)
-	agent.visual = visual
+	visual.bind_agent(agent_index, ped.female, ped.body_scale, ped.outfit)
+	ped.visual = visual
 	CityProfiler.end("crowd_visual_new")
 
 
-func _release_visual(agent: PedAgent) -> void:
-	if agent.visual == null:
+func _release_visual(ped: PedAgent) -> void:
+	if ped.visual == null:
 		return
-	if is_instance_valid(agent.visual):
-		agent.visual.queue_free()
-	agent.visual = null
+	if is_instance_valid(ped.visual):
+		ped.visual.queue_free()
+	ped.visual = null
 
 
 func _sync_near_visuals() -> void:
-	for agent in _near_agents:
-		if agent.visual == null or not is_instance_valid(agent.visual):
+	for ped in _near_agents:
+		if ped.visual == null or not is_instance_valid(ped.visual):
 			continue
-		if not agent.visual.visible:
+		if not ped.visual.visible:
 			continue
-		(agent.visual as CrowdPedVisual).sync_from_agent(agent)
+		(ped.visual as CrowdPedVisual).sync_from_agent(ped)
+
+
+# ---------------------------------------------------------------------------
+# Wiring found in the tree
+# ---------------------------------------------------------------------------
+
+## The live terrain, found the way NavDirtyTracker finds the live brush: through the city_root
+## group. A tool or test scene without a CityRoot gets none.
+func _find_terrain() -> VoxelTerrain:
+	var node := _city_root()
+	if node == null:
+		return null
+	var root := node as CityRoot
+	if root == null:
+		push_error(
+			"CrowdDirector: the city_root group holds %s, which is not a CityRoot" % node.name
+		)
+		return null
+	return root.voxel_terrain()
+
+
+func _find_overlay() -> NavDebugOverlay:
+	var root := _city_root()
+	if root == null:
+		return null
+	for child: Node in root.get_children():
+		var overlay := child as NavDebugOverlay
+		if overlay != null:
+			return overlay
+	return null
+
+
+func _city_root() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	return tree.get_first_node_in_group(&"city_root")
+
+
+## Feed the F8 overlay a bounded set of live ped corridors — enough to see how the crowd is
+## routing, few enough that the corridor layer stays cheap. Refreshed on the LOD cadence
+## rather than per repath, because a thousand path callbacks would each redraw it.
+func _refresh_overlay_corridors() -> void:
+	if _overlay == null or not is_instance_valid(_overlay):
+		return
+	if not _overlay.is_enabled():
+		_forget_overlay_corridors()
+		return
+	var shown: Array[StringName] = []
+	for ped in _agents:
+		if shown.size() >= overlay_corridor_limit:
+			break
+		if ped == null or ped.dead or ped.nav.tier() != NavLod.Tier.NEAR:
+			continue
+		if not ped.nav.has_corridor():
+			continue
+		var result := ped.nav.last_result()
+		if result == null or not result.is_usable():
+			continue
+		var id := StringName("ped_%d" % ped.nav.agent_id())
+		_overlay.set_corridor(id, result)
+		shown.append(id)
+	for id: StringName in _overlay_ids:
+		if not shown.has(id):
+			_overlay.clear_corridor(id)
+	_overlay_ids = shown
+
+
+func _forget_overlay_corridors() -> void:
+	if _overlay_ids.is_empty():
+		return
+	if _overlay != null and is_instance_valid(_overlay):
+		for id: StringName in _overlay_ids:
+			_overlay.clear_corridor(id)
+	_overlay_ids.clear()

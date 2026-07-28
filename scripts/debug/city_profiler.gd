@@ -4,6 +4,9 @@
 extends CanvasLayer
 
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
+## By path for the same reason as PlayerControls above: autoloads must not need the global
+## class cache to parse.
+const UiLayersScript := preload("res://scripts/city/ui_layers.gd")
 
 const MAX_SCOPES := 128
 const SMOOTH := 0.18
@@ -117,7 +120,7 @@ class ScopeProbe:
 
 
 func _ready() -> void:
-	layer = 120
+	layer = UiLayersScript.DEBUG_PROFILER
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	## Lowest priority = first in the pass, so our timestamp precedes all scene nodes.
 	process_priority = -1000

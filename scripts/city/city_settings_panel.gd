@@ -15,9 +15,10 @@ const CONFIG_PATH := "user://city_graphics.cfg"
 ## Bump when graphics defaults change so old user configs pick up the new baseline.
 const CONFIG_VERSION := 2
 ## Bump when default combat binds change so saved layouts pick up the new mapping.
-const CONTROLS_VERSION := 4
+const CONTROLS_VERSION := 5
 
 var _btn: Button
+var _top_bar: HBoxContainer
 var _spawn_meteors_check: CheckBox
 var _undead_invasion_check: CheckBox
 var _panel: PanelContainer
@@ -34,7 +35,7 @@ var _listen_hint: Label
 
 
 func _ready() -> void:
-	layer = 25
+	layer = UiLayers.MODAL_SETTINGS
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_player_controls = PlayerControlsScript.new() as PlayerControls
 	_settings = default_settings()
@@ -49,6 +50,12 @@ func _ready() -> void:
 
 func is_open() -> bool:
 	return _open
+
+
+## The Settings button and the two world toggles are HUD, but they ride this panel's layer so
+## the button still reaches the dim that closes the panel. Another modal hides them instead.
+func set_top_bar_visible(on: bool) -> void:
+	_top_bar.visible = on
 
 
 func get_settings() -> Dictionary:
@@ -165,18 +172,18 @@ func apply_preset(name: String) -> void:
 
 
 func _build_ui() -> void:
-	var top_bar := HBoxContainer.new()
-	top_bar.name = "TopBar"
-	top_bar.focus_mode = Control.FOCUS_NONE
-	top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	top_bar.offset_left = -520.0
-	top_bar.offset_top = 12.0
-	top_bar.offset_right = -16.0
-	top_bar.offset_bottom = 44.0
-	top_bar.add_theme_constant_override("separation", 10)
-	top_bar.alignment = BoxContainer.ALIGNMENT_END
-	add_child(top_bar)
+	_top_bar = HBoxContainer.new()
+	_top_bar.name = "TopBar"
+	_top_bar.focus_mode = Control.FOCUS_NONE
+	_top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_top_bar.offset_left = -520.0
+	_top_bar.offset_top = 12.0
+	_top_bar.offset_right = -16.0
+	_top_bar.offset_bottom = 44.0
+	_top_bar.add_theme_constant_override("separation", 10)
+	_top_bar.alignment = BoxContainer.ALIGNMENT_END
+	add_child(_top_bar)
 
 	_spawn_meteors_check = CheckBox.new()
 	_spawn_meteors_check.name = "SpawnMeteorsCheck"
@@ -184,7 +191,7 @@ func _build_ui() -> void:
 	_spawn_meteors_check.focus_mode = Control.FOCUS_NONE
 	_spawn_meteors_check.button_pressed = false
 	_spawn_meteors_check.toggled.connect(_on_spawn_meteors_toggled)
-	top_bar.add_child(_spawn_meteors_check)
+	_top_bar.add_child(_spawn_meteors_check)
 
 	_undead_invasion_check = CheckBox.new()
 	_undead_invasion_check.name = "UndeadInvasionCheck"
@@ -192,7 +199,7 @@ func _build_ui() -> void:
 	_undead_invasion_check.focus_mode = Control.FOCUS_NONE
 	_undead_invasion_check.button_pressed = false
 	_undead_invasion_check.toggled.connect(_on_undead_invasion_toggled)
-	top_bar.add_child(_undead_invasion_check)
+	_top_bar.add_child(_undead_invasion_check)
 
 	_btn = Button.new()
 	_btn.name = "SettingsButton"
@@ -200,7 +207,7 @@ func _build_ui() -> void:
 	_btn.focus_mode = Control.FOCUS_NONE
 	_btn.custom_minimum_size = Vector2(112, 0)
 	_btn.pressed.connect(toggle_panel)
-	top_bar.add_child(_btn)
+	_top_bar.add_child(_btn)
 
 	_dim = ColorRect.new()
 	_dim.name = "Dim"

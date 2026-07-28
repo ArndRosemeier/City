@@ -22,6 +22,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "beam", "label": "Blaster beam (LMB)", "group": "Combat"},
 	{"id": "stomp", "label": "Stomp (Q)", "group": "Combat"},
 	{"id": "character_editor", "label": "Character editor", "group": "Character"},
+	{"id": "inventory", "label": "Inventory", "group": "Character"},
 	{"id": "sound_toggle", "label": "Sound on/off", "group": "Character"},
 	{"id": "meteor", "label": "Spawn meteor", "group": "World"},
 	{"id": "tetris", "label": "Spawn Tetris", "group": "World"},
@@ -36,6 +37,8 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "build_6", "label": "Build slot 6", "group": "Build"},
 	{"id": "build_assign", "label": "Build assign modifier", "group": "Build"},
 	{"id": "profiler", "label": "Profiler overlay", "group": "System"},
+	{"id": "nav_overlay", "label": "Navigation overlay", "group": "System"},
+	{"id": "nav_overlay_colour", "label": "Navigation overlay colouring", "group": "System"},
 	{"id": "quit", "label": "Quit", "group": "System"},
 	{"id": "retry", "label": "Retry (game over)", "group": "System"},
 ]
@@ -100,6 +103,8 @@ static func default_binding(action_id: String) -> Dictionary:
 			return _key(KEY_Q)
 		"character_editor":
 			return _key(KEY_C)
+		"inventory":
+			return _key(KEY_I)
 		"sound_toggle":
 			return _key(KEY_O)
 		"meteor":
@@ -128,6 +133,12 @@ static func default_binding(action_id: String) -> Dictionary:
 			return _key(KEY_SHIFT)
 		"profiler":
 			return _key(KEY_F7)
+		"nav_overlay":
+			return _key(KEY_F8)
+		## Shares F8 with the toggle; the shift-carrying bind is resolved first, exactly
+		## like Alt+LMB blast wins over bare LMB beam.
+		"nav_overlay_colour":
+			return _key(KEY_F8, true)
 		"quit":
 			return _key(KEY_ESCAPE)
 		"retry":

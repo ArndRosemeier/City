@@ -72,7 +72,7 @@ func _run() -> void:
 		return
 
 	var ped := PedRoadMap.new()
-	ped.bind_graph(layers.ped, layers)
+	ped.bind_graph(layers.ped)
 	var car := CarRoadMap.new()
 	car.bind_graph(layers.road, layers)
 	VehicleCatalogScript.ensure_loaded()

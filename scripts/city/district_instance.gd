@@ -37,6 +37,9 @@ var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
 var _nav_layers: StreetNavLayers
+## This tile's span field is in the world-level NavService (peds and cars still use the
+## planner-derived _nav_layers; both stacks run until the consumers are ported).
+var _nav_registered: bool = false
 
 var _voxel_size: float = 0.5
 var _world_seed: int = 42
@@ -148,6 +151,9 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	if not needs_upgrade():
 		return
 	CityProfiler.begin("stream_upgrade_reset")
+	## The far field describes a district without buildings; drop it before the full bake
+	## replaces it, so nothing paths through a tower that is about to exist.
+	_unregister_nav()
 	is_busy = true
 	is_ready = false
 	is_ground_ready = false
@@ -190,6 +196,7 @@ func begin_generate(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) ->
 
 func destroy_and_clear(_tool: VoxelTool) -> void:
 	CityProfiler.begin("stream_unload")
+	_unregister_nav()
 	is_ready = false
 	is_busy = false
 	is_ground_ready = false
@@ -258,6 +265,10 @@ func _stamp_ground_async() -> void:
 		is_busy = false
 		failed.emit(self, "bake missing generator")
 		return
+	## The span field was baked from the finished volume, so it describes the tile the
+	## commits below are still writing. Registering now lets agents path into a district
+	## while it streams in, and must happen on the main thread.
+	_register_nav(payload.get("nav_bake") as RefCounted, payload.get("nav_stats", {}))
 
 	## Ground layer first, nearest-to-player within that layer.
 	var t_sort := Time.get_ticks_usec()
@@ -358,7 +369,7 @@ func _stamp_detail_async() -> void:
 
 	await get_tree().process_frame
 	var ped_map: PedRoadMap = PedRoadMapScript.new()
-	ped_map.bind_graph(_nav_layers.ped, _nav_layers)
+	ped_map.bind_graph(_nav_layers.ped)
 	var car_map: CarRoadMap = CarRoadMapScript.new()
 	car_map.bind_graph(_nav_layers.road, _nav_layers)
 
@@ -438,6 +449,9 @@ func _stamp_detail_async() -> void:
 
 
 func _bake_on_worker() -> Dictionary:
+	## Passability tables are built once on the main thread; the worker only reads them.
+	var nav := NavService.instance()
+	nav.ensure_configured(_voxel_size)
 	var params := {
 		"coord": coord,
 		"world_seed": _world_seed,
@@ -449,6 +463,9 @@ func _bake_on_worker() -> Dictionary:
 		"max_building_height_vox": 200,
 		"voxel_size": _voxel_size,
 		"quality": bake_quality,
+		"bake_nav": true,
+		"nav_solidity": nav.solidity_tables(),
+		"nav_link_params": nav.link_params(),
 	}
 	var mutex := Mutex.new()
 	var state := {"done": false, "payload": {}}
@@ -476,6 +493,50 @@ func _bake_on_worker() -> Dictionary:
 	var payload: Dictionary = state["payload"]
 	mutex.unlock()
 	return payload
+
+
+func _register_nav(nav_bake: RefCounted, nav_stats: Dictionary) -> void:
+	## Hands this tile's span field to the world registry. The bake handle is spent by the
+	## insert — NavService moves the field rather than copying it.
+	if nav_bake == null:
+		push_error("DistrictInstance %s: bake returned no nav field" % str(coord))
+		return
+	CityProfiler.begin("stream_nav_register")
+	_nav_registered = NavService.instance().register_district(coord, nav_bake)
+	CityProfiler.end("stream_nav_register")
+	if not _nav_registered:
+		return
+	print(
+		"DistrictInstance nav %s quality=%s spans=%d portals=%d links=%d bytes=%d"
+		% [
+			str(coord),
+			bake_quality,
+			int(nav_stats.get("spans", 0)),
+			int(nav_stats.get("portals", 0)),
+			int(nav_stats.get("links", 0)),
+			int(nav_stats.get("bytes", 0)),
+		]
+	)
+
+
+func _unregister_nav() -> void:
+	if not _nav_registered:
+		return
+	_nav_registered = false
+	## Never rebuild the service on the way out — at shutdown it may already be gone.
+	var nav := NavService.peek()
+	if nav == null or not nav.is_configured():
+		return
+	if not nav.unregister_district(coord):
+		push_error("DistrictInstance %s: NavService had no field to drop" % str(coord))
+
+
+func _notification(what: int) -> void:
+	## CityStreamer's failure path frees an instance without destroy_and_clear, and a span
+	## field left in the registry would keep routing agents through a district that is not
+	## there any more.
+	if what == NOTIFICATION_PREDELETE:
+		_unregister_nav()
 
 
 func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:

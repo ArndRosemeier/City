@@ -23,10 +23,16 @@ var _menu: PopupMenu
 var _menu_slot: int = -1
 var _recipes: Array = []
 var _controls: PlayerControls
+## Owner of the canonical "some panel owns the screen" test.
+var _walker: CityWalker
 
 
-func setup(_walker: Node = null) -> void:
-	layer = 30
+func setup(walker: CityWalker) -> void:
+	if walker == null:
+		push_error("PlayerActionBar.setup: null walker")
+		return
+	_walker = walker
+	layer = UiLayers.HUD_ACTION_BAR
 	_recipes = BuildCatalogScript.all()
 	_slots.resize(SLOT_COUNT)
 	for i in range(SLOT_COUNT):
@@ -47,6 +53,10 @@ func _ctl() -> PlayerControls:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	## A modal owns the screen while it is up, so a build key must not reach the world behind
+	## it. Same gate the walker puts on its own hotkeys.
+	if UiInputGate.gameplay_blocked(_walker):
+		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 	var ek := event as InputEventKey

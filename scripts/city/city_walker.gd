@@ -453,7 +453,13 @@ func is_blocking_ui_open() -> bool:
 	if is_character_editor_open():
 		return true
 	var parent := get_parent()
-	return parent != null and parent.has_method("is_settings_open") and bool(parent.call("is_settings_open"))
+	if parent == null:
+		return false
+	if parent.has_method("is_settings_open") and bool(parent.call("is_settings_open")):
+		return true
+	if parent.has_method("is_inventory_open") and bool(parent.call("is_inventory_open")):
+		return true
+	return false
 
 
 func set_game_over_locked(on: bool) -> void:

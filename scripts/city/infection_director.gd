@@ -37,6 +37,8 @@ const _NO_VOX := Vector3i(2147483647, 0, 0)
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
+## Write funnel owned by CityRoot — all tip/body writes go through it.
+var _brush: CityBrush
 var _voxel_size: float = 0.5
 var _next_id: int = 1
 var _rng := RandomNumberGenerator.new()
@@ -52,10 +54,15 @@ var _auras: Dictionary = {}
 
 
 func setup(
-	terrain: VoxelTerrain, tool: VoxelTool, voxel_size: float, surface_vox_y: int = -1
+	terrain: VoxelTerrain,
+	tool: VoxelTool,
+	brush: CityBrush,
+	voxel_size: float,
+	surface_vox_y: int = -1
 ) -> void:
 	_terrain = terrain
 	_tool = tool
+	_brush = brush
 	_voxel_size = voxel_size
 	if surface_vox_y >= 0:
 		min_surface_vox_y = surface_vox_y
@@ -668,10 +675,7 @@ func _stop_tendril_aura(tid: int) -> void:
 
 
 func _set_voxel(vox: Vector3i, mat_id: int) -> void:
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = mat_id
-	_tool.do_point(vox)
+	_brush.set_vox(vox, mat_id)
 
 
 func _world_to_vox(world: Vector3) -> Vector3i:

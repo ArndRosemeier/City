@@ -4,6 +4,9 @@ extends CanvasLayer
 
 const MAX_ENTRIES := 40
 const LoggerScript := preload("res://scripts/debug/error_overlay_logger.gd")
+## Reached by path, not by class_name: an autoload that fails to parse because the global class
+## cache is stale would take the only visible error report down with it.
+const UiLayersScript := preload("res://scripts/city/ui_layers.gd")
 
 var _logger: Logger
 var _panel: PanelContainer
@@ -22,7 +25,7 @@ func _init() -> void:
 
 
 func _ready() -> void:
-	layer = 128
+	layer = UiLayersScript.ERROR_OVERLAY
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_build_ui()
 	_panel.visible = false

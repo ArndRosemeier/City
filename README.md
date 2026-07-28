@@ -68,7 +68,7 @@ powershell -File tools\check_tracking.ps1             -> same check
 `tools/check_tracking.ps1` fails on unexpected untracked files and on missing required
 ship files / `.uid` sidecars. CI runs the same check on every push to `main`.
 
-Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **J** jump to district type · **N** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler (hitches ≥80 ms print to console as `CityProfiler HITCH`) · **Settings** (top-right) for quality. Settings → Graphics → Diagnostics → **Log stutters to file** mirrors those hitch reports into `%APPDATA%\Godot\app_userdata\EccentriCity\city_hitches.log` (the same panel has an *Open log folder* button), so a stutter can be reported without a console open.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **I** inventory · **J** jump to district type · **N** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler (hitches ≥80 ms print to console as `CityProfiler HITCH`) · **Settings** (top-right) for quality. Settings → Graphics → Diagnostics → **Log stutters to file** mirrors those hitch reports into `%APPDATA%\Godot\app_userdata\EccentriCity\city_hitches.log` (the same panel has an *Open log folder* button), so a stutter can be reported without a console open.
 
 Build: aim with the mouse, press **F1–F6** to stamp the bound recipe at the cursor (cottage / pool / hot tub / statues by default). **Shift+F1–F6** opens the full recipe list to rebind a slot. Fronts face you. Builds are session-local and disappear when that district streams out.
 
@@ -149,6 +149,108 @@ extents.
 Checks: `tools/test_procedural_vehicle.gd` and `tools/test_vehicle_glass.gd` (run with
 `--script`). Looks: `tools/shot_car_showroom.tscn` for a lit pad lineup and per-profile
 close-ups, `tools/shot_city_traffic.tscn` for cars photographed in live traffic.
+
+## Voxel write funnel
+
+Every live voxel write goes through `CityBrush` (`scripts/city/city_brush.gd`). Nothing
+else may call `VoxelTool.do_point` / `do_box` / `set_voxel` on the city terrain — blasts,
+melee, gem pickup, giant scrapes, infection tendrils, meteors, the Tetris cabinet and
+`BuildPlacer` all use the one brush `CityRoot.voxel_brush()` hands out.
+
+The brush publishes `voxels_changed(aabb_vox: AABB)` after each finished edit, in world
+voxel space (`position` = inclusive min, `end` = exclusive max). Wrap a multi-voxel edit
+in `begin_edit()` / `end_edit()` so it reports one region instead of one per cell.
+Subscribers (navigation rebuild) connect on the brush; district *bake* brushes paint into
+an offline volume and stay silent, because baked tiles publish their own data at load.
+
+`NativeCascadeDebris` clears collapsing columns from Rust over several frames
+(`native/city_voxel/src/cascade_debris.rs`, `clear_voxel`) — spread neighbours and bark
+canopy that GDScript cannot predict — so it cannot route through the brush. It publishes
+the same `voxels_changed(aabb_vox: AABB)` instead, one region per navigation sector per
+frame, and `NavDirtyTracker` subscribes to both. District loading stays outside either
+signal: it commits whole 16³ blocks with `VoxelTerrain.try_set_block_data` rather than
+editing cells, and the tile it loads brings its own baked navigation.
+
+What a frame pays for that is bounded twice. `NavDirtyTracker` coalesces edits into queued
+*regions* of up to 2x2 navigation sectors, because a burst of writes in one place must not
+cost a rescan each — but it drains them one **sector** at a time, so a blast straddling a
+sector border cannot hand a frame an indivisible rebuild larger than the ~2 ms budget.
+`NavService` starts another unit only while the budget it has left covers the dearest unit
+measured so far; the first always runs, so the queue cannot stall. The material copy each
+unit reads spans the voxel rows the navigation field was baked over plus the link probes'
+reach above them (`NativeNavWorld.rebuild_y_range`), not the terrain's full 220 rows.
+
+Checks: `tools/test_voxel_write_funnel.tscn` for the brush funnel,
+`tools/test_nav_dirty_rebuild.tscn` for both signals reaching navigation (run as scenes).
+
+## Navigation
+
+One `NavService` owns the navigation world: a native span field per district (walkable
+surface spans with the clearance over them, portals between sectors, links for drops and
+climbs) and one `NavProfile` per kind of walker. The profile decides what is legal — radius,
+height, `max_step`, `max_drop`, `max_wade`, whether it can swim or climb — so pedestrians,
+undead and a giant-scaled player read the same field and get different answers out of it.
+
+An actor drives a `NavAgent`: it takes a goal from a `NavGoalProvider`, asks `NavService`
+for a corridor, walks it with `NavMotor` and climbs a six-rung failure ladder (`NavLadder`)
+when the world will not cooperate. That rung is both a signal (`ladder_changed`) and
+state — a failed goal leaves `has_failed()`, `last_failure()`, `failure_count()` and
+`failure_age_sec()` standing on the agent after the next goal is adopted, so a consumer that
+only samples the agent still sees the failure it would otherwise have missed.
+
+A corridor is repathed only when an edit actually touched it. `NavAgent.dirty_probe` defaults
+to the Callable `NavService.corridor_probe()` hands out, which answers whether any navigation
+sector along the current corridor changed since the version the path was built at. Measured
+over 120 peds and 20 s of blasting (`tools/test_nav_lazy_repath.tscn`): 252 repaths with the
+probe against 1439 without — 82% fewer, with 3758 version bumps proved irrelevant.
+
+Water is a depth, not a wall. A submerged span carries the depth of water over it and each
+profile wades up to its own `max_wade`, which is why the overlay's span field looks as though
+it runs out over a lake: the field carries the lake bed, and the overlay draws every span it
+finds. A pedestrian has no footing past its wade depth — over the seed-42 lake the deepest
+bed span sits under 5 cells of water, `nearest_surface` for a pedestrian there reports
+nothing, and a pedestrian route to it comes back `NO_GOAL`. Only the giant, wading six, walks
+in.
+
+**F8** toggles the debug overlay, **Shift+F8** cycles what colours the spans. It draws the
+span field, portals, corridors and the live blocked columns around whatever node it follows,
+plus a counter line on the debug HUD layer. Blocks come back out of `NavService`
+(`is_column_blocked`, `blocked_columns`, expiring against the clock the native world was last
+advanced to), so the overlay also draws blocks it did not write.
+
+Checks: `tools/test_nav_bake`, `test_nav_links`, `test_nav_service`, `test_nav_agent`,
+`test_nav_dirty_rebuild`, `test_nav_debug_overlay`, `test_nav_lazy_repath`, `test_ped_nav`,
+`test_undead_nav` and `test_hill_district` (run as scenes). Looks:
+`tools/shot_nav_overlay.tscn` for the synthetic span field,
+`tools/shot_nav_overlay_city.tscn` for the overlay over the streamed city and the water case.
+
+## Running test scenes
+
+Always run scene tests through **`tools/run_test.ps1`**, never by calling Godot directly.
+It runs each scene headless behind a hard timeout, kills anything that overruns, prints
+the scene's own `RESULT:` line with the wall-clock time, and dumps the log and stderr on
+failure.
+
+```
+powershell -File tools\run_test.ps1 test_ped_nav
+powershell -File tools\run_test.ps1 test_nav_agent test_nav_service test_ped_nav
+powershell -File tools\run_test.ps1 test_nav_bake -TimeoutSec 300 -KeepLog
+powershell -File tools\run_test.ps1 shot_ped_crowd -Rendered -GodotArgs "--spawn-district=0,0"
+```
+
+`-Rendered` drops `--headless` for the screenshot tools, which need a real renderer because
+the district bake waits on `is_area_editable`; `-GodotArgs` passes CityRoot's own flags such as
+`--spawn-district=x,z` through. The hang guard is the same.
+
+Exit code 0 = every scene printed `RESULT: OK`, 1 = a scene failed, 2 = a scene was killed
+on timeout. The default timeout is 180 s; the whole nav suite runs in well under a minute,
+so anything near that is hung rather than slow. Logs go to `tools\<scene>.log` / `.err`
+(gitignored) and are deleted on success unless `-KeepLog` is passed.
+
+The timeout is a backstop, not the guard. **A test that waits for a condition must bound
+the wait itself and fail loudly when the bound is exceeded** — a hang is the most silent
+failure there is, and a hung headless Godot also holds `city_voxel.dll` open, which blocks
+every later `tools/build_city_voxel.ps1` until it is killed.
 
 ## Design rules
 

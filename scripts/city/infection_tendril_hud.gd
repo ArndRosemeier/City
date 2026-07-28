@@ -14,7 +14,7 @@ var _pulse_age: float = 0.0
 
 
 func _ready() -> void:
-	layer = 12
+	layer = UiLayers.HUD_TENDRILS
 	var root := Control.new()
 	root.name = "Root"
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)

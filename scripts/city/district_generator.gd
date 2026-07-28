@@ -2,8 +2,6 @@
 class_name DistrictGenerator
 extends RefCounted
 
-const PedRoadMapScript := preload("res://scripts/city/ped_roadmap.gd")
-const CarRoadMapScript := preload("res://scripts/city/car_roadmap.gd")
 const StreetNavLayersScript := preload("res://scripts/city/street_nav_layers.gd")
 const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
 const PlazaComposerScript := preload("res://scripts/city/plaza_composer.gd")
@@ -605,26 +603,6 @@ func build_street_nav(tool: VoxelTool) -> StreetNavLayers:
 	var layers: StreetNavLayers = StreetNavLayersScript.new()
 	layers.build(_planner, tool, cell_size, ground_thickness, voxel_size, origin_vox)
 	return layers
-
-
-func build_ped_roadmap(tool: VoxelTool, _stride: int = 2) -> PedRoadMap:
-	var layers := build_street_nav(tool)
-	var map: PedRoadMap = PedRoadMapScript.new()
-	if layers != null and layers.ped != null:
-		map.bind_graph(layers.ped, layers)
-	return map
-
-
-func build_car_roadmap(tool: VoxelTool, _stride: int = 2) -> CarRoadMap:
-	var layers := build_street_nav(tool)
-	var map: CarRoadMap = CarRoadMapScript.new()
-	if layers != null and layers.road != null:
-		map.bind_graph(layers.road, layers)
-	return map
-
-
-func collect_walkable_world_positions(tool: VoxelTool, stride: int = 2) -> PackedVector3Array:
-	return build_ped_roadmap(tool, stride).positions
 
 
 func find_spawn_world(tool: VoxelTool) -> Vector3:

@@ -5,10 +5,18 @@ extends Object
 const EXTENSION_PATH := "res://addons/city_voxel/city_voxel.gdextension"
 const VOLUME_CLASS := "NativeOfflineVoxelVolume"
 const DEBRIS_CLASS := "NativeCascadeDebris"
+## One district's baked span field, produced on a bake worker.
+const NAV_BAKE_CLASS := "NativeNavBake"
+## Main-thread navigation registry every agent queries.
+const NAV_WORLD_CLASS := "NativeNavWorld"
+
+const REQUIRED_CLASSES: Array[String] = [
+	VOLUME_CLASS, DEBRIS_CLASS, NAV_BAKE_CLASS, NAV_WORLD_CLASS
+]
 
 
 static func require_loaded() -> void:
-	if ClassDB.class_exists(VOLUME_CLASS) and ClassDB.class_exists(DEBRIS_CLASS):
+	if _all_registered():
 		return
 	if not FileAccess.file_exists(EXTENSION_PATH):
 		push_error(
@@ -26,14 +34,18 @@ static func require_loaded() -> void:
 			)
 			assert(false, "city_voxel GDExtension failed to load")
 			return
-	if not ClassDB.class_exists(VOLUME_CLASS):
-		push_error("CityVoxelNative: class %s not registered after load" % VOLUME_CLASS)
-		assert(false, "NativeOfflineVoxelVolume missing")
-		return
-	if not ClassDB.class_exists(DEBRIS_CLASS):
-		push_error("CityVoxelNative: class %s not registered after load" % DEBRIS_CLASS)
-		assert(false, "NativeCascadeDebris missing")
-		return
+	for cls: String in REQUIRED_CLASSES:
+		if not ClassDB.class_exists(cls):
+			push_error("CityVoxelNative: class %s not registered after load" % cls)
+			assert(false, "city_voxel class missing")
+			return
+
+
+static func _all_registered() -> bool:
+	for cls: String in REQUIRED_CLASSES:
+		if not ClassDB.class_exists(cls):
+			return false
+	return true
 
 
 ## Back-compat name used by older call sites — now hard-requires.
@@ -58,3 +70,22 @@ static func make_cascade_debris() -> Node:
 		push_error("CityVoxelNative: ClassDB.instantiate(%s) failed" % DEBRIS_CLASS)
 		assert(false, "NativeCascadeDebris instantiate failed")
 	return node as Node
+
+
+## One district's span field. Created on a bake worker; hand it to a NativeNavWorld after.
+static func make_nav_bake() -> Object:
+	require_loaded()
+	var bake: Object = ClassDB.instantiate(NAV_BAKE_CLASS)
+	if bake == null:
+		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % NAV_BAKE_CLASS)
+		assert(false, "NativeNavBake instantiate failed")
+	return bake
+
+
+static func make_nav_world() -> Object:
+	require_loaded()
+	var world: Object = ClassDB.instantiate(NAV_WORLD_CLASS)
+	if world == null:
+		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % NAV_WORLD_CLASS)
+		assert(false, "NativeNavWorld instantiate failed")
+	return world

@@ -80,6 +80,8 @@ var _ghost_shader: Shader
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
+## Write funnel owned by CityRoot — the cabinet shell is stamped through it.
+var _brush: CityBrush
 ## World voxel cells that belong to this cabinet shell.
 var _owned_voxels: Dictionary = {}  # Vector3i → true
 
@@ -90,20 +92,26 @@ var _piece_z: float = 0.0
 ## When false, keys 1–4 are ignored (NPC / AI owns the cabinet).
 var _input_enabled: bool = true
 var _ai_controller: Node = null
+## Owner of the canonical "some panel owns the screen" test.
+var _walker: CityWalker
 
 
 func begin(
 	terrain: VoxelTerrain,
 	tool: VoxelTool,
+	brush: CityBrush,
+	walker: CityWalker,
 	ground_hit: Vector3,
 	face_yaw: float,
 	cell_size: float = CELL
 ) -> void:
-	if terrain == null or tool == null:
-		push_error("TetrisMachine.begin: terrain/tool required")
+	if terrain == null or tool == null or brush == null or walker == null:
+		push_error("TetrisMachine.begin: terrain/tool/brush/walker required")
 		return
 	_terrain = terrain
 	_tool = tool
+	_brush = brush
+	_walker = walker
 	_cell_size = maxf(cell_size, 0.1)
 	_rng.randomize()
 	_init_shapes()
@@ -120,12 +128,17 @@ func begin(
 	_refresh_board_visual()
 	_refresh_active_visual()
 	_refresh_hud()
-
-
-func _ready() -> void:
 	set_process_unhandled_input(true)
 	set_process(true)
 	set_physics_process(true)
+
+
+func _ready() -> void:
+	## Idle until begin() hands over the world to stamp into and the walker whose open panels
+	## decide whether the cabinet keys count.
+	set_process_unhandled_input(false)
+	set_process(false)
+	set_physics_process(false)
 
 
 func is_playable() -> bool:
@@ -138,6 +151,10 @@ func is_broken() -> bool:
 
 func is_game_over() -> bool:
 	return _game_over
+
+
+func is_soft_dropping() -> bool:
+	return _soft_dropping
 
 
 func set_input_enabled(enabled: bool) -> void:
@@ -315,8 +332,8 @@ func _stamp_voxel_shell() -> void:
 
 	_owned_voxels.clear()
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.GAMEBOY
+	## Whole cabinet is one logical edit — subscribers get a single dirty region.
+	_brush.begin_edit()
 
 	_stamp_box_m(Vector3(0.0, ped_h * 0.5, depth * 0.5 + 0.05), Vector3(FRAME_W, ped_h, depth + 0.4))
 	_stamp_box_m(
@@ -354,6 +371,7 @@ func _stamp_voxel_shell() -> void:
 		_stamp_box_m(Vector3(d.x, btn_y + d.y, -0.05), Vector3(btn, btn, btn))
 	_stamp_box_m(Vector3(1.0, btn_y + 0.35, -0.05), Vector3(btn, btn, btn))
 	_stamp_box_m(Vector3(1.6, btn_y, -0.05), Vector3(btn, btn, btn))
+	_brush.end_edit()
 
 	_title = Label3D.new()
 	_title.name = "Title"
@@ -399,8 +417,7 @@ func _stamp_local_point(local_pos: Vector3) -> void:
 	var existing := int(_tool.get_voxel(vox))
 	if existing == VoxelMaterial.BEDROCK or existing == VoxelMaterial.WATER:
 		return
-	_tool.value = VoxelMaterial.GAMEBOY
-	_tool.do_point(vox)
+	_brush.set_vox(vox, VoxelMaterial.GAMEBOY)
 	_owned_voxels[vox] = true
 
 
@@ -410,12 +427,12 @@ func clear_shell() -> void:
 		_owned_voxels.clear()
 		return
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
+	_brush.begin_edit()
 	for key in _owned_voxels.keys():
 		var vox: Vector3i = key
 		if int(_tool.get_voxel(vox)) == VoxelMaterial.GAMEBOY:
-			_tool.do_point(vox)
+			_brush.set_vox(vox, VoxelMaterial.AIR)
+	_brush.end_edit()
 	_owned_voxels.clear()
 
 
@@ -792,6 +809,12 @@ func _display_y() -> float:
 
 
 func _physics_process(delta: float) -> void:
+	if UiInputGate.gameplay_blocked(_walker):
+		## A panel that opens mid-hold swallows the key release below it, so the latched
+		## repeat has to be dropped here or the piece keeps sliding behind the modal.
+		_das_dir = 0
+		_das_repeating = false
+		return
 	_update_das(delta)
 
 
@@ -873,6 +896,10 @@ func _tetris_key_id(ek: InputEventKey) -> int:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _broken or _game_over or not _input_enabled:
+		return
+	## A modal owns the screen while it is up, so a cabinet key must not reach the board behind
+	## it. Same gate the walker and the build bar put on their own hotkeys.
+	if UiInputGate.gameplay_blocked(_walker):
 		return
 	if event is InputEventKey:
 		var ek := event as InputEventKey

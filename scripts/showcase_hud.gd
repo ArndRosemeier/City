@@ -12,7 +12,7 @@ var _hint: Label
 
 
 func _ready() -> void:
-	layer = 100
+	layer = UiLayers.HUD_STATS
 	_build_ui()
 
 

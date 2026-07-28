@@ -23,6 +23,8 @@ const SkyBeamScript := preload("res://scripts/city/infection_sky_beam_vfx.gd")
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
+## Write funnel owned by CityRoot — crater rock and seed tips go through it.
+var _brush: CityBrush
 var _target: Vector3 = Vector3.ZERO
 var _velocity: Vector3 = Vector3.ZERO
 var _mm_rock: MultiMeshInstance3D
@@ -41,19 +43,27 @@ static func spawn(
 	parent: Node,
 	terrain: VoxelTerrain,
 	tool: VoxelTool,
+	brush: CityBrush,
 	aim_hit: Vector3,
 	spawn_height: float = 55.0
 ) -> InfectionMeteor:
 	var m := InfectionMeteor.new()
 	m.name = "InfectionMeteor"
 	parent.add_child(m)
-	m.begin(terrain, tool, aim_hit, spawn_height)
+	m.begin(terrain, tool, brush, aim_hit, spawn_height)
 	return m
 
 
-func begin(terrain: VoxelTerrain, tool: VoxelTool, aim_hit: Vector3, spawn_height: float = 55.0) -> void:
+func begin(
+	terrain: VoxelTerrain,
+	tool: VoxelTool,
+	brush: CityBrush,
+	aim_hit: Vector3,
+	spawn_height: float = 55.0
+) -> void:
 	_terrain = terrain
 	_tool = tool
+	_brush = brush
 	_target = aim_hit
 	spawn_height_m = spawn_height
 	_rng.randomize()
@@ -254,8 +264,8 @@ func _do_impact(hit_pos: Vector3) -> void:
 		if base.y < 1:
 			base.y = 1
 		_tool.channel = VoxelBuffer.CHANNEL_TYPE
-		_tool.mode = VoxelTool.MODE_SET
 		## Stamp rock body.
+		_brush.begin_edit()
 		for cell in _blob:
 			var o: Vector3i = cell["o"]
 			var mid: int = int(cell["m"])
@@ -265,8 +275,8 @@ func _do_impact(hit_pos: Vector3) -> void:
 			var existing := int(_tool.get_voxel(vox))
 			if existing == VoxelMaterial.BEDROCK or existing == VoxelMaterial.WATER:
 				continue
-			_tool.value = VoxelMaterial.METEOR_ROCK
-			_tool.do_point(vox)
+			_brush.set_vox(vox, VoxelMaterial.METEOR_ROCK)
+		_brush.end_edit()
 		var want := _rng.randi_range(SEED_COUNT_MIN, SEED_COUNT_MAX)
 		seeds = _plant_guaranteed_seeds(base, want)
 
@@ -433,9 +443,7 @@ func _try_plant_seed_at(
 	var prev_for_seed := existing
 	if prev_for_seed == VoxelMaterial.AIR:
 		prev_for_seed = VoxelMaterial.METEOR_ROCK
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.INFECTION_LEAD
-	_tool.do_point(vox)
+	_brush.set_vox(vox, VoxelMaterial.INFECTION_LEAD)
 	used[vox] = true
 	seeds.append({
 		"world": _terrain.to_global(

@@ -15,7 +15,7 @@ var _snapshot: Dictionary = {}
 
 
 func _ready() -> void:
-	layer = 14
+	layer = UiLayers.HUD_MINIMAP
 	var root := Control.new()
 	root.name = "Root"
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)

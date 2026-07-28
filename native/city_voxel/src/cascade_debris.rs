@@ -35,6 +35,11 @@ const CANOPY_RADIUS: i32 = 2;
 const CANOPY_UP: i32 = 4;
 const MAX_PENDING_UNSUPPORTED: usize = 400;
 
+/// Cleared cells are reported per bucket of this many columns square, which is one
+/// navigation sector. Collapses that spread across town then arrive as one region each
+/// instead of a single box swallowing everything in between.
+const DIRTY_BUCKET: i32 = crate::nav::SECTOR;
+
 /// PhysicsServer3D::BodyMode
 const BODY_MODE_STATIC: i32 = 0;
 const BODY_MODE_RIGID: i32 = 2;
@@ -138,6 +143,9 @@ struct NativeCascadeDebris {
     settle_max_age_sec: f32,
 
     columns: Vec<Vec<ColumnEntry>>,
+    /// Cells cleared since the last flush, bucketed by [`DIRTY_BUCKET`] column square:
+    /// inclusive minimum and exclusive maximum, in world voxels.
+    dirty_cells: HashMap<(i32, i32), (Vector3i, Vector3i)>,
     pending_unsupported: Vec<Vector3i>,
     pending_visuals: Vec<PendingVisual>,
     canopy_dropped: HashSet<(i32, i32)>,
@@ -186,6 +194,7 @@ impl INode for NativeCascadeDebris {
             settle_still_sec: 0.22,
             settle_max_age_sec: 2.4,
             columns: Vec::new(),
+            dirty_cells: HashMap::new(),
             pending_unsupported: Vec::new(),
             pending_visuals: Vec::new(),
             canopy_dropped: HashSet::new(),
@@ -206,6 +215,9 @@ impl INode for NativeCascadeDebris {
 
     fn physics_process(&mut self, delta: f64) {
         let t0 = Time::singleton().get_ticks_usec();
+        // Publish last frame's clears first: a cascade also clears cells from the
+        // #[func] entry points, and every path out of this function is covered here.
+        self.flush_voxels_changed();
         self.debug_frame = self.debug_frame.wrapping_add(1);
         self.evict_budget = self.debris_evict_per_frame.max(1);
         let dt = delta as f32;
@@ -256,6 +268,17 @@ impl INode for NativeCascadeDebris {
 impl NativeCascadeDebris {
     #[signal]
     fn debris_spawned(world_pos: Vector3);
+
+    /// Cells this collapse cleared, in *world voxel* space: `position` is the inclusive
+    /// minimum, `end` the exclusive maximum. Deliberately the same contract as
+    /// `CityBrush.voxels_changed`, so one subscriber shape serves both write paths.
+    ///
+    /// A cascade decides for itself where it spreads and which canopy comes down with a
+    /// trunk, so GDScript cannot predict these edits and route them through the brush.
+    /// One signal per cleared cell would be thousands a second, so a frame's clears are
+    /// coalesced into one region per navigation sector and published on the next tick.
+    #[signal]
+    fn voxels_changed(aabb_vox: Aabb);
 
     #[func]
     fn setup(
@@ -509,6 +532,43 @@ impl NativeCascadeDebris {
         tool.set("mode", &mode.to_variant());
         tool.set("value", &air.to_variant());
         tool.call("do_point", &[vox.to_variant()]);
+        self.note_cleared(vox);
+    }
+
+    /// Fold one cleared cell into the region its column bucket will publish.
+    fn note_cleared(&mut self, vox: Vector3i) {
+        let key = (
+            vox.x.div_euclid(DIRTY_BUCKET),
+            vox.z.div_euclid(DIRTY_BUCKET),
+        );
+        let end = vox + Vector3i::ONE;
+        self.dirty_cells
+            .entry(key)
+            .and_modify(|(lo, hi)| {
+                lo.x = lo.x.min(vox.x);
+                lo.y = lo.y.min(vox.y);
+                lo.z = lo.z.min(vox.z);
+                hi.x = hi.x.max(end.x);
+                hi.y = hi.y.max(end.y);
+                hi.z = hi.z.max(end.z);
+            })
+            .or_insert((vox, end));
+    }
+
+    /// Publish one region per bucket of cells cleared since the last call.
+    fn flush_voxels_changed(&mut self) {
+        if self.dirty_cells.is_empty() {
+            return;
+        }
+        let regions: Vec<(Vector3i, Vector3i)> = self.dirty_cells.drain().map(|(_, v)| v).collect();
+        for (lo, hi) in regions {
+            let aabb = Aabb::new(
+                Vector3::new(lo.x as f32, lo.y as f32, lo.z as f32),
+                Vector3::new((hi.x - lo.x) as f32, (hi.y - lo.y) as f32, (hi.z - lo.z) as f32),
+            );
+            self.base_mut()
+                .emit_signal("voxels_changed", &[aabb.to_variant()]);
+        }
     }
 
     fn append_column(&mut self, column: Vec<ColumnEntry>) {

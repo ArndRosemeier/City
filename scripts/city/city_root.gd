@@ -8,6 +8,7 @@ const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library
 const CityWalkerScript := preload("res://scripts/city/city_walker.gd")
 const DistrictInstanceScript := preload("res://scripts/city/district_instance.gd")
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
+const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
 const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd")
@@ -27,6 +28,9 @@ const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
 const BuildPlacerScript := preload("res://scripts/city/build_placer.gd")
 const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
 const GemLightDirectorScript := preload("res://scripts/city/gem_light_director.gd")
+const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
+const PlayerInventoryPanelScript := preload("res://scripts/city/player_inventory_panel.gd")
+const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -53,6 +57,8 @@ var spawn_theme_id: int = -1
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
+## Single funnel for every live voxel write; publishes voxels_changed(aabb_vox).
+var _brush: CityBrush
 ## Outfit scenes kept referenced for the session so gameplay loads hit the resource cache.
 var _warm_scenes: Array[PackedScene] = []
 var _streamer: Node
@@ -60,6 +66,9 @@ var _streamer: Node
 var _walker: CharacterBody3D
 var _hud: Label
 var _hud_layer: CanvasLayer
+## False while the splash owns the screen (boot, district hop). Combined with is_modal_open()
+## in _refresh_hud_visibility; nothing sets a HUD layer's visibility outside that.
+var _hud_enabled: bool = false
 var _status: Label
 var _loading_splash: CanvasLayer
 var _action_bar: Node
@@ -71,6 +80,8 @@ var _infection: Node
 var _tendril_hud: Node
 var _undead_hud: Node
 var _minimap: Node
+## Span field / portal / corridor / dynamic-block viewer, off until F8.
+var _nav_overlay: NavDebugOverlay
 var _tetris: Node3D
 var _tetris_peds: Array[Node3D] = []
 var _game_over_layer: CanvasLayer
@@ -86,8 +97,9 @@ var _meteor_spawn_interval_sec: float = 120.0
 var _undead_invasion_enabled: bool = false
 var _undead: Node
 var _player_score: int = 0
-## Collected gem tallies keyed by VoxelMaterial.GEM_* id. Display comes later.
-var _gem_counts: Dictionary = {}
+## Collected gems and crafted items (25 stackable slots).
+var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
+var _inventory_panel: Node
 var _game_over: bool = false
 var _radar_cooldown_left: float = 0.0
 var _radar_reveal_left: float = 0.0
@@ -303,6 +315,46 @@ func is_settings_open() -> bool:
 	return _settings_panel != null and bool(_settings_panel.call("is_open"))
 
 
+func is_inventory_open() -> bool:
+	return _inventory_panel != null and bool(_inventory_panel.call("is_open"))
+
+
+## True while a panel of this root's owns the screen. The walker and the build bar read this to
+## stop taking hotkeys, and the HUD band is hidden for as long as it holds. The walker's own
+## character editor is not in here: nothing would tell us when it closes again.
+func is_modal_open() -> bool:
+	return is_settings_open() or is_inventory_open()
+
+
+func _is_character_editor_open() -> bool:
+	if _walker == null or not is_instance_valid(_walker):
+		return false
+	return bool(_walker.call("is_character_editor_open"))
+
+
+## The HUD is on screen only while play is running and nothing owns the screen. Covering it is
+## not enough: every modal dim is translucent, so a HUD left up bleeds through the panel.
+func _set_hud_enabled(enabled: bool) -> void:
+	_hud_enabled = enabled
+	_refresh_hud_visibility()
+
+
+func _refresh_hud_visibility() -> void:
+	var show_hud := _hud_enabled and not is_modal_open()
+	for child in get_children():
+		var canvas := child as CanvasLayer
+		if canvas == null:
+			continue
+		if canvas.layer >= UiLayers.HUD_MIN and canvas.layer <= UiLayers.HUD_MAX:
+			canvas.visible = show_hud
+	if _settings_panel != null:
+		_settings_panel.call("set_top_bar_visible", not is_inventory_open())
+
+
+func get_inventory() -> PlayerInventory:
+	return _inventory
+
+
 func _as_district_instance(entry: Variant) -> Variant:
 	## Resolve without relying on global class_name cache (portable installs).
 	if entry == null or not is_instance_valid(entry):
@@ -345,6 +397,7 @@ func _build_hud() -> void:
 
 	_hud_layer = CanvasLayer.new()
 	_hud_layer.name = "HudLayer"
+	_hud_layer.layer = UiLayers.HUD_STATS
 	## Hidden until the spawn district is playable — the title splash owns the screen.
 	_hud_layer.visible = false
 	add_child(_hud_layer)
@@ -384,6 +437,10 @@ func _build_hud() -> void:
 	add_child(_minimap)
 	_minimap.call("bind_city", self)
 
+	_nav_overlay = NavDebugOverlayScript.new() as NavDebugOverlay
+	_nav_overlay.name = "NavDebugOverlay"
+	add_child(_nav_overlay)
+
 	_build_game_over_overlay()
 
 	_settings_panel = CitySettingsPanelScript.new()
@@ -398,6 +455,14 @@ func _build_hud() -> void:
 		_settings_panel.spawn_meteors_toggled.connect(_on_spawn_meteors_toggled)
 	if _settings_panel.has_signal("undead_invasion_toggled"):
 		_settings_panel.undead_invasion_toggled.connect(_on_undead_invasion_toggled)
+
+	_inventory_panel = PlayerInventoryPanelScript.new()
+	_inventory_panel.name = "PlayerInventory"
+	add_child(_inventory_panel)
+	_inventory_panel.call("bind_inventory", _inventory)
+	_inventory_panel.opened.connect(_on_inventory_opened)
+	_inventory_panel.closed.connect(_on_inventory_closed)
+	_inventory_panel.craft_requested.connect(_on_inventory_craft_requested)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
 	call_deferred("_apply_saved_controls")
@@ -406,7 +471,7 @@ func _build_hud() -> void:
 func _build_game_over_overlay() -> void:
 	_game_over_layer = CanvasLayer.new()
 	_game_over_layer.name = "GameOverOverlay"
-	_game_over_layer.layer = 40
+	_game_over_layer.layer = UiLayers.GAME_OVER
 	_game_over_layer.visible = false
 	add_child(_game_over_layer)
 
@@ -483,13 +548,44 @@ func _roll_meteor_spawn_interval() -> void:
 	_meteor_spawn_interval_sec = randf_range(60.0, 180.0)
 
 func _on_settings_opened() -> void:
+	if is_inventory_open():
+		_inventory_panel.call("close_panel")
+	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
 
 
 func _on_settings_closed() -> void:
+	_refresh_hud_visibility()
+	if is_inventory_open():
+		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker._set_capture(true)
+
+
+func _on_inventory_opened() -> void:
+	if is_settings_open():
+		_settings_panel.call("close_panel")
+	_refresh_hud_visibility()
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_inventory_closed() -> void:
+	_refresh_hud_visibility()
+	if is_settings_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker._set_capture(true)
+
+
+func _on_inventory_craft_requested(recipe_id: String) -> void:
+	if _inventory == null:
+		return
+	if not _inventory.craft(recipe_id):
+		push_error("CityRoot: craft failed for '%s'" % recipe_id)
+		return
+	print("CityRoot: crafted %s" % recipe_id)
 
 
 func _apply_saved_controls() -> void:
@@ -627,6 +723,7 @@ func _create_terrain() -> void:
 		_terrain.queue_free()
 		_terrain = null
 		_tool = null
+		_brush = null
 
 	_terrain = VoxelTerrain.new()
 	_terrain.name = "VoxelTerrain"
@@ -649,7 +746,24 @@ func _create_terrain() -> void:
 	_terrain.generate_collisions = true
 	_tool = _terrain.get_voxel_tool()
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	## Gameplay edits are already in world voxel space, so no origin offset.
+	_brush = CityBrushScript.new(_tool) as CityBrush
 	CityProfiler.set_terrain(_terrain)
+
+
+## The one brush every live voxel write goes through. Connect to its
+## `voxels_changed(aabb_vox)` to react to world mutation — that is the seam the
+## nav span/portal rebuild (and nav_version invalidation) hangs off. Valid only
+## after boot; regenerating the world replaces it, so re-connect on each terrain.
+func voxel_brush() -> CityBrush:
+	return _brush
+
+
+## The live terrain, for consumers that move bodies against voxel data rather than edit it —
+## VoxelBoxMover needs the node itself, not the tool. Valid only after boot; regenerating the
+## world replaces it, so re-read it on each terrain.
+func voxel_terrain() -> VoxelTerrain:
+	return _terrain
 
 
 func _ensure_gem_lights(camera: Camera3D) -> void:
@@ -713,7 +827,7 @@ func _ensure_infection_director() -> void:
 		_infection.name = "InfectionDirector"
 		add_child(_infection)
 	## Street deck voxel Y matches DistrictGenerator.ground_thickness (bedrock+stone).
-	_infection.call("setup", _terrain, _tool, VOXEL_SIZE, 6)
+	_infection.call("setup", _terrain, _tool, _brush, VOXEL_SIZE, 6)
 	if _infection.has_signal("tendril_killed"):
 		var cb_kill := Callable(self, "_on_tendril_killed")
 		if not _infection.is_connected("tendril_killed", cb_kill):
@@ -735,12 +849,20 @@ func _on_player_score_changed(score: int) -> void:
 
 
 func get_gem_count(mat_id: int) -> int:
-	return int(_gem_counts.get(mat_id, 0))
+	var item_id := InventoryCatalog.item_id_for_gem(mat_id)
+	if item_id == "":
+		return 0
+	return _inventory.count_of(item_id)
 
 
-## All tallies keyed by VoxelMaterial.GEM_* — empty entries omitted.
+## All gem tallies keyed by VoxelMaterial.GEM_* — empty entries omitted.
 func get_gem_counts() -> Dictionary:
-	return _gem_counts.duplicate()
+	var out: Dictionary = {}
+	for mat_id in range(VoxelMaterial.GEM_QUARTZ, VoxelMaterial.GEM_DIAMOND + 1):
+		var n := get_gem_count(mat_id)
+		if n > 0:
+			out[mat_id] = n
+	return out
 
 
 ## Remove one gem voxel and credit the inventory. Returns false if it is gone already.
@@ -751,10 +873,13 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 	var mat_id := int(_tool.get_voxel(vox))
 	if not VoxelMaterial.is_gem(mat_id):
 		return false
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
-	_tool.do_point(vox)
-	_gem_counts[mat_id] = int(_gem_counts.get(mat_id, 0)) + 1
+	var item_id := InventoryCatalog.item_id_for_gem(mat_id)
+	if item_id == "":
+		return false
+	_brush.set_vox(vox, VoxelMaterial.AIR)
+	var leftover := _inventory.add(item_id, 1)
+	if leftover != 0:
+		push_error("CityRoot: inventory full — gem %s could not be stored" % item_id)
 	if _audio != null and _audio.has_method("play_gem_pickup"):
 		var local := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
 		var world := _terrain.to_global(local) if _terrain != null else local * VOXEL_SIZE
@@ -982,8 +1107,7 @@ func _district_hop_pick_async() -> void:
 		_district_hopping = false
 		return
 	var origin_pos := walker.global_position
-	if _hud_layer != null:
-		_hud_layer.visible = false
+	_set_hud_enabled(false)
 	walker.set_physics_process(false)
 	walker.velocity = Vector3.ZERO
 	var theme_id: int = int(
@@ -1019,8 +1143,7 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		"CityRoot: district hop %s → %s (%s)"
 		% [here, dest, theme.display_name]
 	)
-	if _hud_layer != null:
-		_hud_layer.visible = false
+	_set_hud_enabled(false)
 	if _loading_splash != null:
 		_loading_splash.call(
 			"show_splash",
@@ -1104,8 +1227,7 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 	if _streamer != null and _streamer.has_method("clear_priority_district"):
 		_streamer.call("clear_priority_district")
 	_district_hopping = false
-	if _hud_layer != null:
-		_hud_layer.visible = true
+	_set_hud_enabled(true)
 	if _loading_splash != null:
 		_loading_splash.call("hide_splash")
 	print("CityRoot: district hop landed in %s at y=%.2f" % [dest, floor_y])
@@ -1120,8 +1242,8 @@ func _finish_district_hop_fail(reason: String, restore_pos: Vector3) -> void:
 		_walker.velocity = Vector3.ZERO
 		_walker.set_physics_process(true)
 	_district_hopping = false
-	if _hud_layer != null and not _booting:
-		_hud_layer.visible = true
+	if not _booting:
+		_set_hud_enabled(true)
 	if _loading_splash != null:
 		_loading_splash.call("set_status", "Hop failed — %s" % reason)
 		## Brief beat so the error is readable, then fade.
@@ -1146,8 +1268,7 @@ func _regenerate() -> void:
 	_booting = true
 	_game_over = false
 	_hide_game_over_overlay()
-	if _hud_layer != null:
-		_hud_layer.visible = false
+	_set_hud_enabled(false)
 	## Splash while the spawn district bakes — no type picker at boot.
 	if _loading_splash != null:
 		_loading_splash.call("show_splash", "Loading EccentriCity…")
@@ -1195,7 +1316,7 @@ func _regenerate() -> void:
 		_undead.queue_free()
 		_undead = null
 	_player_score = 0
-	_gem_counts.clear()
+	_inventory.clear()
 	_gem_pickup_accum = 0.0
 	_radar_cooldown_left = 0.0
 	_radar_reveal_left = 0.0
@@ -1211,6 +1332,11 @@ func _regenerate() -> void:
 		_undead_hud.call("clear_display")
 	if _minimap != null and is_instance_valid(_minimap):
 		_minimap.call("bind_city", self)
+	## The overlay's follow target and every corridor it drew belong to the old world.
+	if _nav_overlay != null and is_instance_valid(_nav_overlay):
+		_nav_overlay.set_enabled(false)
+		_nav_overlay.bind_follow(null)
+		_nav_overlay.bind_aim_provider(Callable())
 	if _cascade != null and is_instance_valid(_cascade):
 		_cascade.clear_debris()
 		_cascade.queue_free()
@@ -1320,6 +1446,8 @@ func _on_spawn_district_ready(inst: Node) -> void:
 
 	_streamer.call("bind_player", _walker, cam)
 	_ensure_gem_lights(cam)
+	_nav_overlay.bind_follow(_walker)
+	_nav_overlay.bind_aim_provider(_nav_overlay_aim)
 
 	_status.text = "Waiting for ground collisions…"
 	var floor_y := await _wait_floor_collision(spawn, 2400)
@@ -1346,8 +1474,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 		_walker.set_yaw(atan2(-look.x, -look.z))
 
 	_booting = false
-	if _hud_layer != null:
-		_hud_layer.visible = true
+	_set_hud_enabled(true)
 	if _loading_splash != null:
 		_loading_splash.call("hide_splash")
 	elif _status != null:
@@ -1357,6 +1484,9 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	add_child(_action_bar)
 	_action_bar.setup(_walker)
 	_action_bar.build_requested.connect(_on_build_chosen)
+	## It joins the HUD band after the band was last refreshed, so it would otherwise stay up
+	## over a panel opened while the spawn district was still baking.
+	_refresh_hud_visibility()
 	if _energy_hud != null and is_instance_valid(_energy_hud):
 		_energy_hud.call("bind_walker", _walker)
 	if _settings_panel != null:
@@ -1513,14 +1643,14 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	if _tool == null or _terrain == null:
 		return
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
 	var local := _terrain.to_local(hit_position)
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
 	## Revert any tip in the blast first; restored fabric then takes the carve normally.
 	_tip_kill_leads_in_sphere(local, radius_vox)
+	_brush.begin_edit()
 	_carve_destructible_sphere(local, radius_vox)
 	_restore_bedrock_floor(local, radius_vox)
+	_brush.end_edit()
 	_notify_tetris_damage()
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
 
@@ -1542,11 +1672,10 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	var cy := int(floor(local.y))
 	var cz := int(floor(local.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
 	var detached: Array = []
 	var column_max_y: Dictionary = {}  # Vector2i → int
 	const MAX_DEBRIS := 900
+	_brush.begin_edit()
 	for z in range(cz - r_i, cz + r_i + 1):
 		for y in range(cy - r_i, cy + r_i + 1):
 			for x in range(cx - r_i, cx + r_i + 1):
@@ -1564,8 +1693,9 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 					column_max_y[col] = maxi(int(column_max_y[col]), y)
 				else:
 					column_max_y[col] = y
-				_tool.do_point(vox)
+				_brush.set_vox(vox, VoxelMaterial.AIR)
 	_restore_bedrock_floor(local, radius_vox)
+	_brush.end_edit()
 	CityProfiler.end("voxel_blast")
 	if _cascade != null:
 		## Primary blast voxels fly outward from the impact.
@@ -1657,8 +1787,6 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	_tip_kill_leads_in_sphere(hit_center, radius_vox)
 	var r_i := int(ceil(radius_vox))
 	var r2 := radius_vox * radius_vox
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
 	## Collect destructibles in the punch sphere, then clear. Cascade must use the TOP of the
 	## hole — starting from the bottom found only AIR (sphere already wiped the column).
 	var detached: Array = []
@@ -1686,8 +1814,10 @@ func _on_melee_strike(origin: Vector3, direction: Vector3, max_range_m: float) -
 	if hit_gem and detached.is_empty():
 		return
 
+	_brush.begin_edit()
 	for entry in detached:
-		_tool.do_point(entry["vox"] as Vector3i)
+		_brush.set_vox(entry["vox"] as Vector3i, VoxelMaterial.AIR)
+	_brush.end_edit()
 
 	if _cascade == null:
 		return
@@ -1732,7 +1862,7 @@ func _on_build_chosen(recipe_id: String) -> void:
 		## No ground under the cursor — drop it a few metres in front of the player.
 		hit = _walker.global_position - _walker.global_transform.basis.z * 4.0
 	var written: int = BuildPlacerScript.place(
-		_terrain, _tool, recipe, hit, _walker.global_position
+		_terrain, _tool, _brush, recipe, hit, _walker.global_position
 	)
 	print("CityRoot: built %s (%d voxels) at %s" % [recipe.display_name, written, hit])
 
@@ -1749,6 +1879,10 @@ func _spawn_tetris_at(hit_point: Vector3) -> void:
 	if _tool == null or _terrain == null:
 		push_error("CityRoot: cannot spawn Tetris without VoxelTerrain tool")
 		return
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot: cannot spawn Tetris without the walker that gates its keys")
+		return
+	var walker := _walker as CityWalker
 	if _tetris != null and is_instance_valid(_tetris):
 		if _tetris.has_method("clear_shell"):
 			_tetris.call("clear_shell")
@@ -1757,13 +1891,12 @@ func _spawn_tetris_at(hit_point: Vector3) -> void:
 	## Old cabinet players lose their machine.
 	_clear_tetris_peds()
 	var face_yaw := 0.0
-	if _walker != null and is_instance_valid(_walker):
-		var to_player := get_player_position() - hit_point
-		to_player.y = 0.0
-		if to_player.length_squared() > 0.01:
-			face_yaw = atan2(-to_player.x, -to_player.z)
-		else:
-			face_yaw = _walker.rotation.y + PI
+	var to_player := get_player_position() - hit_point
+	to_player.y = 0.0
+	if to_player.length_squared() > 0.01:
+		face_yaw = atan2(-to_player.x, -to_player.z)
+	else:
+		face_yaw = walker.rotation.y + PI
 	## Cardinal facing only — voxel shell must stay axis-aligned (no diagonal cabinets).
 	face_yaw = roundf(face_yaw / (PI * 0.5)) * (PI * 0.5)
 	_tetris = TetrisMachineScript.new() as Node3D
@@ -1774,7 +1907,7 @@ func _spawn_tetris_at(hit_point: Vector3) -> void:
 		if _tetris == spawned:
 			_tetris = null
 	)
-	_tetris.call("begin", _terrain, _tool, hit_point, face_yaw, VOXEL_SIZE)
+	_tetris.call("begin", _terrain, _tool, _brush, walker, hit_point, face_yaw, VOXEL_SIZE)
 
 
 func _spawn_tetris_ped_at(hit_point: Vector3) -> void:
@@ -1825,7 +1958,7 @@ func _spawn_meteor_at(hit_point: Vector3) -> void:
 	meteor.name = "InfectionMeteor"
 	add_child(meteor)
 	meteor.connect("impacted", _on_meteor_impacted)
-	meteor.call("begin", _terrain, _tool, hit_point, 55.0)
+	meteor.call("begin", _terrain, _tool, _brush, hit_point, 55.0)
 
 
 ## Random outdoor ground deck near the player — never building fabric.
@@ -2059,11 +2192,10 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 	## Peel every structure voxel in the column band — floor slabs have air gaps between them.
 	var y_lo := maxi(1, hit.y - 8)
 	var y_hi := hit.y + 72
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
 	var removed := 0
 	var scrape_center := Vector3(float(hit.x) + 0.5, float(hit.y) + 0.5, float(hit.z) + 0.5)
 	_tip_kill_leads_in_sphere(scrape_center, 8.0)
+	_brush.begin_edit()
 	for a in range(-along_half, along_half + 1):
 		for d in range(0, depth_vox):
 			var col_x := hit.x + sx.x * a + ix.x * d
@@ -2075,8 +2207,9 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 					continue
 				if detached.size() < MAX_DEBRIS:
 					detached.append({"vox": vox, "mat": mat_id})
-				_tool.do_point(vox)
+				_brush.set_vox(vox, VoxelMaterial.AIR)
 				removed += 1
+	_brush.end_edit()
 	if removed <= 0:
 		return 0
 	adjust_player_score(-removed)
@@ -2102,9 +2235,7 @@ func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
 		return false
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var mat_id := int(_tool.get_voxel(vox))
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
-	_tool.do_point(vox)
+	_brush.set_vox(vox, VoxelMaterial.AIR)
 	adjust_player_score(-1)
 	var world := _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
 	_notify_tetris_damage([{"vox": vox, "mat": mat_id}])
@@ -2184,8 +2315,7 @@ func _carve_building_sphere_counted(local_center: Vector3, radius_vox: float) ->
 	var cy := int(floor(local_center.y))
 	var cz := int(floor(local_center.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
+	_brush.begin_edit()
 	for z in range(cz - r_i, cz + r_i + 1):
 		for y in range(cy - r_i, cy + r_i + 1):
 			for x in range(cx - r_i, cx + r_i + 1):
@@ -2196,8 +2326,9 @@ func _carve_building_sphere_counted(local_center: Vector3, radius_vox: float) ->
 				var id := int(_tool.get_voxel(vox))
 				if not VoxelMaterial.is_undead_structure_target(id):
 					continue
-				_tool.do_point(vox)
+				_brush.set_vox(vox, VoxelMaterial.AIR)
 				removed += 1
+	_brush.end_edit()
 	return removed
 
 
@@ -2236,10 +2367,7 @@ func _on_meteor_impacted(world_pos: Vector3, seeds: Array, sky_beam: Node = null
 			_tendril_to_meteor_site[tid] = site_id
 		else:
 			## Meteor pre-planted a LEAD; registration failed (cap) — don't leave an orphan tip.
-			_tool.channel = VoxelBuffer.CHANNEL_TYPE
-			_tool.mode = VoxelTool.MODE_SET
-			_tool.value = prev_mat if prev_mat >= 0 else VoxelMaterial.METEOR_ROCK
-			_tool.do_point(vox)
+			_brush.set_vox(vox, prev_mat if prev_mat >= 0 else VoxelMaterial.METEOR_ROCK)
 	## If capacity/plant glitches left us short, force more tips on nearby fabric.
 	var want_min := 2
 	if spawned < want_min and _infection.has_method("spawn_tendril_at_vox"):
@@ -2334,8 +2462,7 @@ func _unlock_meteor_rock_at(impact_vox: Vector3i) -> void:
 		return
 	var r: int = 4
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.STONE
+	_brush.begin_edit()
 	for z in range(-r, r + 1):
 		for y in range(-r, r + 1):
 			for x in range(-r, r + 1):
@@ -2343,7 +2470,8 @@ func _unlock_meteor_rock_at(impact_vox: Vector3i) -> void:
 					continue
 				var vox := impact_vox + Vector3i(x, y, z)
 				if int(_tool.get_voxel(vox)) == VoxelMaterial.METEOR_ROCK:
-					_tool.do_point(vox)
+					_brush.set_vox(vox, VoxelMaterial.STONE)
+	_brush.end_edit()
 
 
 func _notify_infection_leads_in(vox_entries: Array) -> void:
@@ -2586,8 +2714,7 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 	var cy := int(floor(local_center.y))
 	var cz := int(floor(local_center.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.AIR
+	_brush.begin_edit()
 	for z in range(cz - r_i, cz + r_i + 1):
 		for y in range(cy - r_i, cy + r_i + 1):
 			for x in range(cx - r_i, cx + r_i + 1):
@@ -2597,8 +2724,9 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 				var vox := Vector3i(x, y, z)
 				if not VoxelMaterial.is_destructible(int(_tool.get_voxel(vox))):
 					continue
-				_tool.do_point(vox)
+				_brush.set_vox(vox, VoxelMaterial.AIR)
 				removed += 1
+	_brush.end_edit()
 	return removed
 
 
@@ -2610,8 +2738,7 @@ func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
 	var cx := int(floor(center_vox.x))
 	var cz := int(floor(center_vox.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	_tool.mode = VoxelTool.MODE_SET
-	_tool.value = VoxelMaterial.BEDROCK
+	_brush.begin_edit()
 	for z in range(cz - r, cz + r + 1):
 		for x in range(cx - r, cx + r + 1):
 			var dx := float(x) + 0.5 - center_vox.x
@@ -2619,7 +2746,17 @@ func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
 			if dx * dx + dz * dz > radius_vox * radius_vox:
 				continue
 			for y in range(0, BEDROCK_BAND):
-				_tool.do_point(Vector3i(x, y, z))
+				_brush.set_vox(Vector3i(x, y, z), VoxelMaterial.BEDROCK)
+	_brush.end_edit()
+
+
+## Where the navigation overlay probes a corridor to: whatever the player's cursor points
+## at. Vector3.INF means "no aim this frame", which the overlay skips.
+func _nav_overlay_aim() -> Vector3:
+	if _walker == null or not is_instance_valid(_walker):
+		return Vector3.INF
+	var aim: Dictionary = _walker.call("aim_ground_at_cursor")
+	return aim["point"]
 
 
 func _player_controls() -> RefCounted:
@@ -2636,7 +2773,20 @@ func _unhandled_input(event: InputEvent) -> void:
 	if ctl == null or not ctl.has_method("matches_key_pressed"):
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "quit")):
+		if is_inventory_open():
+			_inventory_panel.call("close_panel")
+			get_viewport().set_input_as_handled()
+			return
 		get_tree().quit()
+		return
+	if bool(ctl.call("matches_key_pressed", ek, "inventory")):
+		## The character editor is a modal of the walker's own, and two open panels would
+		## stack in whatever order UiLayers happens to give them.
+		if _game_over or _booting or _is_character_editor_open():
+			return
+		if _inventory_panel != null:
+			_inventory_panel.call("toggle_panel")
+		get_viewport().set_input_as_handled()
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "retry")):
 		if _game_over:
@@ -2644,10 +2794,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "day_night")):
-		if _game_over:
+		## World keys stop at an open panel; the debug toggles below deliberately do not.
+		if _game_over or is_modal_open():
 			return
 		if _day_night != null and _day_night.has_method("toggle_day_night"):
 			_day_night.call("toggle_day_night")
+		get_viewport().set_input_as_handled()
+		return
+	## Shift+F8 recolours, bare F8 toggles — the modifier-carrying bind is tested first,
+	## because a bare bind matches with extra modifiers held.
+	if bool(ctl.call("matches_key_pressed", ek, "nav_overlay_colour")):
+		if _nav_overlay.is_enabled():
+			print("CityRoot: nav overlay colouring by %s" % _nav_overlay.cycle_span_colour())
+		get_viewport().set_input_as_handled()
+		return
+	if bool(ctl.call("matches_key_pressed", ek, "nav_overlay")):
+		print("CityRoot: nav overlay %s" % ("on" if _nav_overlay.toggle() else "off"))
 		get_viewport().set_input_as_handled()
 
 

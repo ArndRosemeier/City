@@ -26,7 +26,7 @@ var _awaiting_choice: bool = false
 
 
 func _ready() -> void:
-	layer = 50
+	layer = UiLayers.LOADING_SPLASH
 	name = "LoadingSplash"
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_root = Control.new()
