@@ -1,5 +1,5 @@
-## Combat look-aim uses the viewport crosshair; free-cursor picks stay on aim_ground_at_cursor.
-## Regression for N-summon missing ground after RMB look released the OS cursor.
+## Target mode and screen source are independent: summon/placement uses voxel-only free cursor,
+## while combat uses the look crosshair.
 ##
 ## Run: powershell -File tools\run_test.ps1 test_summon_aim
 extends Node
@@ -33,10 +33,16 @@ func _ready() -> void:
 	get_viewport().warp_mouse(rect.position + Vector2(4.0, 4.0))
 	await get_tree().process_frame
 
-	var look: Dictionary = walker.aim_world_at_cursor()
-	var ground: Dictionary = walker.aim_ground_at_cursor()
-	var look_dir: Vector3 = look["cam_dir"] as Vector3
-	var ground_dir: Vector3 = ground["cam_dir"] as Vector3
+	var look := walker.resolve_target(
+		CityTargeting.TargetMode.VOXELS_ONLY,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR
+	)
+	var ground := walker.resolve_target(
+		CityTargeting.TargetMode.VOXELS_ONLY,
+		CityTargeting.ScreenSource.FREE_CURSOR
+	)
+	var look_dir := look.ray_direction
+	var ground_dir := ground.ray_direction
 	if look_dir.distance_to(ground_dir) < 0.02:
 		push_error(
 			"FAIL look-aim cam_dir matched free-cursor aim (%s) — crosshair/mouse not split"
@@ -46,25 +52,38 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 
-	var center_ray: Dictionary = walker.call("_aim_ray_at_cursor", cross) as Dictionary
-	var center_dir: Vector3 = center_ray["cam_dir"] as Vector3
+	var center_ray := walker.call(
+		"_geometry_target",
+		CityTargeting.TargetMode.VOXELS_ONLY,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		walker.laser_range_m
+	) as CityTargeting.Result
+	var center_dir := center_ray.ray_direction
 	if look_dir.distance_to(center_dir) > 0.001:
 		push_error(
-			"FAIL aim_world_at_cursor cam_dir %s != explicit centre ray %s"
+			"FAIL LOOK_CROSSHAIR direction %s != centralized base ray %s"
 			% [look_dir, center_dir]
 		)
 		print("RESULT: FAILED")
 		get_tree().quit(1)
 		return
 
-	## Meteor and summon both go through aim_world_at_cursor — same dictionary shape.
-	for key in ["point", "normal", "did_hit", "cam_from", "cam_dir", "voxel", "has_voxel"]:
-		if not look.has(key):
-			push_error("FAIL aim_world_at_cursor missing key '%s'" % key)
-			print("RESULT: FAILED")
-			get_tree().quit(1)
-			return
+	if look.mode != CityTargeting.TargetMode.VOXELS_ONLY:
+		push_error("FAIL look result lost VOXELS_ONLY mode")
+		print("RESULT: FAILED")
+		get_tree().quit(1)
+		return
+	if look.screen_source != CityTargeting.ScreenSource.LOOK_CROSSHAIR:
+		push_error("FAIL look result lost LOOK_CROSSHAIR source")
+		print("RESULT: FAILED")
+		get_tree().quit(1)
+		return
+	if ground.screen_source != CityTargeting.ScreenSource.FREE_CURSOR:
+		push_error("FAIL placement result lost FREE_CURSOR source")
+		print("RESULT: FAILED")
+		get_tree().quit(1)
+		return
 
-	print("PASS summon/meteor shared look-aim uses crosshair, not free cursor")
+	print("PASS target mode/source are explicit and crosshair/free-cursor rays stay separate")
 	print("RESULT: OK")
 	get_tree().quit(0)

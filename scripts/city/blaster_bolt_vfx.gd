@@ -34,6 +34,8 @@ var _phase: float = 0.0
 ## Shrink full-length bolt when the aim is closer than the bolt body.
 var _range_fit: float = 1.0
 var _obstacle_probe: Callable = Callable()
+var _tracking_actor: Node3D = null
+var _tracking_offset: Vector3 = Vector3.ZERO
 ## Keep a close-range flash on screen even when travel would be one frame.
 const MIN_VISIBLE_SEC := 0.07
 
@@ -44,6 +46,11 @@ func setup() -> void:
 
 func set_obstacle_probe(probe: Callable) -> void:
 	_obstacle_probe = probe
+
+
+func set_tracking_target(actor: Node3D, world_point: Vector3) -> void:
+	_tracking_actor = actor
+	_tracking_offset = actor.to_local(world_point) if actor != null else Vector3.ZERO
 
 
 func set_character_scale(scale: float) -> void:
@@ -122,6 +129,7 @@ func _process(delta: float) -> void:
 	if not _active:
 		set_process(false)
 		return
+	_update_tracking_target()
 	_traveled += speed_mps * delta
 	_age += delta
 	_phase += delta
@@ -143,6 +151,22 @@ func _process(delta: float) -> void:
 			_finish_impact()
 		return
 	_orient()
+
+
+func _update_tracking_target() -> void:
+	if _tracking_actor == null:
+		return
+	if not is_instance_valid(_tracking_actor):
+		_tracking_actor = null
+		return
+	var target := _tracking_actor.to_global(_tracking_offset)
+	var delta := target - _origin
+	var dist := delta.length()
+	if dist < 0.05:
+		return
+	_dir = delta / dist
+	_aim_dist = dist
+	_refit_to_aim()
 
 
 func _pulse_visual(_delta: float) -> void:

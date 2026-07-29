@@ -177,7 +177,6 @@ func _test_summon_at_aim() -> void:
 	var aim_pos := _w(Vector3i(40, 1, 28))
 	var stub := AimStub.new()
 	stub.name = "AimStub"
-	stub.aim = {"point": aim_pos, "normal": Vector3.UP, "did_hit": true}
 	## Bound as the player, so it has to be in the tree: CityRoot reads its global position and
 	## every unit that ticks asks for it.
 	add_child(stub)
@@ -186,19 +185,24 @@ func _test_summon_at_aim() -> void:
 	_city._undead = _director
 	_city._booting = false
 	_city._game_over = false
+	_city._summon_aim = _voxel_result(aim_pos)
 	var unit := _city.summon_monster_at_aim("kaykit/Skeleton_Minion")
 	if unit == null:
 		_fail("FAIL summon_monster_at_aim returned null on hit")
 		return
-	if unit.global_position.distance_to(aim_pos) > 0.05:
+	var expected := aim_pos + Vector3.UP * 0.06
+	if unit.global_position.distance_to(expected) > 0.01:
 		_fail(
 			"FAIL summon placed at %s want aim %s"
-			% [str(unit.global_position), str(aim_pos)]
+			% [str(unit.global_position), str(expected)]
 		)
 		_despawn(unit)
 		return
 	_despawn(unit)
-	stub.aim = {"point": Vector3.ZERO, "normal": Vector3.UP, "did_hit": false}
+	_city._summon_aim = CityTargeting.Result.new(
+		CityTargeting.TargetMode.VOXELS_ONLY,
+		CityTargeting.ScreenSource.FREE_CURSOR
+	)
 	var missed := _city.summon_monster_at_aim("kaykit/Skeleton_Minion")
 	if missed != null:
 		_fail("FAIL summon_monster_at_aim must not spawn on aim miss")
@@ -228,60 +232,104 @@ func _test_combat_target_cone() -> void:
 	var look := _tilt_down((chest - cam_from).normalized(), AIM_ERROR_DEG)
 	## Where the deck stops the look ray: far short of the mob, exactly the failing case.
 	var ground_point := cam_from + look * 3.5
-	var on_body: Dictionary = _city.resolve_combat_target(
+	var targeting_walker := TargetingWalker.new()
+	targeting_walker.test_origin = cam_from
+	targeting_walker.test_direction = look
+	targeting_walker.test_geometry = ground_point
+	_city.add_child(targeting_walker)
+	targeting_walker.set_physics_process(false)
+	var voxel_only := targeting_walker.resolve_target(
+		CityTargeting.TargetMode.VOXELS_ONLY,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		muzzle,
+		80.0
+	)
+	if voxel_only.kind != CityTargeting.TargetKind.VOXEL:
+		_fail("FAIL VOXELS_ONLY selected the actor under its crosshair")
+		targeting_walker.queue_free()
+		_despawn(unit)
+		return
+	var actor_and_voxels := targeting_walker.resolve_target(
+		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		muzzle,
+		80.0
+	)
+	if actor_and_voxels.kind != CityTargeting.TargetKind.ACTOR:
+		_fail("FAIL ACTORS_AND_VOXELS did not select the visible actor")
+		targeting_walker.queue_free()
+		_despawn(unit)
+		return
+	var on_body := _resolve_combat(
 		cam_from, look, 80.0, ground_point, muzzle
 	)
-	if not bool(on_body["is_agent"]):
+	if on_body.kind != CityTargeting.TargetKind.ACTOR:
 		_fail(
 			"FAIL %.0f° off-centre look kept ground %s instead of the mob at %s"
 			% [AIM_ERROR_DEG, str(ground_point), str(chest)]
 		)
 		_despawn(unit)
 		return
-	var body_point: Vector3 = on_body["point"] as Vector3
+	var body_point := on_body.point
 	if body_point.distance_to(chest) > unit.hit_half_height():
 		_fail("FAIL target %s is not on the mob at %s" % [str(body_point), str(chest)])
 		_despawn(unit)
 		return
-	if absf(float(on_body["distance"]) - muzzle.distance_to(body_point)) > 0.05:
-		_fail("FAIL target distance %.2f is not measured from the muzzle" % on_body["distance"])
+	if absf(on_body.actor_distance - muzzle.distance_to(body_point)) > 0.05:
+		_fail("FAIL target distance %.2f is not measured from the muzzle" % on_body.actor_distance)
 		_despawn(unit)
 		return
 	## Looking well past the mob is a miss, not a magnet.
 	var wide := _tilt_down((chest - cam_from).normalized(), WIDE_LOOK_DEG)
 	var wide_ground := cam_from + wide * 3.5
-	var missed: Dictionary = _city.resolve_combat_target(
+	var missed := _resolve_combat(
 		cam_from, wide, 80.0, wide_ground, muzzle
 	)
-	if bool(missed["is_agent"]):
+	if missed.kind == CityTargeting.TargetKind.ACTOR:
 		_fail("FAIL %.0f° off-centre look still snapped to the mob" % WIDE_LOOK_DEG)
 		_despawn(unit)
 		return
-	if (missed["point"] as Vector3).distance_to(wide_ground) > 0.001:
-		_fail("FAIL miss moved the geometry point %s" % str(missed["point"]))
+	if missed.point.distance_to(wide_ground) > 0.001:
+		_fail("FAIL miss moved the geometry point %s" % str(missed.point))
 		_despawn(unit)
 		return
 	## A wall across the muzzle line stops the shot even though the mob is dead centre.
 	var wall := _add_wall(muzzle.lerp(chest, 0.5))
 	await get_tree().physics_frame
-	var blocked: Dictionary = _city.resolve_combat_target(
-		cam_from, look, 80.0, ground_point, muzzle
+	var blocked := targeting_walker.resolve_target(
+		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		muzzle,
+		80.0
 	)
 	remove_child(wall)
 	wall.free()
-	if bool(blocked["is_agent"]):
-		_fail("FAIL wall between muzzle and mob did not stop the shot")
+	if (
+		blocked.kind != CityTargeting.TargetKind.VOXEL
+		or blocked.muzzle_geometry_distance < 2.0
+		or blocked.muzzle_geometry_distance > 6.0
+	):
+		_fail("FAIL muzzle ray did not stop on the real wall: %s" % str(blocked.point))
+		targeting_walker.queue_free()
 		_despawn(unit)
 		return
 	_despawn(unit)
 	await get_tree().physics_frame
-	## No creature left: geometry is handed back untouched (summon / meteor ground aim).
-	var empty: Dictionary = _city.resolve_combat_target(
-		cam_from, look, 80.0, ground_point, muzzle
+	## No actor or muzzle obstruction: the short camera/deck point must not steer combat.
+	var empty := targeting_walker.resolve_target(
+		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		muzzle,
+		80.0
 	)
-	if bool(empty["is_agent"]) or (empty["point"] as Vector3).distance_to(ground_point) > 0.001:
-		_fail("FAIL empty world moved the geometry point %s" % str(empty["point"]))
+	if (
+		empty.kind != CityTargeting.TargetKind.MISS
+		or (empty.point - muzzle).normalized().dot(look) < 0.95
+	):
+		_fail("FAIL empty combat world kept short camera geometry %s" % str(empty.point))
+		targeting_walker.queue_free()
 		return
+	targeting_walker.queue_free()
 	print(
 		"combat target: %.0f° off-centre hits the mob past the deck, %.0f° misses, wall blocks"
 		% [AIM_ERROR_DEG, WIDE_LOOK_DEG]
@@ -300,6 +348,41 @@ static func _tilt_down(dir: Vector3, degrees: float) -> Vector3:
 	return tilted.normalized()
 
 
+func _resolve_combat(
+	cam_from: Vector3,
+	look: Vector3,
+	reach_m: float,
+	geometry_point: Vector3,
+	muzzle: Vector3
+) -> CityTargeting.Result:
+	var result := CityTargeting.Result.new(
+		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR
+	)
+	result.kind = CityTargeting.TargetKind.VOXEL
+	result.point = geometry_point
+	result.geometry_point = geometry_point
+	result.geometry_distance = cam_from.distance_to(geometry_point)
+	result.ray_origin = cam_from
+	result.ray_direction = look.normalized()
+	_city.resolve_actor_target(result, muzzle, reach_m)
+	return result
+
+
+func _voxel_result(point: Vector3) -> CityTargeting.Result:
+	var result := CityTargeting.Result.new(
+		CityTargeting.TargetMode.VOXELS_ONLY,
+		CityTargeting.ScreenSource.FREE_CURSOR
+	)
+	result.kind = CityTargeting.TargetKind.VOXEL
+	result.point = point
+	result.geometry_point = point
+	result.geometry_distance = 20.0
+	result.ray_origin = point + Vector3.UP * 20.0
+	result.ray_direction = Vector3.DOWN
+	return result
+
+
 func _add_wall(at: Vector3) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.name = "AimWall"
@@ -316,11 +399,34 @@ func _add_wall(at: Vector3) -> StaticBody3D:
 
 
 class AimStub:
-	extends CharacterBody3D
-	var aim: Dictionary = {}
+	extends CityWalker
 
-	func aim_world_at_cursor() -> Dictionary:
-		return aim
+	func _ready() -> void:
+		pass
+
+
+class TargetingWalker:
+	extends CityWalker
+	var test_origin: Vector3 = Vector3.ZERO
+	var test_direction: Vector3 = Vector3.FORWARD
+	var test_geometry: Vector3 = Vector3.ZERO
+
+	func _ready() -> void:
+		pass
+
+	func _geometry_target(
+		mode: CityTargeting.TargetMode,
+		screen_source: CityTargeting.ScreenSource,
+		_reach_m: float
+	) -> CityTargeting.Result:
+		var result := CityTargeting.Result.new(mode, screen_source)
+		result.kind = CityTargeting.TargetKind.VOXEL
+		result.point = test_geometry
+		result.geometry_point = test_geometry
+		result.geometry_distance = test_origin.distance_to(test_geometry)
+		result.ray_origin = test_origin
+		result.ray_direction = test_direction.normalized()
+		return result
 
 
 func _test_melee_hurts_player() -> void:

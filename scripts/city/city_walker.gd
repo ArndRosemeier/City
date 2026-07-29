@@ -35,6 +35,8 @@ const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const VoxelBodyMotionScript := preload("res://scripts/city/voxel_body_motion.gd")
 const PlayerHealthScript := preload("res://scripts/city/player_health.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
+const CityTargetingScript := preload("res://scripts/city/city_targeting.gd")
+const TARGET_SURFACE_COALESCE_M := 0.15
 
 const PedOutfitCatalogScript := preload("res://scripts/humans/ped_outfit_catalog.gd")
 const PedOutfitApplierScript := preload("res://scripts/humans/ped_outfit_applier.gd")
@@ -268,9 +270,9 @@ var _live_blaster_bolts: Array[Node] = []
 var _energy: float = 100.0
 var _health := PlayerHealthScript.new()
 var _blast_fire_token: int = 0
-var _blast_pending_aim: Vector3 = Vector3.ZERO
 var _blast_pending_radius: float = 1.0
 var _controls: PlayerControls
+var _last_combat_target: CityTargeting.Result = null
 var _charge_orb: Node3D
 var _charge_orb_core: MeshInstance3D
 var _charge_orb_mesh: SphereMesh
@@ -3158,68 +3160,41 @@ func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: 
 		root.call("apply_charged_blast", hit_point, radius_m)
 
 
-## Shared look/crosshair→world aim for meteor / tetris / ped / monster summon. Always rays
-## through the viewport centre so N/M match the camera the player is looking through
-## (hold-to-look releases the OS cursor; free-cursor screen picks belong to aim_ground_at_cursor).
-## Placement wants the world, never a body — combat targeting is `aim_combat_target`.
-## Keys: point, normal, did_hit, cam_from, cam_dir, voxel (Vector3i), has_voxel (bool).
-func aim_world_at_cursor() -> Dictionary:
-	return _enrich_aim_voxel(_aim_ray_at_cursor())
-
-
-## Ground / wall under the free mouse cursor (builds place where the pointer is). Solid geometry
-## only: a build must land on the deck, not on the bark mat lying on it.
-## Same key set as `aim_world_at_cursor`.
-func aim_ground_at_cursor() -> Dictionary:
-	return _enrich_aim_voxel(_aim_ray_at_cursor(get_viewport().get_mouse_position(), false))
-
-
-## What every offensive action shoots at: the creature the player is looking at, else the
-## geometry the crosshair ended on. CityRoot owns the choice so laser, bolts and charged blast
-## cannot drift apart. `shot_origin` is the muzzle the shot leaves from — it is what the
-## line-of-sight check uses, so pass the hand or the eyes, not the camera.
-## Keys: those of `aim_world_at_cursor` plus is_agent (bool) and distance (float from muzzle).
-func aim_combat_target(shot_origin: Vector3 = Vector3.INF) -> Dictionary:
-	var aim := _aim_ray_at_cursor()
+## The only screen-to-world targeting API. Target kind and screen source are independent typed
+## choices: placement cannot accidentally see an actor, and combat cannot accidentally sample
+## the free OS cursor after RMB look.
+func resolve_target(
+	mode: CityTargeting.TargetMode,
+	screen_source: CityTargeting.ScreenSource,
+	shot_origin: Vector3 = Vector3.INF,
+	reach_m: float = -1.0
+) -> CityTargeting.Result:
+	var reach := laser_range_m if reach_m < 0.0 else reach_m
+	if reach <= 0.0:
+		push_error("CityWalker.resolve_target: reach must be positive, got %.2f" % reach)
+		assert(false, "CityWalker: invalid target reach")
+	var result := _geometry_target(mode, screen_source, reach)
+	if mode == CityTargeting.TargetMode.VOXELS_ONLY:
+		return result
+	if mode != CityTargeting.TargetMode.ACTORS_AND_VOXELS:
+		push_error("CityWalker.resolve_target: unknown mode %d" % int(mode))
+		assert(false, "CityWalker: unknown target mode")
 	var muzzle := shot_origin if shot_origin.is_finite() else _laser_eye_origin()
-	var root := _city_root()
+	result.shot_origin = muzzle
+	var root := _city_root() as CityRoot
 	if root == null:
-		push_error("CityWalker.aim_combat_target: no CityRoot parent to resolve targets")
-		aim["is_agent"] = false
-		aim["distance"] = muzzle.distance_to(aim["point"] as Vector3)
-		return aim
-	var target: Dictionary = root.call(
-		"resolve_combat_target",
-		aim["cam_from"] as Vector3,
-		aim["cam_dir"] as Vector3,
-		laser_range_m,
-		aim["point"] as Vector3,
-		muzzle
-	) as Dictionary
-	aim["point"] = target["point"] as Vector3
-	aim["distance"] = float(target["distance"])
-	aim["is_agent"] = bool(target["is_agent"])
-	if aim["is_agent"]:
-		aim["did_hit"] = true
-	return aim
+		push_error("CityWalker.resolve_target: no CityRoot parent for actor targeting")
+		assert(false, "CityWalker: missing CityRoot")
+		return result
+	root.resolve_actor_target(result, muzzle, reach)
+	if result.kind != CityTargeting.TargetKind.ACTOR:
+		_resolve_combat_muzzle_geometry(result, muzzle, reach)
+	_last_combat_target = result
+	return result
 
 
-## Attach the aimed voxel cell when terrain is available (shared by meteor + summon).
-func _enrich_aim_voxel(aim: Dictionary) -> Dictionary:
-	aim["has_voxel"] = false
-	aim["voxel"] = Vector3i()
-	if not bool(aim.get("did_hit", false)):
-		return aim
-	var root := _city_root()
-	if root == null or not root.has_method("voxel_terrain"):
-		return aim
-	var terrain: VoxelTerrain = root.call("voxel_terrain") as VoxelTerrain
-	if terrain == null:
-		return aim
-	var local: Vector3 = terrain.to_local(aim["point"] as Vector3)
-	aim["voxel"] = Vector3i(floori(local.x), floori(local.y), floori(local.z))
-	aim["has_voxel"] = true
-	return aim
+func last_combat_target() -> CityTargeting.Result:
+	return _last_combat_target
 
 
 ## Viewport-centre crosshair (combat / look aim). Independent of free OS cursor position.
@@ -3228,102 +3203,332 @@ func _aim_crosshair_screen_pos() -> Vector2:
 	return rect.position + rect.size * 0.5
 
 
-## Camera ray against the world: point + normal (UP if miss / far clip).
-## screen_pos: INF → crosshair centre; pass get_mouse_position() for free-cursor builds.
-## march_destructible also walks the voxel volume, so walk-through park mats (bark / leaves /
-## planters) are targetable even though nothing collides with them.
-func _aim_ray_at_cursor(
-	screen_pos: Vector2 = Vector2.INF,
-	march_destructible: bool = true
-) -> Dictionary:
+## One base camera ray for both modes. Geometry is always resolved first and preserved in the
+## result even when actor soft aim wins.
+func _geometry_target(
+	mode: CityTargeting.TargetMode,
+	screen_source: CityTargeting.ScreenSource,
+	reach_m: float
+) -> CityTargeting.Result:
+	var result := CityTargetingScript.Result.new(mode, screen_source) as CityTargeting.Result
 	if _camera == null:
-		var fallback := global_position - global_transform.basis.z * 10.0
-		return {
-			"point": fallback,
-			"normal": Vector3.UP,
-			"did_hit": false,
-			"cam_from": fallback,
-			"cam_dir": -global_transform.basis.z,
-		}
-	var mouse := screen_pos if screen_pos.is_finite() else _aim_crosshair_screen_pos()
+		push_error("CityWalker.resolve_target: camera is missing")
+		return result
+	var mouse: Vector2
+	match screen_source:
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR:
+			mouse = _aim_crosshair_screen_pos()
+		CityTargeting.ScreenSource.FREE_CURSOR:
+			mouse = get_viewport().get_mouse_position()
+		_:
+			push_error("CityWalker.resolve_target: unknown screen source %d" % int(screen_source))
+			assert(false, "CityWalker: unknown screen source")
+			return result
 	var from := _camera.project_ray_origin(mouse)
 	var ray_dir := _camera.project_ray_normal(mouse)
 	if ray_dir.length_squared() < 0.0001:
-		ray_dir = -global_transform.basis.z
+		push_error("CityWalker.resolve_target: projected ray direction is zero")
+		assert(false, "CityWalker: zero target ray")
+		return result
 	ray_dir = ray_dir.normalized()
-	var to := from + ray_dir * laser_range_m
+	var to := from + ray_dir * reach_m
+	result.ray_origin = from
+	result.ray_direction = ray_dir
+	## A combat miss still needs a finite endpoint at maximum range. Placement checks did_hit()
+	## and therefore cancels instead of using this endpoint as a spawn fallback.
+	result.point = to
 	var query := PhysicsRayQueryParameters3D.create(from, to)
 	query.collision_mask = 1
 	query.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
-	var aim_point := to
-	var aim_normal := Vector3.UP
-	var did_hit := not hit.is_empty()
-	if did_hit:
-		aim_point = hit["position"] as Vector3
-		aim_normal = hit["normal"] as Vector3
+	var geometry_point := Vector3.INF
+	var geometry_normal := Vector3.UP
+	var geometry_distance := INF
+	if not hit.is_empty():
+		geometry_point = hit["position"] as Vector3
+		geometry_normal = hit["normal"] as Vector3
+		geometry_distance = from.distance_to(geometry_point)
 	var root := _city_root()
-	if march_destructible and root != null and root.has_method("probe_destructible_ray"):
+	if root != null and root.has_method("probe_destructible_ray"):
 		## Full ray — trees sit in front of ground/walls the physics hit would prefer.
-		var vhit: Variant = root.call("probe_destructible_ray", from, to)
-		if vhit is Dictionary and not (vhit as Dictionary).is_empty():
-			var vd := Dictionary(vhit)
+		var vd: Dictionary = root.call("probe_destructible_ray", from, to) as Dictionary
+		if not vd.is_empty():
 			var vdist := float(vd.get("distance", INF))
-			var pdist := from.distance_to(aim_point) if did_hit else INF
-			if vdist + 0.02 < pdist:
-				aim_point = vd["point"] as Vector3
-				aim_normal = vd.get("normal", -ray_dir) as Vector3
-				did_hit = true
-	return {
-		"point": aim_point,
-		"normal": aim_normal,
-		"did_hit": did_hit,
-		"cam_from": from,
-		"cam_dir": ray_dir,
-	}
+			## Voxel marching backs the point off the entered cell by 0.1 m. Treat a nearby
+			## physics surface as the same hit so its exact face normal wins.
+			if vdist + TARGET_SURFACE_COALESCE_M < geometry_distance:
+				geometry_point = vd["point"] as Vector3
+				geometry_normal = vd["normal"] as Vector3
+				geometry_distance = vdist
+	if not geometry_point.is_finite():
+		return result
+	result.kind = CityTargeting.TargetKind.VOXEL
+	result.point = geometry_point
+	result.normal = geometry_normal
+	result.geometry_point = geometry_point
+	result.geometry_distance = geometry_distance
+	var city := root as CityRoot
+	if city != null:
+		var terrain := city.voxel_terrain()
+		if terrain != null:
+			var local := terrain.to_local(geometry_point - ray_dir * 0.01)
+			result.voxel = Vector3i(floori(local.x), floori(local.y), floori(local.z))
+			result.has_voxel = true
+	return result
 
 
-## Fresh cursor target + hand muzzle for one blaster bolt (retargets every shot).
-func _blaster_shot_endpoints() -> Dictionary:
+## Camera ray establishes intent; combat collision is re-cast from the muzzle. A near-deck
+## muzzle strike must not steal a wall the crosshair already hit (classic third-person dip),
+## and when the muzzle does graze the street first the cast continues to the next valid hit.
+func _resolve_combat_muzzle_geometry(
+	result: CityTargeting.Result, muzzle: Vector3, reach_m: float
+) -> void:
+	if not muzzle.is_finite():
+		push_error("CityWalker.resolve_target: combat muzzle is not finite")
+		assert(false, "CityWalker: invalid combat muzzle")
+		return
+	var intent_far := result.ray_origin + result.ray_direction * reach_m
+	var desired := intent_far - muzzle
+	if desired.length_squared() < 0.0001:
+		push_error("CityWalker.resolve_target: muzzle reached the intent far point")
+		assert(false, "CityWalker: degenerate combat intent")
+		return
+	var shot_dir := desired.normalized()
+	## Preserve screen-intent geometry before muzzle resolution overwrites `normal` / `point`.
+	var camera_point := result.geometry_point
+	var camera_normal := result.normal
+	var camera_distance := result.geometry_distance
+	var min_clearance := maxf(0.35, 0.25 * maxf(character_scale, 0.05))
+	var cast_from := muzzle + shot_dir * min_clearance
+	var cast_to := muzzle + shot_dir * reach_m
+	result.kind = CityTargeting.TargetKind.MISS
+	result.point = cast_to
+	result.normal = Vector3.UP
+	result.has_voxel = false
+	var root := _city_root()
+	var rejected_deck := false
+	var first_deck_point := Vector3.INF
+	var first_deck_distance := INF
+	## Skip street-deck grazes so a facade past the road still wins. Bounded so a thick
+	## underworld of ground-like hits cannot spin forever.
+	for _attempt in range(8):
+		var hit := _combat_cast_geometry(cast_from, cast_to, muzzle)
+		if hit.is_empty():
+			break
+		var best_point: Vector3 = hit["point"] as Vector3
+		var best_normal: Vector3 = hit["normal"] as Vector3
+		var best_distance := float(hit["distance"])
+		if not result.muzzle_geometry_point.is_finite():
+			result.muzzle_geometry_point = best_point
+			result.muzzle_geometry_distance = best_distance
+			result.muzzle_geometry_projection = (best_point - muzzle).dot(result.ray_direction)
+		if _combat_hit_is_near_deck(
+			muzzle, best_point, best_normal, shot_dir, best_distance
+		):
+			rejected_deck = true
+			if not first_deck_point.is_finite():
+				first_deck_point = best_point
+				first_deck_distance = best_distance
+			## Step past this surface and keep looking for a wall / roof / prop.
+			cast_from = best_point + shot_dir * 0.2
+			if (cast_to - cast_from).dot(shot_dir) <= 0.05:
+				break
+			continue
+		_apply_combat_geometry_hit(
+			result, root, muzzle, best_point, best_normal, shot_dir
+		)
+		if rejected_deck:
+			result.muzzle_geometry_rejected = true
+		return
+	if rejected_deck:
+		result.muzzle_geometry_rejected = true
+		if not result.muzzle_geometry_point.is_finite() and first_deck_point.is_finite():
+			result.muzzle_geometry_point = first_deck_point
+			result.muzzle_geometry_distance = first_deck_distance
+			result.muzzle_geometry_projection = (
+				(first_deck_point - muzzle).dot(result.ray_direction)
+			)
+		## Crosshair already cleared the street onto a building / prop — keep that intent.
+		## The lower muzzle ray dipping into the deck must not redirect into the road.
+		if (
+			camera_point.is_finite()
+			and camera_distance > first_deck_distance + 0.5
+			and not _combat_hit_is_near_deck(
+				muzzle,
+				camera_point,
+				camera_normal,
+				shot_dir,
+				muzzle.distance_to(camera_point)
+			)
+		):
+			_apply_combat_geometry_hit(
+				result, root, muzzle, camera_point, camera_normal, shot_dir
+			)
+			return
+		## Empty street look: short visible shot along look, not 100 m through the planet.
+		var s := maxf(character_scale, 0.05)
+		var along := maxf(first_deck_distance, 1.25 * s)
+		result.point = muzzle + shot_dir * along
+		result.kind = CityTargeting.TargetKind.MISS
+		result.normal = Vector3.UP
+
+
+func _combat_cast_geometry(cast_from: Vector3, cast_to: Vector3, muzzle: Vector3) -> Dictionary:
+	var best_point := Vector3.INF
+	var best_normal := Vector3.UP
+	var best_distance := INF
+	var query := PhysicsRayQueryParameters3D.create(cast_from, cast_to)
+	query.collision_mask = 1
+	query.exclude = _target_ray_excludes()
+	var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
+	if not hit.is_empty():
+		best_point = hit["position"] as Vector3
+		best_normal = hit["normal"] as Vector3
+		best_distance = muzzle.distance_to(best_point)
+	var root := _city_root()
+	if root != null and root.has_method("probe_destructible_ray"):
+		var voxel_hit: Dictionary = root.call(
+			"probe_destructible_ray", cast_from, cast_to
+		) as Dictionary
+		if not voxel_hit.is_empty():
+			var voxel_point: Vector3 = voxel_hit["point"] as Vector3
+			var voxel_distance := muzzle.distance_to(voxel_point)
+			if voxel_distance + TARGET_SURFACE_COALESCE_M < best_distance:
+				best_point = voxel_point
+				best_normal = voxel_hit["normal"] as Vector3
+				best_distance = voxel_distance
+	if not best_point.is_finite():
+		return {}
+	return {"point": best_point, "normal": best_normal, "distance": best_distance}
+
+
+func _apply_combat_geometry_hit(
+	result: CityTargeting.Result,
+	root: Node,
+	muzzle: Vector3,
+	point: Vector3,
+	normal: Vector3,
+	shot_dir: Vector3
+) -> void:
+	result.kind = CityTargeting.TargetKind.VOXEL
+	result.point = point
+	result.normal = normal
+	result.muzzle_geometry_point = point
+	result.muzzle_geometry_distance = muzzle.distance_to(point)
+	result.muzzle_geometry_projection = (point - muzzle).dot(result.ray_direction)
+	var city := root as CityRoot
+	if city == null:
+		return
+	var terrain := city.voxel_terrain()
+	if terrain == null:
+		return
+	var local := terrain.to_local(point - shot_dir * 0.01)
+	result.voxel = Vector3i(floori(local.x), floori(local.y), floori(local.z))
+	result.has_voxel = true
+
+
+func _combat_hit_is_near_deck(
+	muzzle: Vector3,
+	point: Vector3,
+	normal: Vector3,
+	shot_dir: Vector3,
+	distance_m: float
+) -> bool:
+	## Any ground-like surface below the muzzle steals third-person look aim; range must not
+	## re-admit a street hit 10 m out as a "wall".
+	var normal_unit := normal.normalized()
+	var below := point.y < muzzle.y - 0.2
+	var ground_like := normal_unit.dot(Vector3.UP) > 0.65
+	if not ground_like and below and normal_unit.dot(-shot_dir) > 0.98:
+		## Voxel march reports -shot_dir for fabric cells. Only treat that as deck when the
+		## hit sits under the muzzle — a vertical wall face is the same normal but not below.
+		ground_like = true
+	if not ground_like and below and distance_m < maxf(8.0, 4.0 * maxf(character_scale, 0.05)):
+		## A curb/step often reports a horizontal face even though it is the same near-deck
+		## artefact. A one-metre-higher parallel ray clears it; a real wall still blocks.
+		var raised_from := muzzle + Vector3.UP
+		var raised_to := raised_from + shot_dir * (distance_m + 0.75)
+		var raised_query := PhysicsRayQueryParameters3D.create(raised_from, raised_to)
+		raised_query.collision_mask = 1
+		raised_query.exclude = _target_ray_excludes()
+		ground_like = get_world_3d().direct_space_state.intersect_ray(raised_query).is_empty()
+	return below and ground_like
+
+
+func _target_ray_excludes() -> Array[RID]:
+	var excludes: Array[RID] = [get_rid()]
+	if _safety_deck != null and is_instance_valid(_safety_deck):
+		excludes.append(_safety_deck.get_rid())
+	return excludes
+
+
+## Pre-summon (44c4007) muzzle→endpoint math: when the muzzle sits past a close non-actor hit,
+## fire along the look ray instead of into the deck. `advance_muzzle` is the blaster's short
+## forward bias off the hand bone; laser / charged blast keep the raw muzzle.
+func _combat_projectile_solution(
+	muzzle: Vector3, target: CityTargeting.Result, advance_muzzle: bool = false
+) -> CityTargeting.ProjectileSolution:
+	var s := maxf(character_scale, 0.05)
+	var aim_point := target.point
+	var cam_dir := target.ray_direction
+	if not aim_point.is_finite() or cam_dir.length_squared() < 0.0001:
+		push_error("CityWalker: combat projectile aim is not finite")
+		assert(false, "CityWalker: invalid combat projectile aim")
+		return CityTargetingScript.ProjectileSolution.new(muzzle, target)
+	cam_dir = cam_dir.normalized()
+	var to_aim := aim_point - muzzle
+	var dir: Vector3
+	if to_aim.length_squared() < 0.0001:
+		dir = cam_dir
+	else:
+		dir = to_aim.normalized()
+		if target.kind != CityTargeting.TargetKind.ACTOR and dir.dot(cam_dir) < 0.2:
+			dir = cam_dir
+			var along := maxf(target.ray_origin.distance_to(aim_point), 1.25 * s)
+			aim_point = muzzle + dir * along
+			target.point = aim_point
+	var origin := muzzle + dir * (0.2 * s) if advance_muzzle else muzzle
+	return CityTargetingScript.ProjectileSolution.new(origin, target)
+
+
+## Fresh look target + hand muzzle for one blaster bolt (retargets every shot).
+func _blaster_shot_endpoints() -> CityTargeting.ProjectileSolution:
 	var s := maxf(character_scale, 0.05)
 	var hand := _bone_world_pos(
 		[&"LeftHand", &"hand_l", &"hand.L", &"LeftLowerArm", &"lowerarm_l"]
 	)
 	if not hand.is_finite():
 		hand = global_position + Vector3(0.0, 1.15 * s, 0.0)
-	var aim := aim_combat_target(hand)
-	var aim_point: Vector3 = aim["point"] as Vector3
-	var cam_dir: Vector3 = aim["cam_dir"] as Vector3
-	var to_aim := aim_point - hand
-	var dir: Vector3
-	if to_aim.length_squared() < 0.0001:
-		dir = cam_dir
-	else:
-		dir = to_aim.normalized()
-		## Hand can sit past a close geometry hit — shoot along the camera ray instead. A body
-		## the targeting picked is never overridden: its line from this muzzle is already clear.
-		if not bool(aim["is_agent"]) and dir.dot(cam_dir) < 0.2:
-			dir = cam_dir
-			var cam_from: Vector3 = aim["cam_from"] as Vector3
-			var along := maxf(cam_from.distance_to(aim_point), 1.25 * s)
-			aim_point = hand + dir * along
-	var origin := hand + dir * (0.2 * s)
-	return {"origin": origin, "aim_point": aim_point}
+	var aim := resolve_target(
+		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		hand
+	)
+	return _combat_projectile_solution(hand, aim, true)
 
 
 func _request_infection_meteor() -> void:
-	var aim := aim_world_at_cursor()
-	meteor_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+	var aim := resolve_target(
+		CityTargeting.TargetMode.VOXELS_ONLY, CityTargeting.ScreenSource.FREE_CURSOR
+	)
+	if aim.did_hit():
+		meteor_requested.emit(aim.point, aim.normal)
 
 
 func _request_tetris_machine() -> void:
-	var aim := aim_world_at_cursor()
-	tetris_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+	var aim := resolve_target(
+		CityTargeting.TargetMode.VOXELS_ONLY, CityTargeting.ScreenSource.FREE_CURSOR
+	)
+	if aim.did_hit():
+		tetris_requested.emit(aim.point, aim.normal)
 
 
 func _request_pedestrian() -> void:
-	var aim := aim_world_at_cursor()
-	pedestrian_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+	var aim := resolve_target(
+		CityTargeting.TargetMode.VOXELS_ONLY, CityTargeting.ScreenSource.FREE_CURSOR
+	)
+	if aim.did_hit():
+		pedestrian_requested.emit(aim.point, aim.normal)
 
 
 func _request_undead_radar() -> void:
@@ -3369,7 +3574,6 @@ func _start_charged_blast_at_cursor() -> void:
 	if _blast_charge < 0.05:
 		_blast_charge = 0.05
 	_blast_pending_radius = _charged_blast_radius()
-	_blast_pending_aim = aim_combat_target(_spell_hand_origin())["point"] as Vector3
 	_blast_charge = 0.0
 	_blast_ready_at_msec = now + int(maxi(int(charged_blast_cooldown_sec * 1000.0), 50))
 	if _charge_orb != null:
@@ -3412,19 +3616,25 @@ func _schedule_charged_blast_release() -> void:
 
 
 func _fire_charged_blast_projectile() -> void:
-	var origin := _spell_hand_origin()
+	var hand := _spell_hand_origin()
+	var blast_target := resolve_target(
+		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		hand
+	)
+	var shot := _combat_projectile_solution(hand, blast_target)
+	var origin := shot.origin
+	var aim_point := shot.target.point
 	_laser_shot_origin = origin
-	var aim_point := _blast_pending_aim
-	if aim_point.distance_squared_to(origin) < 0.25:
-		var fwd := -global_transform.basis.z
-		if fwd.length_squared() > 0.0001:
-			aim_point = origin + fwd.normalized() * 8.0
 	var audio := _city_audio()
 	if audio != null and audio.has_method("play_charged_blast_throw"):
 		audio.call("play_charged_blast_throw", origin, character_scale)
 	elif audio != null and audio.has_method("play_laser_fire"):
 		audio.call("play_laser_fire", origin, character_scale)
 	if _charged_blast != null and _charged_blast.has_method("fire"):
+		_charged_blast.call(
+			"set_tracking_target", shot.target.actor, aim_point
+		)
 		_charged_blast.call(
 			"fire",
 			origin,
@@ -3446,8 +3656,15 @@ func _start_laser_eyes_at_cursor() -> void:
 	if not try_spend_energy(energy_cost_laser):
 		return
 
-	var origin := _laser_eye_origin()
-	var aim_point := aim_combat_target(origin)["point"] as Vector3
+	var eye := _laser_eye_origin()
+	var laser_target := resolve_target(
+		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
+		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
+		eye
+	)
+	var shot := _combat_projectile_solution(eye, laser_target)
+	var origin := shot.origin
+	var aim_point := shot.target.point
 	_laser_ready_at_msec = now + int(maxi(int(laser_cooldown_sec * 1000.0), 50))
 
 	_laser_shot_origin = origin
@@ -3455,6 +3672,7 @@ func _start_laser_eyes_at_cursor() -> void:
 	if audio != null and audio.has_method("play_laser_fire"):
 		audio.call("play_laser_fire", origin, character_scale)
 	if _eye_laser != null and _eye_laser.has_method("fire"):
+		_eye_laser.call("set_tracking_target", shot.target.actor, aim_point)
 		## Pass current body scale so dart length/thickness match the character.
 		_eye_laser.call("fire", origin, aim_point, laser_speed_mps, _effective_body_scale())
 
@@ -3533,10 +3751,10 @@ func _fire_blaster_bolt() -> void:
 	## Same shoot flick as charged blast release — hand casts each bolt.
 	if has_action_animation(charged_blast_shoot_anim):
 		play_action(charged_blast_shoot_anim, false)
-	## Retarget every bolt from the live mouse cursor (camera ray → voxels/agents).
+	## Retarget every bolt from the live look ray (pre-summon muzzle→endpoint math).
 	var shot := _blaster_shot_endpoints()
-	var origin: Vector3 = shot["origin"] as Vector3
-	var aim_point: Vector3 = shot["aim_point"] as Vector3
+	var origin := shot.origin
+	var aim_point := shot.target.point
 	var audio := _city_audio()
 	if audio != null and audio.has_method("play_laser_fire"):
 		audio.call("play_laser_fire", origin, character_scale)
@@ -3562,6 +3780,7 @@ func _fire_blaster_bolt() -> void:
 		)
 	if bolt.has_signal("impact"):
 		bolt.connect("impact", _on_blaster_impact)
+	bolt.call("set_tracking_target", shot.target.actor, aim_point)
 	bolt.call("fire", origin, aim_point, blaster_speed_mps, _effective_body_scale())
 
 
@@ -3599,7 +3818,7 @@ func _on_blaster_impact(hit_point: Vector3, direction: Vector3, shot_origin: Vec
 func _city_root() -> Node:
 	var n: Node = get_parent()
 	while n != null:
-		if n.has_method("resolve_combat_target") and n.has_method("apply_laser_agent_hit"):
+		if n.has_method("resolve_actor_target") and n.has_method("apply_laser_agent_hit"):
 			return n
 		n = n.get_parent()
 	return null
