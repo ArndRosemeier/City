@@ -2337,11 +2337,16 @@ func _ensure_safety_deck() -> void:
 	## Own layer so cascading debris (mask=terrain) never rests on this failsafe.
 	_safety_deck.collision_layer = SAFETY_DECK_LAYER
 	_safety_deck.collision_mask = 0
+	## Carried as a child so the deck cannot outlive the body it catches, and top-level so it
+	## still keeps the world position written below rather than turning and growing with it.
+	_safety_deck.top_level = true
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
 	box.size = Vector3(80.0, 1.0, 80.0)
 	shape.shape = box
 	_safety_deck.add_child(shape)
+	add_child(_safety_deck)
+	_update_safety_deck()
 
 
 func _update_safety_deck() -> void:
@@ -2349,13 +2354,6 @@ func _update_safety_deck() -> void:
 	## at sidewalk height dual-contacted giants and caused vertical jitter).
 	if _safety_deck == null or not is_instance_valid(_safety_deck):
 		return
-	var host := get_parent()
-	if host == null:
-		return
-	if _safety_deck.get_parent() != host:
-		if _safety_deck.get_parent() != null:
-			_safety_deck.get_parent().remove_child(_safety_deck)
-		host.add_child(_safety_deck)
 	_safety_deck.global_position = Vector3(
 		global_position.x,
 		global_position.y - 8.0,
