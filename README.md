@@ -68,7 +68,7 @@ powershell -File tools\check_tracking.ps1             -> same check
 `tools/check_tracking.ps1` fails on unexpected untracked files and on missing required
 ship files / `.uid` sidecars. CI runs the same check on every push to `main`.
 
-Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **I** inventory · **J** jump to district type · **N** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler (hitches ≥80 ms print to console as `CityProfiler HITCH`) · **Settings** (top-right) for quality. Settings → Graphics → Diagnostics → **Log stutters to file** mirrors those hitch reports into `%APPDATA%\Godot\app_userdata\EccentriCity\city_hitches.log` (the same panel has an *Open log folder* button), so a stutter can be reported without a console open.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **I** inventory · **J** jump to district type · **Y** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **N** summon monster at mouse aim (Random + spawn_ready roster) · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler (hitches ≥80 ms print to console as `CityProfiler HITCH`) · **Settings** (top-right) for quality. Settings → Graphics → Diagnostics → **Log stutters to file** mirrors those hitch reports into `%APPDATA%\Godot\app_userdata\EccentriCity\city_hitches.log` (the same panel has an *Open log folder* button), so a stutter can be reported without a console open.
 
 Build: aim with the mouse, press **F1–F6** to stamp the bound recipe at the cursor (cottage / pool / hot tub / statues by default). **Shift+F1–F6** opens the full recipe list to rebind a slot. Fronts face you. Builds are session-local and disappear when that district streams out.
 
@@ -80,12 +80,38 @@ Tetris (after **T**): **1** left · **2** rotate · **3** right · **4** fast dr
 assets/humans/     MPFB bases, outfits, Quaternius Idle/Walk
 assets/city/       Voxel textures
 assets/vehicles/   Quaternius CC0 car GLBs + catalog.json
+assets/combat/     Shared attacks.json (player + monster attack definitions)
+assets/monsters/   KayKit / Quaternius bodies + combat_table.json (data-only archetypes)
 scenes/            city_poc.tscn, main.tscn
 scripts/city/      District generation, crowd, street lights
 scripts/vehicles/  VehicleDirector / catalog / visuals
 scripts/humans/    Outfits, proportions
 LICENSE_ASSETS.md  Content license provenance
 ```
+
+Shared attack stats (damage, cooldown, energy, range, kind) live in
+`assets/combat/attacks.json`. Behaviours (attack pools + prey weights) live in
+`assets/combat/behaviours.json`. Monster templates and per-body rows in
+`assets/monsters/combat_table.json` reference those ids.
+
+Merge rules (max scalars across templates, body scalar replace; union lists with
+`*_extra` / hard replace; prey weights = mean across effective behaviours;
+attacks from behaviours then body overrides) are implemented in both
+`tools/combat_resolve.py` (validator + editor) and `scripts/city/combat_table.gd`
+(`CombatTable.resolve`). Keep those two in lockstep.
+
+- Schema check: `python tools/validate_combat_tables.py` (also checks the golden
+  fixture; use `--skip-sync` to skip)
+- Regenerate golden effective stats:
+  `python tools/sync_combat_resolve.py --write`
+  → `tools/fixtures/combat_effective_stats.json`
+- Godot sync test:
+  `powershell -File tools/run_test.ps1 test_combat_table_sync -KeepLog`
+- Editor (live effective preview on Monsters tab):
+  `python tools/edit_combat_tables.py`
+
+When changing merge rules: update **both** `combat_resolve.py` and
+`combat_table.gd`, regenerate the golden file, then re-run the sync test.
 
 ## World seed
 

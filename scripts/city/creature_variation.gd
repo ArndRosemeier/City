@@ -356,9 +356,11 @@ func _graft(
 	donor_part.get_parent().remove_child(donor_part)
 	host_part.get_parent().remove_child(host_part)
 	host_part.queue_free()
+	## `remove_child` leaves the donor scene as the owner, and re-parenting a node that still
+	## points at an owner outside its new branch is what `add_child` warns about.
+	donor_part.owner = null
 	host_skeleton.add_child(donor_part)
 	donor_part.name = host_name
-	donor_part.owner = null
 	donor_part.skeleton = NodePath("..")
 	donor_part.skin = skin
 	return true

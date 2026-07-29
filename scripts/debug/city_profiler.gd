@@ -623,6 +623,57 @@ func reset_peaks() -> void:
 	_worst_hitch_ms = 0.0
 
 
+## Smooth wall-clock frame time in ms (same value the F7 overlay shows).
+func smooth_frame_ms() -> float:
+	return _frame_ms_smooth
+
+
+func worst_frame_ms() -> float:
+	return _worst_frame_ms
+
+
+func hitch_count() -> int:
+	return _hitch_count
+
+
+## Peak exclusive time for a begin/end scope, in milliseconds.
+func scope_peak_ms(scope_name: String) -> float:
+	if not _scopes.has(scope_name):
+		return 0.0
+	var s: Dictionary = _scopes[scope_name]
+	return float(int(s.get("peak_us", 0))) / 1000.0
+
+
+## Last exclusive sample for a scope, in milliseconds.
+func scope_last_ms(scope_name: String) -> float:
+	if not _scopes.has(scope_name):
+		return 0.0
+	var s: Dictionary = _scopes[scope_name]
+	return float(int(s.get("last_us", 0))) / 1000.0
+
+
+## Print peaks for the named scopes (used by the --auto-summon probe).
+func print_scope_report(scope_names: PackedStringArray) -> void:
+	_emit(
+		"CityProfiler REPORT  frame_smooth=%.1fms worst_frame=%.1fms hitches=%d"
+		% [_frame_ms_smooth, _worst_frame_ms, _hitch_count]
+	)
+	for scope_name: String in scope_names:
+		if not _scopes.has(scope_name):
+			_emit("  %s  (no samples)" % scope_name)
+			continue
+		var s: Dictionary = _scopes[scope_name]
+		_emit(
+			"  %s  last=%.2fms peak=%.2fms n=%d"
+			% [
+				scope_name,
+				float(int(s.get("last_us", 0))) / 1000.0,
+				float(int(s.get("peak_us", 0))) / 1000.0,
+				int(s.get("count", 0)),
+			]
+		)
+
+
 func clear_hitches() -> void:
 	_hitch_log.clear()
 	_hitch_count = 0

@@ -455,12 +455,21 @@ func _test_hud_follows_the_pool() -> void:
 ## what is measured is the whole path: the unit's pool, the death it triggers and the score the
 ## director credits for it.
 func _test_weak_bodies_die_on_the_expected_hit() -> void:
-	## One punch. Anything else and the fodder has stopped being fodder.
+	## One punch. Combat-table minion hp_mult 0.5 → 17 pool; still dies to the fist.
 	var skeleton := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(20, 1, 20)), "kaykit/Skeleton_Minion")
 	if skeleton == null:
 		return
-	if absf(skeleton.health_max() - 34.0) > HEALTH_EPS:
-		_fail("FAIL a spawned skeleton has %.2f health" % skeleton.health_max())
+	var minion_stats: RefCounted = skeleton.combat_stats()
+	if minion_stats == null:
+		_fail("FAIL spawned minion has no combat stats")
+		return
+	var minion_hp_mult := float(minion_stats.get("hp_mult"))
+	var minion_hp: float = 34.0 * minion_hp_mult
+	if absf(skeleton.health_max() - minion_hp) > HEALTH_EPS:
+		_fail(
+			"FAIL a spawned skeleton has %.2f health, want %.2f (hp_mult %.2f)"
+			% [skeleton.health_max(), minion_hp, minion_hp_mult]
+		)
 		return
 	_city.score = 0
 	if not _director.damage_unit(skeleton, DamageSource.Id.PLAYER_MELEE):
@@ -479,37 +488,60 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 		return
 	await _settle(skeleton)
 
-	## Two eye-laser darts: the first must leave it standing, which is the half of a damage
-	## model that did not exist before and the half that can silently become one hit again.
-	var chipped := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(24, 1, 20)), "kaykit/Skeleton_Minion")
+	## Warrior: tougher pool + armor, so the first laser must leave it standing.
+	var chipped := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(24, 1, 20)), "kaykit/Skeleton_Warrior")
 	if chipped == null:
+		return
+	var war_stats: RefCounted = chipped.combat_stats()
+	if war_stats == null:
+		_fail("FAIL warrior has no combat stats")
+		return
+	var war_hp_mult := float(war_stats.get("hp_mult"))
+	var war_armor := float(war_stats.get("armor_mult"))
+	var war_hp: float = 34.0 * war_hp_mult
+	if absf(chipped.health_max() - war_hp) > HEALTH_EPS:
+		_fail("FAIL warrior has %.2f health, want %.2f" % [chipped.health_max(), war_hp])
 		return
 	_city.score = 0
 	_director.damage_unit(chipped, DamageSource.Id.PLAYER_LASER)
 	if not chipped.is_alive():
-		_fail("FAIL one laser dart killed a skeleton outright")
+		_fail("FAIL one laser dart killed a warrior outright")
 		return
-	if absf(chipped.health() - 16.0) > HEALTH_EPS:
-		_fail("FAIL one laser dart left %.2f of 34" % chipped.health())
+	var after_one: float = war_hp - DamageSource.amount(DamageSource.Id.PLAYER_LASER) / war_armor
+	if absf(chipped.health() - after_one) > HEALTH_EPS:
+		_fail("FAIL one laser dart left %.2f, want %.2f" % [chipped.health(), after_one])
 		return
 	if _city.score != 0:
-		_fail("FAIL a surviving skeleton already paid %d" % _city.score)
+		_fail("FAIL a surviving warrior already paid %d" % _city.score)
 		return
-	_director.damage_unit(chipped, DamageSource.Id.PLAYER_LASER)
+	var darts := _hits_to_kill_armored(
+		chipped.health_max(), DamageSource.Id.PLAYER_LASER, war_armor
+	)
+	if darts < 2:
+		_fail("FAIL a warrior falls to %d laser darts" % darts)
+		return
+	for _i in range(darts - 1):
+		_director.damage_unit(chipped, DamageSource.Id.PLAYER_LASER)
 	if chipped.is_alive():
-		_fail("FAIL two laser darts left a skeleton standing at %.2f" % chipped.health())
+		_fail("FAIL %d laser darts left a warrior standing at %.2f" % [darts, chipped.health()])
 		return
 	if _city.score != UndeadUnit.HIT_SCORE_NORMAL:
-		_fail("FAIL the second dart paid %d" % _city.score)
+		_fail("FAIL the finishing dart paid %d" % _city.score)
 		return
 	await _settle(chipped)
 
-	## A mid-size monster is several hits, and the count comes off the same catalogue arithmetic
-	## the tier table printed — so this asserts the live body agrees with the table.
+	## A mid-size monster is several hits; punches count armour from the combat table.
 	var monster := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(28, 1, 20)), "big/Frog")
 	if monster == null:
 		return
-	var punches := CreatureHealth.hits_to_kill(monster.health_max(), DamageSource.Id.PLAYER_MELEE)
+	var frog_stats: RefCounted = monster.combat_stats()
+	if frog_stats == null:
+		_fail("FAIL Frog has no combat stats")
+		return
+	var frog_armor := float(frog_stats.get("armor_mult"))
+	var punches := _hits_to_kill_armored(
+		monster.health_max(), DamageSource.Id.PLAYER_MELEE, frog_armor
+	)
 	if punches < 3:
 		_fail("FAIL a Big monster falls to %d punches" % punches)
 		return
@@ -561,10 +593,10 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 	await _settle(far)
 	print(
 		(
-			"live bodies: a skeleton dies to 1 punch or 2 darts, a Frog to %d punches,"
+			"live bodies: minion dies to 1 punch, warrior to %d darts, Frog to %d punches,"
 			+ " and one stomp cleared 3 in its crater — %d apiece, once each"
 		)
-		% [punches, UndeadUnit.HIT_SCORE_NORMAL]
+		% [darts, punches, UndeadUnit.HIT_SCORE_NORMAL]
 	)
 
 
@@ -750,6 +782,20 @@ func _test_pools_are_independent_and_game_over_is_not_early() -> void:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+## Hits of `source` needed to empty `health` when each hit deals amount/armor_mult.
+func _hits_to_kill_armored(health: float, source: DamageSource.Id, armor_mult: float) -> int:
+	var per := DamageSource.amount(source) / maxf(armor_mult, 0.001)
+	if per <= 0.0:
+		_fail("FAIL armored hits_to_kill got non-positive damage")
+		return 0
+	var left := health
+	var hits := 0
+	while not CreatureHealth.is_dead(left):
+		left -= per
+		hits += 1
+	return hits
+
+
 func _boot_nav() -> bool:
 	_nav = NavService.instance()
 	_nav.ensure_configured(VOXEL_SIZE)
@@ -781,10 +827,14 @@ func _spawn(role: UndeadUnit.Role, at: Vector3, body_id: String) -> UndeadUnit:
 
 
 ## A killed body plays its death clip and frees itself 1.6 s later. Nothing here waits that
-## long, so it is dropped deliberately instead of accumulating across cases.
+## long, so it is dropped deliberately instead of accumulating across cases. A body that died
+## here is already off the roster; one still standing has to be taken off it before it leaves
+## the tree, or the director's registered-on-exit alarm fires.
 func _settle(unit: UndeadUnit) -> void:
 	await get_tree().process_frame
 	if is_instance_valid(unit):
+		if _director._units.has(unit):
+			_director.unregister_unit(unit)
 		unit.queue_free()
 	await get_tree().process_frame
 

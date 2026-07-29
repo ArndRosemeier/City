@@ -32,6 +32,7 @@ const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
 const GemLightDirectorScript := preload("res://scripts/city/gem_light_director.gd")
 const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
 const PlayerInventoryPanelScript := preload("res://scripts/city/player_inventory_panel.gd")
+const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
@@ -103,6 +104,17 @@ var _player_score: int = 0
 ## Collected gems and crafted items (25 stackable slots).
 var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
 var _inventory_panel: Node
+var _monster_summon_panel: Node
+## Look-aim captured when N opens the summon panel (before mouse is released onto the UI).
+## Empty when no pending summon. Same dictionary shape as CityWalker.aim_world_at_cursor().
+var _summon_aim: Dictionary = {}
+## Cached building-nibble probe — the voxel ring scan is far too heavy to run every goal tick.
+var _nibble_cache_from: Vector3 = Vector3.INF
+var _nibble_cache_max_m: float = -1.0
+var _nibble_cache_at_msec: int = -1000000
+var _nibble_cache_result: Vector3 = Vector3.INF
+const NIBBLE_CACHE_SEC := 0.4
+const NIBBLE_CACHE_MOVE_M := 2.5
 var _game_over: bool = false
 var _radar_cooldown_left: float = 0.0
 var _radar_reveal_left: float = 0.0
@@ -196,6 +208,835 @@ func _cli_spawn_theme() -> int:
 			continue
 		return DistrictTheme.parse_theme_id(a.substr(FLAG.length()))
 	return -1
+
+
+func _cli_string_flag(flag: String) -> String:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for a: String in args:
+		if a.begins_with(flag):
+			return a.substr(flag.length())
+	return ""
+
+
+func _cli_float_flag(flag: String, default_value: float) -> float:
+	var raw := _cli_string_flag(flag)
+	if raw.is_empty():
+		return default_value
+	if not raw.is_valid_float():
+		push_error("CityRoot: %s%s is not a float" % [flag, raw])
+		return default_value
+	return float(raw)
+
+
+func _cli_has_flag(flag: String) -> bool:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for a: String in args:
+		if a == flag or a.begins_with(flag + "="):
+			return true
+	return false
+
+
+## In-game summon + FPS probe: `--auto-summon=big/Orc --auto-summon-offset=28 [--auto-summon-quit]`.
+## Verifies shared look/crosshair aim hits ground, then spawns ahead for the FPS sample.
+func _cli_auto_summon_probe() -> void:
+	var body_id := _cli_string_flag("--auto-summon=")
+	if body_id.is_empty():
+		return
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot: --auto-summon needs a walker")
+		return
+	var offset_m := _cli_float_flag("--auto-summon-offset=", 28.0)
+	var quit_after := _cli_has_flag("--auto-summon-quit")
+	var use_look := _cli_has_flag("--auto-summon-look")
+	## Pitch toward the plaza like a player looking at ground; free OS cursor may be anywhere.
+	var walker := _walker as CityWalker
+	walker._pitch = -0.55
+	walker._apply_camera_angles()
+	## Let physics/voxel colliders settle under the camera before sampling the shared ray.
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var look_aim: Dictionary = walker.aim_world_at_cursor()
+	var look_hit := bool(look_aim.get("did_hit", false))
+	var look_point: Vector3 = look_aim.get("point", Vector3.INF) as Vector3
+	print(
+		"CityRoot AUTO-SUMMON: look-aim did_hit=%s point=%s (shared meteor/summon ray)"
+		% [look_hit, look_point]
+	)
+	if not look_hit:
+		push_error("CityRoot AUTO-SUMMON: look aim missed geometry — shared aim ray broken")
+		if quit_after:
+			get_tree().quit(1)
+		return
+	var fwd := -_walker.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.0001:
+		fwd = Vector3(0.0, 0.0, -1.0)
+	else:
+		fwd = fwd.normalized()
+	var aim_point := look_point if use_look else _walker.global_position + fwd * offset_m
+	## Feed summon_monster_at_aim the same dictionary shape capture_summon_aim stores.
+	_summon_aim = look_aim if use_look else {
+		"point": aim_point,
+		"normal": Vector3.UP,
+		"did_hit": true,
+		"cam_from": look_aim.get("cam_from", _walker.global_position),
+		"cam_dir": look_aim.get("cam_dir", fwd),
+		"voxel": Vector3i(),
+		"has_voxel": false,
+	}
+	CityProfiler.set_overlay_enabled(true)
+	print(
+		"CityRoot AUTO-SUMMON: body=%s aim=%s offset=%.1fm use_look=%s (player=%s)"
+		% [body_id, aim_point, offset_m, use_look, _walker.global_position]
+	)
+	var unit := summon_monster_at_aim(body_id)
+	_summon_aim.clear()
+	if unit == null:
+		push_error("CityRoot AUTO-SUMMON: spawn failed for '%s'" % body_id)
+		if quit_after:
+			get_tree().quit(1)
+		return
+	var flat := Vector2(
+		unit.global_position.x - _walker.global_position.x,
+		unit.global_position.z - _walker.global_position.z
+	).length()
+	print(
+		"CityRoot AUTO-SUMMON: spawned at %s flat_dist_from_player=%.2fm"
+		% [unit.global_position, flat]
+	)
+	## Baseline a moment after spawn, then sample with the monster ticking.
+	CityProfiler.reset_peaks()
+	CityProfiler.clear_hitches()
+	await get_tree().create_timer(2.5).timeout
+	var scopes := PackedStringArray(
+		["undead_unit", "undead_nav", "undead_hunt_pick", "building_nibble", "crowd", "nav_queries"]
+	)
+	CityProfiler.print_scope_report(scopes)
+	var frame_ms := CityProfiler.smooth_frame_ms()
+	var undead_peak := CityProfiler.scope_peak_ms("undead_unit")
+	var nibble_peak := CityProfiler.scope_peak_ms("building_nibble")
+	print(
+		"CityRoot AUTO-SUMMON: RESULT OK flat_dist=%.2f frame_ms=%.1f undead_unit_peak_ms=%.2f building_nibble_peak_ms=%.2f"
+		% [flat, frame_ms, undead_peak, nibble_peak]
+	)
+	if quit_after:
+		get_tree().quit(0)
+
+
+## Which bound action each `--auto-fire-action=` name presses.
+const AUTO_FIRE_BINDS: Dictionary = {
+	"beam": "beam",
+	"blast": "fire",
+	"laser": "laser",
+}
+## How long the probe waits for the shot to travel and resolve before reading health.
+const AUTO_FIRE_SETTLE_SEC := 2.5
+## Physics frames the probe gives the streamer to mesh a collider under the spawn point.
+const AUTO_FIRE_DECK_TRIES := 240
+## Headings tried around the player's facing when looking for level ground in line of sight.
+const AUTO_FIRE_YAW_SWEEP_DEG: PackedInt32Array = [
+	0, 20, -20, 40, -40, 60, -60, 90, -90, 120, -120, 150, -150, 180
+]
+## How far the target's deck may sit above or below the player before it counts as a hill.
+const AUTO_FIRE_MAX_STEP_M := 1.5
+## Physics frames the body gets to land and let navigation stop shoving it around.
+const AUTO_FIRE_SETTLE_FRAMES := 30
+## Aim passes allowed; the camera's spring arm makes one pass insufficient.
+const AUTO_FIRE_AIM_TRIES := 8
+## When the crosshair counts as being on the body — a player would call this dead centre.
+const AUTO_FIRE_AIM_TOL_DEG := 0.5
+## How far the pinned body may drift before the probe puts it back on its mark.
+const AUTO_FIRE_PIN_SLACK_M := 0.5
+## The shot has to cross real ground to be worth anything; closer than this is not a test.
+const AUTO_FIRE_MIN_RANGE_M := 8.0
+
+
+## In-game blast probe: `--auto-fire=kaykit/Skeleton_Minion [--auto-fire-offset=22]
+## [--auto-fire-action=beam|blast|laser] [--auto-fire-hold=0.6] [--auto-fire-quit]`.
+##
+## Summons one body straight ahead, points the third-person crosshair at its chest, then presses
+## the player's own bound button through `Input.parse_input_event` — the shot takes exactly the
+## path a hand on the mouse takes, which is the only way to prove the aim in the running game.
+## Prints aim origin, direction, resolved target and distances; fails when the body kept its
+## health, which is what "the blast always hits the ground" looks like from here.
+func _cli_auto_fire_probe() -> void:
+	var body_id := _cli_string_flag("--auto-fire=")
+	if body_id.is_empty():
+		return
+	var action := _cli_string_flag("--auto-fire-action=")
+	if action.is_empty():
+		action = "beam"
+	if not AUTO_FIRE_BINDS.has(action):
+		push_error("CityRoot AUTO-FIRE: --auto-fire-action=%s is not beam/blast/laser" % action)
+		get_tree().quit(1)
+		return
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot AUTO-FIRE: needs a walker")
+		get_tree().quit(1)
+		return
+	var walker := _walker as CityWalker
+	var offset_m := _cli_float_flag("--auto-fire-offset=", 22.0)
+	var hold_sec := _cli_float_flag("--auto-fire-hold=", 0.6)
+	var quit_after := _cli_has_flag("--auto-fire-quit")
+	## The probe clicks in the same window a player does: as soon as the splash hands back the
+	## screen. It must not have to wait out the fade, which is exactly what used to swallow the
+	## first shots.
+	for _i in range(AUTO_FIRE_DECK_TRIES):
+		if not is_splash_open():
+			break
+		await get_tree().physics_frame
+	var unit := await _auto_fire_spawn_target(body_id, offset_m)
+	if unit == null:
+		if quit_after:
+			get_tree().quit(1)
+		return
+	## This probe measures the player's aim, not monster pathing, so the body stands still where
+	## it was placed. Freezing its tick is not enough: navigation teleports a body it decides is
+	## trapped, and it lands next to the player, which would turn a 22 m shot into a point-blank
+	## one and prove nothing.
+	var stand_at := unit.global_position
+	unit.set_physics_process(false)
+	for _i in range(AUTO_FIRE_SETTLE_FRAMES):
+		await get_tree().physics_frame
+		if unit.global_position.distance_to(stand_at) > AUTO_FIRE_PIN_SLACK_M:
+			unit.global_position = stand_at
+	var chest := _auto_fire_chest(unit)
+	## The camera rides a colliding spring arm, so one aim pass can leave the crosshair off the
+	## body; re-aim at the body's current chest until it is centred.
+	for _i in range(AUTO_FIRE_AIM_TRIES):
+		chest = _auto_fire_chest(unit)
+		await _auto_fire_look_at(walker, chest)
+		if _auto_fire_aim_error_deg(walker, _auto_fire_chest(unit)) < AUTO_FIRE_AIM_TOL_DEG:
+			break
+	chest = _auto_fire_chest(unit)
+	var centred := _auto_fire_aim_error_deg(walker, chest)
+	if centred > AUTO_FIRE_AIM_TOL_DEG:
+		push_error(
+			"CityRoot AUTO-FIRE: could not centre the crosshair on the body (%.2f° off)" % centred
+		)
+		if quit_after:
+			get_tree().quit(1)
+		return
+	print("CityRoot AUTO-FIRE: crosshair centred on the chest to %.2f°" % centred)
+	var range_m := walker.global_position.distance_to(chest)
+	if range_m < AUTO_FIRE_MIN_RANGE_M:
+		push_error(
+			"CityRoot AUTO-FIRE: body ended up %.2fm away — too close to prove anything" % range_m
+		)
+		if quit_after:
+			get_tree().quit(1)
+		return
+	## Nothing draws a reticle, so a player's aim is never exactly on the chest. This tilts the
+	## look down by a few degrees to stand in for that, which is when the street deck ends up
+	## between the crosshair and the body.
+	var aim_low_deg := _cli_float_flag("--auto-fire-aim-low-deg=", 0.0)
+	if not is_zero_approx(aim_low_deg):
+		walker._pitch = clampf(
+			walker._pitch - deg_to_rad(aim_low_deg), walker.pitch_min, walker.pitch_max
+		)
+		walker._apply_camera_angles()
+		await get_tree().physics_frame
+		print("CityRoot AUTO-FIRE: crosshair tilted %.1f° below the chest" % aim_low_deg)
+	var cam := walker.get_camera()
+	if cam == null:
+		push_error("CityRoot AUTO-FIRE: walker has no camera")
+		get_tree().quit(1)
+		return
+	var rect := cam.get_viewport().get_visible_rect()
+	var crosshair := rect.position + rect.size * 0.5
+	var cam_from := cam.project_ray_origin(crosshair)
+	var cam_dir := cam.project_ray_normal(crosshair)
+	print(
+		"CityRoot AUTO-FIRE: action=%s body=%s unit=%s chest=%s dist_from_player=%.2fm"
+		% [action, body_id, unit.global_position, chest, walker.global_position.distance_to(chest)]
+	)
+	var geom: Dictionary = walker.aim_world_at_cursor()
+	var geom_point: Vector3 = geom["point"] as Vector3
+	print(
+		"CityRoot AUTO-FIRE: cam_from=%s cam_dir=%s geometry_point=%s normal=%s did_hit=%s geom_dist=%.2fm"
+		% [
+			cam_from,
+			cam_dir,
+			geom_point,
+			geom["normal"],
+			bool(geom["did_hit"]),
+			cam_from.distance_to(geom_point),
+		]
+	)
+	var on_ray := _query_closest_agent_hit(cam_from, cam_from + cam_dir * walker.laser_range_m)
+	if on_ray.is_empty():
+		print("CityRoot AUTO-FIRE: agent_on_look_ray=no (crosshair misses every body)")
+	else:
+		print(
+			"CityRoot AUTO-FIRE: agent_on_look_ray=%s dist=%.2fm point=%s is_the_target=%s"
+			% [
+				on_ray["kind"],
+				float(on_ray["distance"]),
+				on_ray["point"],
+				on_ray.get("unit", null) == unit,
+			]
+		)
+	var shot: Dictionary = walker.call("_blaster_shot_endpoints") as Dictionary
+	var shot_origin: Vector3 = shot["origin"] as Vector3
+	var shot_point: Vector3 = shot["aim_point"] as Vector3
+	var target: Dictionary = walker.aim_combat_target(shot_origin)
+	print(
+		"CityRoot AUTO-FIRE: resolved target=%s point=%s dist=%.2fm gap_to_chest=%.2fm"
+		% [
+			"agent" if bool(target["is_agent"]) else "geometry",
+			target["point"],
+			float(target["distance"]),
+			(target["point"] as Vector3).distance_to(chest),
+		]
+	)
+	print(
+		"CityRoot AUTO-FIRE: muzzle=%s aim_point=%s dir=%s dist=%.2fm gap_to_chest=%.2fm"
+		% [
+			shot_origin,
+			shot_point,
+			(shot_point - shot_origin).normalized(),
+			shot_origin.distance_to(shot_point),
+			shot_point.distance_to(chest),
+		]
+	)
+	var before := unit.health()
+	_auto_fire_send(action, true, crosshair)
+	## Projectiles in flight are the receipt that the button reached the walker at all, which is
+	## how a swallowed click tells itself apart from a shot that flew wide. Energy cannot do that
+	## job: regen refills the few points a burst costs while the probe waits for the hit.
+	var shots := 0
+	var waited := 0.0
+	while waited < maxf(hold_sec, 0.05):
+		await get_tree().process_frame
+		waited += get_process_delta_time()
+		shots = maxi(shots, walker.live_projectile_count())
+	_auto_fire_send(action, false, crosshair)
+	## The charged blast only leaves the hand on release, so keep counting while it travels.
+	waited = 0.0
+	while waited < AUTO_FIRE_SETTLE_SEC:
+		await get_tree().process_frame
+		waited += get_process_delta_time()
+		shots = maxi(shots, walker.live_projectile_count())
+	var alive := is_instance_valid(unit) and unit.is_alive()
+	var after := unit.health() if is_instance_valid(unit) else 0.0
+	print(
+		"CityRoot AUTO-FIRE: projectiles_in_flight_peak=%d health %.2f → %.2f (delta %.2f) alive=%s"
+		% [shots, before, after, before - after, alive]
+	)
+	if before - after < 0.01:
+		if shots == 0:
+			push_error(
+				"CityRoot AUTO-FIRE: RESULT FAILED — %s never left the player (input or cost path)"
+				% action
+			)
+		else:
+			push_error(
+				"CityRoot AUTO-FIRE: RESULT FAILED — %s never reached the body %.2fm ahead"
+				% [action, walker.global_position.distance_to(chest)]
+			)
+		if quit_after:
+			get_tree().quit(1)
+		return
+	print(
+		"CityRoot AUTO-FIRE: RESULT OK %s took %.2f damage off the %s"
+		% [action, before - after, body_id]
+	)
+	if quit_after:
+		get_tree().quit(0)
+
+
+## One body standing on the deck `offset_m` away, in a direction the player can actually see it
+## from: the probe would otherwise put a monster up a hill or behind a facade and then blame the
+## aim for a shot that correctly hit the world. The player is turned to face it.
+##
+## Terrain colliders around the spawn are still meshing when boot reports playable, so the deck
+## ray is retried before the sweep gives up on a heading.
+func _auto_fire_spawn_target(body_id: String, offset_m: float) -> UndeadUnit:
+	_ensure_undead_director()
+	if _undead == null or not _undead.has_method("spawn_monster_by_id"):
+		push_error("CityRoot AUTO-FIRE: undead director missing spawn")
+		return null
+	var reach := maxf(offset_m, 2.0)
+	var base_yaw := _walker.rotation.y
+	var space := get_world_3d().direct_space_state
+	for _i in range(AUTO_FIRE_DECK_TRIES):
+		await get_tree().physics_frame
+		for step in AUTO_FIRE_YAW_SWEEP_DEG:
+			var yaw := base_yaw + deg_to_rad(float(step))
+			var dir := Vector3(-sin(yaw), 0.0, -cos(yaw))
+			var ahead := _walker.global_position + dir * reach
+			var down := PhysicsRayQueryParameters3D.create(
+				ahead + Vector3.UP * 30.0, ahead - Vector3.UP * 30.0
+			)
+			down.collision_mask = 1
+			var ground := space.intersect_ray(down)
+			if ground.is_empty():
+				continue
+			var at: Vector3 = ground["position"] as Vector3
+			## A body more than a storey above or below the player is up a hill or on a roof.
+			if absf(at.y - _walker.global_position.y) > AUTO_FIRE_MAX_STEP_M:
+				continue
+			var eye := _walker.global_position + Vector3.UP * 1.6
+			var chest := at + Vector3.UP * 1.2
+			var los := PhysicsRayQueryParameters3D.create(eye, chest)
+			los.collision_mask = 1
+			if not space.intersect_ray(los).is_empty():
+				continue
+			## A pedestrian in the corridor is a legitimate shield, and a probe that fires
+			## through one is measuring the crowd instead of the aim.
+			if not _query_closest_agent_hit(eye, chest).is_empty():
+				continue
+			_walker.set_yaw(yaw)
+			var unit := _undead.call("spawn_monster_by_id", body_id, at) as UndeadUnit
+			if unit == null:
+				push_error(
+					"CityRoot AUTO-FIRE: could not summon '%s' %.1fm ahead" % [body_id, offset_m]
+				)
+			else:
+				print(
+					"CityRoot AUTO-FIRE: target heading %+.0f° from spawn facing, deck y=%.2f (player y=%.2f)"
+					% [rad_to_deg(yaw - base_yaw), at.y, _walker.global_position.y]
+				)
+			return unit
+	push_error(
+		"CityRoot AUTO-FIRE: no level deck in line of sight %.1fm away after %d frames"
+		% [offset_m, AUTO_FIRE_DECK_TRIES]
+	)
+	return null
+
+
+## Where the probe considers the body's centre of mass — the same chest the targeting picks.
+func _auto_fire_chest(unit: UndeadUnit) -> Vector3:
+	return unit.global_position + Vector3(0.0, unit.hit_half_height() * 0.85, 0.0)
+
+
+## Angle between the crosshair ray and `target`, in degrees: how far off the body the player's
+## look currently is.
+func _auto_fire_aim_error_deg(walker: CityWalker, target: Vector3) -> float:
+	var cam := walker.get_camera()
+	if cam == null:
+		push_error("CityRoot AUTO-FIRE: walker has no camera while measuring aim")
+		return 180.0
+	var rect := cam.get_viewport().get_visible_rect()
+	var crosshair := rect.position + rect.size * 0.5
+	var from := cam.project_ray_origin(crosshair)
+	var dir := cam.project_ray_normal(crosshair)
+	var want := target - from
+	if want.length_squared() < 0.0001:
+		return 0.0
+	return rad_to_deg(acos(clampf(want.normalized().dot(dir.normalized()), -1.0, 1.0)))
+
+
+## Point the crosshair at `target`. The camera rides a spring arm that collides with the world,
+## so the pitch that centres a point has no closed form — iterate on the camera's own centre ray.
+func _auto_fire_look_at(walker: CityWalker, target: Vector3) -> void:
+	var look := target - walker.global_position
+	look.y = 0.0
+	if look.length_squared() > 0.01:
+		walker.set_yaw(atan2(-look.x, -look.z))
+	for _i in range(10):
+		await get_tree().physics_frame
+		var cam := walker.get_camera()
+		if cam == null:
+			push_error("CityRoot AUTO-FIRE: walker has no camera while aiming")
+			return
+		var rect := cam.get_viewport().get_visible_rect()
+		var crosshair := rect.position + rect.size * 0.5
+		var from := cam.project_ray_origin(crosshair)
+		var dir := cam.project_ray_normal(crosshair)
+		var want := target - from
+		if want.length_squared() < 0.01:
+			return
+		want = want.normalized()
+		var err := asin(clampf(want.y, -1.0, 1.0)) - asin(clampf(dir.y, -1.0, 1.0))
+		walker._pitch = clampf(walker._pitch + err, walker.pitch_min, walker.pitch_max)
+		walker._apply_camera_angles()
+		if absf(err) < 0.0005:
+			return
+
+
+## Press or release the real bound button for `action` through the input pipeline.
+func _auto_fire_send(action: String, pressed: bool, at: Vector2) -> void:
+	var ctl := _player_controls()
+	if ctl == null:
+		push_error("CityRoot AUTO-FIRE: no player controls to read the binding from")
+		return
+	var bind_id := str(AUTO_FIRE_BINDS[action])
+	var bind: Dictionary = ctl.call("get_binding", bind_id) as Dictionary
+	var device := str(bind.get("device", ""))
+	if device == "mouse":
+		var mb := InputEventMouseButton.new()
+		mb.button_index = int(bind["code"]) as MouseButton
+		mb.pressed = pressed
+		mb.position = at
+		mb.global_position = at
+		mb.shift_pressed = bool(bind["shift"])
+		mb.ctrl_pressed = bool(bind["ctrl"])
+		mb.alt_pressed = bool(bind["alt"])
+		Input.parse_input_event(mb)
+		print(
+			"CityRoot AUTO-FIRE: %s %s (%s)"
+			% [bind_id, "press" if pressed else "release", PlayerControls.format_binding(bind)]
+		)
+		return
+	if device != "key":
+		push_error("CityRoot AUTO-FIRE: '%s' is bound to device '%s'" % [bind_id, device])
+		return
+	var ke := InputEventKey.new()
+	ke.keycode = int(bind["code"]) as Key
+	ke.physical_keycode = ke.keycode
+	ke.pressed = pressed
+	ke.shift_pressed = bool(bind["shift"])
+	ke.ctrl_pressed = bool(bind["ctrl"])
+	ke.alt_pressed = bool(bind["alt"])
+	Input.parse_input_event(ke)
+	print(
+		"CityRoot AUTO-FIRE: %s %s (%s)"
+		% [bind_id, "press" if pressed else "release", PlayerControls.format_binding(bind)]
+	)
+
+
+## Physics frames the walk probe gives the splash before it starts pressing keys.
+const AUTO_WALK_BOOT_FRAMES := 1200
+## Metres the failsafe deck rides below the feet (CityWalker._update_safety_deck).
+const AUTO_WALK_DECK_DROP_M := 8.0
+## How far the deck may sit from the feet on a frame the walker wrote it.
+const AUTO_WALK_DECK_TOL_M := 0.01
+## Worst axis drift the deck basis may show: turning must not rotate or stretch the box.
+const AUTO_WALK_BASIS_TOL := 0.0001
+## Longest unsupported stretch that still reads as walking over a lip rather than falling.
+const AUTO_WALK_MAX_AIR_SEC := 2.0
+## How far below its starting ground the player may get before it has fallen out of the world.
+const AUTO_WALK_MAX_DROP_M := 30.0
+## Seconds the probe lets the body settle before it reads the standing state it spawned in.
+const AUTO_WALK_SETTLE_SEC := 1.5
+
+
+## In-game walk probe: `--auto-walk [--auto-walk-leg-sec=3] [--auto-walk-shot=res://tools/w.png]
+## [--auto-walk-quit]`.
+##
+## Holds the player's own bound movement keys through `Input.parse_input_event` and watches what
+## holds the body up while it walks, turns, sprints, jumps and resizes: floor contact, water,
+## step-ups, how far it sinks, and where the failsafe deck under it ends up. The deck is a child
+## of the walker with `top_level` on, so the two failures worth catching are a deck that stopped
+## tracking the feet and a deck that turns or stretches with the body — neither of which a
+## headless RID count can see, which is why this has to run rendered.
+func _cli_auto_walk_probe() -> void:
+	if not _cli_has_flag("--auto-walk"):
+		return
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot AUTO-WALK: needs a walker")
+		get_tree().quit(1)
+		return
+	var walker := _walker as CityWalker
+	var leg_sec := _cli_float_flag("--auto-walk-leg-sec=", 3.0)
+	var shot_path := _cli_string_flag("--auto-walk-shot=")
+	var quit_after := _cli_has_flag("--auto-walk-quit")
+	for _i in range(AUTO_WALK_BOOT_FRAMES):
+		if not is_splash_open():
+			break
+		await get_tree().physics_frame
+	var deck := walker.get_node_or_null("SafetyDeck") as StaticBody3D
+	if deck == null:
+		push_error(
+			"CityRoot AUTO-WALK: the walker owns no SafetyDeck child — it would outlive the body"
+		)
+		if quit_after:
+			get_tree().quit(1)
+		return
+	print(
+		"CityRoot AUTO-WALK: deck owner=%s top_level=%s layer=%d walker_mask=%d"
+		% [deck.get_parent().name, deck.top_level, deck.collision_layer, walker.collision_mask]
+	)
+
+	var start := walker.global_position
+	var settled := 0.0
+	while settled < AUTO_WALK_SETTLE_SEC:
+		await get_tree().physics_frame
+		settled += get_physics_process_delta_time()
+	print(
+		"CityRoot AUTO-WALK: spawn on_ground=%s swimming=%s y %.3f → %.3f (sank %.3fm in %.1fs) deck=%s"
+		% [
+			walker.is_supported(),
+			walker.is_swimming(),
+			start.y,
+			walker.global_position.y,
+			start.y - walker.global_position.y,
+			AUTO_WALK_SETTLE_SEC,
+			deck.global_position,
+		]
+	)
+	if not walker.is_supported():
+		push_error(
+			"CityRoot AUTO-WALK: RESULT FAILED — nothing holds the player up at spawn (y=%.3f)"
+			% walker.global_position.y
+		)
+		if quit_after:
+			get_tree().quit(1)
+		return
+
+	## `airborne_ok` marks the one leg that is meant to leave the ground: holding the jump key
+	## keeps rising for as long as it is held, so its air time is the feature, not a fall.
+	## Only the resizing legs carry a `scale`; the rest walk at whatever size the last one left.
+	var legs: Array[Dictionary] = [
+		{"what": "stand still", "keys": PackedStringArray(), "airborne_ok": false},
+		{"what": "walk forward", "keys": PackedStringArray(["move_forward"]), "airborne_ok": false},
+		{
+			"what": "sprint forward",
+			"keys": PackedStringArray(["move_forward", "sprint"]),
+			"airborne_ok": false,
+		},
+		{
+			"what": "forward + turn left",
+			"keys": PackedStringArray(["move_forward", "turn_left"]),
+			"airborne_ok": false,
+		},
+		{
+			"what": "forward + turn right",
+			"keys": PackedStringArray(["move_forward", "turn_right"]),
+			"airborne_ok": false,
+		},
+		{"what": "turn in place", "keys": PackedStringArray(["turn_left"]), "airborne_ok": false},
+		{"what": "walk back", "keys": PackedStringArray(["move_back"]), "airborne_ok": false},
+		{
+			"what": "jump while walking",
+			"keys": PackedStringArray(["move_forward", "jump"]),
+			"airborne_ok": true,
+		},
+		{"what": "land after the jump", "keys": PackedStringArray(), "airborne_ok": false},
+		## A giant and a mouse walk on the same deck; resizing must not scale the box with them.
+		{
+			"what": "walk forward as a giant",
+			"keys": PackedStringArray(["move_forward"]),
+			"airborne_ok": false,
+			"scale": 2.5,
+		},
+		{
+			"what": "walk forward shrunk",
+			"keys": PackedStringArray(["move_forward"]),
+			"airborne_ok": false,
+			"scale": 0.4,
+		},
+		{
+			"what": "walk forward back at full size",
+			"keys": PackedStringArray(["move_forward"]),
+			"airborne_ok": false,
+			"scale": 1.0,
+		},
+	]
+	var worst_air := 0.0
+	var worst_deck_off := 0.0
+	var worst_basis := 0.0
+	var lowest_y := walker.global_position.y
+	var supported_frames := 0
+	var swim_frames := 0
+	var step_frames := 0
+	var total_frames := 0
+	var stale_frames := 0
+	for leg: Dictionary in legs:
+		if leg.has("scale"):
+			walker.set_character_scale(float(leg["scale"]), true)
+		var stat := await _auto_walk_leg(
+			walker, deck, str(leg["what"]), leg["keys"] as PackedStringArray, leg_sec
+		)
+		if not bool(leg["airborne_ok"]):
+			worst_air = maxf(worst_air, float(stat["worst_air_sec"]))
+		worst_deck_off = maxf(worst_deck_off, float(stat["worst_deck_off_m"]))
+		worst_basis = maxf(worst_basis, float(stat["worst_basis_err"]))
+		lowest_y = minf(lowest_y, float(stat["lowest_y"]))
+		supported_frames += int(stat["supported_frames"])
+		swim_frames += int(stat["swim_frames"])
+		step_frames += int(stat["step_frames"])
+		total_frames += int(stat["frames"])
+		stale_frames += int(stat["stale_frames"])
+
+	var deck_box := (deck.get_child(0) as CollisionShape3D).shape as BoxShape3D
+	var errors_shown := _auto_walk_errors_on_screen()
+	print(
+		"CityRoot AUTO-WALK: on ground %d/%d frames · in water %d · stepped up %d · worst unintended airborne %.2fs · fell to y=%.2f (spawn %.2f) · deck off by ≤%.4fm (%d frames one tick behind) · deck basis drift ≤%.6f · box %s · errors on screen %d"
+		% [
+			supported_frames,
+			total_frames,
+			swim_frames,
+			step_frames,
+			worst_air,
+			lowest_y,
+			start.y,
+			worst_deck_off,
+			stale_frames,
+			worst_basis,
+			deck_box.size,
+			errors_shown,
+		]
+	)
+	if not shot_path.is_empty():
+		await _auto_walk_screenshot(shot_path)
+
+	var verdict := ""
+	if worst_air > AUTO_WALK_MAX_AIR_SEC:
+		verdict = "the player was in free fall for %.2fs — the ground stopped holding it" % worst_air
+	elif start.y - lowest_y > AUTO_WALK_MAX_DROP_M:
+		verdict = (
+			"the player sank %.2fm below its spawn ground — it fell through the world"
+			% (start.y - lowest_y)
+		)
+	elif worst_basis > AUTO_WALK_BASIS_TOL:
+		verdict = (
+			"the failsafe deck turned or stretched with the body (axis drift %.6f)" % worst_basis
+		)
+	elif worst_deck_off > AUTO_WALK_DECK_TOL_M:
+		verdict = "the failsafe deck drifted %.4fm off the feet" % worst_deck_off
+	elif not (walker.is_supported() or walker.is_swimming()):
+		verdict = "the player ended the run unsupported at y=%.3f" % walker.global_position.y
+	if not verdict.is_empty():
+		push_error("CityRoot AUTO-WALK: RESULT FAILED — %s" % verdict)
+		if quit_after:
+			get_tree().quit(1)
+		return
+	print(
+		"CityRoot AUTO-WALK: RESULT OK the player stood and walked supported over %d frames"
+		% total_frames
+	)
+	if quit_after:
+		get_tree().quit(0)
+
+
+## Hold `keys` for `seconds` and report what held the body up. Keys: frames, supported_frames,
+## swim_frames, step_frames, stale_frames, worst_air_sec, lowest_y, worst_deck_off_m,
+## worst_basis_err.
+func _auto_walk_leg(
+	walker: CityWalker,
+	deck: StaticBody3D,
+	what: String,
+	keys: PackedStringArray,
+	seconds: float
+) -> Dictionary:
+	var drop := Vector3(0.0, AUTO_WALK_DECK_DROP_M, 0.0)
+	var from := walker.global_position
+	var prev_feet := from
+	var frames := 0
+	var supported_frames := 0
+	var swim_frames := 0
+	var step_frames := 0
+	var stale_frames := 0
+	var air_sec := 0.0
+	var worst_air := 0.0
+	var lowest_y := from.y
+	var worst_deck_off := 0.0
+	var worst_basis := 0.0
+	for key in keys:
+		_auto_walk_hold(key, true)
+	var waited := 0.0
+	while waited < maxf(seconds, 0.05):
+		await get_tree().physics_frame
+		var step := get_physics_process_delta_time()
+		waited += step
+		frames += 1
+		var feet := walker.global_position
+		lowest_y = minf(lowest_y, feet.y)
+		## Water holds the body up as legitimately as ground does — the walker's own locomotion
+		## counts a swim as not airborne, so a probe that called it a fall would fail on a pond.
+		if walker.is_supported():
+			supported_frames += 1
+			air_sec = 0.0
+		elif walker.is_swimming():
+			swim_frames += 1
+			air_sec = 0.0
+		else:
+			air_sec += step
+			worst_air = maxf(worst_air, air_sec)
+		if walker.has_stepped_up():
+			step_frames += 1
+		worst_basis = maxf(worst_basis, _auto_walk_basis_error(deck.global_transform.basis))
+		## The deck has to be where the walker last wrote it. Leaving a climb returns out of
+		## `_physics_climb` before `_update_safety_deck`, so on those frames the deck is still
+		## on the previous tick's feet — counted, but not drift. Anything further off is a deck
+		## that stopped tracking the body at all.
+		var off_now := deck.global_position.distance_to(feet - drop)
+		var off_prev := deck.global_position.distance_to(prev_feet - drop)
+		if off_now > AUTO_WALK_DECK_TOL_M and off_prev <= AUTO_WALK_DECK_TOL_M:
+			stale_frames += 1
+		worst_deck_off = maxf(worst_deck_off, minf(off_now, off_prev))
+		prev_feet = feet
+	for key in keys:
+		_auto_walk_hold(key, false)
+	print(
+		"CityRoot AUTO-WALK: %-32s ground %3d/%3d · swim %3d · stepped up %3d · moved %5.2fm · y %.2f→%.2f (low %.2f) · air ≤%.2fs · deck ≤%.4fm (%d behind) basis ≤%.6f"
+		% [
+			what,
+			supported_frames,
+			frames,
+			swim_frames,
+			step_frames,
+			from.distance_to(walker.global_position),
+			from.y,
+			walker.global_position.y,
+			lowest_y,
+			worst_air,
+			worst_deck_off,
+			stale_frames,
+			worst_basis,
+		]
+	)
+	return {
+		"frames": frames,
+		"supported_frames": supported_frames,
+		"swim_frames": swim_frames,
+		"step_frames": step_frames,
+		"stale_frames": stale_frames,
+		"worst_air_sec": worst_air,
+		"lowest_y": lowest_y,
+		"worst_deck_off_m": worst_deck_off,
+		"worst_basis_err": worst_basis,
+	}
+
+
+## Press or release the real bound key for a movement action, the way a hand on the keyboard does.
+func _auto_walk_hold(action_id: String, pressed: bool) -> void:
+	var ctl := _player_controls()
+	if ctl == null:
+		push_error("CityRoot AUTO-WALK: no player controls to read the binding from")
+		return
+	var bind: Dictionary = ctl.call("get_binding", action_id) as Dictionary
+	var device := str(bind.get("device", ""))
+	if device != "key":
+		push_error("CityRoot AUTO-WALK: '%s' is bound to device '%s'" % [action_id, device])
+		return
+	var ke := InputEventKey.new()
+	ke.keycode = int(bind["code"]) as Key
+	ke.physical_keycode = ke.keycode
+	ke.pressed = pressed
+	Input.parse_input_event(ke)
+
+
+## Worst axis drift between `b` and the world axes: 0 means unrotated and unscaled.
+func _auto_walk_basis_error(b: Basis) -> float:
+	return maxf(
+		maxf(b.x.distance_to(Vector3.RIGHT), b.y.distance_to(Vector3.UP)),
+		b.z.distance_to(Vector3.BACK)
+	)
+
+
+## How many errors the in-game overlay is showing — a rendered run's own error report.
+func _auto_walk_errors_on_screen() -> int:
+	var overlay := get_node_or_null("/root/ErrorOverlay")
+	if overlay == null:
+		push_error("CityRoot AUTO-WALK: the ErrorOverlay autoload is missing")
+		return -1
+	return int(overlay.get("_visible_count"))
+
+
+func _auto_walk_screenshot(path: String) -> void:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	if img == null:
+		push_error("CityRoot AUTO-WALK: no viewport image for %s" % path)
+		return
+	var saved := img.save_png(path)
+	if saved != OK:
+		push_error("CityRoot AUTO-WALK: could not save %s (error %d)" % [path, saved])
+		return
+	print("CityRoot AUTO-WALK: SAVED %s" % path)
 
 
 func _pick_spawn_district_random() -> Vector2i:
@@ -324,11 +1165,15 @@ func is_inventory_open() -> bool:
 	return _inventory_panel != null and bool(_inventory_panel.call("is_open"))
 
 
+func is_monster_summon_open() -> bool:
+	return _monster_summon_panel != null and bool(_monster_summon_panel.call("is_open"))
+
+
 ## True while a panel of this root's owns the screen. The walker and the build bar read this to
 ## stop taking hotkeys, and the HUD band is hidden for as long as it holds. The walker's own
 ## character editor is not in here: nothing would tell us when it closes again.
 func is_modal_open() -> bool:
-	return is_settings_open() or is_inventory_open()
+	return is_settings_open() or is_inventory_open() or is_monster_summon_open()
 
 
 ## True while the splash covers the world — boot, a hop in flight, and the J picker. It is a
@@ -361,7 +1206,9 @@ func _refresh_hud_visibility() -> void:
 		if canvas.layer >= UiLayers.HUD_MIN and canvas.layer <= UiLayers.HUD_MAX:
 			canvas.visible = show_hud
 	if _settings_panel != null:
-		_settings_panel.call("set_top_bar_visible", not is_inventory_open())
+		_settings_panel.call(
+			"set_top_bar_visible", not is_inventory_open() and not is_monster_summon_open()
+		)
 
 
 func get_inventory() -> PlayerInventory:
@@ -480,6 +1327,13 @@ func _build_hud() -> void:
 	_inventory_panel.opened.connect(_on_inventory_opened)
 	_inventory_panel.closed.connect(_on_inventory_closed)
 	_inventory_panel.craft_requested.connect(_on_inventory_craft_requested)
+
+	_monster_summon_panel = MonsterSummonPanelScript.new()
+	_monster_summon_panel.name = "MonsterSummon"
+	add_child(_monster_summon_panel)
+	_monster_summon_panel.opened.connect(_on_monster_summon_opened)
+	_monster_summon_panel.closed.connect(_on_monster_summon_closed)
+	_monster_summon_panel.summon_requested.connect(_on_monster_summon_requested)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
 	call_deferred("_apply_saved_controls")
@@ -567,6 +1421,8 @@ func _roll_meteor_spawn_interval() -> void:
 func _on_settings_opened() -> void:
 	if is_inventory_open():
 		_inventory_panel.call("close_panel")
+	if is_monster_summon_open():
+		_monster_summon_panel.call("close_panel")
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -574,7 +1430,7 @@ func _on_settings_opened() -> void:
 
 func _on_settings_closed() -> void:
 	_refresh_hud_visibility()
-	if is_inventory_open():
+	if is_inventory_open() or is_monster_summon_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker._set_capture(true)
@@ -583,6 +1439,8 @@ func _on_settings_closed() -> void:
 func _on_inventory_opened() -> void:
 	if is_settings_open():
 		_settings_panel.call("close_panel")
+	if is_monster_summon_open():
+		_monster_summon_panel.call("close_panel")
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -590,10 +1448,111 @@ func _on_inventory_opened() -> void:
 
 func _on_inventory_closed() -> void:
 	_refresh_hud_visibility()
-	if is_settings_open():
+	if is_settings_open() or is_monster_summon_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker._set_capture(true)
+
+
+func _on_monster_summon_opened() -> void:
+	if is_settings_open():
+		_settings_panel.call("close_panel")
+	if is_inventory_open():
+		_inventory_panel.call("close_panel")
+	_refresh_hud_visibility()
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_monster_summon_closed() -> void:
+	## Cancel clears a pending look-aim; confirm already consumed it in summon_monster_at_aim.
+	_summon_aim.clear()
+	_refresh_hud_visibility()
+	if is_settings_open() or is_inventory_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker._set_capture(true)
+
+
+func _on_monster_summon_requested(monster_id: String) -> void:
+	var body_id := monster_id
+	if body_id.is_empty():
+		body_id = _roll_random_summon_id()
+		if body_id.is_empty():
+			push_error("CityRoot: Random summon has an empty spawnable roster")
+			assert(false, "CityRoot: empty summon roster")
+			return
+	var unit := summon_monster_at_aim(body_id)
+	_summon_aim.clear()
+	if unit == null:
+		## Miss is a quiet cancel inside summon_monster_at_aim; hard failures already push_error.
+		return
+	print("CityRoot: summoned %s at %s" % [body_id, unit.global_position])
+
+
+func _roll_random_summon_id() -> String:
+	var ids: PackedStringArray = MonsterSummonPanelScript.summonable_ids()
+	if ids.is_empty():
+		return ""
+	return ids[randi_range(0, ids.size() - 1)]
+
+
+## Sample the shared CityWalker look/crosshair aim before the summon panel opens.
+## Must run before the panel releases the cursor onto the UI — a live sample at Summon-click
+## would ray through the button (below centre). Uses the same aim_world_at_cursor as meteor.
+func capture_summon_aim() -> void:
+	_summon_aim.clear()
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot.capture_summon_aim: no walker")
+		return
+	var aim: Dictionary = _walker.call("aim_world_at_cursor") as Dictionary
+	_summon_aim = aim
+	var point: Vector3 = aim.get("point", Vector3.INF) as Vector3
+	var player := get_player_position()
+	print(
+		"CityRoot: summon aim point=%s voxel=%s did_hit=%s dist_from_player=%.1fm"
+		% [
+			point,
+			aim.get("voxel", Vector3i()),
+			bool(aim.get("did_hit", false)),
+			player.distance_to(point) if player != Vector3.INF and point != Vector3.INF else -1.0,
+		]
+	)
+
+
+## Spawn a combat-table body at the look-aim captured when N opened the panel
+## (same CityWalker.aim_world_at_cursor ray meteor uses). Falls back to a live sample only
+## when no capture exists (tools / CLI). Sky miss → quiet cancel; never the player's feet.
+func summon_monster_at_aim(body_id: String) -> UndeadUnit:
+	if _game_over or _booting:
+		return null
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot.summon_monster_at_aim: no walker")
+		return null
+	var aim: Dictionary = _summon_aim
+	if aim.is_empty():
+		aim = _walker.call("aim_world_at_cursor") as Dictionary
+	if not bool(aim.get("did_hit", false)):
+		## True miss (sky). Meteor still fires at far-clip; we refuse a sky/feet spawn quietly.
+		print("CityRoot: summon cancelled — look aim missed geometry (aim at ground/buildings)")
+		return null
+	_ensure_undead_director()
+	if _undead == null or not _undead.has_method("spawn_monster_by_id"):
+		push_error("CityRoot.summon_monster_at_aim: undead director missing spawn")
+		assert(false, "CityRoot: no spawn_monster_by_id")
+		return null
+	var pos: Vector3 = aim["point"] as Vector3
+	var player := get_player_position()
+	print(
+		"CityRoot: spawning '%s' at aim=%s (player=%s, flat_dist=%.1fm)"
+		% [
+			body_id,
+			pos,
+			player,
+			Vector2(pos.x - player.x, pos.z - player.z).length() if player != Vector3.INF else -1.0,
+		]
+	)
+	return _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
 
 
 func _on_inventory_craft_requested(recipe_id: String) -> void:
@@ -756,7 +1715,10 @@ func _create_terrain() -> void:
 	## from the deterministic district seed if you return). Storing every visited tile
 	## forever was the multi‑GB leak.
 	## Soft large bounds — streamer loads tiles inside the bubble.
-	_terrain.bounds = AABB(Vector3(-20000, 0, -20000), Vector3(40000, 220, 40000))
+	## Y must cover offline nav bake height + link_reach_y headroom. Painted volumes use
+	## 16-voxel blocks (e.g. top row 223) and rebuild_y_range adds ~6 sky rows above that;
+	## a 220-tall ceiling left dirty rebuilds short of the band and NativeNavWorld refused.
+	_terrain.bounds = AABB(Vector3(-20000, 0, -20000), Vector3(40000, 256, 40000))
 	## Ceiling only — must fit a district half-diagonal (~482 vox) so data-only
 	## anchors can make the full tile editable. Player viewers stay shorter below.
 	_terrain.max_view_distance = 512
@@ -1047,6 +2009,11 @@ func get_player_target_position() -> Vector3:
 ## walker's signal brings us back here to `_on_player_health_depleted`. Nothing else calls
 ## `trigger_game_over` for damage any more.
 func damage_player(source: DamageSource.Id) -> float:
+	return damage_player_scaled(source, 1.0)
+
+
+## Same as `damage_player`, with a body's resolved `damage_mult` applied to the table amount.
+func damage_player_scaled(source: DamageSource.Id, scale: float) -> float:
 	if not is_player_alive():
 		return 0.0
 	if DamageSourceScript.target(source) != DamageSourceScript.Target.PLAYER:
@@ -1055,7 +2022,7 @@ func damage_player(source: DamageSource.Id) -> float:
 			% DamageSourceScript.source_name(source)
 		)
 		return 0.0
-	return float(_walker.call("take_damage", source))
+	return float(_walker.call("take_damage_scaled", source, scale))
 
 
 func _on_player_health_depleted(source: DamageSource.Id) -> void:
@@ -1543,9 +2510,12 @@ func _on_spawn_district_ready(inst: Node) -> void:
 		if _undead_hud != null and is_instance_valid(_undead_hud):
 			_undead_hud.call("bind_director", _undead)
 	print(
-		"CityRoot: playable — endless stream active at y=%.2f (F1–F6 = build · M = meteor · T = tetris)"
+		"CityRoot: playable — endless stream active at y=%.2f (F1–F6 = build · M = meteor · N = summon · Y = day/night · T = tetris)"
 		% floor_y
 	)
+	call_deferred("_cli_auto_summon_probe")
+	call_deferred("_cli_auto_fire_probe")
+	call_deferred("_cli_auto_walk_probe")
 
 
 ## A pedestrian or car visual pays two one-off costs the first time it appears: reading its
@@ -2117,6 +3087,18 @@ func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
 		if pd2 <= best_d2:
 			best_d2 = pd2
 			best = ppos
+	var ped := find_nearest_ped_only(from, max_dist)
+	if ped != Vector3.INF:
+		var d2 := Vector2(ped.x - from.x, ped.z - from.z).length_squared()
+		if d2 <= best_d2:
+			best = ped
+	return best
+
+
+## Nearest crowd pedestrian only — never the player. Used when prey_weights separate the two.
+func find_nearest_ped_only(from: Vector3, max_dist: float) -> Vector3:
+	var best := Vector3.INF
+	var best_d2 := max_dist * max_dist
 	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
 		return best
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
@@ -2133,6 +3115,31 @@ func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
 			continue
 		best_d2 = d2
 		best = pos
+	return best
+
+
+## Nearest living undead/monster other than `except_unit`. Vector3.INF when none in range.
+func find_nearest_monster_position(
+	from: Vector3, max_dist: float, except_unit: UndeadUnit = null
+) -> Vector3:
+	if _undead == null or not is_instance_valid(_undead) or not _undead.has_method("get_alive_units"):
+		return Vector3.INF
+	var best := Vector3.INF
+	var best_d2 := max_dist * max_dist
+	var units: Array = _undead.call("get_alive_units") as Array
+	for entry in units:
+		var unit := entry as UndeadUnit
+		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
+			continue
+		if except_unit != null and unit == except_unit:
+			continue
+		var d2 := Vector2(
+			unit.global_position.x - from.x, unit.global_position.z - from.z
+		).length_squared()
+		if d2 > best_d2:
+			continue
+		best_d2 = d2
+		best = unit.global_position
 	return best
 
 
@@ -2192,6 +3199,42 @@ func try_convert_ped_near(world_pos: Vector3, radius: float) -> Variant:
 	if former == Vector3.INF:
 		return null
 	return former
+
+
+## One-shot remove a pedestrian in reach (monster melee vs ped prey). No health pool — peds
+## stay instantly removable. Returns the former world position, or null when nobody was there.
+func try_kill_ped_near(world_pos: Vector3, radius: float) -> Variant:
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return null
+	var best_crowd: CrowdDirector = null
+	var best_agent: PedAgent = null
+	var best_pos := Vector3.INF
+	var best_d2 := radius * radius
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst = _as_district_instance(entry)
+		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
+			continue
+		var hit: Dictionary = inst.crowd.find_nearest_agent(world_pos, radius)
+		if hit.is_empty():
+			continue
+		var pos: Vector3 = hit["position"] as Vector3
+		var d2 := pos.distance_squared_to(world_pos)
+		if d2 > best_d2:
+			continue
+		best_d2 = d2
+		best_crowd = inst.crowd
+		best_agent = hit["agent"] as PedAgent
+		best_pos = pos
+	if best_crowd == null or best_agent == null:
+		return null
+	var away := best_pos - world_pos
+	away.y = 0.0
+	if away.length_squared() < 0.0001:
+		away = Vector3.FORWARD
+	if not best_crowd.kill_agent(best_agent, best_pos, away.normalized()):
+		return null
+	return best_pos
 
 
 func undead_stomp_at(world_pos: Vector3, radius_m: float) -> void:
@@ -2326,11 +3369,31 @@ func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
 
 
 ## World position of a nearby building fabric voxel, or Vector3.INF.
+## Results are short-TTL cached — the ring scan can exceed a frame at aggro ranges.
 func find_nearest_building_nibble(from: Vector3, max_dist: float) -> Vector3:
+	CityProfiler.begin("building_nibble")
+	var now := Time.get_ticks_msec()
+	if (
+		now - _nibble_cache_at_msec < int(NIBBLE_CACHE_SEC * 1000.0)
+		and is_equal_approx(_nibble_cache_max_m, max_dist)
+		and _nibble_cache_from != Vector3.INF
+		and from.distance_to(_nibble_cache_from) <= NIBBLE_CACHE_MOVE_M
+	):
+		CityProfiler.add_counter("building_nibble_cache_hit")
+		CityProfiler.end("building_nibble")
+		return _nibble_cache_result
 	var vox := _find_building_vox_near(from, max_dist)
-	if vox == Vector3i(2147483647, 2147483647, 2147483647):
-		return Vector3.INF
-	return _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
+	var result := Vector3.INF
+	if vox != Vector3i(2147483647, 2147483647, 2147483647):
+		result = _terrain.to_global(
+			Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+		)
+	_nibble_cache_from = from
+	_nibble_cache_max_m = max_dist
+	_nibble_cache_at_msec = now
+	_nibble_cache_result = result
+	CityProfiler.end("building_nibble")
+	return result
 
 
 func _find_building_vox_near(from: Vector3, max_dist: float) -> Vector3i:
@@ -2339,6 +3402,12 @@ func _find_building_vox_near(from: Vector3, max_dist: float) -> Vector3i:
 		return SENTINEL
 	var local := _terrain.to_local(from)
 	var max_vox := maxi(int(ceil(max_dist / VOXEL_SIZE)), 2)
+	## Hard cap — aggro/leash values (80–110 m) at 0.5 m voxels are hundreds of rings and
+	## millions of reads; undead only need a nearby facade, not a city-wide flood.
+	## 32 rings × 0.5 m ≈ 16 m; taller floors still covered by DY_SCAN.
+	const MAX_RINGS := 32
+	const DY_SCAN := 28
+	max_vox = mini(max_vox, MAX_RINGS)
 	var ox := int(floor(local.x))
 	var oy := int(floor(local.y))
 	var oz := int(floor(local.z))
@@ -2353,7 +3422,7 @@ func _find_building_vox_near(from: Vector3, max_dist: float) -> Vector3i:
 				if r > 0 and absi(dx) != r and absi(dz) != r:
 					continue
 				## Tall scan — floors sit well above street after the outer wall is gone.
-				for dy in range(0, 48):
+				for dy in range(0, DY_SCAN):
 					var v := Vector3i(ox + dx, oy + dy, oz + dz)
 					var id := int(_tool.get_voxel(v))
 					if not VoxelMaterial.is_undead_structure_target(id):
@@ -2689,15 +3758,130 @@ func probe_destructible_ray(from_world: Vector3, to_world: Vector3) -> Dictionar
 	return {}
 
 
-## Shorten a laser aim so the dart stops on the nearest ped/car before the wall.
-## Prefer the camera click ray (what the player aimed at); also try eye→wall.
-func resolve_laser_aim(cam_from: Vector3, wall_aim: Vector3, eye_from: Vector3) -> Vector3:
-	var hit := _query_closest_agent_hit(cam_from, wall_aim)
-	if hit.is_empty() and eye_from.distance_squared_to(cam_from) > 0.01:
-		hit = _query_closest_agent_hit(eye_from, wall_aim)
+## How far off the look direction a creature may stand and still be what the player is aiming
+## at. Nothing draws a reticle, so the aim is a guess about the middle of the screen; a hard ray
+## through that guess misses a body by metres at combat range, which is why the blast used to
+## land in the street. Roughly an eighth of the 70° field of view.
+const COMBAT_AIM_CONE_DEG := 9.0
+## Slack on the muzzle line-of-sight ray. The deck the body stands on is allowed to clip the
+## last stretch of it; a wall further back is not.
+const COMBAT_LOS_SLACK_M := 1.0
+
+
+## The one targeting query behind every player attack: laser, blaster bolts, charged blast.
+##
+## Two things the old aim got wrong live here. Geometry distance cannot veto a body, because in
+## third person the crosshair ray leaves a camera above and behind the player and grazes the
+## street deck long before it reaches a mob. And the ray itself cannot be the test either: a few
+## degrees of aim error — unavoidable without a reticle — puts it metres wide of a body at 30 m.
+##
+## So creatures are picked by *angle* off the look direction, closest to centre first, and the
+## shot is then confirmed with a line-of-sight ray from the muzzle, which stands at body height
+## and sees past the deck. A wall between muzzle and body still blocks. Pedestrians and cars are
+## not soft-locked — they are scenery, and snapping a monster fight onto a passing commuter would
+## be worse than missing — so they keep the tight on-ray test.
+##
+## Keys: point (Vector3), distance (float, from shot_origin), is_agent (bool).
+func resolve_combat_target(
+	cam_from: Vector3,
+	look_dir: Vector3,
+	reach: float,
+	geometry_point: Vector3,
+	shot_origin: Vector3
+) -> Dictionary:
+	if look_dir.length_squared() < 0.0001:
+		push_error("CityRoot.resolve_combat_target: look direction is zero")
+		return _combat_geometry_target(geometry_point, shot_origin)
+	var look := look_dir.normalized()
+	var range_m := maxf(reach, 1.0)
+	## Straight on-ray hit first: whatever the player is actually pointing through wins, ped or
+	## car included, and it is the only way those two stay targetable at all.
+	var on_ray := _query_closest_agent_hit(cam_from, cam_from + look * range_m)
+	if not on_ray.is_empty():
+		var on_ray_point: Vector3 = on_ray["point"] as Vector3
+		if _muzzle_sees(shot_origin, on_ray_point):
+			return _combat_agent_target(on_ray_point, shot_origin)
+	var chest := _closest_creature_in_cone(cam_from, look, range_m, shot_origin)
+	if chest.is_finite():
+		return _combat_agent_target(chest, shot_origin)
+	return _combat_geometry_target(geometry_point, shot_origin)
+
+
+## Chest of the living creature nearest the centre of the look cone with a clear muzzle line,
+## or INF. Candidates are walked centre-out, so a wall in front of the best one hands the shot
+## to the next instead of dropping straight to geometry.
+func _closest_creature_in_cone(
+	cam_from: Vector3,
+	look: Vector3,
+	range_m: float,
+	shot_origin: Vector3
+) -> Vector3:
+	if _undead == null or not is_instance_valid(_undead):
+		return Vector3.INF
+	if not _undead.has_method("get_alive_units"):
+		push_error("CityRoot.resolve_combat_target: undead director cannot list its units")
+		return Vector3.INF
+	var units: Array = _undead.call("get_alive_units") as Array
+	var cone := deg_to_rad(COMBAT_AIM_CONE_DEG)
+	var ranked: Array[Dictionary] = []
+	for entry: Variant in units:
+		var unit := entry as UndeadUnit
+		if unit == null or not is_instance_valid(unit):
+			continue
+		var chest := unit.global_position + Vector3(0.0, unit.hit_half_height() * 0.85, 0.0)
+		var to_body := chest - cam_from
+		var dist := to_body.length()
+		if dist < 0.05 or dist > range_m:
+			continue
+		var angle := acos(clampf(to_body.dot(look) / dist, -1.0, 1.0))
+		## The body is not a point: its own width earns tolerance, which matters up close where
+		## a fixed cone is only centimetres wide.
+		var margin := angle - atan(unit.hit_radius() / dist)
+		if margin > cone:
+			continue
+		ranked.append({"margin": margin, "chest": chest})
+	ranked.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			return float(a["margin"]) < float(b["margin"])
+	)
+	for row in ranked:
+		var chest: Vector3 = row["chest"] as Vector3
+		if _muzzle_sees(shot_origin, chest):
+			return chest
+	return Vector3.INF
+
+
+## True when nothing solid stands between the muzzle and `point`.
+func _muzzle_sees(from: Vector3, point: Vector3) -> bool:
+	if not from.is_finite():
+		push_error("CityRoot.resolve_combat_target: muzzle origin is not finite")
+		return false
+	var dist := from.distance_to(point)
+	if dist < 0.05:
+		return true
+	var query := PhysicsRayQueryParameters3D.create(from, point)
+	## Terrain and buildings only. Bodies live on layer 2 and must never shadow each other here.
+	query.collision_mask = 1
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
-		return wall_aim
-	return hit["point"] as Vector3
+		return true
+	return from.distance_to(hit["position"] as Vector3) >= dist - COMBAT_LOS_SLACK_M
+
+
+func _combat_agent_target(point: Vector3, shot_origin: Vector3) -> Dictionary:
+	return {
+		"point": point,
+		"distance": shot_origin.distance_to(point),
+		"is_agent": true,
+	}
+
+
+func _combat_geometry_target(point: Vector3, shot_origin: Vector3) -> Dictionary:
+	return {
+		"point": point,
+		"distance": shot_origin.distance_to(point),
+		"is_agent": false,
+	}
 
 
 ## True when the shot landed on a body along the segment (no voxel carve).
@@ -2771,34 +3955,34 @@ func _apply_agent_hit(
 
 
 func _query_closest_agent_hit(from: Vector3, to: Vector3) -> Dictionary:
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
-		return {}
 	var best: Dictionary = {}
 	var best_dist := INF
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
-	for entry in districts:
-		var inst = _as_district_instance(entry)
-		if inst == null or not is_instance_valid(inst):
-			continue
-		## Crowd/traffic exist only after full bake (far tiles skip them).
-		if inst.crowd != null and is_instance_valid(inst.crowd):
-			var ped_hit: Dictionary = inst.crowd.query_segment_hit(from, to)
-			if not ped_hit.is_empty():
-				var d: float = float(ped_hit["distance"])
-				if d < best_dist:
-					best_dist = d
-					best = ped_hit.duplicate()
-					best["kind"] = "ped"
-					best["crowd"] = inst.crowd
-		if inst.vehicles != null and is_instance_valid(inst.vehicles):
-			var car_hit: Dictionary = inst.vehicles.query_segment_hit(from, to)
-			if not car_hit.is_empty():
-				var d2: float = float(car_hit["distance"])
-				if d2 < best_dist:
-					best_dist = d2
-					best = car_hit.duplicate()
-					best["kind"] = "vehicle"
-					best["vehicles"] = inst.vehicles
+	## Peds/cars need loaded districts; undead live on CityRoot and must still aim without them.
+	if _streamer != null and _streamer.has_method("get_loaded_districts"):
+		var districts: Array = _streamer.call("get_loaded_districts") as Array
+		for entry in districts:
+			var inst = _as_district_instance(entry)
+			if inst == null or not is_instance_valid(inst):
+				continue
+			## Crowd/traffic exist only after full bake (far tiles skip them).
+			if inst.crowd != null and is_instance_valid(inst.crowd):
+				var ped_hit: Dictionary = inst.crowd.query_segment_hit(from, to)
+				if not ped_hit.is_empty():
+					var d: float = float(ped_hit["distance"])
+					if d < best_dist:
+						best_dist = d
+						best = ped_hit.duplicate()
+						best["kind"] = "ped"
+						best["crowd"] = inst.crowd
+			if inst.vehicles != null and is_instance_valid(inst.vehicles):
+				var car_hit: Dictionary = inst.vehicles.query_segment_hit(from, to)
+				if not car_hit.is_empty():
+					var d2: float = float(car_hit["distance"])
+					if d2 < best_dist:
+						best_dist = d2
+						best = car_hit.duplicate()
+						best["kind"] = "vehicle"
+						best["vehicles"] = inst.vehicles
 	if _undead != null and is_instance_valid(_undead) and _undead.has_method("query_segment_hit"):
 		var u_hit: Dictionary = _undead.call("query_segment_hit", from, to)
 		if not u_hit.is_empty():
@@ -2887,6 +4071,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_inventory_panel.call("close_panel")
 			get_viewport().set_input_as_handled()
 			return
+		if is_monster_summon_open():
+			_monster_summon_panel.call("close_panel")
+			get_viewport().set_input_as_handled()
+			return
 		get_tree().quit()
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "inventory")):
@@ -2897,6 +4085,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if _inventory_panel != null:
 			_inventory_panel.call("toggle_panel")
+		get_viewport().set_input_as_handled()
+		return
+	if bool(ctl.call("matches_key_pressed", ek, "monster_summon")):
+		if _game_over or _booting or _is_character_editor_open() or is_splash_open():
+			return
+		if _monster_summon_panel != null:
+			## Capture look-aim while the mouse is still captured — opening the panel releases
+			## it onto the UI and a live sample at confirm would hit near the player's feet.
+			if not is_monster_summon_open():
+				capture_summon_aim()
+			_monster_summon_panel.call("toggle_panel")
 		get_viewport().set_input_as_handled()
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "retry")):

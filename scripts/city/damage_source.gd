@@ -13,6 +13,9 @@
 ## The scale is one pool: the player's hundred points and a creature's tier are the same units,
 ## so `PLAYER_MELEE` 34 against a 34-point skeleton and `UNDEAD_ORB` 25 against the player's
 ## hundred can be read against each other without conversion.
+##
+## Monster→player rows match `assets/combat/attacks.json` `damage_vs_player` at 1× `damage_mult`.
+## Live units multiply those bases by their resolved combat `damage_mult`.
 class_name DamageSource
 extends RefCounted
 
@@ -29,6 +32,11 @@ enum Id {
 	PLAYER_BLAST,
 	UNDEAD_ORB,
 	GIANT_DEBRIS,
+	MONSTER_MELEE,
+	MONSTER_LASER,
+	MONSTER_BLASTER,
+	MONSTER_STOMP,
+	MONSTER_BLAST,
 }
 
 
@@ -41,20 +49,23 @@ static func all() -> Array[Id]:
 		Id.PLAYER_BLAST,
 		Id.UNDEAD_ORB,
 		Id.GIANT_DEBRIS,
+		Id.MONSTER_MELEE,
+		Id.MONSTER_LASER,
+		Id.MONSTER_BLASTER,
+		Id.MONSTER_STOMP,
+		Id.MONSTER_BLAST,
 	]
 
 
-## Hit points one landed hit removes.
+## Hit points one landed hit removes at 1× scale.
 ##
 ## The player's five attacks are priced against each other by what they cost to throw: the fist
 ## is free and kills one skeleton, the eye laser and the blaster cost a point of energy each and
 ## chip, the stomp costs ten and clears a mid-size monster, the charged blast costs twenty and
 ## is the only thing that meaningfully hurts a giant.
 ##
-## The two that come the other way are priced against the player's hundred points: an orb is a
-## quarter of the pool, so four of them convert you, and standing where a giant is peeling a
-## facade costs a tenth per strip — which at the giant's scrape cadence is about three seconds
-## of not moving.
+## Undead orb and giant debris keep their live invasion numbers. Monster contact / ranged rows
+## mirror attacks.json so a body's `damage_mult` scales a known base rather than inventing one.
 static func amount(id: Id) -> float:
 	match id:
 		Id.PLAYER_MELEE:
@@ -71,6 +82,16 @@ static func amount(id: Id) -> float:
 			return 25.0
 		Id.GIANT_DEBRIS:
 			return 10.0
+		Id.MONSTER_MELEE:
+			return 12.0
+		Id.MONSTER_LASER:
+			return 18.0
+		Id.MONSTER_BLASTER:
+			return 18.0
+		Id.MONSTER_STOMP:
+			return 50.0
+		Id.MONSTER_BLAST:
+			return 50.0
 	push_error("DamageSource: no amount defined for id %d" % int(id))
 	return 0.0
 
@@ -79,7 +100,7 @@ static func target(id: Id) -> Target:
 	match id:
 		Id.PLAYER_MELEE, Id.PLAYER_LASER, Id.PLAYER_BLASTER, Id.PLAYER_STOMP, Id.PLAYER_BLAST:
 			return Target.CREATURE
-		Id.UNDEAD_ORB, Id.GIANT_DEBRIS:
+		Id.UNDEAD_ORB, Id.GIANT_DEBRIS, Id.MONSTER_MELEE, Id.MONSTER_LASER, Id.MONSTER_BLASTER, Id.MONSTER_STOMP, Id.MONSTER_BLAST:
 			return Target.PLAYER
 	push_error("DamageSource: no target defined for id %d" % int(id))
 	return Target.CREATURE
@@ -102,6 +123,16 @@ static func source_name(id: Id) -> String:
 			return "undead orb"
 		Id.GIANT_DEBRIS:
 			return "giant debris"
+		Id.MONSTER_MELEE:
+			return "monster melee"
+		Id.MONSTER_LASER:
+			return "monster eye laser"
+		Id.MONSTER_BLASTER:
+			return "monster blaster"
+		Id.MONSTER_STOMP:
+			return "monster stomp"
+		Id.MONSTER_BLAST:
+			return "monster charged blast"
 	push_error("DamageSource: no name for id %d" % int(id))
 	return "?"
 
@@ -113,6 +144,16 @@ static func death_reason(id: Id) -> String:
 			return "Undead conversion orb"
 		Id.GIANT_DEBRIS:
 			return "Crushed under a giant's demolition"
+		Id.MONSTER_MELEE:
+			return "Torn apart in melee"
+		Id.MONSTER_LASER:
+			return "Burned by a monster's eye laser"
+		Id.MONSTER_BLASTER:
+			return "Cut down by a monster's blaster"
+		Id.MONSTER_STOMP:
+			return "Crushed under a monster's stomp"
+		Id.MONSTER_BLAST:
+			return "Caught in a monster's charged blast"
 		Id.PLAYER_MELEE, Id.PLAYER_LASER, Id.PLAYER_BLASTER, Id.PLAYER_STOMP, Id.PLAYER_BLAST:
 			push_error(
 				"DamageSource: %s cannot kill the player, so it has no death reason"
@@ -121,3 +162,33 @@ static func death_reason(id: Id) -> String:
 			return "?"
 	push_error("DamageSource: no death reason for id %d" % int(id))
 	return "?"
+
+
+## Map a combat-table attack id to the DamageSource used when that attack hits the player.
+## Building-only attacks (`nibble`) and null-source rows have no player mapping.
+static func for_monster_attack(attack_id: String) -> Id:
+	match attack_id:
+		"melee":
+			return Id.MONSTER_MELEE
+		"eye_laser":
+			return Id.MONSTER_LASER
+		"blaster":
+			return Id.MONSTER_BLASTER
+		"stomp":
+			return Id.MONSTER_STOMP
+		"charged_blast":
+			return Id.MONSTER_BLAST
+		"orb_convert":
+			return Id.UNDEAD_ORB
+		"debris":
+			return Id.GIANT_DEBRIS
+		"nibble", "fist":
+			push_error(
+				"DamageSource.for_monster_attack: '%s' does not hurt the player"
+				% attack_id
+			)
+			return Id.MONSTER_MELEE
+		_:
+			push_error("DamageSource.for_monster_attack: unknown attack '%s'" % attack_id)
+			assert(false, "DamageSource: unknown monster attack")
+			return Id.MONSTER_MELEE

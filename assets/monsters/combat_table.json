@@ -1,0 +1,717 @@
+{
+  "templates": {
+    "brute": {
+      "intent": "Tanky melee pressure — Quaternius Big / warrior bulk that sticks to the player. chase behaviour supplies stupid creature prey weights (incl. monsters).",
+      "hp_mult": 1.4,
+      "damage_mult": 1.3,
+      "speed_mult": 0.9,
+      "aggro_range_m": 35.0,
+      "leash_m": 55.0,
+      "preferred_range_m": 2.5,
+      "armor_mult": 1.3,
+      "score_mult": 1.5,
+      "behaviour": [
+        "chase"
+      ],
+      "tags": [
+        "tank"
+      ],
+      "crowd_roles": [
+        "wave_hunter"
+      ]
+    },
+    "minion": {
+      "intent": "Convert fodder and pack hunters — fast, fragile, chew buildings between fights. chase + wander_hunt + demolish: stupid living prey averaged with building hunger from demolish.",
+      "hp_mult": 0.5,
+      "damage_mult": 0.85,
+      "speed_mult": 1.0,
+      "aggro_range_m": 45.0,
+      "leash_m": 70.0,
+      "preferred_range_m": 2.0,
+      "armor_mult": 0.9,
+      "score_mult": 1.0,
+      "behaviour": [
+        "chase",
+        "wander_hunt",
+        "demolish"
+      ],
+      "tags": [
+        "fodder",
+        "pack"
+      ],
+      "crowd_roles": [
+        "wave_hunter",
+        "convert_minion"
+      ]
+    },
+    "boss": {
+      "intent": "Grown-giant / elite path — high threat; chase + demolish + grow supply melee/nibble/debris and averaged building/player prey weights.",
+      "hp_mult": 2.5,
+      "damage_mult": 1.8,
+      "speed_mult": 1.15,
+      "aggro_range_m": 110.0,
+      "leash_m": 150.0,
+      "preferred_range_m": 5.5,
+      "armor_mult": 1.6,
+      "score_mult": 20.0,
+      "behaviour": [
+        "chase",
+        "demolish",
+        "grow"
+      ],
+      "tags": [
+        "elite",
+        "giant"
+      ],
+      "crowd_roles": [
+        "wave_hunter"
+      ]
+    },
+    "ranged_boss": {
+      "intent": "Artillery elite — skirmish behaviour may use charged_blast / eye_laser (and the rest of the skirmish pool); AI selection deferred. Boss-tier threat but not the grown-giant demolish path; stack with boss when a body should be both giant and artillery (scalars take max).",
+      "hp_mult": 2.0,
+      "damage_mult": 2.2,
+      "speed_mult": 0.7,
+      "aggro_range_m": 80.0,
+      "leash_m": 100.0,
+      "preferred_range_m": 28.0,
+      "armor_mult": 1.4,
+      "score_mult": 15.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "tags": [
+        "artillery",
+        "elite",
+        "ranged"
+      ],
+      "crowd_roles": [
+        "wave_boss"
+      ]
+    },
+    "melee_boss": {
+      "intent": "Melee elite — closes via chase; specialty template attack stomp (crater) plus contact melee from chase. Same hp_mult/damage_mult as ranged_boss.",
+      "hp_mult": 2.0,
+      "damage_mult": 2.2,
+      "speed_mult": 1.0,
+      "aggro_range_m": 50.0,
+      "leash_m": 70.0,
+      "preferred_range_m": 2.2,
+      "armor_mult": 1.5,
+      "score_mult": 15.0,
+      "behaviour": [
+        "chase"
+      ],
+      "attacks": [
+        "stomp"
+      ],
+      "tags": [
+        "elite",
+        "melee",
+        "tank"
+      ],
+      "crowd_roles": [
+        "wave_boss"
+      ]
+    },
+    "rangestriker": {
+      "intent": "Standoff caster/skirmisher — skirmish attack pool (orb/blaster/eye_laser/charged_blast) plus chase melee when closing; prey weights average skirmish + chase.",
+      "hp_mult": 1.0,
+      "damage_mult": 1.0,
+      "speed_mult": 0.55,
+      "aggro_range_m": 40.0,
+      "leash_m": 60.0,
+      "preferred_range_m": 27.6,
+      "armor_mult": 1.0,
+      "score_mult": 1.0,
+      "behaviour": [
+        "skirmish",
+        "chase"
+      ],
+      "tags": [
+        "caster",
+        "ranged"
+      ],
+      "crowd_roles": [
+        "wave_caster"
+      ]
+    },
+    "demolisher": {
+      "intent": "Building-first chewer — demolish behaviour weights building high and is stupid about creatures. Stacks onto other templates for structure threat.",
+      "hp_mult": 1.1,
+      "damage_mult": 1.0,
+      "speed_mult": 0.95,
+      "aggro_range_m": 50.0,
+      "leash_m": 80.0,
+      "preferred_range_m": 3.0,
+      "armor_mult": 1.1,
+      "score_mult": 1.2,
+      "behaviour": [
+        "demolish"
+      ],
+      "tags": [
+        "structure_threat"
+      ],
+      "crowd_roles": [
+        "wave_hunter"
+      ]
+    },
+    "guard": {
+      "intent": "Dungeon holder — short leash, holds a post, engages the player (guard behaviour: player-only prey weights).",
+      "hp_mult": 1.2,
+      "damage_mult": 1.1,
+      "speed_mult": 0.75,
+      "aggro_range_m": 18.0,
+      "leash_m": 22.0,
+      "preferred_range_m": 2.5,
+      "armor_mult": 1.25,
+      "score_mult": 1.3,
+      "behaviour": [
+        "guard"
+      ],
+      "tags": [
+        "dungeon"
+      ],
+      "crowd_roles": [
+        "dungeon_guard"
+      ]
+    }
+  },
+  "monsters": [
+    {
+      "id": "kaykit/Skeleton_Mage",
+      "templates": [
+        "rangestriker"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "attacks_extra": [
+        "orb_convert"
+      ],
+      "notes": "Live wave caster body; also eligible for BRUTE slot. Kit from behaviours: demolisher(nibble) + rangestriker/skirmish (orb_convert|blaster|eye_laser|charged_blast) + chase melee. Leans full ranged roster."
+    },
+    {
+      "id": "kaykit/Skeleton_Minion",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "notes": "Reference-height fodder body the capsule numbers were measured on."
+    },
+    {
+      "id": "kaykit/Skeleton_Rogue",
+      "templates": [
+        "rangestriker"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "speed_mult": 0.85,
+      "preferred_range_m": 12.0,
+      "attacks": [
+        "eye_laser",
+        "melee",
+        "orb_convert"
+      ],
+      "tags_extra": [
+        "hybrid",
+        "skirmisher"
+      ],
+      "notes": "Caster-slot hybrid: hard-replaces behaviour-derived attacks to drop blaster/charged_blast (rapid/nuke feel wrong on a sword skirmisher) but keeps orb_convert, adds melee + eye_laser single-shot poke. Closer preferred_range; orb scalars stay intact (single template)."
+    },
+    {
+      "id": "kaykit/Skeleton_Warrior",
+      "templates": [
+        "brute",
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "notes": "FODDER+BRUTE slots — max-scalar pack hunter / tank (hp/damage from brute)."
+    },
+    {
+      "id": "big/Alien",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "big/Birb",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "big/BlueDemon",
+      "templates": [
+        "melee_boss",
+        "guard"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.55,
+      "notes": "Dungeon stomper — melee_boss + guard (scalars max: hp/damage 2.0/2.2, leash max(70,22)=70). Kit: stomp + melee."
+    },
+    {
+      "id": "big/Bunny",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "big/Cactoro",
+      "templates": [
+        "boss",
+        "demolisher"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.5,
+      "notes": "Tall grown-giant path candidate."
+    },
+    {
+      "id": "big/Demon",
+      "templates": [
+        "ranged_boss"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.55,
+      "notes": "Artillery demon — charged_blast sphere nuke + eye_laser; not the grown-giant boss path."
+    },
+    {
+      "id": "big/Dino",
+      "templates": [
+        "brute",
+        "demolisher"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.9
+    },
+    {
+      "id": "big/Fish",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "big/Frog",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "big/Monkroose",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "big/MushroomKing",
+      "templates": [
+        "boss",
+        "ranged_boss"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.4,
+      "notes": "Giant + artillery stack: scalars take max (hp_mult 2.5, damage_mult 2.2); attacks union debris|melee|charged_blast|eye_laser. Magical elite silhouette."
+    },
+    {
+      "id": "big/Ninja",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "speed_mult": 1.05,
+      "tags_extra": [
+        "agile"
+      ]
+    },
+    {
+      "id": "big/Orc",
+      "templates": [
+        "melee_boss"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.55,
+      "notes": "Melee elite — stomp crater + contact melee; not grown-giant boss path."
+    },
+    {
+      "id": "big/Orc_Skull",
+      "templates": [
+        "brute",
+        "guard"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.7
+    },
+    {
+      "id": "big/Tribal",
+      "templates": [
+        "boss",
+        "demolisher"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.45
+    },
+    {
+      "id": "big/Yeti",
+      "templates": [
+        "melee_boss",
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.5,
+      "hp_mult": 2.7,
+      "notes": "Tanky stomper — melee_boss+brute (damage_mult max 2.2); body hp_mult 2.7 replaces merged max(2.0,1.4)."
+    },
+    {
+      "id": "blob/Alien",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "blob/Birb",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "blob/Cactoro",
+      "templates": [
+        "minion",
+        "demolisher"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.9
+    },
+    {
+      "id": "blob/Cat",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "tags_extra": [
+        "small"
+      ]
+    },
+    {
+      "id": "blob/Chicken",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "tags_extra": [
+        "small"
+      ]
+    },
+    {
+      "id": "blob/Dog",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "tags_extra": [
+        "small"
+      ]
+    },
+    {
+      "id": "blob/Fish",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "blob/GreenBlob",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.2,
+      "notes": "Cheapest pack silhouette in the blob family."
+    },
+    {
+      "id": "blob/GreenSpikyBlob",
+      "templates": [
+        "minion",
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.7,
+      "notes": "Tall spikes — hybrid fodder/tank; height decoration still goes through CreatureHealth's blob sqrt."
+    },
+    {
+      "id": "blob/Mushnub",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "blob/Mushnub_Evolved",
+      "templates": [
+        "minion",
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.6
+    },
+    {
+      "id": "blob/Orc",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0
+    },
+    {
+      "id": "blob/Pigeon",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.0,
+      "tags_extra": [
+        "small"
+      ]
+    },
+    {
+      "id": "blob/PinkBlob",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 1.1,
+      "tags_extra": [
+        "small"
+      ]
+    },
+    {
+      "id": "blob/Yeti",
+      "templates": [
+        "minion",
+        "brute"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.8
+    },
+    {
+      "id": "blob/Wizard",
+      "templates": [
+        "ranged_boss"
+      ],
+      "spawn_ready": true,
+      "spawn_weight": 0.6,
+      "notes": "Promoted from rangestriker convert kit to ranged_boss artillery — charged_blast + eye_laser (no orb_convert)."
+    },
+    {
+      "id": "blob/Ninja",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": false,
+      "spawn_weight": 0.0,
+      "notes": "Catalog note: rest pose sits 0.23 units below y=0 — vendored, not spawnable until fixed."
+    },
+    {
+      "id": "flying/Alpaking",
+      "templates": [
+        "boss"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ],
+      "notes": "Flying rig — no ground locomotion; table row only."
+    },
+    {
+      "id": "flying/Alpaking_Evolved",
+      "templates": [
+        "boss"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Armabee",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Armabee_Evolved",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Demon",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Dragon",
+      "templates": [
+        "boss",
+        "rangestriker"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ],
+      "notes": "Fantasy flyer: elite + ranged; not spawnable until flight exists."
+    },
+    {
+      "id": "flying/Dragon_Evolved",
+      "templates": [
+        "boss",
+        "rangestriker"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Ghost",
+      "templates": [
+        "rangestriker"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Ghost_Skull",
+      "templates": [
+        "rangestriker"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Glub",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Glub_Evolved",
+      "templates": [
+        "minion",
+        "brute"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Goleling",
+      "templates": [
+        "brute",
+        "guard"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Goleling_Evolved",
+      "templates": [
+        "brute",
+        "guard"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Hywirl",
+      "templates": [
+        "rangestriker"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Pigeon",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ],
+      "notes": "Authored hovering ~1.57 units up — ambient table only."
+    },
+    {
+      "id": "flying/Squidle",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    },
+    {
+      "id": "flying/Tribal",
+      "templates": [
+        "boss",
+        "demolisher"
+      ],
+      "spawn_ready": false,
+      "crowd_roles": [
+        "ambient"
+      ]
+    }
+  ]
+}
