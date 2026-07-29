@@ -32,6 +32,7 @@ const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
 const GemLightDirectorScript := preload("res://scripts/city/gem_light_director.gd")
 const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
 const PlayerInventoryPanelScript := preload("res://scripts/city/player_inventory_panel.gd")
+const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
@@ -103,6 +104,9 @@ var _player_score: int = 0
 ## Collected gems and crafted items (25 stackable slots).
 var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
 var _inventory_panel: Node
+var _monster_summon_panel: Node
+## World aim captured when N opens the summon panel (before the mouse moves onto UI).
+var _summon_aim: Variant = null
 var _game_over: bool = false
 var _radar_cooldown_left: float = 0.0
 var _radar_reveal_left: float = 0.0
@@ -324,11 +328,15 @@ func is_inventory_open() -> bool:
 	return _inventory_panel != null and bool(_inventory_panel.call("is_open"))
 
 
+func is_monster_summon_open() -> bool:
+	return _monster_summon_panel != null and bool(_monster_summon_panel.call("is_open"))
+
+
 ## True while a panel of this root's owns the screen. The walker and the build bar read this to
 ## stop taking hotkeys, and the HUD band is hidden for as long as it holds. The walker's own
 ## character editor is not in here: nothing would tell us when it closes again.
 func is_modal_open() -> bool:
-	return is_settings_open() or is_inventory_open()
+	return is_settings_open() or is_inventory_open() or is_monster_summon_open()
 
 
 ## True while the splash covers the world — boot, a hop in flight, and the J picker. It is a
@@ -361,7 +369,9 @@ func _refresh_hud_visibility() -> void:
 		if canvas.layer >= UiLayers.HUD_MIN and canvas.layer <= UiLayers.HUD_MAX:
 			canvas.visible = show_hud
 	if _settings_panel != null:
-		_settings_panel.call("set_top_bar_visible", not is_inventory_open())
+		_settings_panel.call(
+			"set_top_bar_visible", not is_inventory_open() and not is_monster_summon_open()
+		)
 
 
 func get_inventory() -> PlayerInventory:
@@ -480,6 +490,13 @@ func _build_hud() -> void:
 	_inventory_panel.opened.connect(_on_inventory_opened)
 	_inventory_panel.closed.connect(_on_inventory_closed)
 	_inventory_panel.craft_requested.connect(_on_inventory_craft_requested)
+
+	_monster_summon_panel = MonsterSummonPanelScript.new()
+	_monster_summon_panel.name = "MonsterSummon"
+	add_child(_monster_summon_panel)
+	_monster_summon_panel.opened.connect(_on_monster_summon_opened)
+	_monster_summon_panel.closed.connect(_on_monster_summon_closed)
+	_monster_summon_panel.summon_requested.connect(_on_monster_summon_requested)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
 	call_deferred("_apply_saved_controls")
@@ -567,6 +584,8 @@ func _roll_meteor_spawn_interval() -> void:
 func _on_settings_opened() -> void:
 	if is_inventory_open():
 		_inventory_panel.call("close_panel")
+	if is_monster_summon_open():
+		_monster_summon_panel.call("close_panel")
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -574,7 +593,7 @@ func _on_settings_opened() -> void:
 
 func _on_settings_closed() -> void:
 	_refresh_hud_visibility()
-	if is_inventory_open():
+	if is_inventory_open() or is_monster_summon_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker._set_capture(true)
@@ -583,6 +602,8 @@ func _on_settings_closed() -> void:
 func _on_inventory_opened() -> void:
 	if is_settings_open():
 		_settings_panel.call("close_panel")
+	if is_monster_summon_open():
+		_monster_summon_panel.call("close_panel")
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -590,10 +611,116 @@ func _on_inventory_opened() -> void:
 
 func _on_inventory_closed() -> void:
 	_refresh_hud_visibility()
-	if is_settings_open():
+	if is_settings_open() or is_monster_summon_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker._set_capture(true)
+
+
+func _on_monster_summon_opened() -> void:
+	if is_settings_open():
+		_settings_panel.call("close_panel")
+	if is_inventory_open():
+		_inventory_panel.call("close_panel")
+	_refresh_hud_visibility()
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_monster_summon_closed() -> void:
+	## Cancel clears a pending look-aim; confirm already consumed it in summon_monster_at_aim.
+	_summon_aim = null
+	_refresh_hud_visibility()
+	if is_settings_open() or is_inventory_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker._set_capture(true)
+
+
+func _on_monster_summon_requested(monster_id: String) -> void:
+	var body_id := monster_id
+	if body_id.is_empty():
+		body_id = _roll_random_summon_id()
+		if body_id.is_empty():
+			push_error("CityRoot: Random summon has an empty spawnable roster")
+			assert(false, "CityRoot: empty summon roster")
+			return
+	var unit := summon_monster_at_aim(body_id)
+	_summon_aim = null
+	if unit == null:
+		## Miss is a quiet cancel inside summon_monster_at_aim; hard failures already push_error.
+		return
+	print("CityRoot: summoned %s at %s" % [body_id, unit.global_position])
+
+
+func _roll_random_summon_id() -> String:
+	var ids: PackedStringArray = MonsterSummonPanelScript.summonable_ids()
+	if ids.is_empty():
+		return ""
+	return ids[randi_range(0, ids.size() - 1)]
+
+
+## Sample meteor-style world aim before the summon panel moves the cursor onto its UI.
+func capture_summon_aim() -> void:
+	_summon_aim = null
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot.capture_summon_aim: no walker")
+		return
+	var aim: Dictionary = _walker.call("aim_world_at_cursor") as Dictionary
+	_summon_aim = aim
+	var point: Vector3 = aim.get("point", Vector3.INF) as Vector3
+	var player := get_player_position()
+	print(
+		"CityRoot: summon aim captured hit=%s point=%s player=%s dist=%.1fm"
+		% [
+			bool(aim.get("did_hit", false)),
+			point,
+			player,
+			player.distance_to(point) if player != Vector3.INF and point.is_finite() else -1.0,
+		]
+	)
+
+
+## Spawn at the world aim captured when N opened. Tiny upward clearance keeps feet out of the
+## hit surface; there is no feet/ring/nav fallback on a true miss.
+func summon_monster_at_aim(body_id: String) -> UndeadUnit:
+	if _game_over or _booting:
+		return null
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot.summon_monster_at_aim: no walker")
+		return null
+	var aim: Dictionary
+	if _summon_aim is Dictionary:
+		aim = _summon_aim as Dictionary
+	else:
+		## Direct callers (tests / probes) may skip capture; live sample matches meteor.
+		aim = _walker.call("aim_world_at_cursor") as Dictionary
+	if not bool(aim.get("did_hit", false)):
+		print("CityRoot: summon cancelled — world aim missed")
+		return null
+	_ensure_undead_director()
+	if _undead == null or not _undead.has_method("spawn_monster_by_id"):
+		push_error("CityRoot.summon_monster_at_aim: undead director missing spawn")
+		assert(false, "CityRoot: no spawn_monster_by_id")
+		return null
+	const BODY_CLEARANCE_M := 0.06
+	var requested: Vector3 = aim["point"] as Vector3
+	var pos := requested + Vector3.UP * BODY_CLEARANCE_M
+	var player := get_player_position()
+	print(
+		"CityRoot: spawn requested=%s actual_request=%s player=%s flat_dist=%.1fm body=%s"
+		% [
+			requested,
+			pos,
+			player,
+			Vector2(pos.x - player.x, pos.z - player.z).length() if player != Vector3.INF else -1.0,
+			body_id,
+		]
+	)
+	var unit := _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
+	if unit != null:
+		print("CityRoot: spawn actual=%s requested_voxel_hit=%s" % [unit.global_position, requested])
+	return unit
 
 
 func _on_inventory_craft_requested(recipe_id: String) -> void:
@@ -2887,6 +3014,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_inventory_panel.call("close_panel")
 			get_viewport().set_input_as_handled()
 			return
+		if is_monster_summon_open():
+			_monster_summon_panel.call("close_panel")
+			get_viewport().set_input_as_handled()
+			return
 		get_tree().quit()
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "inventory")):
@@ -2897,6 +3028,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if _inventory_panel != null:
 			_inventory_panel.call("toggle_panel")
+		get_viewport().set_input_as_handled()
+		return
+	if bool(ctl.call("matches_key_pressed", ek, "monster_summon")):
+		if _game_over or _booting or _is_character_editor_open() or is_splash_open():
+			return
+		if _monster_summon_panel != null:
+			## Capture world aim while the mouse is still captured — opening the panel releases
+			## it onto the UI and a live sample at confirm would hit near the player's feet.
+			if not is_monster_summon_open():
+				capture_summon_aim()
+			_monster_summon_panel.call("toggle_panel")
 		get_viewport().set_input_as_handled()
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "retry")):

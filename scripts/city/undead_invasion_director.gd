@@ -6,6 +6,8 @@
 class_name UndeadInvasionDirector
 extends Node3D
 
+const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
+
 const CONVERT_SCORE_PENALTY := 150
 const WAVE_MIN_COUNT := 3
 const WAVE_MAX_COUNT := 5
@@ -172,6 +174,43 @@ func spawn_minion_at(world_pos: Vector3) -> void:
 	if _count_role(UndeadUnit.Role.MINION) >= MAX_MINIONS:
 		return
 	_spawn_unit(UndeadUnit.Role.MINION, world_pos)
+
+
+## Debug / N-key summon: spawn a named catalogue body at `world_pos` (caller supplies aim).
+## Does not require invasion waves. Returns the unit, or null when nav / caps refuse.
+func spawn_monster_by_id(body_id: String, world_pos: Vector3, body_seed: int = -1) -> UndeadUnit:
+	if body_id.is_empty():
+		push_error("UndeadInvasion.spawn_monster_by_id: empty body id")
+		assert(false, "UndeadInvasion: empty body id")
+		return null
+	var entry: CreatureCatalog.Entry = CreatureCatalogScript.by_id(body_id)
+	if entry == null:
+		return null
+	if not entry.is_spawnable():
+		push_error(
+			"UndeadInvasion.spawn_monster_by_id: '%s' is not spawnable (%s)"
+			% [body_id, entry.note]
+		)
+		assert(false, "UndeadInvasion: body not spawnable")
+		return null
+	_prune_units()
+	if _count_alive() >= MAX_ALIVE_UNITS:
+		push_error("UndeadInvasion.spawn_monster_by_id: alive cap %d reached" % MAX_ALIVE_UNITS)
+		return null
+	var spawn_role := _role_for_entry(entry)
+	return _spawn_unit(spawn_role, world_pos, body_seed, body_id)
+
+
+static func _role_for_entry(entry: CreatureCatalog.Entry) -> UndeadUnit.Role:
+	if entry.has_slot(CreatureCatalogScript.Slot.CASTER):
+		return UndeadUnit.Role.MAGE
+	if entry.has_slot(CreatureCatalogScript.Slot.FODDER):
+		return UndeadUnit.Role.MINION
+	if entry.has_slot(CreatureCatalogScript.Slot.BRUTE):
+		return UndeadUnit.Role.MINION
+	push_error("UndeadInvasion: '%s' has no role slot" % entry.id)
+	assert(false, "UndeadInvasion: no role for body")
+	return UndeadUnit.Role.MINION
 
 
 func _count_alive() -> int:
