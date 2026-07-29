@@ -34,6 +34,8 @@ const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
 const PlayerInventoryPanelScript := preload("res://scripts/city/player_inventory_panel.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
+const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
+const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -595,8 +597,9 @@ func _on_settings_closed() -> void:
 	_refresh_hud_visibility()
 	if is_inventory_open() or is_monster_summon_open():
 		return
+	## Free-cursor aim — never restore legacy mouse capture after a modal.
 	if _walker != null and is_instance_valid(_walker):
-		_walker._set_capture(true)
+		_walker.release_capture()
 
 
 func _on_inventory_opened() -> void:
@@ -614,7 +617,7 @@ func _on_inventory_closed() -> void:
 	if is_settings_open() or is_monster_summon_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
-		_walker._set_capture(true)
+		_walker.release_capture()
 
 
 func _on_monster_summon_opened() -> void:
@@ -634,7 +637,7 @@ func _on_monster_summon_closed() -> void:
 	if is_settings_open() or is_inventory_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
-		_walker._set_capture(true)
+		_walker.release_capture()
 
 
 func _on_monster_summon_requested(monster_id: String) -> void:
@@ -706,6 +709,15 @@ func summon_monster_at_aim(body_id: String) -> UndeadUnit:
 	const BODY_CLEARANCE_M := 0.06
 	var requested: Vector3 = aim["point"] as Vector3
 	var pos := requested + Vector3.UP * BODY_CLEARANCE_M
+	## Snap onto a standable span for this body's nav profile before spawn. Aim hits are voxel
+	## surfaces; MONSTER clearance is wider than UNDEAD, and a body a few centimetres off a
+	## span starts every goal with NO_START → TRAPPED → re-acquire (including another facade
+	## search). Prefer a real footing over a clearance nudge alone.
+	var entry: CreatureCatalog.Entry = CreatureCatalogScript.by_id(body_id)
+	if entry != null and NavService.instance().is_configured():
+		var stand := NavService.instance().nearest_surface(entry.nav_profile, pos, 8.0)
+		if stand.found:
+			pos = stand.position
 	var player := get_player_position()
 	print(
 		"CityRoot: spawn requested=%s actual_request=%s player=%s flat_dist=%.1fm body=%s"
@@ -717,7 +729,10 @@ func summon_monster_at_aim(body_id: String) -> UndeadUnit:
 			body_id,
 		]
 	)
+	CityProfiler.note_event("monster_summon %s" % body_id)
+	CityProfiler.begin("monster_summon")
 	var unit := _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
+	CityProfiler.end("monster_summon")
 	if unit != null:
 		print("CityRoot: spawn actual=%s requested_voxel_hit=%s" % [unit.global_position, requested])
 	return unit
@@ -1673,6 +1688,61 @@ func _on_spawn_district_ready(inst: Node) -> void:
 		"CityRoot: playable — endless stream active at y=%.2f (F1–F6 = build · M = meteor · T = tetris)"
 		% floor_y
 	)
+	_maybe_run_summon_probe()
+
+
+## `--summon-probe=big/BlueDemon` (optional `--summon-probe-quit`): summon once playable so
+## hitch logs attribute the thin spawn path without needing the N-key panel.
+func _maybe_run_summon_probe() -> void:
+	var body_id := _cli_string_flag("--summon-probe=")
+	if body_id.is_empty():
+		return
+	call_deferred("_run_summon_probe", body_id)
+
+
+func _run_summon_probe(body_id: String) -> void:
+	## Let a few streamed frames settle so nav / crowd are alive before the first goal.
+	for _i in 45:
+		await get_tree().process_frame
+	var player := get_player_position()
+	if player == Vector3.INF:
+		push_error("CityRoot summon-probe: no player position")
+		return
+	var ahead := player + Vector3(8.0, 0.0, 0.0)
+	_summon_aim = {"point": ahead, "normal": Vector3.UP, "did_hit": true}
+	var before := int(Performance.get_custom_monitor(&"city/hitch_count"))
+	var t0 := Time.get_ticks_usec()
+	var unit := summon_monster_at_aim(body_id)
+	var summon_ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	if unit == null:
+		push_error("CityRoot summon-probe: spawn failed for %s" % body_id)
+		return
+	print(
+		"CityRoot SUMMON-PROBE: spawned %s in %.1f ms at %s"
+		% [body_id, summon_ms, unit.global_position]
+	)
+	for _j in 90:
+		await get_tree().process_frame
+	var after := int(Performance.get_custom_monitor(&"city/hitch_count"))
+	print(
+		"CityRoot SUMMON-PROBE: RESULT hitches_after=%d summon_ms=%.1f"
+		% [after - before, summon_ms]
+	)
+	if _cli_has_flag("--summon-probe-quit"):
+		get_tree().quit()
+
+
+func _cli_string_flag(flag: String) -> String:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for a: String in args:
+		if a.begins_with(flag):
+			return a.substr(flag.length())
+	return ""
+
+
+func _cli_has_flag(flag: String) -> bool:
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	return args.has(flag)
 
 
 ## A pedestrian or car visual pays two one-off costs the first time it appears: reading its
@@ -1736,6 +1806,13 @@ func _warm_visual_pipelines() -> void:
 		car.sync_pose(
 			base + Vector3((float(col) - 2.0) * 3.2, 0.0, -8.0 - float(row) * 6.0), 0.0
 		)
+
+	## Shared monster health-bar shader: first summon used to compile it on the live camera.
+	var bar := MonsterHealthBarScript.new()
+	bar.name = "WarmHealthBar"
+	holder.add_child(bar)
+	bar.fit_to_body(0.55, 0.8)
+	bar.global_position = base + Vector3(0.0, 0.2, -4.0)
 
 	## Pipelines compile on the render thread, so give it real frames to draw in.
 	for _frame in WARMUP_FRAMES:
@@ -2460,59 +2537,191 @@ func find_nearest_building_nibble(from: Vector3, max_dist: float) -> Vector3:
 	return _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
 
 
+## Hard cap on XZ columns probed. A naïve 45 m ring × 48-tall scan is ~1.5M get_voxel
+## calls (~1.5 s) when nothing is in range — paid on the physics thread the first time a
+## minion/monster acquires a facade goal, and again whenever that goal fails and restarts.
+const BUILDING_PROBE_COLUMN_BUDGET := 384
+## Street-level pass first; tall floors only when the short pass found nothing in-budget.
+const BUILDING_PROBE_DY_STREET := 16
+const BUILDING_PROBE_DY_TALL := 48
+
+
 func _find_building_vox_near(from: Vector3, max_dist: float) -> Vector3i:
 	const SENTINEL := Vector3i(2147483647, 2147483647, 2147483647)
 	if _terrain == null or _tool == null:
 		return SENTINEL
+	CityProfiler.begin("building_nibble_query")
+	var best := _find_building_vox_near_budgeted(from, max_dist, SENTINEL)
+	CityProfiler.end("building_nibble_query")
+	return best
+
+
+func _find_building_vox_near_budgeted(
+	from: Vector3, max_dist: float, sentinel: Vector3i
+) -> Vector3i:
 	var local := _terrain.to_local(from)
 	var max_vox := maxi(int(ceil(max_dist / VOXEL_SIZE)), 2)
 	var ox := int(floor(local.x))
 	var oy := int(floor(local.y))
 	var oz := int(floor(local.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	var best := SENTINEL
+	var best := sentinel
 	var best_score := -1.0e30
-	## Prefer exposed edges (air beside them) so peeled shells still yield floor-slab lips.
+	var columns_left := BUILDING_PROBE_COLUMN_BUDGET
+	## Footprint edges first: when impostor LOD has buildings, this finds fabric in a handful
+	## of columns instead of walking an empty plaza out to max_dist.
+	var seeds := _building_probe_seed_columns(from, max_dist)
+	for seed: Vector2i in seeds:
+		if columns_left <= 0:
+			break
+		columns_left -= 1
+		var scored := _score_building_column(
+			Vector3i(seed.x, oy, seed.y), from, max_dist, BUILDING_PROBE_DY_STREET, best_score
+		)
+		if scored["score"] > best_score:
+			best_score = float(scored["score"])
+			best = scored["vox"] as Vector3i
+	if best != sentinel:
+		return best
+	## Expanding ring, same scoring as before, but stop when the column budget is spent so a
+	## park / plaza / far-empty tile cannot freeze the frame.
 	for r in range(0, max_vox + 1):
+		if columns_left <= 0:
+			break
 		var found_this_ring := false
 		for dz in range(-r, r + 1):
 			for dx in range(-r, r + 1):
 				if r > 0 and absi(dx) != r and absi(dz) != r:
 					continue
-				## Tall scan — floors sit well above street after the outer wall is gone.
-				for dy in range(0, 48):
-					var v := Vector3i(ox + dx, oy + dy, oz + dz)
-					var id := int(_tool.get_voxel(v))
-					if not VoxelMaterial.is_undead_structure_target(id):
-						continue
-					var center := _terrain.to_global(
-						Vector3(float(v.x) + 0.5, float(v.y) + 0.5, float(v.z) + 0.5)
-					)
-					var world_d := center.distance_to(from)
-					if world_d > max_dist:
-						continue
-					## Exposed if any horizontal neighbor is air / non-structure.
-					var exposed := 0
-					var nbrs: Array[Vector3i] = [
-						Vector3i(1, 0, 0),
-						Vector3i(-1, 0, 0),
-						Vector3i(0, 0, 1),
-						Vector3i(0, 0, -1),
-					]
-					for off in nbrs:
-						var nid := int(_tool.get_voxel(v + off))
-						if not VoxelMaterial.is_undead_structure_target(nid):
-							exposed += 1
-					## Buried interior cores score poorly; open floor edges / walls win.
-					var score := float(exposed) * 40.0 - world_d
-					if score <= best_score:
-						continue
-					best_score = score
-					best = v
+				if columns_left <= 0:
+					break
+				columns_left -= 1
+				var scored_ring := _score_building_column(
+					Vector3i(ox + dx, oy, oz + dz),
+					from,
+					max_dist,
+					BUILDING_PROBE_DY_STREET,
+					best_score
+				)
+				if scored_ring["score"] > best_score:
+					best_score = float(scored_ring["score"])
+					best = scored_ring["vox"] as Vector3i
 					found_this_ring = true
 		if found_this_ring and r >= 2:
+			return best
+	if best != sentinel or columns_left <= 0:
+		return best
+	## Second pass: spend any leftover budget on tall floors near the origin (peeled shells).
+	var tall_r := mini(max_vox, 12)
+	for r2 in range(0, tall_r + 1):
+		if columns_left <= 0:
 			break
+		for dz2 in range(-r2, r2 + 1):
+			for dx2 in range(-r2, r2 + 1):
+				if r2 > 0 and absi(dx2) != r2 and absi(dz2) != r2:
+					continue
+				if columns_left <= 0:
+					break
+				columns_left -= 1
+				var scored_tall := _score_building_column(
+					Vector3i(ox + dx2, oy, oz + dz2),
+					from,
+					max_dist,
+					BUILDING_PROBE_DY_TALL,
+					best_score
+				)
+				if scored_tall["score"] > best_score:
+					best_score = float(scored_tall["score"])
+					best = scored_tall["vox"] as Vector3i
 	return best
+
+
+## Nearest footprint-edge columns from loaded districts, closest first.
+func _building_probe_seed_columns(from: Vector3, max_dist: float) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return out
+	if _terrain == null:
+		return out
+	var ranked: Array = []
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst = _as_district_instance(entry)
+		if inst == null or not is_instance_valid(inst) or inst.building_lod == null:
+			continue
+		if not inst.building_lod.has_method("get_footprints_near"):
+			continue
+		var more: Array = inst.building_lod.call("get_footprints_near", from, max_dist) as Array
+		for b in more:
+			var center: Vector3 = b["center"] as Vector3
+			var size: Vector3 = b["size"] as Vector3
+			var hx := size.x * 0.5
+			var hz := size.z * 0.5
+			var edge := Vector3(
+				clampf(from.x, center.x - hx, center.x + hx),
+				center.y,
+				clampf(from.z, center.z - hz, center.z + hz)
+			)
+			var d2 := Vector2(edge.x - from.x, edge.z - from.z).length_squared()
+			if d2 > max_dist * max_dist:
+				continue
+			var local := _terrain.to_local(edge)
+			ranked.append({
+				"d2": d2,
+				"col": Vector2i(int(floor(local.x)), int(floor(local.z))),
+			})
+	ranked.sort_custom(func(a: Variant, b: Variant) -> bool: return float(a["d2"]) < float(b["d2"]))
+	var seen: Dictionary = {}
+	for item: Variant in ranked:
+		var col: Vector2i = item["col"] as Vector2i
+		if seen.has(col):
+			continue
+		seen[col] = true
+		out.append(col)
+		if out.size() >= 24:
+			break
+	return out
+
+
+## Score one XZ column for undead facade work. Returns {score, vox}; score stays below
+## `beat_score` rejection path as -INF when nothing better was found.
+func _score_building_column(
+	base: Vector3i,
+	from: Vector3,
+	max_dist: float,
+	dy_max: int,
+	beat_score: float
+) -> Dictionary:
+	var best_score := beat_score
+	var best := Vector3i(2147483647, 2147483647, 2147483647)
+	var nbrs: Array[Vector3i] = [
+		Vector3i(1, 0, 0),
+		Vector3i(-1, 0, 0),
+		Vector3i(0, 0, 1),
+		Vector3i(0, 0, -1),
+	]
+	for dy in range(0, dy_max):
+		var v := Vector3i(base.x, base.y + dy, base.z)
+		var id := int(_tool.get_voxel(v))
+		if not VoxelMaterial.is_undead_structure_target(id):
+			continue
+		var center := _terrain.to_global(
+			Vector3(float(v.x) + 0.5, float(v.y) + 0.5, float(v.z) + 0.5)
+		)
+		var world_d := center.distance_to(from)
+		if world_d > max_dist:
+			continue
+		var exposed := 0
+		for off in nbrs:
+			var nid := int(_tool.get_voxel(v + off))
+			if not VoxelMaterial.is_undead_structure_target(nid):
+				exposed += 1
+		var score := float(exposed) * 40.0 - world_d
+		if score <= best_score:
+			continue
+		best_score = score
+		best = v
+	return {"score": best_score, "vox": best}
 
 
 func _carve_building_sphere_counted(local_center: Vector3, radius_vox: float) -> int:
@@ -3034,8 +3243,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _game_over or _booting or _is_character_editor_open() or is_splash_open():
 			return
 		if _monster_summon_panel != null:
-			## Capture world aim while the mouse is still captured — opening the panel releases
-			## it onto the UI and a live sample at confirm would hit near the player's feet.
+			## Sample world aim before the panel moves the free cursor onto its UI; a live
+			## sample at confirm would hit near the player's feet.
 			if not is_monster_summon_open():
 				capture_summon_aim()
 			_monster_summon_panel.call("toggle_panel")

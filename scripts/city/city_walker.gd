@@ -972,20 +972,23 @@ func _spawn_fallback_body(female: bool) -> void:
 
 
 func _set_capture(on: bool) -> void:
-	_captured = on
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
+	## Persistent capture is gone. Only RMB look-hold may use MOUSE_MODE_CAPTURED.
+	if on:
+		push_error("CityWalker._set_capture(true): persistent mouse capture is removed")
+		assert(false, "CityWalker: persistent mouse capture removed")
+		return
+	_captured = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func is_captured() -> bool:
+	## True only while RMB look-hold is active (temporary capture).
 	return _captured
 
 
-func toggle_capture() -> void:
-	_set_capture(not _captured)
-
-
 func release_capture() -> void:
-	_set_capture(false)
+	## Drop temporary RMB look-hold too — modals must never leave the cursor captured.
+	_set_rmb_looking(false)
 
 
 func is_feet_aligned() -> bool:

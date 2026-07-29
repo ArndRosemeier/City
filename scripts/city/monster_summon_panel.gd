@@ -112,7 +112,7 @@ func confirm_selection() -> void:
 	if not _open:
 		return
 	var mid := selected_monster_id()
-	## Aim was sampled when N opened the panel (captured look). Closing must not re-aim.
+	## Aim was sampled when N opened the panel (world aim point). Closing must not re-aim.
 	summon_requested.emit(mid)
 	close_panel()
 

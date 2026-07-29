@@ -21,6 +21,11 @@ const CreatureClipsScript := preload("res://scripts/city/creature_clips.gd")
 const CreatureHealthScript := preload("res://scripts/city/creature_health.gd")
 const CreatureVariationScript := preload("res://scripts/city/creature_variation.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
+const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
+
+## PackedScenes stay referenced so a second summon of the same body is a cache hit, matching
+## the ped/car warm-up pattern. First load of each path is still sync on the summon thread.
+static var _scene_cache: Dictionary = {}  ## String path -> PackedScene
 
 ## Slightly slower than the slowest walking pedestrian (1.15–1.85).
 const MOVE_SPEED_MAGE := 1.05
@@ -123,6 +128,11 @@ var _nibble_cd: float = 0.0
 ## fifty-four hand-written numbers.
 var _health: float = 0.0
 var _health_max: float = 0.0
+## The strip under the feet. Null before `setup` builds one and again once death frees it.
+var _health_bar: MonsterHealthBar = null
+## How far the drawn body reaches from its own axis, in the units it was authored in. Measured
+## once off the meshes; only the health bar needs it, and only to be pulled clear of them.
+var _model_reach: float = 0.0
 ## Seconds the flinch still owns the rig.
 var _hit_react_left: float = 0.0
 ## The orb is away; hold CAST one more frame so the spellcast clip is not stomped by the
@@ -158,16 +168,19 @@ func setup(
 	_alive = true
 	collision_layer = 2
 	collision_mask = 1
+	CityProfiler.begin("undead_setup")
 	_build_body()
 	_load_model()
 	_reset_health()
 	_apply_scale()
+	_build_health_bar()
 	if role == Role.MINION:
 		## Stagger nibbles so a pack doesn't all bite on the same frame.
 		_nibble_cd = randf_range(0.0, MINION_NIBBLE_INTERVAL_SEC)
 	state = State.STOMP if role == Role.GIANT else State.SEEK_PED
 	_build_nav()
 	_play_action(CreatureClips.Action.IDLE)
+	CityProfiler.end("undead_setup")
 
 
 func is_alive() -> bool:
@@ -251,6 +264,11 @@ func health_fraction() -> float:
 	return clampf(_health / _health_max, 0.0, 1.0)
 
 
+## The strip drawn under this body, for tools and tests. Null once the body is dead.
+func health_bar() -> MonsterHealthBar:
+	return _health_bar
+
+
 ## One hit from `source`. Returns the score award when this hit was the fatal one and 0 when the
 ## body is still standing, which is exactly the contract `kill_from_player` had when every hit
 ## was fatal — so the caller's bookkeeping never had to learn about health.
@@ -267,6 +285,7 @@ func apply_damage(source: DamageSource.Id) -> int:
 	if CreatureHealthScript.is_dead(_health):
 		_health = 0.0
 		return kill_from_player()
+	_update_health_bar()
 	_play_hit_reaction()
 	return 0
 
@@ -281,6 +300,7 @@ func kill_from_player() -> int:
 	state = State.DEAD
 	velocity = Vector3.ZERO
 	_dispose_nav()
+	_drop_health_bar()
 	_play_action(CreatureClips.Action.DEATH)
 	var award := HIT_SCORE_GIANT if is_giant() else HIT_SCORE_NORMAL
 	died.emit(self, is_giant())
@@ -345,10 +365,13 @@ func _load_model() -> void:
 		_entry = CreatureCatalogScript.by_id(_body_id)
 	if _entry == null:
 		return
-	var packed: PackedScene = load(_entry.path) as PackedScene
+	CityProfiler.begin("undead_model_load")
+	var packed := _cached_scene(_entry.path)
+	CityProfiler.end("undead_model_load")
 	if packed == null:
 		push_error("UndeadUnit: %s did not load a scene from %s" % [_entry.id, _entry.path])
 		return
+	CityProfiler.begin("undead_model_setup")
 	var inst: Node = packed.instantiate()
 	_model = inst as Node3D
 	if _model == null:
@@ -356,6 +379,7 @@ func _load_model() -> void:
 			"UndeadUnit: %s root is not Node3D (got %s)" % [_entry.id, inst.get_class()]
 		)
 		inst.queue_free()
+		CityProfiler.end("undead_model_setup")
 		return
 	_model.name = "CreatureModel"
 	add_child(_model)
@@ -363,14 +387,31 @@ func _load_model() -> void:
 	_anim = _find_anim(_model)
 	if _anim == null:
 		push_error("UndeadUnit: no AnimationPlayer in %s" % _entry.id)
+		CityProfiler.end("undead_model_setup")
 		return
 	_anim.active = true
 	_anim_clips = _anim.get_animation_list()
 	_variation = CreatureVariationScript.roll(_entry, _anim_clips, _seed)
 	_attach_prop()
 	_variation.apply(_model, _entry)
+	_model_reach = MonsterHealthBarScript.body_reach(_model)
 	_configure_locomotion_loops()
 	_apply_far_visibility(_model)
+	CityProfiler.end("undead_model_setup")
+
+
+static func _cached_scene(path: String) -> PackedScene:
+	if path.is_empty():
+		return null
+	if _scene_cache.has(path):
+		return _scene_cache[path] as PackedScene
+	if not ResourceLoader.has_cached(path):
+		CityProfiler.note_event("undead_scene_first_load %s" % path.get_file())
+	var packed := load(path) as PackedScene
+	if packed == null:
+		return null
+	_scene_cache[path] = packed
+	return packed
 
 
 ## Hang the body's prop off the rig's hand slot. KayKit exposes `handslot.l` / `handslot.r`
@@ -386,7 +427,7 @@ func _attach_prop() -> void:
 	if skeleton.find_bone(_entry.prop_bone) < 0:
 		push_error("UndeadUnit: %s has no bone '%s'" % [_entry.id, _entry.prop_bone])
 		return
-	var packed: PackedScene = load(_entry.prop_path) as PackedScene
+	var packed := _cached_scene(_entry.prop_path)
 	if packed == null:
 		push_error("UndeadUnit: prop %s did not load a scene" % _entry.prop_path)
 		return
@@ -470,6 +511,7 @@ func _apply_scale() -> void:
 		## The pivot correction is measured in the body's own units, so it grows with it.
 		_model.position = _entry.model_offset * build
 	_update_collision_for_scale()
+	_update_health_bar()
 	if _nav_motor != null:
 		_nav_motor.speed_mps = _move_speed()
 
@@ -487,6 +529,43 @@ func _update_collision_for_scale() -> void:
 	_capsule.radius = r
 	_capsule.height = maxf(h, r * 2.0 + 0.05)
 	_col_shape.position = Vector3(0.0, h * 0.5, 0.0)
+
+
+func _build_health_bar() -> void:
+	if _health_bar != null:
+		push_error("UndeadUnit %s: already wearing a health bar" % name)
+		return
+	_health_bar = MonsterHealthBarScript.new()
+	add_child(_health_bar)
+	_update_health_bar()
+
+
+## Both halves of what the strip shows: how big this body is now, and how much of it is left.
+## Runs from `_apply_scale`, so a growing giant's bar grows with it, and from the hit that took
+## the points off. There is no bar before `setup` builds one or after death frees it, and both
+## are states this is called in.
+func _update_health_bar() -> void:
+	if _health_bar == null:
+		return
+	_health_bar.fit_to_body(hit_radius(), body_reach_m())
+	_health_bar.set_fraction(health_fraction())
+
+
+## How wide the drawn body is, in metres at its current build and growth — wider than the hit
+## capsule on every body that is broader than its torso. The model carries the build on its own
+## scale, which `_apply_scale` has already written by the time this runs.
+func body_reach_m() -> float:
+	if _model == null or not is_instance_valid(_model):
+		return 0.0
+	return _model_reach * _model.scale.x
+
+
+## A corpse has no health left to report. The body itself stays until its own timer frees it.
+func _drop_health_bar() -> void:
+	if _health_bar == null:
+		return
+	_health_bar.queue_free()
+	_health_bar = null
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +760,7 @@ func tick(delta: float) -> void:
 		return
 	if not _city.is_player_alive():
 		return
+	CityProfiler.begin("undead_tick")
 	_cast_cd = maxf(0.0, _cast_cd - delta)
 	_scrape_cd = maxf(0.0, _scrape_cd - delta)
 	_nibble_cd = maxf(0.0, _nibble_cd - delta)
@@ -710,6 +790,7 @@ func tick(delta: float) -> void:
 		_:
 			push_error("UndeadUnit %s: unknown state %d" % [name, state])
 	_tick_nav(delta)
+	CityProfiler.end("undead_tick")
 
 
 func _begin_pad_seek() -> void:

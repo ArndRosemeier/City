@@ -28,6 +28,11 @@ const ARRIVE_TOLERANCE_M := 1.5
 ## How far from a wall voxel to look for a span the body can work from. A giant needs 11
 ## cells of clearance, so its standing spot is metres out from the facade it is peeling.
 const FACADE_SNAP_M := 8.0
+## After a miss, do not re-run the city-wide fabric probe from nearly the same place. The
+## probe is budgeted now, but a TRAPPED / unreachable loop would still burn a column budget
+## every acquire without this.
+const FACADE_MISS_CACHE_SEC := 1.25
+const FACADE_MISS_REUSE_M := 10.0
 
 var _unit: UndeadUnit = null
 var _city: CityRoot = null
@@ -38,6 +43,8 @@ var _prey_at_msec: int = -1000000
 var _facade: Vector3 = Vector3.INF
 ## Set when the ladder gave up on a goal: look somewhere else before looking there again.
 var _wander_next: bool = false
+var _facade_miss_at_msec: int = -1000000
+var _facade_miss_from: Vector3 = Vector3.INF
 
 
 func setup(unit: UndeadUnit, city: CityRoot) -> void:
@@ -184,17 +191,36 @@ func _demolish() -> NavGoal:
 ## Building fabric is solid, so it is never a destination: the goal is the nearest span this
 ## profile can stand on beside it, and the wall voxel is remembered for the working state.
 func _facade_goal(seek_m: float, tag: StringName) -> NavGoal:
-	var fabric := _city.find_nearest_building_nibble(_unit.global_position, seek_m)
+	var from := _unit.global_position
+	if _facade_miss_is_fresh(from):
+		return _wander()
+	var fabric := _city.find_nearest_building_nibble(from, seek_m)
 	if fabric == Vector3.INF:
+		_remember_facade_miss(from)
 		return _wander()
 	var stand := NavService.instance().nearest_surface(
 		_unit.nav_profile_id(), _approach_point(fabric), FACADE_SNAP_M
 	)
 	if not stand.found:
 		## Nothing this body can stand on beside that wall — a giant in an alley, usually.
+		_remember_facade_miss(from)
 		return _wander()
 	_facade = fabric
+	_facade_miss_at_msec = -1000000
 	return _tagged(NavGoal.go_to_point(stand.position, ARRIVE_TOLERANCE_M), tag)
+
+
+func _facade_miss_is_fresh(from: Vector3) -> bool:
+	if _facade_miss_at_msec < 0:
+		return false
+	if Time.get_ticks_msec() - _facade_miss_at_msec >= int(FACADE_MISS_CACHE_SEC * 1000.0):
+		return false
+	return from.distance_to(_facade_miss_from) <= FACADE_MISS_REUSE_M
+
+
+func _remember_facade_miss(from: Vector3) -> void:
+	_facade_miss_at_msec = Time.get_ticks_msec()
+	_facade_miss_from = from
 
 
 ## A step back out of the wall along the line the body is coming from. Snapping straight to the
