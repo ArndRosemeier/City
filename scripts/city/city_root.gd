@@ -900,8 +900,11 @@ func _create_terrain() -> void:
 	## Leaving the bubble drops the district anchor → data is discarded (and regenerated
 	## from the deterministic district seed if you return). Storing every visited tile
 	## forever was the multi‑GB leak.
-	## Soft large bounds — streamer loads tiles inside the bubble.
-	_terrain.bounds = AABB(Vector3(-20000, 0, -20000), Vector3(40000, 220, 40000))
+	## Soft large bounds — streamer loads tiles inside the bubble. Tall enough for the offline
+	## bake: block tops land on 16-voxel blocks (e.g. top row 223) and rebuild_y_range adds ~6
+	## sky rows above that; a 220-tall ceiling left dirty rebuilds short of the band and
+	## NativeNavWorld refused them.
+	_terrain.bounds = AABB(Vector3(-20000, 0, -20000), Vector3(40000, 256, 40000))
 	## Ceiling only — must fit a district half-diagonal (~482 vox) so data-only
 	## anchors can make the full tile editable. Player viewers stay shorter below.
 	_terrain.max_view_distance = 512

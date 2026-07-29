@@ -20,6 +20,8 @@ const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd"
 const VOXEL_SIZE := 0.5
 ## A district coordinate no other nav test bakes, so the registry cannot collide.
 const DISTRICT := Vector2i(3, 3)
+## Live terrain Y size (exclusive). Must cover FIELD_Y_MAX + link_reach_y headroom.
+const TERRAIN_HEIGHT_VOX := 256
 ## Deep enough that headroom is never the reason a span is missing.
 const FIELD_Y_MAX := 47
 ## Four sectors square: room for two routes and for sectors the edits must not touch.
@@ -154,6 +156,10 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	await _test_band_past_terrain_ceiling()
+	if _failed:
+		_quit()
+		return
 
 	if _nav.dirty().skipped_unloaded() != 0:
 		_fail("FAIL %d regions found the terrain unloaded" % _nav.dirty().skipped_unloaded())
@@ -194,9 +200,8 @@ func _check_margin() -> bool:
 
 
 ## The rebuild reads the rows the field was baked over plus what the link probes reach above
-## them, and the terrain is 220 rows tall. Registration is where NavService learns the band;
-## if it ever stopped doing so the copy would fall back to nothing at all, so this pins the
-## band against the bake and reports what the narrowing saves.
+## them. Registration is where NavService learns the band; if it ever stopped doing so the
+## copy would fall back to nothing at all, so this pins the band against the bake.
 func _check_y_band() -> bool:
 	var band := _nav.dirty().district_y_band(DISTRICT)
 	if band.x != 0 or band.y <= FIELD_Y_MAX or band.y >= FIELD_Y_MAX + 32:
@@ -207,10 +212,98 @@ func _check_y_band() -> bool:
 		return false
 	var rows := band.y - band.x + 1
 	print(
-		"nav Y band: rows %d..%d, %d of the terrain's 220 (%.0f%% of the old copy)"
-		% [band.x, band.y, rows, 100.0 * float(rows) / 220.0]
+		"nav Y band: rows %d..%d (%d rows; terrain ceiling %d)"
+		% [band.x, band.y, rows, TERRAIN_HEIGHT_VOX]
 	)
 	return true
+
+
+## Regression: the live terrain ceiling used to truncate the material copy below
+## `rebuild_y_range` (field.y_max + link_reach_y). Native then refused the short box and
+## GDScript reported "rebuilt no sector". Shrink the terrain under a registered band, copy
+## materials, require the full band, then drain a real edit through rebuild_region.
+func _test_band_past_terrain_ceiling() -> void:
+	var band := _nav.dirty().district_y_band(DISTRICT)
+	if band.y < band.x:
+		_fail("FAIL no nav Y band before ceiling regression")
+		return
+	## Ceiling ends at field.y_max (exclusive of link headroom): the old clamp produced
+	## exactly that short box.
+	var short_top := FIELD_Y_MAX
+	if short_top >= band.y:
+		_fail(
+			"FAIL cannot reproduce short ceiling: terrain top %d >= band %d"
+			% [short_top, band.y]
+		)
+		return
+	var saved_bounds := _terrain.bounds
+	_terrain.bounds = AABB(
+		Vector3(float(_origin.x) - 512.0, 0.0, float(_origin.z) - 512.0),
+		Vector3(1536.0, float(short_top + 1), 1536.0)
+	)
+	## Shrinking the ceiling can unload blocks; wait until the pillar columns are editable.
+	var wait_box := AABB(
+		Vector3(float(_origin.x + PILLAR_X - 4), 0.0, float(_origin.z + PILLAR_Z - 4)),
+		Vector3(24.0, float(short_top + 1), 24.0)
+	)
+	var ready := false
+	for _i in range(600):
+		await get_tree().process_frame
+		if _tool.is_area_editable(wait_box):
+			ready = true
+			break
+	if not ready:
+		_terrain.bounds = saved_bounds
+		_fail("FAIL short-ceiling terrain never became editable again")
+		return
+	var probe := NavDirtyRegion.from_columns(
+		DISTRICT,
+		_origin.x + PILLAR_X,
+		_origin.z + PILLAR_Z,
+		_origin.x + PILLAR_X,
+		_origin.z + PILLAR_Z
+	)
+	if not _nav.dirty().fill_materials(probe):
+		_terrain.bounds = saved_bounds
+		_fail("FAIL fill_materials refused a short-ceiling copy")
+		return
+	var box_y0 := probe.box_min.y
+	var box_y1 := probe.box_min.y + probe.box_size.y - 1
+	probe.drop_materials()
+	if box_y0 > band.x or box_y1 < band.y:
+		_terrain.bounds = saved_bounds
+		_fail(
+			"FAIL short-ceiling copy carried rows %d..%d, district needs %d..%d"
+			% [box_y0, box_y1, band.x, band.y]
+		)
+		return
+	var before_ver := _nav.version()
+	var before_rebuilds := _nav.dirty().rebuilds()
+	var before_skipped := _nav.dirty().skipped_unloaded()
+	## Local district coords — brush origin is `_origin`.
+	_brush.set_vox(Vector3i(PILLAR_X + 8, 1, PILLAR_Z - 8), VoxelMaterial.BRICK)
+	var handled := _nav.flush_dirty()
+	var skipped_delta := _nav.dirty().skipped_unloaded() - before_skipped
+	_terrain.bounds = saved_bounds
+	if handled < 1:
+		_fail(
+			"FAIL short-ceiling flush handled %d units (pending=%d skipped_unloaded+=%d)"
+			% [handled, _nav.dirty().pending(), skipped_delta]
+		)
+		return
+	if skipped_delta != 0:
+		_fail("FAIL short-ceiling rebuild skipped %d regions as unloaded" % skipped_delta)
+		return
+	if _nav.dirty().rebuilds() <= before_rebuilds:
+		_fail("FAIL short-ceiling edit never rebuilt a sector")
+		return
+	if _nav.version() <= before_ver:
+		_fail("FAIL short-ceiling rebuild did not bump nav_version")
+		return
+	print(
+		"short-ceiling rebuild: terrain top %d, band %d..%d, box %d..%d, nav_version %d→%d"
+		% [short_top, band.x, band.y, box_y0, box_y1, before_ver, _nav.version()]
+	)
 
 
 # ---------------------------------------------------------------------------
@@ -929,11 +1022,10 @@ func _make_terrain() -> void:
 	mesher.library = VoxelBlockLibraryScript.build()
 	_terrain.mesher = mesher
 	_terrain.generator = AirGeneratorScript.new()
-	## Same 220 voxel ceiling CityRoot uses: the rebuild copies whole columns, so the
-	## terrain's height is what one region costs.
+	## Same ceiling CityRoot uses: tall enough for field.y_max + link_reach_y headroom.
 	_terrain.bounds = AABB(
 		Vector3(float(_origin.x) - 512.0, 0.0, float(_origin.z) - 512.0),
-		Vector3(1536.0, 220.0, 1536.0)
+		Vector3(1536.0, float(TERRAIN_HEIGHT_VOX), 1536.0)
 	)
 	_terrain.max_view_distance = 512
 	_terrain.generate_collisions = false
@@ -953,7 +1045,7 @@ func _make_terrain() -> void:
 	## The whole field, full height: exactly what one rebuild region has to read back.
 	var box := AABB(
 		Vector3(float(_origin.x) - 32.0, 0.0, float(_origin.z) - 32.0),
-		Vector3(float(FIELD_X) + 64.0, 220.0, float(FIELD_Z) + 64.0)
+		Vector3(float(FIELD_X) + 64.0, float(TERRAIN_HEIGHT_VOX), float(FIELD_Z) + 64.0)
 	)
 	for _i in range(900):
 		await get_tree().process_frame
