@@ -1189,6 +1189,11 @@ func get_player_target_position() -> Vector3:
 ## walker's signal brings us back here to `_on_player_health_depleted`. Nothing else calls
 ## `trigger_game_over` for damage any more.
 func damage_player(source: DamageSource.Id) -> float:
+	return damage_player_scaled(source, 1.0)
+
+
+## Same as `damage_player`, with a body's resolved `damage_mult` applied to the table amount.
+func damage_player_scaled(source: DamageSource.Id, scale: float) -> float:
 	if not is_player_alive():
 		return 0.0
 	if DamageSourceScript.target(source) != DamageSourceScript.Target.PLAYER:
@@ -1197,7 +1202,7 @@ func damage_player(source: DamageSource.Id) -> float:
 			% DamageSourceScript.source_name(source)
 		)
 		return 0.0
-	return float(_walker.call("take_damage", source))
+	return float(_walker.call("take_damage_scaled", source, scale))
 
 
 func _on_player_health_depleted(source: DamageSource.Id) -> void:
@@ -2321,6 +2326,18 @@ func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
 		if pd2 <= best_d2:
 			best_d2 = pd2
 			best = ppos
+	var ped := find_nearest_ped_only(from, max_dist)
+	if ped != Vector3.INF:
+		var d2 := Vector2(ped.x - from.x, ped.z - from.z).length_squared()
+		if d2 <= best_d2:
+			best = ped
+	return best
+
+
+## Nearest crowd pedestrian only (no player). Vector3.INF when none in range.
+func find_nearest_ped_only(from: Vector3, max_dist: float) -> Vector3:
+	var best := Vector3.INF
+	var best_d2 := max_dist * max_dist
 	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
 		return best
 	var districts: Array = _streamer.call("get_loaded_districts") as Array
@@ -2337,6 +2354,31 @@ func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
 			continue
 		best_d2 = d2
 		best = pos
+	return best
+
+
+## Nearest living undead/monster other than `except_unit`. Vector3.INF when none in range.
+func find_nearest_monster_position(
+	from: Vector3, max_dist: float, except_unit: UndeadUnit = null
+) -> Vector3:
+	if _undead == null or not is_instance_valid(_undead) or not _undead.has_method("get_alive_units"):
+		return Vector3.INF
+	var best := Vector3.INF
+	var best_d2 := max_dist * max_dist
+	var units: Array = _undead.call("get_alive_units") as Array
+	for entry in units:
+		var unit := entry as UndeadUnit
+		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
+			continue
+		if except_unit != null and unit == except_unit:
+			continue
+		var d2 := Vector2(
+			unit.global_position.x - from.x, unit.global_position.z - from.z
+		).length_squared()
+		if d2 > best_d2:
+			continue
+		best_d2 = d2
+		best = unit.global_position
 	return best
 
 
@@ -2396,6 +2438,41 @@ func try_convert_ped_near(world_pos: Vector3, radius: float) -> Variant:
 	if former == Vector3.INF:
 		return null
 	return former
+
+
+## One-shot remove a pedestrian near `world_pos` (melee / living prey). Returns former position.
+func try_kill_ped_near(world_pos: Vector3, radius: float) -> Variant:
+	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+		return null
+	var best_crowd: CrowdDirector = null
+	var best_agent: PedAgent = null
+	var best_pos := Vector3.INF
+	var best_d2 := radius * radius
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry in districts:
+		var inst = _as_district_instance(entry)
+		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
+			continue
+		var hit: Dictionary = inst.crowd.find_nearest_agent(world_pos, radius)
+		if hit.is_empty():
+			continue
+		var pos: Vector3 = hit["position"] as Vector3
+		var d2 := pos.distance_squared_to(world_pos)
+		if d2 > best_d2:
+			continue
+		best_d2 = d2
+		best_crowd = inst.crowd
+		best_agent = hit["agent"] as PedAgent
+		best_pos = pos
+	if best_crowd == null or best_agent == null:
+		return null
+	var away := best_pos - world_pos
+	away.y = 0.0
+	if away.length_squared() < 0.0001:
+		away = Vector3.FORWARD
+	if not best_crowd.kill_agent(best_agent, best_pos, away.normalized()):
+		return null
+	return best_pos
 
 
 func undead_stomp_at(world_pos: Vector3, radius_m: float) -> void:

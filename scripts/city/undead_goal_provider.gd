@@ -1,5 +1,5 @@
-## What one undead wants next: people for a mage, a facade for a minion, a building for a
-## giant, and a wander when the city offers none of those.
+## What one undead wants next: living prey by combat-table weights, a facade when buildings
+## are weighted, a grow pad when the director asks, and a wander when the city offers none.
 ##
 ## One provider per body, because the answer comes out of that body's role, its state and
 ## what the city can see around it. NavAgent asks whenever a goal ends; `retarget` exists
@@ -125,67 +125,175 @@ func goal_failed(_request: NavGoalRequest, goal: NavGoal, state: NavLadder.State
 # Retargeting
 # ---------------------------------------------------------------------------
 
-## Prey moves while the mage walks. Called by the unit on the crowd-query cadence rather
+## Prey moves while the hunter walks. Called by the unit on the crowd-query cadence rather
 ## than every frame, since only the hunt goal has a subject that can run away.
 func retarget(agent: NavAgent) -> void:
 	if not _has_unit():
 		return
 	var goal := agent.goal()
-	if goal == null or goal.tag != TAG_HUNT:
+	if goal == null:
+		## Engage-in-place (null hunt): refresh living aim so strikes track the player
+		## without adopting a trivial go_to(self) corridor every physics frame.
+		if (
+			_unit.state == UndeadUnit.State.SEEK_PED
+			or _unit.state == UndeadUnit.State.STOMP
+		):
+			var hold_prey := _nearest_living_prey()
+			_unit.set_combat_prey(hold_prey)
+			if hold_prey != Vector3.INF:
+				var resume := _hunt(hold_prey)
+				if resume != null:
+					## Prey left stand-off — resume the corridor immediately.
+					agent.set_goal(resume)
 		return
-	var prey := _nearest_prey()
+	if goal.tag != TAG_HUNT:
+		return
+	var prey := _nearest_living_prey()
 	if prey == Vector3.INF:
-		## The soft leash: they broke the pursue range, so stop chasing.
+		## Soft leash: they broke aggro / pursue range, so stop chasing.
+		_unit.set_combat_prey(Vector3.INF)
 		agent.set_goal(_wander())
 		return
+	_unit.set_combat_prey(prey)
 	if prey.distance_to(goal.point) <= RETARGET_SLACK_M:
 		return
-	agent.set_goal(_hunt(prey))
+	var next := _hunt(prey)
+	if next == null:
+		## Prey walked into stand-off — drop the corridor and hold.
+		agent.abandon_goal()
+		return
+	agent.set_goal(next)
 
 
 # ---------------------------------------------------------------------------
 # The goals themselves
 # ---------------------------------------------------------------------------
 
-## SEEK_PED covers both non-giant roles: a mage hunts people, a minion hunts wall.
+## SEEK_PED: pick the highest-weighted option among living prey and buildings.
 func _hunt_or_chew() -> NavGoal:
-	if _unit.role == UndeadUnit.Role.MINION:
-		return _facade_goal(UndeadUnit.MINION_BUILDING_SEEK_M, TAG_NIBBLE)
-	## A mage nobody can see hunting does not pay for the crowd query.
-	if _unit.nav_tier() == NavLod.Tier.FAR:
-		return _wander()
-	var prey := _nearest_prey()
-	if prey == Vector3.INF:
-		return _wander()
-	return _hunt(prey)
+	CityProfiler.begin("undead_hunt_pick")
+	var combat: RefCounted = _unit.combat()
+	## Legacy minion path when no combat kit (should not happen after setup).
+	if combat == null:
+		var legacy_goal: NavGoal
+		if _unit.role == UndeadUnit.Role.MINION:
+			legacy_goal = _facade_goal(UndeadUnit.MINION_BUILDING_SEEK_M, TAG_NIBBLE)
+		else:
+			var legacy := _nearest_living_prey()
+			if legacy != Vector3.INF:
+				_unit.set_combat_prey(legacy)
+				legacy_goal = _hunt(legacy)
+			else:
+				legacy_goal = _wander()
+		CityProfiler.end("undead_hunt_pick")
+		return legacy_goal
+
+	var best_kind := ""
+	var best_score := -1.0
+	var best_living := Vector3.INF
+	var from := _unit.global_position
+	var range_m := UndeadUnit.MINION_BUILDING_SEEK_M
+	var aggro: float = float(combat.call("aggro_range_m"))
+	if aggro > 0.0:
+		range_m = maxf(range_m, aggro)
+	var d_living := INF
+
+	if bool(combat.call("has_living_prey")) and _unit.nav_tier() != NavLod.Tier.FAR:
+		var living := _nearest_living_prey()
+		if living != Vector3.INF:
+			d_living = Vector2(living.x - from.x, living.z - from.z).length()
+			## Use the same weight that won the living pick: prefer player weight when the
+			## aim is the player, else ped / monsters — approximated by max living weight.
+			var w_living := maxf(
+				float(combat.call("prey_weight", "player")),
+				maxf(
+					float(combat.call("prey_weight", "ped")),
+					float(combat.call("prey_weight", "monsters"))
+				)
+			)
+			var score_living := w_living / maxf(d_living, 0.5)
+			if score_living > best_score:
+				best_score = score_living
+				best_kind = "living"
+				best_living = living
+
+	## Building fabric flood is the expensive path. Skip it when living prey is close enough
+	## to commit to — otherwise one summoned minion re-scans tens of metres of voxels every
+	## time a trivial hunt goal completes.
+	var skip_building := false
+	if best_kind == "living" and d_living <= maxf(_hunt_stand_off_m() * 4.0, 16.0):
+		skip_building = true
+
+	if not skip_building and bool(combat.call("has_building_prey")):
+		var fabric := _city.find_nearest_building_nibble(from, range_m)
+		if fabric != Vector3.INF:
+			var d_build := Vector2(fabric.x - from.x, fabric.z - from.z).length()
+			var w_build := float(combat.call("prey_weight", "building"))
+			var score_build := w_build / maxf(d_build, 0.5)
+			if score_build > best_score:
+				best_score = score_build
+				best_kind = "building"
+
+	var picked: NavGoal
+	if best_kind == "living":
+		_unit.set_combat_prey(best_living)
+		picked = _hunt(best_living)
+	else:
+		_unit.set_combat_prey(Vector3.INF)
+		if best_kind == "building":
+			picked = _facade_goal(range_m, TAG_NIBBLE)
+		elif _unit.role == UndeadUnit.Role.MINION:
+			## FODDER / convert-minion slot: when nothing living is in range, chew fabric even if
+			## the averaged prey weights left building at zero (pure chase brutes spawned as MINION).
+			picked = _facade_goal(range_m, TAG_NIBBLE)
+		else:
+			picked = _wander()
+	CityProfiler.end("undead_hunt_pick")
+	return picked
 
 
-## Aimed at the spot the mage wants to fire from, not at the prey: a corridor ends where it
+## Aimed at the spot the body wants to fight from, not at the prey: a corridor ends where it
 ## is aimed, and a goal's radius only decides whether arriving counted.
 func _hunt(prey: Vector3) -> NavGoal:
 	var from := _unit.global_position
 	var away := from - prey
 	away.y = 0.0
 	var distance := away.length()
-	var stand_off := _cast_stand_off_m()
+	var stand_off := _hunt_stand_off_m()
 	if distance <= stand_off:
-		## Already in range: the goal is done where the body stands.
-		return _tagged(NavGoal.go_to_point(from, ARRIVE_TOLERANCE_M), TAG_HUNT)
+		## Already in range: hold and let MonsterCombat strike. A trivial go_to(self) goal
+		## completes every physics frame, re-acquires, and re-paths — that alone tanks FPS.
+		_unit.set_combat_prey(prey)
+		return null
 	return _tagged(
 		NavGoal.go_to_point(prey + away / distance * stand_off, ARRIVE_TOLERANCE_M), TAG_HUNT
 	)
 
 
-## Stop in orb range when the mage can fire; keep closing while it cannot, which is what the
-## old straight-line pursue did between casts.
-func _cast_stand_off_m() -> float:
+func _hunt_stand_off_m() -> float:
+	var combat: RefCounted = _unit.combat()
+	if combat != null:
+		return float(combat.call("hunt_standoff_m"))
+	## Legacy mage orb standoff.
 	if _unit.can_cast():
 		return UndeadUnit.ORB_RANGE_M * UndeadUnit.ORB_STANDOFF_FRACTION
 	return UndeadUnit.MAGE_CLOSE_IN_M
 
 
 func _demolish() -> NavGoal:
-	return _facade_goal(UndeadUnit.GIANT_BUILDING_SEEK_M, TAG_DEMOLISH)
+	## Giants still peel buildings; if they also hunt the player, prefer living prey in range.
+	var combat: RefCounted = _unit.combat()
+	if combat != null and bool(combat.call("has_living_prey")) and _unit.nav_tier() != NavLod.Tier.FAR:
+		var prey := _nearest_living_prey()
+		if prey != Vector3.INF:
+			_unit.set_combat_prey(prey)
+			return _hunt(prey)
+	var seek := UndeadUnit.GIANT_BUILDING_SEEK_M
+	if combat != null:
+		var aggro: float = float(combat.call("aggro_range_m"))
+		if aggro > 0.0:
+			seek = maxf(seek, aggro)
+	return _facade_goal(seek, TAG_DEMOLISH)
 
 
 ## Building fabric is solid, so it is never a destination: the goal is the nearest span this
@@ -256,15 +364,59 @@ func _tagged(goal: NavGoal, tag: StringName) -> NavGoal:
 # Queries
 # ---------------------------------------------------------------------------
 
-## Nearest pedestrian, or the player, within the mage pursue range. Vector3.INF for nobody.
-func _nearest_prey() -> Vector3:
+## Weighted living prey inside aggro range. Vector3.INF for nobody.
+func _nearest_living_prey() -> Vector3:
 	var now := Time.get_ticks_msec()
 	if now - _prey_at_msec < int(PREY_CACHE_SEC * 1000.0):
 		return _prey
 	_prey_at_msec = now
-	_prey = _city.find_nearest_ped_position(
-		_unit.global_position, UndeadUnit.MAGE_PURSUE_RANGE_M
-	)
+	var combat: RefCounted = _unit.combat()
+	var range_m := UndeadUnit.MAGE_PURSUE_RANGE_M
+	if combat != null:
+		var aggro: float = float(combat.call("aggro_range_m"))
+		if aggro > 0.0:
+			range_m = aggro
+	var best := Vector3.INF
+	var best_score := -1.0
+	var from := _unit.global_position
+	## Player
+	var w_player := 1.0
+	if combat != null:
+		w_player = float(combat.call("prey_weight", "player"))
+	if w_player > 0.0 and _city.is_player_alive():
+		var ppos := _city.get_player_target_position()
+		var d := Vector2(ppos.x - from.x, ppos.z - from.z).length()
+		if d <= range_m:
+			var score := w_player / maxf(d, 0.5)
+			if score > best_score:
+				best_score = score
+				best = ppos
+	## Pedestrians (same city query the mage used; weight 0 skips them).
+	var w_ped := 0.8
+	if combat != null:
+		w_ped = float(combat.call("prey_weight", "ped"))
+	if w_ped > 0.0:
+		var ped := _city.find_nearest_ped_only(from, range_m)
+		if ped != Vector3.INF:
+			var d_ped := Vector2(ped.x - from.x, ped.z - from.z).length()
+			var score_ped := w_ped / maxf(d_ped, 0.5)
+			if score_ped > best_score:
+				best_score = score_ped
+				best = ped
+	## Other monsters — weight 0 skips pack infighting.
+	var w_monsters := 0.0
+	if combat != null:
+		w_monsters = float(combat.call("prey_weight", "monsters"))
+	if w_monsters > 0.0 and _city.has_method("find_nearest_monster_position"):
+		var other: Vector3 = _city.call(
+			"find_nearest_monster_position", from, range_m, _unit
+		) as Vector3
+		if other != Vector3.INF:
+			var d_m := Vector2(other.x - from.x, other.z - from.z).length()
+			var score_m := w_monsters / maxf(d_m, 0.5)
+			if score_m > best_score:
+				best = other
+	_prey = best
 	return _prey
 
 

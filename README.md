@@ -79,13 +79,35 @@ Tetris (after **T**): **1** left · **2** rotate · **3** right · **4** fast dr
 ```
 assets/humans/     MPFB bases, outfits, Quaternius Idle/Walk
 assets/city/       Voxel textures
+assets/combat/     Shared attacks.json + behaviours.json
+assets/monsters/   combat_table.json (templates + per-body rows)
 assets/vehicles/   Quaternius CC0 car GLBs + catalog.json
 scenes/            city_poc.tscn, main.tscn
-scripts/city/      District generation, crowd, street lights
+scripts/city/      District generation, crowd, street lights; CombatTable resolver
 scripts/vehicles/  VehicleDirector / catalog / visuals
 scripts/humans/    Outfits, proportions
 LICENSE_ASSETS.md  Content license provenance
 ```
+
+## Combat tables
+
+Editable data for monster templates, behaviours, attacks, and per-body overrides lives in
+JSON under `assets/combat/` and `assets/monsters/combat_table.json`. Resolve rules
+(template scalar **max**, list **union**, prey-weight **average**, body
+`attacks_extra` / hard `attacks`) are implemented twice and kept in lockstep:
+
+- Python: `tools/combat_resolve.py` (used by the editor and validators)
+- Godot: `scripts/city/combat_table.gd` (`CombatTable.resolve`)
+
+```
+python tools/edit_combat_tables.py          # tkinter editor (effective-stats preview)
+python tools/validate_combat_tables.py      # schema + refs + golden sync check
+python tools/sync_combat_resolve.py --write # regenerate tools/fixtures/combat_effective_stats.json
+powershell -File tools/run_test.ps1 test_combat_table_sync
+```
+
+After changing merge rules, update **both** Python and GDScript, then rewrite the golden
+fixture. This does not by itself wire AI to the tables — it restores the data + sync guard.
 
 ## World seed
 

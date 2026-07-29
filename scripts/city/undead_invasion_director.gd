@@ -67,12 +67,14 @@ func is_enabled() -> bool:
 
 
 func clear_all() -> void:
-	for u in _units:
-		if u != null and is_instance_valid(u):
-			u.queue_free()
+	## Snapshot: queue_free → tree_exiting must not mutate `_units` while we walk it.
+	var doomed: Array[UndeadUnit] = _units.duplicate()
 	_units.clear()
 	_giant = null
 	_giant_candidate = null
+	for u in doomed:
+		if u != null and is_instance_valid(u):
+			u.queue_free()
 	for c in get_children():
 		if str(c.name).begins_with("UndeadOrb"):
 			c.queue_free()
@@ -82,6 +84,8 @@ func get_alive_units() -> Array[UndeadUnit]:
 	_prune_units()
 	var out: Array[UndeadUnit] = []
 	for u in _units:
+		if not _unit_usable(u):
+			continue
 		if u.is_alive():
 			out.append(u)
 	return out
@@ -93,7 +97,7 @@ func get_hud_stats() -> Dictionary:
 	var converted := 0
 	var giant_out := false
 	for u in _units:
-		if not u.is_alive():
+		if not _unit_usable(u) or not u.is_alive():
 			continue
 		if u.is_giant():
 			giant_out = true
@@ -138,9 +142,10 @@ func _process(delta: float) -> void:
 func _scare_crowd_from_mages() -> void:
 	if _city == null:
 		return
+	_prune_units()
 	var threats: Array = []
 	for u in _units:
-		if not u.is_alive() or not u.is_mage():
+		if not _unit_usable(u) or not u.is_alive() or not u.is_mage():
 			continue
 		threats.append(u.global_position)
 	if threats.is_empty():
@@ -216,7 +221,7 @@ static func _role_for_entry(entry: CreatureCatalog.Entry) -> UndeadUnit.Role:
 func _count_alive() -> int:
 	var n := 0
 	for u in _units:
-		if u.is_alive():
+		if _unit_usable(u) and u.is_alive():
 			n += 1
 	return n
 
@@ -224,7 +229,7 @@ func _count_alive() -> int:
 func _count_role(want_role: UndeadUnit.Role) -> int:
 	var n := 0
 	for u in _units:
-		if not u.is_alive() or u.is_giant():
+		if not _unit_usable(u) or not u.is_alive() or u.is_giant():
 			continue
 		if u.role == want_role:
 			n += 1
@@ -260,6 +265,8 @@ func _spawn_unit(
 		body_id
 	)
 	unit.died.connect(_on_unit_died)
+	## Safety net if something frees a body without going through `died`.
+	unit.tree_exiting.connect(_on_unit_tree_exiting.bind(unit))
 	_units.append(unit)
 	return unit
 
@@ -298,6 +305,8 @@ func try_convert_ped_at(world_pos: Vector3, radius: float) -> bool:
 
 
 func query_segment_hit(from: Vector3, to: Vector3) -> Dictionary:
+	## Aim / blaster can run any frame; never walk freed corpses left by a delayed queue_free.
+	_prune_units()
 	var best_dist := INF
 	var best: Dictionary = {}
 	var seg := to - from
@@ -306,7 +315,7 @@ func query_segment_hit(from: Vector3, to: Vector3) -> Dictionary:
 		return best
 	var dir := seg / seg_len
 	for u in _units:
-		if not u.is_alive():
+		if not _unit_usable(u) or not u.is_alive():
 			continue
 		var r := u.hit_radius()
 		var hh := u.hit_half_height()
@@ -348,8 +357,11 @@ func damage_unit(unit: UndeadUnit, source: DamageSource.Id) -> bool:
 func damage_units_in_sphere(center: Vector3, radius: float, source: DamageSource.Id) -> int:
 	_prune_units()
 	var hit := 0
-	for u in _units:
-		if not u.is_alive():
+	## Snapshot: a body that dies to this stomp unregisters itself, and shrinking `_units`
+	## mid-walk would skip the body standing behind it.
+	var caught: Array[UndeadUnit] = _units.duplicate()
+	for u in caught:
+		if not _unit_usable(u) or not u.is_alive():
 			continue
 		var chest := u.global_position + Vector3(0.0, u.hit_half_height() * 0.85, 0.0)
 		if chest.distance_to(center) > radius + u.hit_radius():
@@ -364,18 +376,67 @@ func _award(score: int) -> void:
 		_city.adjust_player_score(score)
 
 
-func _on_unit_died(unit: UndeadUnit, was_giant: bool) -> void:
-	if unit == _giant or was_giant:
+## Drop a registered body from the roster. Loud on double-remove — the list must not keep
+## freed refs for aim / damage iterators to trip over.
+func unregister_unit(unit: UndeadUnit) -> void:
+	if unit == null:
+		push_error("UndeadInvasion.unregister_unit: null unit")
+		assert(false, "UndeadInvasion: unregister null")
+		return
+	var idx := _units.find(unit)
+	if idx < 0:
+		push_error(
+			"UndeadInvasion.unregister_unit: '%s' was not registered (double-remove?)"
+			% unit.name
+		)
+		assert(false, "UndeadInvasion: double unregister")
+		return
+	_units.remove_at(idx)
+	if unit == _giant:
 		_giant = null
 	if unit == _giant_candidate:
 		_giant_candidate = null
 
 
+func _on_unit_died(unit: UndeadUnit, was_giant: bool) -> void:
+	if was_giant:
+		_giant = null
+	## Unregister immediately on death so blaster aim cannot call into a queue_free'd body
+	## during the death-clip delay. The corpse stays in the tree until its timer frees it.
+	unregister_unit(unit)
+
+
+func _on_unit_tree_exiting(unit: UndeadUnit) -> void:
+	## Expected after `died` already unregistered. If still listed, something freed the node
+	## without death — pull it out loudly so iterators stay clean.
+	if unit == null or not _units.has(unit):
+		return
+	push_error(
+		"UndeadInvasion: '%s' exited the tree while still registered — forcing unregister"
+		% unit.name
+	)
+	unregister_unit(unit)
+
+
+## True when `u` is a live Object we may call methods on. Drain-only guard for iterators;
+## registration on death is what keeps the list clean.
+func _unit_usable(u: UndeadUnit) -> bool:
+	return u != null and is_instance_valid(u)
+
+
 func _prune_units() -> void:
 	var kept: Array[UndeadUnit] = []
+	var dropped := 0
 	for u in _units:
-		if u != null and is_instance_valid(u):
+		if _unit_usable(u):
 			kept.append(u)
+		else:
+			dropped += 1
+	if dropped > 0:
+		push_error(
+			"UndeadInvasion._prune_units: dropped %d freed ref(s) — unregister-on-death missed"
+			% dropped
+		)
 	_units = kept
 	if _giant != null and not is_instance_valid(_giant):
 		_giant = null

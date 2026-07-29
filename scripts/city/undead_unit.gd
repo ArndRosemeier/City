@@ -16,11 +16,13 @@ enum Role { MAGE, MINION, GIANT }
 enum State { IDLE, SEEK_PED, CAST, NIBBLE, SEEK_PAD, GROWING, STOMP, SCRAPE, DEAD }
 
 const OrbScript := preload("res://scripts/city/undead_orb_projectile.gd")
+const CombatTableScript := preload("res://scripts/city/combat_table.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const CreatureClipsScript := preload("res://scripts/city/creature_clips.gd")
 const CreatureHealthScript := preload("res://scripts/city/creature_health.gd")
 const CreatureVariationScript := preload("res://scripts/city/creature_variation.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
+const MonsterCombatScript := preload("res://scripts/city/monster_combat.gd")
 const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
 
 ## PackedScenes stay referenced so a second summon of the same body is a cache hit, matching
@@ -140,6 +142,10 @@ var _hit_react_left: float = 0.0
 var _cast_fired: bool = false
 ## The building voxel the body is chewing or peeling. Vector3.INF while it has none.
 var _facade_target: Vector3 = Vector3.INF
+## Resolved combat kit (MonsterCombat). Null only before setup finishes.
+var _combat: RefCounted = null
+## Cached living-prey aim for the combat tick (refreshed with the goal provider).
+var _combat_prey: Vector3 = Vector3.INF
 
 
 ## `p_seed` decides which body out of the catalogue this unit wears and every procedural
@@ -171,6 +177,7 @@ func setup(
 	CityProfiler.begin("undead_setup")
 	_build_body()
 	_load_model()
+	_bind_combat()
 	_reset_health()
 	_apply_scale()
 	_build_health_bar()
@@ -196,6 +203,9 @@ func is_giant() -> bool:
 
 
 func can_cast() -> bool:
+	## Prefer the combat-table orb cooldown when this body has orb_convert.
+	if _combat != null and bool(_combat.call("has_attack", "orb_convert")):
+		return bool(_combat.call("is_attack_ready", "orb_convert"))
 	return _cast_cd <= 0.0
 
 
@@ -206,6 +216,68 @@ func creature_entry() -> CreatureCatalog.Entry:
 
 func creature_variation() -> CreatureVariation:
 	return _variation
+
+
+func combat() -> RefCounted:
+	return _combat
+
+
+func city() -> CityRoot:
+	return _city
+
+
+func muzzle_world() -> Vector3:
+	return global_position + Vector3(0.0, MUZZLE_BASE_M * _span_tall() * character_scale, 0.0)
+
+
+## Resolved effective stats (CombatTable.EffectiveStats), or null before setup.
+func combat_stats() -> RefCounted:
+	if _combat == null:
+		return null
+	return _combat.call("stats") as RefCounted
+
+
+func set_combat_prey(world: Vector3) -> void:
+	_combat_prey = world
+
+
+func combat_prey() -> Vector3:
+	return _combat_prey
+
+
+func face_combat_prey(world: Vector3) -> void:
+	_look_at_flat(world)
+
+
+func play_combat_windup(attack_id: String) -> void:
+	if attack_id == "orb_convert" or attack_id == "eye_laser" or attack_id == "blaster" or attack_id == "charged_blast":
+		_play_action(CreatureClips.Action.CAST)
+	else:
+		_play_action(CreatureClips.Action.MELEE)
+
+
+func play_combat_strike(attack_id: String) -> void:
+	if attack_id == "orb_convert" or attack_id == "eye_laser" or attack_id == "blaster" or attack_id == "charged_blast":
+		_play_action(CreatureClips.Action.CAST)
+	else:
+		_play_action(CreatureClips.Action.MELEE)
+
+
+func fire_convert_orb(toward: Vector3) -> void:
+	_fire_orb(toward)
+
+
+## Instantly remove a pedestrian at `prey` when that prey kind is weighted. No health pool.
+func try_remove_ped_at(prey: Vector3, reach_m: float) -> bool:
+	if _city == null:
+		return false
+	if _combat != null and float(_combat.call("prey_weight", "ped")) <= 0.0:
+		return false
+	## One-shot remove — peds have no health pool.
+	var removed: Variant = _city.call("try_kill_ped_near", prey, reach_m)
+	if typeof(removed) == TYPE_NIL:
+		return false
+	return true
 
 
 ## How much bigger the drawn body is than the one the hit volume was measured on, split into
@@ -272,6 +344,8 @@ func health_bar() -> MonsterHealthBar:
 ## One hit from `source`. Returns the score award when this hit was the fatal one and 0 when the
 ## body is still standing, which is exactly the contract `kill_from_player` had when every hit
 ## was fatal — so the caller's bookkeeping never had to learn about health.
+##
+## Incoming damage is divided by the body's resolved `armor_mult` (1.0 = catalogue tier as-is).
 func apply_damage(source: DamageSource.Id) -> int:
 	if not _alive:
 		return 0
@@ -281,7 +355,10 @@ func apply_damage(source: DamageSource.Id) -> int:
 			% [name, DamageSourceScript.source_name(source)]
 		)
 		return 0
-	_health -= DamageSourceScript.amount(source)
+	var armor := 1.0
+	if _combat != null:
+		armor = maxf(float(_combat.call("armor_mult")), 0.001)
+	_health -= DamageSourceScript.amount(source) / armor
 	if CreatureHealthScript.is_dead(_health):
 		_health = 0.0
 		return kill_from_player()
@@ -482,8 +559,26 @@ func _find_anim(n: Node) -> AnimationPlayer:
 	return null
 
 
+func _bind_combat() -> void:
+	if _entry == null:
+		push_error("UndeadUnit %s: cannot resolve combat without a catalogue body" % name)
+		assert(false, "UndeadUnit: no body for combat")
+		return
+	var stats: RefCounted = CombatTableScript.resolve(_entry.id)
+	if stats == null:
+		push_error("UndeadUnit %s: CombatTable.resolve failed for '%s'" % [name, _entry.id])
+		assert(false, "UndeadUnit: combat resolve failed")
+		return
+	_combat = MonsterCombatScript.new()
+	_combat.call("bind", self, stats)
+
+
 func _reset_health() -> void:
-	_health_max = CreatureHealthScript.for_scale(_entry, character_scale)
+	var base := CreatureHealthScript.for_scale(_entry, character_scale)
+	var mult := 1.0
+	if _combat != null:
+		mult = float(_combat.call("hp_mult"))
+	_health_max = base * mult
 	_health = _health_max
 
 
@@ -491,7 +586,11 @@ func _reset_health() -> void:
 ## and a monster halfway through a fight stays halfway through it — a giant that healed to full
 ## by growing would be a giant nobody could ever wear down.
 func _update_health_for_scale() -> void:
-	var next := CreatureHealthScript.for_scale(_entry, character_scale)
+	var base := CreatureHealthScript.for_scale(_entry, character_scale)
+	var mult := 1.0
+	if _combat != null:
+		mult = float(_combat.call("hp_mult"))
+	var next := base * mult
 	if is_equal_approx(next, _health_max):
 		return
 	var kept := 1.0 if _health_max <= 0.0 else _health / _health_max
@@ -696,9 +795,20 @@ func _on_dig_out_requested(world_pos: Vector3) -> void:
 ## Standing on the firing spot. While the orb is on cooldown the provider simply hands out
 ## another approach, so the mage keeps pressing instead of loitering at orb range.
 func on_prey_in_range() -> void:
+	## Combat kit owns living-prey strikes; CAST remains for the legacy mage orb cadence when
+	## orb_convert is the only ready tool and the kit has not already fired.
+	if _combat != null and _combat_prey != Vector3.INF:
+		if bool(_combat.call("try_attack_living", _combat_prey)):
+			return
+	if not has_attack_id("orb_convert"):
+		return
 	if not can_cast():
 		return
 	state = State.CAST
+
+
+func has_attack_id(attack_id: String) -> bool:
+	return _combat != null and bool(_combat.call("has_attack", attack_id))
 
 
 func on_facade_in_reach(point: Vector3, working: State) -> void:
@@ -760,19 +870,21 @@ func tick(delta: float) -> void:
 		return
 	if not _city.is_player_alive():
 		return
-	CityProfiler.begin("undead_tick")
+	CityProfiler.begin("undead_unit")
 	_cast_cd = maxf(0.0, _cast_cd - delta)
 	_scrape_cd = maxf(0.0, _scrape_cd - delta)
 	_nibble_cd = maxf(0.0, _nibble_cd - delta)
 	_retarget_cd = maxf(0.0, _retarget_cd - delta)
 	_hit_react_left = maxf(0.0, _hit_react_left - delta)
+	if _combat != null:
+		_combat.call("tick", delta)
 
 	## Far units: skip anim switches most frames.
 	var far := _distance_to_player() > ANIM_FAR_DIST_M
 	if _anim != null:
 		_anim.active = not far or role == Role.GIANT
 
-	if role != Role.GIANT and _director.wants_giant_candidate(self):
+	if role != Role.GIANT and _director != null and _director.wants_giant_candidate(self):
 		_begin_pad_seek()
 
 	match state:
@@ -785,12 +897,23 @@ func tick(delta: float) -> void:
 		State.SCRAPE:
 			_tick_scrape()
 		State.IDLE, State.SEEK_PED, State.SEEK_PAD, State.STOMP, State.DEAD:
-			## Walking states: the corridor is the behaviour.
-			pass
+			## Walking states: corridor plus table-driven strikes when prey is close.
+			if state == State.SEEK_PED or state == State.STOMP:
+				_tick_combat_strikes()
 		_:
 			push_error("UndeadUnit %s: unknown state %d" % [name, state])
+	CityProfiler.begin("undead_nav")
 	_tick_nav(delta)
-	CityProfiler.end("undead_tick")
+	CityProfiler.end("undead_nav")
+	CityProfiler.end("undead_unit")
+
+
+func _tick_combat_strikes() -> void:
+	if _combat == null or _combat_prey == Vector3.INF:
+		return
+	if not bool(_combat.call("has_living_prey")):
+		return
+	_combat.call("try_attack_living", _combat_prey)
 
 
 func _begin_pad_seek() -> void:
@@ -812,12 +935,21 @@ func _tick_cast() -> void:
 	_cast_fired = true
 	_play_action(CreatureClips.Action.CAST)
 	## Fresh aim — never fire at the position the hunt goal was built from.
-	var prey := _city.find_nearest_ped_position(global_position, ORB_RANGE_M)
+	var prey := _combat_prey
+	if prey == Vector3.INF:
+		var range_m := ORB_RANGE_M
+		if has_attack_id("orb_convert"):
+			range_m = CombatTableScript.monster_attack_range_m("orb_convert")
+		prey = _city.find_nearest_ped_position(global_position, range_m)
 	if prey == Vector3.INF:
 		return
 	_look_at_flat(prey)
 	_fire_orb(prey)
-	_cast_cd = CAST_COOLDOWN_SEC
+	if has_attack_id("orb_convert"):
+		## Keep the legacy cast_cd in sync with the table cooldown so can_cast() stays honest.
+		_cast_cd = CombatTableScript.monster_attack_cooldown_s("orb_convert")
+	else:
+		_cast_cd = CAST_COOLDOWN_SEC
 
 
 ## Locked on a facade — keep swinging the whole time; the voxel only dies every 15 s.
@@ -908,14 +1040,19 @@ func _distance_to_player() -> float:
 
 
 func _move_speed() -> float:
+	var base := MOVE_SPEED_MINION
 	match role:
 		Role.MAGE:
-			return MOVE_SPEED_MAGE
+			base = MOVE_SPEED_MAGE
 		Role.GIANT:
 			## Cover ground at giant size without becoming unreadable.
-			return MOVE_SPEED_GIANT * clampf(0.55 + 0.12 * character_scale, 1.0, 2.4)
+			base = MOVE_SPEED_GIANT * clampf(0.55 + 0.12 * character_scale, 1.0, 2.4)
 		_:
-			return MOVE_SPEED_MINION
+			base = MOVE_SPEED_MINION
+	var mult := 1.0
+	if _combat != null:
+		mult = float(_combat.call("speed_mult"))
+	return base * mult
 
 
 # ---------------------------------------------------------------------------

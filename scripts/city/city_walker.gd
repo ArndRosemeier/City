@@ -821,9 +821,14 @@ func is_health_depleted() -> bool:
 ## Deliberately not scaled by `character_scale`. Growing is already the strongest thing the
 ## player can do — free durability on top of it would make the giant form the only form.
 func take_damage(source: DamageSource.Id) -> float:
+	return take_damage_scaled(source, 1.0)
+
+
+## Monster hits pass their resolved `damage_mult` as `scale`. Player-facing sources stay at 1×.
+func take_damage_scaled(source: DamageSource.Id, scale: float) -> float:
 	if _game_over_locked:
 		return 0.0
-	var taken := _health.apply_damage(source)
+	var taken := _health.apply_damage_scaled(source, scale)
 	if taken > 0.0 and not _health.is_depleted():
 		_play_hit_reaction()
 	return taken
