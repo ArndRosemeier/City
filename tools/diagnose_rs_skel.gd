@@ -20,7 +20,7 @@ func _run() -> void:
 	print("mesh.skin=", mesh.skin)
 	print("resolved skeleton node=", mesh.get_node_or_null(mesh.skeleton))
 
-	var rid: RID = skel.get_skeleton_rid()
+	var rid: RID = mesh.get_skin_reference().get_skeleton()
 	print("skeleton rid valid=", rid.is_valid(), " rs bone count=", RenderingServer.skeleton_get_bone_count(rid))
 
 	var thigh := skel.find_bone("thigh_l")

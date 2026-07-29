@@ -150,7 +150,7 @@ func _set_blend(mesh_instance: MeshInstance3D, morph_name: String, value: float)
 
 
 func _find_blend_shape_index(mesh_instance: MeshInstance3D, morph_name: String) -> int:
-	var mesh := mesh_instance.mesh
+	var mesh := mesh_instance.mesh as ArrayMesh
 	if mesh == null:
 		return -1
 	for i in range(mesh.get_blend_shape_count()):

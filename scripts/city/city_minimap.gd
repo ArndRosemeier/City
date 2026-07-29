@@ -1,5 +1,6 @@
 ## Top-down tactical minimap: buildings, undead, meteors within 100 m.
 ## Radar (U) paints every undead; beyond-range contacts sit on the rim (direction only).
+class_name CityMinimap
 extends CanvasLayer
 
 const RANGE_M := 100.0

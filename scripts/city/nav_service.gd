@@ -76,9 +76,8 @@ var max_queries_per_frame: int = DEFAULT_MAX_PER_FRAME
 var default_budget: int = DEFAULT_BUDGET
 var dirty_budget_usec: int = DEFAULT_DIRTY_BUDGET_USEC
 
-## NativeNavWorld, kept untyped like every other GDExtension handle so scripts still
-## parse when the DLL is being rebuilt.
-var _world = null
+## The native navigation registry. Null until `ensure_configured` builds it.
+var _world: NativeNavWorld = null
 var _solidity: NavSolidity = null
 var _tables: Dictionary = {}
 var _voxel_size: float = 0.0
@@ -147,7 +146,7 @@ func ensure_configured(voxel_size: float) -> void:
 	_voxel_size = voxel_size
 	_solidity = NavSolidityScript.build()
 	_tables = _solidity.export_tables()
-	_world = CityVoxelNativeScript.make_nav_world()
+	_world = CityVoxelNativeScript.make_nav_world() as NativeNavWorld
 	_world.configure(
 		voxel_size,
 		_tables["class"],

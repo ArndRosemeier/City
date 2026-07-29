@@ -31,6 +31,17 @@ ErrorOverlay="*res://scripts/debug/error_overlay.gd"
 CityProfiler="*res://scripts/debug/city_profiler.gd"
 DamageLog="*res://scripts/debug/damage_log.gd"
 
+[debug]
+
+; A GDScript that reaches through an untyped value is not checked at all until the line runs,
+; so a wrong method name reached the running game and only showed up as a script error mid-play.
+; At level 2 the analyzer refuses the script outright, which is what test_scripts_compile reads.
+; res://addons is already excluded by the engine's default directory_rules.
+gdscript/warnings/unsafe_property_access=2
+gdscript/warnings/unsafe_method_access=2
+gdscript/warnings/untyped_declaration=1
+gdscript/warnings/unsafe_call_argument=1
+
 [display]
 
 window/size/viewport_width=1280

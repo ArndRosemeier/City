@@ -389,11 +389,11 @@ func _boot_nav() -> bool:
 	return true
 
 
-func _bake_tile() -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_tile() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(SX, 1, SZ), VoxelMaterial.CONCRETE)
 	var tables := _nav.solidity_tables()
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		ORIGIN,
@@ -410,7 +410,7 @@ func _bake_tile() -> RefCounted:
 	if not ok:
 		_fail("FAIL bake_from_volume rejected the test tile")
 		return null
-	return bake as RefCounted
+	return bake
 
 
 func _w(vox: Vector3i) -> Vector3:

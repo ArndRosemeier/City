@@ -1,5 +1,6 @@
 ## Slim 100 m sinister beam — infection energy transmitting into space.
 ## After impact the beam stays planted at the crater until that meteor's tendrils end.
+class_name InfectionSkyBeamVfx
 extends Node3D
 
 const HEIGHT_M := 100.0
@@ -28,7 +29,7 @@ var _fade_from: float = 1.0
 static func attach_to_meteor(host: Node, meteor: Node3D) -> Node:
 	if host == null or meteor == null:
 		return null
-	var script: Script = load("res://scripts/city/infection_sky_beam_vfx.gd") as Script
+	var script := load("res://scripts/city/infection_sky_beam_vfx.gd") as GDScript
 	var beam: Node = script.new() as Node
 	beam.name = "InfectionSkyBeam"
 	host.add_child(beam)

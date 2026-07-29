@@ -57,9 +57,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	## it. Same gate the walker puts on its own hotkeys.
 	if UiInputGate.gameplay_blocked(_walker):
 		return
-	if not (event is InputEventKey and event.pressed and not event.echo):
-		return
 	var ek := event as InputEventKey
+	if ek == null or not ek.pressed or ek.echo:
+		return
 	var ctl := _ctl()
 	var slot := ctl.build_slot_for_key(ek)
 	if slot < 0:

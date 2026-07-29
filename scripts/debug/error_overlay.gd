@@ -13,7 +13,7 @@ var _panel: PanelContainer
 var _title: Label
 var _body: RichTextLabel
 var _close_btn: Button
-var _pending: Array = []
+var _pending: Array[Dictionary] = []
 var _visible_count: int = 0
 
 
@@ -59,7 +59,7 @@ func _flush_pending() -> void:
 	if _pending.is_empty() or _panel == null:
 		return
 	var block := ""
-	for item in _pending:
+	for item: Dictionary in _pending:
 		var kind: String = str(item.get("kind", "ERROR"))
 		var detail: String = str(item.get("detail", ""))
 		var location: String = str(item.get("location", ""))
@@ -142,8 +142,9 @@ func _build_ui() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _panel.visible:
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ESCAPE:
+	if event is InputEventKey:
+		var key := event as InputEventKey
+		if key.pressed and not key.echo and key.keycode == KEY_ESCAPE:
 			_dismiss()
 			get_viewport().set_input_as_handled()
 

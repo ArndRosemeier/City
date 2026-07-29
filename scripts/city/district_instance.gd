@@ -31,7 +31,7 @@ var generator: DistrictGenerator
 var crowd: CrowdDirector
 var vehicles: VehicleDirector
 var street_props: StreetPropPlacer
-var scale_pads: Node
+var scale_pads: ScalePadPlacer
 ## Mesh doors hung in the castle's openings. Null on every tile that is not a Castle.
 var castle_doors: CastleDoorPlacer
 var building_lod: BuildingImpostorLod

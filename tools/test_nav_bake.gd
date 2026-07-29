@@ -32,7 +32,7 @@ func _fail(msg: String) -> void:
 
 func _ready() -> void:
 	CityVoxelNativeScript.require_loaded()
-	var solidity = NavSolidityScript.build()
+	var solidity := NavSolidityScript.build()
 	_check_tables(solidity)
 	if _failed:
 		_quit()
@@ -53,7 +53,7 @@ func _ready() -> void:
 		_quit()
 		return
 
-	var nav_bake = res["nav_bake"]
+	var nav_bake := res["nav_bake"] as NativeNavBake
 	if nav_bake == null:
 		_fail("FAIL bake returned no nav_bake handle")
 		_quit()
@@ -148,7 +148,7 @@ func _ready() -> void:
 
 ## The four Rust tables must be full length and agree with the collision data they came
 ## from, because a short or shifted table silently turns walls into open space.
-func _check_tables(solidity) -> void:
+func _check_tables(solidity: NavSolidity) -> void:
 	var counts: PackedInt32Array = solidity.count_by_kind()
 	print(
 		"solidity passable=%d water=%d solid=%d partial=%d"

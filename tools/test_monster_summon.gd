@@ -16,10 +16,10 @@ class TestCity:
 	func _ready() -> void:
 		pass
 
-	func bind_player(walker: CharacterBody3D) -> void:
+	func bind_player(walker: CityWalker) -> void:
 		_walker = walker
 
-	func bind_undead(director: Node) -> void:
+	func bind_undead(director: UndeadInvasionDirector) -> void:
 		_undead = director
 
 	func _ensure_undead_director() -> void:
@@ -28,8 +28,10 @@ class TestCity:
 			assert(false, "TestCity: no undead")
 
 
+## A real walker whose cursor aim is scripted, so the summon path is exercised with the
+## walker type CityRoot actually holds rather than a look-alike.
 class AimStub:
-	extends CharacterBody3D
+	extends CityWalker
 	var aim: Dictionary = {}
 
 	func aim_world_at_cursor() -> Dictionary:
@@ -37,7 +39,7 @@ class AimStub:
 
 
 class RecordingDirector:
-	extends Node
+	extends UndeadInvasionDirector
 
 	var last_body_id: String = ""
 	var last_pos: Vector3 = Vector3.INF

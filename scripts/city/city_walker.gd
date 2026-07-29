@@ -211,7 +211,7 @@ var _prop_mod: SkeletonModifier3D
 var _proportions: BodyProportions = BodyProportions.identity()
 var _female: bool = false
 var _outfit: PedOutfit
-var _editor: CanvasLayer
+var _editor: CharacterEditor
 var _moving: bool = false
 var _body_base_y: float = 0.0
 var _feet_aligned: bool = false
@@ -469,7 +469,7 @@ func is_female() -> bool:
 
 
 func is_character_editor_open() -> bool:
-	return _editor != null and _editor.call("is_open")
+	return _editor != null and _editor.is_open()
 
 
 func is_blocking_ui_open() -> bool:
@@ -518,12 +518,12 @@ func set_game_over_locked(on: bool) -> void:
 func toggle_character_editor() -> void:
 	if _editor == null:
 		return
-	if _editor.call("is_open"):
-		_editor.call("close_editor")
+	if _editor.is_open():
+		_editor.close_editor()
 	else:
 		_set_rmb_looking(false)
 		_set_capture(false)
-		_editor.call("open_editor", _proportions, _female)
+		_editor.open_editor(_proportions, _female)
 
 
 func get_character_scale() -> float:
@@ -628,7 +628,7 @@ func _on_editor_proportions(props: BodyProportions) -> void:
 
 func _on_editor_sex(female: bool) -> void:
 	if _editor != null:
-		_proportions = (_editor.call("get_proportions") as BodyProportions).duplicate_props()
+		_proportions = _editor.get_proportions().duplicate_props()
 	_spawn_human(female)
 
 
@@ -1301,92 +1301,92 @@ func _unhandled_input(event: InputEvent) -> void:
 	if is_blocking_ui_open():
 		return
 	var ctl := _ctl()
-	if event is InputEventKey and not event.echo:
+	if event is InputEventKey:
 		var ek := event as InputEventKey
-		if ek.pressed and ctl.matches_key_pressed(ek, "jump"):
-			if _climb_mode != ClimbMode.NONE:
-				_end_climb(true)
-			else:
-				_try_start_jump()
-			get_viewport().set_input_as_handled()
-			return
-		if not ek.pressed and ctl.matches_key_released(ek, "jump"):
-			_end_jump_rise()
-			get_viewport().set_input_as_handled()
-			return
-	if event is InputEventKey and event.pressed and not event.echo:
-		var ek := event as InputEventKey
-		if ctl.matches_key_pressed(ek, "character_editor"):
-			toggle_character_editor()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "autorun"):
-			_auto_run = not _auto_run
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "sound_toggle"):
-			_toggle_sound()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "meteor"):
-			_request_infection_meteor()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "tetris"):
-			_request_tetris_machine()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "pedestrian"):
-			_request_pedestrian()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "undead_radar"):
-			_request_undead_radar()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "district_hop"):
-			_request_district_hop()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "laser"):
-			_stop_blaster(false)
-			_blast_charging = false
-			_blast_charge = 0.0
-			_start_laser_eyes_at_cursor()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "beam"):
-			_blast_charging = false
-			_blast_charge = 0.0
-			_begin_blaster_hold()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "stomp"):
-			_stop_blaster(false)
-			_blast_charging = false
-			_blast_charge = 0.0
-			_start_stomp()
-			get_viewport().set_input_as_handled()
-			return
-		if ctl.matches_key_pressed(ek, "fire"):
-			_stop_blaster(false)
-			_begin_charged_blast_hold()
-			get_viewport().set_input_as_handled()
-			return
-	if event is InputEventKey and not event.pressed:
-		## Release charged blast when fire is a key bind.
-		if _blast_charging and str(ctl.get_binding("fire").get("device", "")) == "key":
-			var code := int(ctl.get_binding("fire").get("code", -1)) as Key
-			if (event as InputEventKey).keycode == code:
-				_release_charged_blast_at_cursor()
+		if not ek.echo:
+			if ek.pressed and ctl.matches_key_pressed(ek, "jump"):
+				if _climb_mode != ClimbMode.NONE:
+					_end_climb(true)
+				else:
+					_try_start_jump()
 				get_viewport().set_input_as_handled()
 				return
-		if _blaster_holding and str(ctl.get_binding("beam").get("device", "")) == "key":
-			var beam_code := int(ctl.get_binding("beam").get("code", -1)) as Key
-			if (event as InputEventKey).keycode == beam_code:
+			if not ek.pressed and ctl.matches_key_released(ek, "jump"):
+				_end_jump_rise()
+				get_viewport().set_input_as_handled()
+				return
+		if ek.pressed and not ek.echo:
+			if ctl.matches_key_pressed(ek, "character_editor"):
+				toggle_character_editor()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "autorun"):
+				_auto_run = not _auto_run
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "sound_toggle"):
+				_toggle_sound()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "meteor"):
+				_request_infection_meteor()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "tetris"):
+				_request_tetris_machine()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "pedestrian"):
+				_request_pedestrian()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "undead_radar"):
+				_request_undead_radar()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "district_hop"):
+				_request_district_hop()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "laser"):
 				_stop_blaster(false)
+				_blast_charging = false
+				_blast_charge = 0.0
+				_start_laser_eyes_at_cursor()
 				get_viewport().set_input_as_handled()
 				return
+			if ctl.matches_key_pressed(ek, "beam"):
+				_blast_charging = false
+				_blast_charge = 0.0
+				_begin_blaster_hold()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "stomp"):
+				_stop_blaster(false)
+				_blast_charging = false
+				_blast_charge = 0.0
+				_start_stomp()
+				get_viewport().set_input_as_handled()
+				return
+			if ctl.matches_key_pressed(ek, "fire"):
+				_stop_blaster(false)
+				_begin_charged_blast_hold()
+				get_viewport().set_input_as_handled()
+				return
+		if not ek.pressed:
+			## Release charged blast when fire is a key bind.
+			if _blast_charging and str(ctl.get_binding("fire").get("device", "")) == "key":
+				var code := int(ctl.get_binding("fire").get("code", -1)) as Key
+				if ek.keycode == code:
+					_release_charged_blast_at_cursor()
+					get_viewport().set_input_as_handled()
+					return
+			if _blaster_holding and str(ctl.get_binding("beam").get("device", "")) == "key":
+				var beam_code := int(ctl.get_binding("beam").get("code", -1)) as Key
+				if ek.keycode == beam_code:
+					_stop_blaster(false)
+					get_viewport().set_input_as_handled()
+					return
 	if event is InputEventMouseMotion and _rmb_looking:
 		var mm := event as InputEventMouseMotion
 		## Turn the character with look yaw; pitch stays on the camera arm.

@@ -8,11 +8,11 @@ func _initialize() -> void:
 func _run() -> void:
 	for path in ["res://assets/humans/male_base.glb", "res://assets/humans/female_base.glb"]:
 		print("=== ", path, " ===")
-		var packed = load(path)
+		var packed := load(path) as PackedScene
 		if packed == null:
 			print("FAILED load")
 			continue
-		var inst: Node = packed.instantiate()
+		var inst := packed.instantiate()
 		_dump(inst, 0)
 		inst.free()
 	quit(0)

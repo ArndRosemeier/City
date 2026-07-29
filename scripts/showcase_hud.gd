@@ -73,11 +73,12 @@ func _build_ui() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("ui_cancel") or (event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE):
+	var ek := event as InputEventKey
+	if event.is_action_pressed("ui_cancel") or (ek != null and ek.pressed and ek.keycode == KEY_ESCAPE):
 		get_tree().quit()
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		match event.keycode:
+	if ek != null and ek.pressed and not ek.echo:
+		match ek.keycode:
 			KEY_R:
 				reshuffle_requested.emit()
 			KEY_SPACE:

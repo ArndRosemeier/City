@@ -183,7 +183,7 @@ func _check_fixture_materials(tables: Dictionary) -> void:
 
 ## The link ids this test reasons about must be the ones the DLL bakes.
 func _check_link_ids(tables: Dictionary, rules: PlayerRules) -> void:
-	var world: Object = _make_world(tables, rules.link_params(), rules)
+	var world := _make_world(tables, rules.link_params(), rules)
 	var ids := {
 		"climb": [int(world.link_climb_id()), LINK_CLIMB],
 		"drop": [int(world.link_drop_id()), LINK_DROP],
@@ -226,7 +226,7 @@ func _facade_takeoffs() -> Array[Vector2i]:
 
 
 func _case_facades(tables: Dictionary, rules: PlayerRules) -> void:
-	var world: Object = _make_world(tables, rules.link_params(), rules)
+	var world := _make_world(tables, rules.link_params(), rules)
 	_insert_fixture(world, _facade_boxes(), tables, rules.link_params())
 	var links := _links(world)
 	var climbs := _of_kind(links, LINK_CLIMB)
@@ -284,7 +284,7 @@ func _canopy_boxes() -> Array[Box]:
 
 
 func _case_canopy(tables: Dictionary, rules: PlayerRules) -> void:
-	var world: Object = _make_world(tables, rules.link_params(), rules)
+	var world := _make_world(tables, rules.link_params(), rules)
 	_insert_fixture(world, _canopy_boxes(), tables, rules.link_params())
 
 	var takeoff_headroom := _headroom(world, Vector2i(3, 14), 1.0)
@@ -320,7 +320,7 @@ func _terrace_boxes() -> Array[Box]:
 
 
 func _case_terraces(tables: Dictionary, rules: PlayerRules) -> void:
-	var world: Object = _make_world(tables, rules.link_params(), rules)
+	var world := _make_world(tables, rules.link_params(), rules)
 	_insert_fixture(world, _terrace_boxes(), tables, rules.link_params())
 	var drops := _of_kind(_links(world), LINK_DROP)
 	print("terraces: %d drop links" % drops.size())
@@ -367,7 +367,9 @@ func _case_terraces(tables: Dictionary, rules: PlayerRules) -> void:
 
 
 ## A descent walking already covers has to stay a route, and stay free of drop links.
-func _expect_walk_off(world: Object, label: String, from_vox: Vector3, to_vox: Vector3) -> void:
+func _expect_walk_off(
+	world: NativeNavWorld, label: String, from_vox: Vector3, to_vox: Vector3
+) -> void:
 	var path := _path(world, PROFILE_CLIMBER, from_vox, to_vox)
 	if int(path["status"]) != PATH_OK:
 		_fail("FAIL terraces: no route off the %s (status %d)" % [label, int(path["status"])])
@@ -389,7 +391,7 @@ func _hollow_facade_boxes() -> Array[Box]:
 
 
 func _case_destroyed_facade(tables: Dictionary, rules: PlayerRules) -> void:
-	var world: Object = _make_world(tables, rules.link_params(), rules)
+	var world := _make_world(tables, rules.link_params(), rules)
 	var standing := _ground()
 	standing.append(Box.new(FACADE_MIN, FACADE_MAX, VoxelMaterial.BRICK))
 	_insert_fixture(world, standing, tables, rules.link_params())
@@ -448,9 +450,9 @@ func _case_defaults_mirror_the_player(tables: Dictionary, rules: PlayerRules) ->
 func _compare_defaults(
 	label: String, boxes: Array[Box], tables: Dictionary, rules: PlayerRules
 ) -> void:
-	var derived: Object = _make_world(tables, rules.link_params(), rules)
+	var derived := _make_world(tables, rules.link_params(), rules)
 	_insert_fixture(derived, boxes, tables, rules.link_params())
-	var defaults: Object = _make_world(tables, {}, rules)
+	var defaults := _make_world(tables, {}, rules)
 	_insert_fixture(defaults, boxes, tables, {})
 	var a := _signature(_links(derived))
 	var b := _signature(_links(defaults))
@@ -475,8 +477,8 @@ func _ground() -> Array[Box]:
 	return out
 
 
-func _make_world(tables: Dictionary, link_params: Dictionary, rules: PlayerRules) -> Object:
-	var world: Object = CityVoxelNativeScript.make_nav_world()
+func _make_world(tables: Dictionary, link_params: Dictionary, rules: PlayerRules) -> NativeNavWorld:
+	var world := CityVoxelNativeScript.make_nav_world() as NativeNavWorld
 	world.configure(
 		VOXEL_SIZE,
 		tables["class"],
@@ -504,12 +506,12 @@ func _make_world(tables: Dictionary, link_params: Dictionary, rules: PlayerRules
 
 
 func _insert_fixture(
-	world: Object, boxes: Array[Box], tables: Dictionary, link_params: Dictionary
+	world: NativeNavWorld, boxes: Array[Box], tables: Dictionary, link_params: Dictionary
 ) -> void:
-	var volume: Object = CityVoxelNativeScript.make_volume()
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	for box: Box in boxes:
 		volume.fill_box(box.min_v, box.max_v, box.mat)
-	var bake: Object = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var baked: bool = bake.bake_from_volume(
 		volume,
 		Vector3i.ZERO,
@@ -552,7 +554,7 @@ func _materials(boxes: Array[Box], rows: int) -> PackedByteArray:
 
 
 ## Every link in the fixture, converted to voxel coordinates.
-func _links(world: Object) -> Array[Link]:
+func _links(world: NativeNavWorld) -> Array[Link]:
 	var centre := Vector3(SECTOR * 0.5, 0.0, SECTOR * 0.5) * VOXEL_SIZE
 	var raw: Dictionary = world.debug_links(centre, float(SECTOR) * VOXEL_SIZE)
 	var from: PackedVector3Array = raw["from"]
@@ -609,7 +611,7 @@ func _describe(links: Array[Link]) -> String:
 
 
 ## Free cells above the span standing at `y_vox` in a column, or -1 when there is none.
-func _headroom(world: Object, col: Vector2i, y_vox: float) -> int:
+func _headroom(world: NativeNavWorld, col: Vector2i, y_vox: float) -> int:
 	var centre := Vector3(col.x + 0.5, 0.0, col.y + 0.5) * VOXEL_SIZE
 	var raw: Dictionary = world.debug_spans(centre, VOXEL_SIZE)
 	var positions: PackedVector3Array = raw["positions"]
@@ -621,7 +623,7 @@ func _headroom(world: Object, col: Vector2i, y_vox: float) -> int:
 	return -1
 
 
-func _path(world: Object, profile: int, from_vox: Vector3, to_vox: Vector3) -> Dictionary:
+func _path(world: NativeNavWorld, profile: int, from_vox: Vector3, to_vox: Vector3) -> Dictionary:
 	return world.find_path(profile, from_vox * VOXEL_SIZE, to_vox * VOXEL_SIZE, PATH_BUDGET)
 
 

@@ -1,4 +1,5 @@
 ## Compact undead-invasion readout: mages, converted minions, giant flag.
+class_name UndeadInvasionHud
 extends CanvasLayer
 
 @export var refresh_sec: float = 0.2

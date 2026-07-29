@@ -148,29 +148,31 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		match event.keycode:
-			KEY_ESCAPE:
-				get_tree().quit()
-			KEY_TAB:
-				_active_is_male = not _active_is_male
-				_update_hud()
-			KEY_F:
-				_body_yaw += PI
-				_apply_body_yaw()
-				_update_hud()
-			KEY_R:
-				_reset_poses()
-				_update_hud()
-			KEY_COMMA:
-				_limb_index = (_limb_index - 1 + LIMBS.size()) % LIMBS.size()
-				_update_hud()
-			KEY_PERIOD:
-				_limb_index = (_limb_index + 1) % LIMBS.size()
-				_update_hud()
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0:
-				_select_limb_by_key(event.keycode)
-				_update_hud()
+	var ek := event as InputEventKey
+	if ek == null or not ek.pressed or ek.echo:
+		return
+	match ek.keycode:
+		KEY_ESCAPE:
+			get_tree().quit()
+		KEY_TAB:
+			_active_is_male = not _active_is_male
+			_update_hud()
+		KEY_F:
+			_body_yaw += PI
+			_apply_body_yaw()
+			_update_hud()
+		KEY_R:
+			_reset_poses()
+			_update_hud()
+		KEY_COMMA:
+			_limb_index = (_limb_index - 1 + LIMBS.size()) % LIMBS.size()
+			_update_hud()
+		KEY_PERIOD:
+			_limb_index = (_limb_index + 1) % LIMBS.size()
+			_update_hud()
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0:
+			_select_limb_by_key(ek.keycode)
+			_update_hud()
 
 
 func _select_limb_by_key(keycode: Key) -> void:
@@ -304,7 +306,7 @@ func _apply_active_pose() -> void:
 
 
 func _reset_poses() -> void:
-	for skel in [_male_skel, _female_skel]:
+	for skel: Skeleton3D in [_male_skel, _female_skel]:
 		if skel == null:
 			continue
 		skel.reset_bone_poses()

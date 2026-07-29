@@ -12,17 +12,19 @@ func _run() -> void:
 		"res://assets/humans/female_base.gltf",
 	]:
 		print("exists(", path, ")=", ResourceLoader.exists(path))
-		var packed = load(path)
+		var packed := load(path)
 		print("load type=", packed)
 		if packed is PackedScene:
-			var inst: Node = packed.instantiate()
+			var scene := packed as PackedScene
+			var inst := scene.instantiate()
 			_dump(inst, 0)
 			var mesh := _find_mesh(inst)
 			var skel := _find_skel(inst)
 			print("FOUND mesh=", mesh, " skel=", skel)
 			if mesh != null:
+				var shaped := mesh.mesh as ArrayMesh
 				print("  mesh resource=", mesh.mesh)
-				print("  blend shapes=", mesh.mesh.get_blend_shape_count() if mesh.mesh else -1)
+				print("  blend shapes=", shaped.get_blend_shape_count() if shaped else -1)
 			inst.free()
 	quit(0)
 

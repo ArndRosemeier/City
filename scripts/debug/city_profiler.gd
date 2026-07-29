@@ -42,7 +42,7 @@ var _open: Array = []  ## stack of {name, t0_us}
 var _frame_ms_smooth: float = 0.0
 var _physics_ms_smooth: float = 0.0
 var _last_physics_usec: int = 0
-var _controls: RefCounted
+var _controls: PlayerControls
 var _hitch_log: Array = []  ## newest last: {ms, at_msec, scopes: Dictionary, accounted_ms, note}
 var _hitch_count: int = 0
 var _worst_hitch_ms: float = 0.0
@@ -587,21 +587,23 @@ func recent_hitches() -> Array:
 	return _hitch_log.duplicate()
 
 
-func set_controls(controls: RefCounted) -> void:
+func set_controls(controls: PlayerControls) -> void:
 	_controls = controls
 
 
-func _ctl() -> RefCounted:
+func _ctl() -> PlayerControls:
 	if _controls == null:
-		_controls = PlayerControlsScript.new() as RefCounted
+		_controls = PlayerControlsScript.new() as PlayerControls
 	return _controls
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		if bool(_ctl().call("matches_key_pressed", event, "profiler")):
-			set_overlay_enabled(not _enabled)
-			get_viewport().set_input_as_handled()
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo:
+		return
+	if _ctl().matches_key_pressed(key, "profiler"):
+		set_overlay_enabled(not _enabled)
+		get_viewport().set_input_as_handled()
 
 
 func set_overlay_enabled(on: bool) -> void:

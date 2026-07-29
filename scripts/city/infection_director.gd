@@ -219,7 +219,7 @@ func notify_voxels_carved(vox_list: Array) -> void:
 	for item in vox_list:
 		var vox: Vector3i
 		if item is Dictionary:
-			vox = item.get("vox", Vector3i.ZERO)
+			vox = (item as Dictionary).get("vox", Vector3i.ZERO)
 		elif item is Vector3i:
 			vox = item
 		else:
@@ -660,11 +660,10 @@ func _start_tendril_aura(tid: int, vox: Vector3i) -> void:
 
 
 func _move_tendril_aura(tid: int, vox: Vector3i) -> void:
-	var aura: Variant = _auras.get(tid, null)
+	var aura := _auras.get(tid, null) as TendrilAuraScript
 	if aura == null or not is_instance_valid(aura):
 		return
-	if aura.has_method("move_to"):
-		aura.call("move_to", _vox_to_world(vox))
+	aura.move_to(_vox_to_world(vox))
 
 
 func _stop_tendril_aura(tid: int) -> void:

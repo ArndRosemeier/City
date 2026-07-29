@@ -220,7 +220,8 @@ func _request_sex(female: bool) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not visible:
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_C or event.keycode == KEY_ESCAPE:
+	var ek := event as InputEventKey
+	if ek != null and ek.pressed and not ek.echo:
+		if ek.keycode == KEY_C or ek.keycode == KEY_ESCAPE:
 			close_editor()
 			get_viewport().set_input_as_handled()

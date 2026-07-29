@@ -14,7 +14,7 @@ var _visible: bool = false
 var _panel: PanelContainer
 var _scroll: ScrollContainer
 var _body: RichTextLabel
-var _controls: RefCounted
+var _controls: PlayerControls
 ## Newest last.
 var _entries: Array[Dictionary] = []
 
@@ -26,21 +26,23 @@ func _ready() -> void:
 	_panel.visible = false
 
 
-func set_controls(controls: RefCounted) -> void:
+func set_controls(controls: PlayerControls) -> void:
 	_controls = controls
 
 
-func _ctl() -> RefCounted:
+func _ctl() -> PlayerControls:
 	if _controls == null:
-		_controls = PlayerControlsScript.new() as RefCounted
+		_controls = PlayerControlsScript.new() as PlayerControls
 	return _controls
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		if bool(_ctl().call("matches_key_pressed", event, "damage_log")):
-			set_overlay_enabled(not _visible)
-			get_viewport().set_input_as_handled()
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo:
+		return
+	if _ctl().matches_key_pressed(key, "damage_log"):
+		set_overlay_enabled(not _visible)
+		get_viewport().set_input_as_handled()
 
 
 func set_overlay_enabled(on: bool) -> void:

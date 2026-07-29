@@ -1,4 +1,5 @@
 ## Bottom-center energy bar — bound to CityWalker energy pool.
+class_name PlayerEnergyHud
 extends CanvasLayer
 
 @export var bar_width_px: float = 280.0

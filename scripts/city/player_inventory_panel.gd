@@ -133,8 +133,8 @@ func _process(_delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _open:
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		var ek := event as InputEventKey
+	var ek := event as InputEventKey
+	if ek != null and ek.pressed and not ek.echo:
 		if ek.keycode == KEY_ESCAPE or ek.physical_keycode == KEY_ESCAPE:
 			close_panel()
 			get_viewport().set_input_as_handled()
@@ -340,7 +340,8 @@ func _recipe_button_text(recipe: InventoryCatalog.Recipe) -> String:
 
 
 func _on_dim_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	var mb := event as InputEventMouseButton
+	if mb != null and mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 		close_panel()
 
 

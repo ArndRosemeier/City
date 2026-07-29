@@ -20,8 +20,8 @@ const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd"
 
 var tool: VoxelTool
 var origin: Vector3i = Vector3i.ZERO
-## NativeOfflineVoxelVolume when baking off-thread; null in live mode.
-var volume
+## Set when baking off-thread; null in live mode.
+var volume: NativeOfflineVoxelVolume
 
 ## Open begin_edit() scopes. Writes coalesce into one signal until this hits 0.
 var _edit_depth: int = 0
@@ -82,11 +82,11 @@ func _flush_edit() -> void:
 	voxels_changed.emit(AABB(Vector3(_dirty_min), Vector3(_dirty_max - _dirty_min)))
 
 
-func use_offline_volume(p_volume = null) -> void:
+func use_offline_volume(p_volume: NativeOfflineVoxelVolume = null) -> void:
 	if p_volume != null:
 		volume = p_volume
 	else:
-		volume = CityVoxelNativeScript.make_volume()
+		volume = CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	## Offline paints in local space; origin applied at commit time.
 	origin = Vector3i.ZERO
 

@@ -401,7 +401,7 @@ func _cancel_probe() -> void:
 # ---------------------------------------------------------------------------
 
 func _draw_spans() -> void:
-	var world = _nav_world()
+	var world := _nav_world()
 	if world == null:
 		return
 	var raw: Dictionary = world.debug_spans(_centre, radius_m)
@@ -505,7 +505,7 @@ func _tint_lut() -> PackedFloat32Array:
 
 
 func _draw_portals() -> void:
-	var world = _nav_world()
+	var world := _nav_world()
 	if world == null:
 		return
 	var points: PackedVector3Array = world.debug_portals(_centre, radius_m)
@@ -758,9 +758,8 @@ func _nav_ready() -> bool:
 
 ## NavService owns the NativeNavWorld and exposes no wrapper for `debug_spans` /
 ## `debug_portals`, so the overlay reads the handle directly. The alternative is a second
-## world, which would draw a field no agent queries. Untyped like every other GDExtension
-## handle in this project, so scripts still parse while the DLL is being rebuilt.
-func _nav_world():
+## world, which would draw a field no agent queries.
+func _nav_world() -> NativeNavWorld:
 	var nav := NavService.peek()
 	if nav == null or not nav.is_configured():
 		push_error("NavDebugOverlay: NavService went away while the overlay was on")

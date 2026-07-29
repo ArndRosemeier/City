@@ -41,7 +41,7 @@ func _run() -> void:
 	world.add_child(cam)
 
 	var packed: PackedScene = load("res://assets/humans/male_base.gltf")
-	var body: Node = packed.instantiate()
+	var body := packed.instantiate() as Node3D
 	body.rotation.y = PI
 	world.add_child(body)
 	var skel := _find_skel(body)

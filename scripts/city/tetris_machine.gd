@@ -442,8 +442,9 @@ func notify_voxels_carved(vox_entries: Array) -> void:
 	for item in vox_entries:
 		if typeof(item) != TYPE_DICTIONARY:
 			continue
-		var vox: Vector3i = item.get("vox", Vector3i(2147483647, 2147483647, 2147483647))
-		var mat_id := int(item.get("mat", -1))
+		var entry := item as Dictionary
+		var vox: Vector3i = entry.get("vox", Vector3i(2147483647, 2147483647, 2147483647))
+		var mat_id := int(entry.get("mat", -1))
 		if mat_id == VoxelMaterial.GAMEBOY or _owned_voxels.has(vox):
 			_break_machine()
 			return

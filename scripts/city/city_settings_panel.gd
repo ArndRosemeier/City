@@ -568,52 +568,56 @@ func _emit_controls() -> void:
 
 
 func _on_dim_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if not _listening_action.is_empty():
-			return
-		close_panel()
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			if not _listening_action.is_empty():
+				return
+			close_panel()
 
 
 func _input(event: InputEvent) -> void:
 	if _listening_action.is_empty() or not _open:
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
+	if event is InputEventKey:
 		var ek := event as InputEventKey
-		if ek.keycode == KEY_ESCAPE:
-			_cancel_listen()
+		if ek.pressed and not ek.echo:
+			if ek.keycode == KEY_ESCAPE:
+				_cancel_listen()
+				get_viewport().set_input_as_handled()
+				return
+			## Don't bind bare modifier keys as the main code when they are only modifiers —
+			## except for actions like sprint / build_assign that intentionally use them.
+			var code := ek.keycode
+			if code == KEY_SHIFT or code == KEY_CTRL or code == KEY_ALT or code == KEY_META:
+				_commit_binding({
+					"device": "key",
+					"code": int(code),
+					"shift": false,
+					"ctrl": false,
+					"alt": false,
+				})
+			else:
+				_commit_binding({
+					"device": "key",
+					"code": int(code),
+					"shift": ek.shift_pressed,
+					"ctrl": ek.ctrl_pressed,
+					"alt": ek.alt_pressed,
+				})
 			get_viewport().set_input_as_handled()
 			return
-		## Don't bind bare modifier keys as the main code when they are only modifiers —
-		## except for actions like sprint / build_assign that intentionally use them.
-		var code := ek.keycode
-		if code == KEY_SHIFT or code == KEY_CTRL or code == KEY_ALT or code == KEY_META:
-			_commit_binding({
-				"device": "key",
-				"code": int(code),
-				"shift": false,
-				"ctrl": false,
-				"alt": false,
-			})
-		else:
-			_commit_binding({
-				"device": "key",
-				"code": int(code),
-				"shift": ek.shift_pressed,
-				"ctrl": ek.ctrl_pressed,
-				"alt": ek.alt_pressed,
-			})
-		get_viewport().set_input_as_handled()
-		return
-	if event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		_commit_binding({
-			"device": "mouse",
-			"code": int(mb.button_index),
-			"shift": mb.shift_pressed,
-			"ctrl": mb.ctrl_pressed,
-			"alt": mb.alt_pressed,
-		})
-		get_viewport().set_input_as_handled()
+		if mb.pressed:
+			_commit_binding({
+				"device": "mouse",
+				"code": int(mb.button_index),
+				"shift": mb.shift_pressed,
+				"ctrl": mb.ctrl_pressed,
+				"alt": mb.alt_pressed,
+			})
+			get_viewport().set_input_as_handled()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -621,9 +625,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _listening_action.is_empty():
 		return
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
-		close_panel()
-		get_viewport().set_input_as_handled()
+	if event is InputEventKey:
+		var ek := event as InputEventKey
+		if ek.pressed and not ek.echo and ek.keycode == KEY_ESCAPE:
+			close_panel()
+			get_viewport().set_input_as_handled()
 
 
 func _load_config() -> void:

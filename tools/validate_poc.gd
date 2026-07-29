@@ -18,12 +18,13 @@ func _run() -> void:
 			push_error("Failed to load %s" % path)
 			errors += 1
 		elif packed is PackedScene:
-			var inst: Node = packed.instantiate()
+			var scene := packed as PackedScene
+			var inst := scene.instantiate()
 			var mesh := _find_mesh(inst)
 			if mesh == null:
 				push_error("%s has no MeshInstance3D" % path)
 				errors += 1
-			elif mesh.mesh != null and mesh.mesh.get_blend_shape_count() < 1:
+			elif mesh.mesh != null and (mesh.mesh as ArrayMesh).get_blend_shape_count() < 1:
 				push_warning("%s has no blend shapes (proportions will use fallback only)" % path)
 			inst.free()
 

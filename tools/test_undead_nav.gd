@@ -605,12 +605,12 @@ func _tick(unit: UndeadUnit, frames: int) -> void:
 
 ## Flat concrete deck, wide enough for a giant's eleven cells of clearance, with one sealed
 ## brick tower on it.
-func _bake_tile() -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_tile() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(SX, 1, SZ), VoxelMaterial.CONCRETE)
 	volume.fill_box(TOWER_MIN, TOWER_MAX, VoxelMaterial.BRICK)
 	var tables := _nav.solidity_tables()
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		ORIGIN,
@@ -627,7 +627,7 @@ func _bake_tile() -> RefCounted:
 	if not ok:
 		_fail("FAIL bake_from_volume rejected the test tile")
 		return null
-	return bake as RefCounted
+	return bake
 
 
 ## A CityBrush over an offline volume: the dig-out has to go through the funnel, and this is

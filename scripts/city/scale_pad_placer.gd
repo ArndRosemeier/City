@@ -150,7 +150,7 @@ func _rect_world_center(
 
 
 func _spawn_pad(origin: Vector3, kind: int) -> void:
-	var pad: Node = ScalePadScript.new()
+	var pad := ScalePadScript.new() as ScalePad
 	pad.name = "ScalePadGrow" if kind == KIND_GROW else "ScalePadShrink"
 	add_child(pad)
 	pad.position = origin

@@ -347,12 +347,12 @@ func _paint_into(brush: CityBrush) -> void:
 
 
 func _register_field() -> bool:
-	var volume = CityVoxelNativeScript.make_volume()
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	var offline: CityBrush = CityBrushScript.new() as CityBrush
 	offline.use_offline_volume(volume)
 	_paint_into(offline)
 	var tables := _nav.solidity_tables()
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		_origin,
@@ -369,7 +369,7 @@ func _register_field() -> bool:
 	if not ok:
 		_fail("FAIL bake_from_volume rejected the %d square deck" % FIELD_VOX)
 		return false
-	if not _nav.register_district(DISTRICT, bake as RefCounted):
+	if not _nav.register_district(DISTRICT, bake):
 		_fail("FAIL NavService refused district %s" % str(DISTRICT))
 		return false
 	var stats := _nav.district_stats(DISTRICT)

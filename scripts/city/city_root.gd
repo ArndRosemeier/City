@@ -66,26 +66,25 @@ var _tool: VoxelTool
 var _brush: CityBrush
 ## Outfit scenes kept referenced for the session so gameplay loads hit the resource cache.
 var _warm_scenes: Array[PackedScene] = []
-var _streamer: Node
-## Typed as CharacterBody3D so portable installs work before global class_name cache exists.
-var _walker: CharacterBody3D
+var _streamer: CityStreamer
+var _walker: CityWalker
 var _hud: Label
 var _hud_layer: CanvasLayer
 ## False while the splash owns the screen (boot, district hop). Combined with is_modal_open()
 ## in _refresh_hud_visibility; nothing sets a HUD layer's visibility outside that.
 var _hud_enabled: bool = false
 var _status: Label
-var _loading_splash: CanvasLayer
-var _action_bar: Node
-var _energy_hud: Node
-var _health_hud: Node
+var _loading_splash: LoadingSplash
+var _action_bar: PlayerActionBar
+var _energy_hud: PlayerEnergyHud
+var _health_hud: PlayerHealthHud
 var _debris_root: Node3D
-var _cascade: Node
-var _gem_lights: Node
-var _infection: Node
-var _tendril_hud: Node
-var _undead_hud: Node
-var _minimap: Node
+var _cascade: NativeCascadeDebris
+var _gem_lights: GemLightDirector
+var _infection: InfectionDirector
+var _tendril_hud: InfectionTendrilHud
+var _undead_hud: UndeadInvasionHud
+var _minimap: CityMinimap
 ## Span field / portal / corridor / dynamic-block viewer, off until F8.
 var _nav_overlay: NavDebugOverlay
 var _tetris: Node3D
@@ -101,12 +100,12 @@ var _spawn_meteors_enabled: bool = false
 var _meteor_spawn_accum: float = 0.0
 var _meteor_spawn_interval_sec: float = 120.0
 var _undead_invasion_enabled: bool = false
-var _undead: Node
+var _undead: UndeadInvasionDirector
 var _player_score: int = 0
 ## Collected gems and crafted items (25 stackable slots).
 var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
-var _inventory_panel: Node
-var _monster_summon_panel: Node
+var _inventory_panel: PlayerInventoryPanel
+var _monster_summon_panel: MonsterSummonPanel
 ## World aim captured when N opens the summon panel (before the mouse moves onto UI).
 var _summon_aim: Variant = null
 var _game_over: bool = false
@@ -120,9 +119,9 @@ const GEM_PICKUP_INTERVAL_SEC := 0.12
 const GEM_PICKUP_REACH_M := 1.35
 ## How close to a giant's fresh facade strip is close enough to be under it.
 const GIANT_DEBRIS_HURT_RADIUS_M := 6.0
-var _audio: Node
-var _day_night: Node
-var _settings_panel: Node
+var _audio: CityAudio
+var _day_night: DayNightCycle
+var _settings_panel: CitySettingsPanel
 var _world_env: WorldEnvironment
 var _sun: DirectionalLight3D
 var _player_viewer: VoxelViewer
@@ -380,8 +379,9 @@ func get_inventory() -> PlayerInventory:
 	return _inventory
 
 
-func _as_district_instance(entry: Variant) -> Variant:
-	## Resolve without relying on global class_name cache (portable installs).
+func _as_district_instance(entry: Variant) -> DistrictInstance:
+	## Script identity rather than `is`, so a node carrying a subclass of the district script
+	## is not mistaken for a district the streamer owns.
 	if entry == null or not is_instance_valid(entry):
 		return null
 	if not (entry is Node):
@@ -389,7 +389,7 @@ func _as_district_instance(entry: Variant) -> Variant:
 	var node := entry as Node
 	if node.get_script() != DistrictInstanceScript:
 		return null
-	return entry
+	return node as DistrictInstance
 
 
 func _on_night_factor_changed(night_factor: float) -> void:
@@ -399,19 +399,16 @@ func _on_night_factor_changed(night_factor: float) -> void:
 
 
 func _push_night_factor_to_street_lights() -> void:
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
-	for entry in districts:
-		var inst = _as_district_instance(entry)
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
 		if inst == null:
 			continue
 		if inst.street_props != null and is_instance_valid(inst.street_props):
-			if inst.street_props.has_method("set_night_factor"):
-				inst.street_props.call("set_night_factor", _street_night_factor)
+			inst.street_props.set_night_factor(_street_night_factor)
 		if inst.building_lod != null and is_instance_valid(inst.building_lod):
-			if inst.building_lod.has_method("set_night_factor"):
-				inst.building_lod.call("set_night_factor", _street_night_factor)
+			inst.building_lod.set_night_factor(_street_night_factor)
 
 
 func _build_hud() -> void:
@@ -748,23 +745,19 @@ func _on_inventory_craft_requested(recipe_id: String) -> void:
 
 
 func _apply_saved_controls() -> void:
-	if _settings_panel != null and _settings_panel.has_method("get_player_controls"):
-		_on_controls_changed(_settings_panel.call("get_player_controls"))
+	if _settings_panel != null:
+		_on_controls_changed(_settings_panel.get_player_controls())
 
 
-func _on_controls_changed(controls: Variant) -> void:
+func _on_controls_changed(controls: PlayerControls) -> void:
 	if controls == null:
 		return
-	if _walker != null and is_instance_valid(_walker) and _walker.has_method("set_controls"):
-		_walker.call("set_controls", controls)
-	if _action_bar != null and is_instance_valid(_action_bar) and _action_bar.has_method("set_controls"):
-		_action_bar.call("set_controls", controls)
-	var profiler := get_tree().root.get_node_or_null("CityProfiler")
-	if profiler != null and profiler.has_method("set_controls"):
-		profiler.call("set_controls", controls)
-	var damage_log := get_tree().root.get_node_or_null("DamageLog")
-	if damage_log != null and damage_log.has_method("set_controls"):
-		damage_log.call("set_controls", controls)
+	if _walker != null and is_instance_valid(_walker):
+		_walker.set_controls(controls)
+	if _action_bar != null and is_instance_valid(_action_bar):
+		_action_bar.set_controls(controls)
+	CityProfiler.set_controls(controls)
+	DamageLog.set_controls(controls)
 
 
 func _on_settings_applied(settings: Dictionary) -> void:
@@ -806,23 +799,20 @@ func _on_settings_applied(settings: Dictionary) -> void:
 
 
 func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int) -> void:
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
-	for entry in districts:
-		var inst = _as_district_instance(entry)
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst):
 			continue
 		if inst.crowd != null and is_instance_valid(inst.crowd):
 			inst.crowd.render_distance = crowd_m
-			if inst.crowd.has_method("_refresh_lod"):
-				inst.crowd.call("_refresh_lod", true)
+			inst.crowd._refresh_lod(true)
 		if inst.vehicles != null and is_instance_valid(inst.vehicles):
 			inst.vehicles.render_distance = vehicle_m
 		if inst.street_props != null and is_instance_valid(inst.street_props):
 			inst.street_props.max_omni_lights = omni
-			if inst.street_props.has_method("_refresh_lights"):
-				inst.street_props.call("_refresh_lights", true)
+			inst.street_props._refresh_lights(true)
 
 
 func _process(delta: float) -> void:
@@ -1108,26 +1098,21 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 		origin = _walker.global_position
 		yaw = _walker.rotation.y
 	var buildings: Array = []
-	if _streamer != null and _streamer.has_method("get_loaded_districts"):
-		var districts: Array = _streamer.call("get_loaded_districts") as Array
-		for entry in districts:
-			var inst = _as_district_instance(entry)
+	if _streamer != null:
+		for entry in _streamer.get_loaded_districts():
+			var inst := _as_district_instance(entry)
 			if inst == null or not is_instance_valid(inst) or inst.building_lod == null:
 				continue
-			if not inst.building_lod.has_method("get_footprints_near"):
-				continue
-			var more: Array = inst.building_lod.call("get_footprints_near", origin, range_m) as Array
-			for b in more:
+			for b in inst.building_lod.get_footprints_near(origin, range_m):
 				buildings.append(b)
 	var undead: Array = []
 	var radar_on := _radar_reveal_left > 0.0
 	var range_r2 := range_m * range_m
-	if _undead != null and is_instance_valid(_undead) and _undead.has_method("get_alive_units"):
-		var units: Array = _undead.call("get_alive_units") as Array
-		for u in units:
+	if _undead != null and is_instance_valid(_undead):
+		for u: UndeadUnit in _undead.get_alive_units():
 			if u == null or not is_instance_valid(u):
 				continue
-			var pos: Vector3 = (u as Node3D).global_position
+			var pos := u.global_position
 			var dx := pos.x - origin.x
 			var dz := pos.z - origin.z
 			var d2 := dx * dx + dz * dz
@@ -1136,9 +1121,9 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 			if outside and not radar_on:
 				continue
 			var kind := "mage"
-			if bool(u.call("is_giant")):
+			if u.is_giant():
 				kind = "giant"
-			elif int(u.get("role")) == 1:  ## UndeadUnit.Role.MINION
+			elif u.role == UndeadUnit.Role.MINION:
 				kind = "minion"
 			undead.append({"pos": pos, "kind": kind, "edge": outside})
 	var meteors: Array = []
@@ -1581,13 +1566,13 @@ func _on_streamer_status(text: String) -> void:
 		_status.text = text
 
 
-func _on_spawn_district_ready(inst: Node) -> void:
-	if inst == null or not inst.get("generator"):
+func _on_spawn_district_ready(inst: DistrictInstance) -> void:
+	if inst == null or inst.generator == null:
 		_status.text = "ERROR: spawn district missing generator"
 		_booting = false
 		return
 	_status.text = "Finding spawn…"
-	var gen: DistrictGenerator = inst.generator
+	var gen := inst.generator
 	var spawn: Vector3 = gen.find_spawn_world(_tool)
 	## Verify stamped ground exists under spawn (voxel data, not just mesh flag).
 	if not _has_solid_ground_at(spawn):
@@ -2297,13 +2282,13 @@ func _pick_ground_ring_target(min_m: float, max_m: float) -> Vector3:
 
 
 func find_nearest_grow_pad(from: Vector3, max_dist: float) -> Node3D:
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return null
 	var best: Node3D = null
 	var best_d2 := max_dist * max_dist
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.scale_pads == null:
 			continue
 		for pad in inst.scale_pads.get_children():
@@ -2344,11 +2329,11 @@ func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
 func find_nearest_ped_only(from: Vector3, max_dist: float) -> Vector3:
 	var best := Vector3.INF
 	var best_d2 := max_dist * max_dist
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return best
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
 			continue
 		var hit: Dictionary = inst.crowd.find_nearest_agent(from, max_dist)
@@ -2392,11 +2377,11 @@ func find_nearest_monster_position(
 func scare_crowd_from_mages(threats: Array, trigger_m: float, clear_m: float) -> void:
 	if threats.is_empty():
 		return
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
 			continue
 		inst.crowd.scare_from_threats(threats, trigger_m, clear_m)
@@ -2418,14 +2403,14 @@ func try_orb_hit_player(world_pos: Vector3, radius: float) -> bool:
 
 
 func try_convert_ped_near(world_pos: Vector3, radius: float) -> Variant:
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return null
 	var best_crowd: CrowdDirector = null
 	var best_agent: PedAgent = null
 	var best_d2 := radius * radius
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
 			continue
 		var hit: Dictionary = inst.crowd.find_nearest_agent(world_pos, radius)
@@ -2448,15 +2433,15 @@ func try_convert_ped_near(world_pos: Vector3, radius: float) -> Variant:
 
 ## One-shot remove a pedestrian near `world_pos` (melee / living prey). Returns former position.
 func try_kill_ped_near(world_pos: Vector3, radius: float) -> Variant:
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return null
 	var best_crowd: CrowdDirector = null
 	var best_agent: PedAgent = null
 	var best_pos := Vector3.INF
 	var best_d2 := radius * radius
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
 			continue
 		var hit: Dictionary = inst.crowd.find_nearest_agent(world_pos, radius)
@@ -2722,20 +2707,17 @@ func _find_building_vox_near_budgeted(
 ## Nearest footprint-edge columns from loaded districts, closest first.
 func _building_probe_seed_columns(from: Vector3, max_dist: float) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return out
 	if _terrain == null:
 		return out
 	var ranked: Array = []
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst) or inst.building_lod == null:
 			continue
-		if not inst.building_lod.has_method("get_footprints_near"):
-			continue
-		var more: Array = inst.building_lod.call("get_footprints_near", from, max_dist) as Array
-		for b in more:
+		for b in inst.building_lod.get_footprints_near(from, max_dist):
 			var center: Vector3 = b["center"] as Vector3
 			var size: Vector3 = b["size"] as Vector3
 			var hx := size.x * 0.5
@@ -2847,8 +2829,9 @@ func _on_meteor_impacted(world_pos: Vector3, seeds: Array, sky_beam: Node = null
 	for entry in seeds:
 		if not (entry is Dictionary):
 			continue
-		var vox: Vector3i = entry.get("vox", Vector3i.ZERO)
-		var prev_mat := int(entry.get("prev_mat", -1))
+		var seed_entry := entry as Dictionary
+		var vox: Vector3i = seed_entry.get("vox", Vector3i.ZERO)
+		var prev_mat := int(seed_entry.get("prev_mat", -1))
 		var key := "%d,%d,%d" % [vox.x, vox.y, vox.z]
 		if seen.has(key):
 			continue
@@ -2939,12 +2922,9 @@ func _clear_meteor_site(site_id: int) -> void:
 	var tids: Dictionary = site.get("tendrils", {})
 	for tid in tids.keys():
 		_tendril_to_meteor_site.erase(int(tid))
-	var beam: Variant = site.get("beam", null)
-	if beam is Node and is_instance_valid(beam):
-		if beam.has_method("begin_fade_out"):
-			beam.call("begin_fade_out", 1.2)
-		else:
-			beam.queue_free()
+	var beam := site.get("beam", null) as InfectionSkyBeamVfx
+	if beam != null and is_instance_valid(beam):
+		beam.begin_fade_out(1.2)
 	var impact_vox: Vector3i = site.get("impact_vox", Vector3i.ZERO)
 	_unlock_meteor_rock_at(impact_vox)
 
@@ -2991,9 +2971,10 @@ func _tip_kill_leads_in_entries(vox_entries: Array) -> bool:
 	for item in vox_entries:
 		var vox: Vector3i
 		if item is Dictionary:
-			vox = item.get("vox", Vector3i.ZERO)
+			var entry := item as Dictionary
+			vox = entry.get("vox", Vector3i.ZERO)
 			## Fast path from collect mat id.
-			if int(item.get("mat", -1)) == VoxelMaterial.INFECTION_LEAD:
+			if int(entry.get("mat", -1)) == VoxelMaterial.INFECTION_LEAD:
 				leads.append(vox)
 				continue
 		elif item is Vector3i:
@@ -3055,11 +3036,11 @@ func _invalidate_infection_outside_bubble() -> void:
 
 func _notify_destruction(world_pos: Vector3, radius_m: float = 32.0) -> void:
 	## Peds sprint and cars floor it away from the blast along their graphs.
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst):
 			continue
 		if inst.crowd != null and is_instance_valid(inst.crowd):
@@ -3190,13 +3171,13 @@ func _apply_agent_hit(
 
 
 func _query_closest_agent_hit(from: Vector3, to: Vector3) -> Dictionary:
-	if _streamer == null or not _streamer.has_method("get_loaded_districts"):
+	if _streamer == null:
 		return {}
 	var best: Dictionary = {}
 	var best_dist := INF
-	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	var districts := _streamer.get_loaded_districts()
 	for entry in districts:
-		var inst = _as_district_instance(entry)
+		var inst := _as_district_instance(entry)
 		if inst == null or not is_instance_valid(inst):
 			continue
 		## Crowd/traffic exist only after full bake (far tiles skip them).
@@ -3288,41 +3269,41 @@ func _nav_overlay_aim() -> Vector3:
 	return aim["point"]
 
 
-func _player_controls() -> RefCounted:
-	if _settings_panel != null and _settings_panel.has_method("get_player_controls"):
-		return _settings_panel.call("get_player_controls") as RefCounted
-	return null
+func _player_controls() -> PlayerControls:
+	if _settings_panel == null:
+		return null
+	return _settings_panel.get_player_controls()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not (event is InputEventKey and event.pressed and not event.echo):
-		return
 	var ek := event as InputEventKey
-	var ctl := _player_controls()
-	if ctl == null or not ctl.has_method("matches_key_pressed"):
+	if ek == null or not ek.pressed or ek.echo:
 		return
-	if bool(ctl.call("matches_key_pressed", ek, "quit")):
+	var ctl := _player_controls()
+	if ctl == null:
+		return
+	if ctl.matches_key_pressed(ek, "quit"):
 		if is_inventory_open():
-			_inventory_panel.call("close_panel")
+			_inventory_panel.close_panel()
 			get_viewport().set_input_as_handled()
 			return
 		if is_monster_summon_open():
-			_monster_summon_panel.call("close_panel")
+			_monster_summon_panel.close_panel()
 			get_viewport().set_input_as_handled()
 			return
 		get_tree().quit()
 		return
-	if bool(ctl.call("matches_key_pressed", ek, "inventory")):
+	if ctl.matches_key_pressed(ek, "inventory"):
 		## The character editor is a modal of the walker's own, and two open panels would
 		## stack in whatever order UiLayers happens to give them. The splash outranks the whole
 		## modal band, so a panel opened under it is invisible and still takes the keys.
 		if _game_over or _booting or _is_character_editor_open() or is_splash_open():
 			return
 		if _inventory_panel != null:
-			_inventory_panel.call("toggle_panel")
+			_inventory_panel.toggle_panel()
 		get_viewport().set_input_as_handled()
 		return
-	if bool(ctl.call("matches_key_pressed", ek, "monster_summon")):
+	if ctl.matches_key_pressed(ek, "monster_summon"):
 		if _game_over or _booting or _is_character_editor_open() or is_splash_open():
 			return
 		if _monster_summon_panel != null:
@@ -3330,31 +3311,31 @@ func _unhandled_input(event: InputEvent) -> void:
 			## sample at confirm would hit near the player's feet.
 			if not is_monster_summon_open():
 				capture_summon_aim()
-			_monster_summon_panel.call("toggle_panel")
+			_monster_summon_panel.toggle_panel()
 		get_viewport().set_input_as_handled()
 		return
-	if bool(ctl.call("matches_key_pressed", ek, "retry")):
+	if ctl.matches_key_pressed(ek, "retry"):
 		if _game_over:
 			_retry_after_game_over()
 			get_viewport().set_input_as_handled()
 		return
-	if bool(ctl.call("matches_key_pressed", ek, "day_night")):
+	if ctl.matches_key_pressed(ek, "day_night"):
 		## World keys stop at an open panel or the splash; the debug toggles below deliberately
 		## do not.
 		if _game_over or is_modal_open() or is_splash_open():
 			return
-		if _day_night != null and _day_night.has_method("toggle_day_night"):
-			_day_night.call("toggle_day_night")
+		if _day_night != null:
+			_day_night.toggle_day_night()
 		get_viewport().set_input_as_handled()
 		return
 	## Shift+F8 recolours, bare F8 toggles — the modifier-carrying bind is tested first,
 	## because a bare bind matches with extra modifiers held.
-	if bool(ctl.call("matches_key_pressed", ek, "nav_overlay_colour")):
+	if ctl.matches_key_pressed(ek, "nav_overlay_colour"):
 		if _nav_overlay.is_enabled():
 			print("CityRoot: nav overlay colouring by %s" % _nav_overlay.cycle_span_colour())
 		get_viewport().set_input_as_handled()
 		return
-	if bool(ctl.call("matches_key_pressed", ek, "nav_overlay")):
+	if ctl.matches_key_pressed(ek, "nav_overlay"):
 		print("CityRoot: nav overlay %s" % ("on" if _nav_overlay.toggle() else "off"))
 		get_viewport().set_input_as_handled()
 
@@ -3363,10 +3344,10 @@ func _input(event: InputEvent) -> void:
 	## Game-over retry must work even if another control ate unhandled input.
 	if not _game_over or _booting:
 		return
-	if not (event is InputEventKey and event.pressed and not event.echo):
+	var ek := event as InputEventKey
+	if ek == null or not ek.pressed or ek.echo:
 		return
 	var ctl := _player_controls()
-	if ctl != null and ctl.has_method("matches_key_pressed"):
-		if bool(ctl.call("matches_key_pressed", event, "retry")):
-			_retry_after_game_over()
-			get_viewport().set_input_as_handled()
+	if ctl != null and ctl.matches_key_pressed(ek, "retry"):
+		_retry_after_game_over()
+		get_viewport().set_input_as_handled()

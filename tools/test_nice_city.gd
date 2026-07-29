@@ -10,7 +10,7 @@ func _run() -> void:
 	var t0 := Time.get_ticks_msec()
 	var root := CityRoot.new()
 	root.city_seed = 42
-	root.crowd_count = 0
+	root.crowd_per_district = 0
 	get_root().add_child(root)
 
 	for _i in range(2400):

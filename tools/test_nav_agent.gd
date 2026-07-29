@@ -1057,22 +1057,24 @@ func _corridor(points: Array[Vector3], links: Array[int]) -> NavPathResult:
 # ---------------------------------------------------------------------------
 
 ## Flat concrete deck with one sealed brick block on it.
-func _bake_tile() -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_tile() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(SX, 1, SZ), VoxelMaterial.CONCRETE)
 	volume.fill_box(BLOCK_MIN, BLOCK_MAX, VoxelMaterial.BRICK)
 	return _bake_volume(volume, ORIGIN, SX, SZ)
 
 
-func _bake_dirty() -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_dirty() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(DIRTY_SIZE, 1, DIRTY_SIZE), VoxelMaterial.CONCRETE)
 	return _bake_volume(volume, DIRTY_ORIGIN, DIRTY_SIZE, DIRTY_SIZE)
 
 
-func _bake_volume(volume: Variant, origin: Vector3i, size_x: int, size_z: int) -> RefCounted:
+func _bake_volume(
+	volume: NativeOfflineVoxelVolume, origin: Vector3i, size_x: int, size_z: int
+) -> NativeNavBake:
 	var tables := _nav.solidity_tables()
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		origin,
@@ -1089,7 +1091,7 @@ func _bake_volume(volume: Variant, origin: Vector3i, size_x: int, size_z: int) -
 	if not ok:
 		_fail("FAIL bake_from_volume rejected %dx%d at %s" % [size_x, size_z, str(origin)])
 		return null
-	return bake as RefCounted
+	return bake
 
 
 func _w(vox: Vector3i) -> Vector3:

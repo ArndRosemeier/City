@@ -714,15 +714,15 @@ func _band_centre_x(depth: int) -> int:
 # ---------------------------------------------------------------------------
 
 ## Flat concrete deck one voxel thick, open sky above.
-func _bake_flat(origin: Vector3i, size_x: int, size_z: int) -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_flat(origin: Vector3i, size_x: int, size_z: int) -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(size_x, 1, size_z), VoxelMaterial.CONCRETE)
 	return _bake_volume(volume, origin, size_x, size_z)
 
 
 ## The same deck, split by a sheer brick wall with one 3 m gap in it.
-func _bake_alley() -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_alley() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(ALLEY_X, 1, ALLEY_Z), VoxelMaterial.CONCRETE)
 	volume.fill_box(
 		Vector3i(ALLEY_WALL_X, 1, 0),
@@ -739,8 +739,8 @@ func _bake_alley() -> RefCounted:
 
 ## Shore, then five bands of lake bed a cell deeper each, all under one water surface at
 ## LAKE_RIM_Y. Depth i runs from x = LAKE_SHORE_X + (i - 1) * LAKE_BAND_X.
-func _bake_lake() -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_lake() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(LAKE_X, LAKE_RIM_Y, LAKE_Z), VoxelMaterial.CONCRETE)
 	for depth in range(1, LAKE_DEPTH_MAX + 1):
 		var x0 := LAKE_SHORE_X + (depth - 1) * LAKE_BAND_X
@@ -752,9 +752,11 @@ func _bake_lake() -> RefCounted:
 	return _bake_volume(volume, LAKE_ORIGIN, LAKE_X, LAKE_Z)
 
 
-func _bake_volume(volume: Variant, origin: Vector3i, size_x: int, size_z: int) -> RefCounted:
+func _bake_volume(
+	volume: NativeOfflineVoxelVolume, origin: Vector3i, size_x: int, size_z: int
+) -> NativeNavBake:
 	var tables := _nav.solidity_tables()
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		origin,
@@ -771,7 +773,7 @@ func _bake_volume(volume: Variant, origin: Vector3i, size_x: int, size_z: int) -
 	if not ok:
 		_fail("FAIL bake_from_volume rejected %dx%d at %s" % [size_x, size_z, str(origin)])
 		return null
-	return bake as RefCounted
+	return bake
 
 
 func _vox_to_world(vox: Vector3i) -> Vector3:

@@ -7,14 +7,15 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var packed: PackedScene = load("res://assets/humans/male_base.gltf")
-	var root: Node = packed.instantiate()
+	var root := packed.instantiate() as Node3D
 	get_root().add_child(root)
 	var skel := _find_skel(root)
 	var mesh: MeshInstance3D = _find_mesh(root)
 
+	var armature := skel.get_parent() as Node3D
 	print("mesh aabb=", mesh.get_aabb())
 	print("skel transform=", skel.transform)
-	print("armature=", skel.get_parent().transform if skel.get_parent() else null)
+	print("armature=", armature.transform if armature else null)
 	print("root=", root.transform)
 
 	# Print chain of global bone origins from root to foot

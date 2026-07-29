@@ -178,7 +178,7 @@ func _ready() -> void:
 ## region happens to touch, so pin the two numbers together here instead of finding out
 ## from a region that never rebuilt.
 func _check_margin() -> bool:
-	var probe = CityVoxelNativeScript.make_nav_world()
+	var probe := CityVoxelNativeScript.make_nav_world() as NativeNavWorld
 	var tables := _nav.solidity_tables()
 	probe.configure(
 		VOXEL_SIZE,
@@ -878,7 +878,7 @@ func _test_full_district_cost() -> void:
 		_fail("FAIL could not drop the patch-sized field")
 		return
 	var t_bake := Time.get_ticks_msec()
-	var volume = CityVoxelNativeScript.make_volume()
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	var offline: CityBrush = CityBrushScript.new() as CityBrush
 	offline.use_offline_volume(volume)
 	var size := DistrictCoord.size_vox()
@@ -889,7 +889,7 @@ func _test_full_district_cost() -> void:
 		Vector3i(WALL_X, 1, GAP_A_Z0), Vector3i(WALL_X + 1, WALL_TOP, GAP_A_Z1), VoxelMaterial.BRICK
 	)
 	offline.fill_disk(BLAST_X, BLAST_Z, 0, BLAST_RADIUS, VoxelMaterial.AIR)
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var tables := _nav.solidity_tables()
 	var ok: bool = bake.bake_from_volume(
 		volume,
@@ -907,7 +907,7 @@ func _test_full_district_cost() -> void:
 	if not ok:
 		_fail("FAIL the district-sized bake was refused")
 		return
-	if not _nav.register_district(DISTRICT, bake as RefCounted):
+	if not _nav.register_district(DISTRICT, bake):
 		_fail("FAIL NavService refused the district-sized field")
 		return
 	var stats := _nav.district_stats(DISTRICT)
@@ -974,12 +974,12 @@ func _paint_into(brush: CityBrush) -> void:
 
 
 func _register_field() -> bool:
-	var volume = CityVoxelNativeScript.make_volume()
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	var offline: CityBrush = CityBrushScript.new() as CityBrush
 	offline.use_offline_volume(volume)
 	_paint_into(offline)
 	var tables := _nav.solidity_tables()
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		_origin,
@@ -996,7 +996,7 @@ func _register_field() -> bool:
 	if not ok:
 		_fail("FAIL bake_from_volume rejected the test field")
 		return false
-	if not _nav.register_district(DISTRICT, bake as RefCounted):
+	if not _nav.register_district(DISTRICT, bake):
 		_fail("FAIL NavService refused district %s" % str(DISTRICT))
 		return false
 	var stats := _nav.district_stats(DISTRICT)

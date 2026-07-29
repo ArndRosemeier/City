@@ -1,4 +1,5 @@
 ## Stacked HUD: one sickly glowing line per active tendril, remaining value centered.
+class_name InfectionTendrilHud
 extends CanvasLayer
 
 @export var refresh_sec: float = 0.12
@@ -67,9 +68,10 @@ func _rebuild_from_director() -> void:
 	for entry in snapshot:
 		if not (entry is Dictionary):
 			continue
-		var tid := int(entry.get("id", -1))
-		var value := int(entry.get("value", entry.get("mass", 0)))
-		var depleted := bool(entry.get("depleted", value <= 0))
+		var row_data := entry as Dictionary
+		var tid := int(row_data.get("id", -1))
+		var value := int(row_data.get("value", row_data.get("mass", 0)))
+		var depleted := bool(row_data.get("depleted", value <= 0))
 		if tid < 0:
 			continue
 		alive[tid] = true

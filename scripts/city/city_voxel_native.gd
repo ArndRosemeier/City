@@ -54,37 +54,37 @@ static func ensure_loaded() -> bool:
 	return true
 
 
-static func make_volume() -> Object:
+static func make_volume() -> NativeOfflineVoxelVolume:
 	require_loaded()
-	var vol: Object = ClassDB.instantiate(VOLUME_CLASS)
+	var vol := ClassDB.instantiate(VOLUME_CLASS) as NativeOfflineVoxelVolume
 	if vol == null:
 		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % VOLUME_CLASS)
 		assert(false, "NativeOfflineVoxelVolume instantiate failed")
 	return vol
 
 
-static func make_cascade_debris() -> Node:
+static func make_cascade_debris() -> NativeCascadeDebris:
 	require_loaded()
-	var node: Object = ClassDB.instantiate(DEBRIS_CLASS)
-	if node == null or not (node is Node):
+	var node := ClassDB.instantiate(DEBRIS_CLASS) as NativeCascadeDebris
+	if node == null:
 		push_error("CityVoxelNative: ClassDB.instantiate(%s) failed" % DEBRIS_CLASS)
 		assert(false, "NativeCascadeDebris instantiate failed")
-	return node as Node
+	return node
 
 
 ## One district's span field. Created on a bake worker; hand it to a NativeNavWorld after.
-static func make_nav_bake() -> Object:
+static func make_nav_bake() -> NativeNavBake:
 	require_loaded()
-	var bake: Object = ClassDB.instantiate(NAV_BAKE_CLASS)
+	var bake := ClassDB.instantiate(NAV_BAKE_CLASS) as NativeNavBake
 	if bake == null:
 		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % NAV_BAKE_CLASS)
 		assert(false, "NativeNavBake instantiate failed")
 	return bake
 
 
-static func make_nav_world() -> Object:
+static func make_nav_world() -> NativeNavWorld:
 	require_loaded()
-	var world: Object = ClassDB.instantiate(NAV_WORLD_CLASS)
+	var world := ClassDB.instantiate(NAV_WORLD_CLASS) as NativeNavWorld
 	if world == null:
 		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % NAV_WORLD_CLASS)
 		assert(false, "NativeNavWorld instantiate failed")

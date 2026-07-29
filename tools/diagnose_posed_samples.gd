@@ -68,7 +68,8 @@ func _run() -> void:
 
 	# Check surface count / lod
 	var am := mesh.mesh as ArrayMesh
-	print("\nsurfaces=", am.get_surface_count(), " lods=", am.get_lods().size() if am.has_method("get_lods") else "?")
+	# ArrayMesh keeps no LOD accessor — only ImporterMesh has one, and that lives at import time.
+	print("\nsurfaces=", am.get_surface_count(), " lods=?")
 	print("skin binds=", skin.get_bind_count())
 
 	quit(0)

@@ -22,7 +22,7 @@ var _active: bool = false
 static func spawn(host: Node, world_pos: Vector3, radius_m: float) -> void:
 	if host == null or not is_instance_valid(host):
 		return
-	var script: Script = load("res://scripts/city/blast_flash_vfx.gd") as Script
+	var script := load("res://scripts/city/blast_flash_vfx.gd") as GDScript
 	var flash: Node = script.new() as Node
 	flash.name = "BlastFlash"
 	host.add_child(flash)

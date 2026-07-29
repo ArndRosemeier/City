@@ -47,9 +47,9 @@ func _log_error(
 		loc = "%s (%s)" % [loc, function]
 	## Append a short backtrace tip when present (debug builds).
 	if script_backtraces != null and script_backtraces.size() > 0:
-		var bt: Variant = script_backtraces[0]
-		if bt != null and bt.has_method("format"):
-			var formatted: String = str(bt.call("format", 0, 6))
+		var bt := script_backtraces[0] as ScriptBacktrace
+		if bt != null:
+			var formatted := bt.format(0, 6)
 			if not formatted.is_empty():
 				detail = "%s\n%s" % [detail, formatted]
 	_enqueue(kind, detail, loc, error_type)

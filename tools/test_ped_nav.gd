@@ -700,8 +700,8 @@ func _flat_distance(a: Vector3, b: Vector3) -> float:
 # ---------------------------------------------------------------------------
 
 ## Pavement, carriageway, pavement, with a painted crossing every ten metres.
-func _bake_street() -> RefCounted:
-	var volume = CityVoxelNativeScript.make_volume()
+func _bake_street() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(STREET_SX, 1, STREET_SZ), VoxelMaterial.CONCRETE)
 	volume.fill_box(
 		Vector3i(0, 0, ROAD_Z0), Vector3i(STREET_SX, 1, ROAD_Z1), VoxelMaterial.ASPHALT
@@ -715,7 +715,7 @@ func _bake_street() -> RefCounted:
 		)
 		x += CROSSWALK_PITCH
 	var tables := _nav.solidity_tables()
-	var bake = CityVoxelNativeScript.make_nav_bake()
+	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		STREET_ORIGIN,
@@ -732,7 +732,7 @@ func _bake_street() -> RefCounted:
 	if not ok:
 		_fail("FAIL bake_from_volume rejected the street tile")
 		return null
-	return bake as RefCounted
+	return bake
 
 
 ## The pavement this street carries: a run of kerb pads down each side, and one crossing per

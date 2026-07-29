@@ -10,7 +10,7 @@ const ShowcaseHudScript := preload("res://scripts/showcase_hud.gd")
 
 var _orbit_paused: bool = false
 var _orbit_t: float = 0.0
-var _hud: CanvasLayer
+var _hud: ShowcaseHud
 
 
 func _ready() -> void:

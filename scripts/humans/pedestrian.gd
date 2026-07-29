@@ -56,9 +56,9 @@ func _load_body() -> void:
 		_create_fallback_body()
 		return
 	var packed := load(path)
-	var instance: Node = null
+	var instance: Node3D = null
 	if packed is PackedScene:
-		instance = packed.instantiate()
+		instance = (packed as PackedScene).instantiate() as Node3D
 	else:
 		push_error("Pedestrian: %s did not load as PackedScene" % path)
 		_create_fallback_body()

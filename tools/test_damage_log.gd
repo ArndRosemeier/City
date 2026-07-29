@@ -7,11 +7,12 @@ const PlayerHealthScript := preload("res://scripts/city/player_health.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const UiLayersScript := preload("res://scripts/city/ui_layers.gd")
+const DamageLogScript := preload("res://scripts/debug/damage_log.gd")
 
 
 func _ready() -> void:
 	var failed := false
-	var log_node := get_tree().root.get_node_or_null("DamageLog")
+	var log_node := get_tree().root.get_node_or_null("DamageLog") as DamageLogScript
 	if log_node == null:
 		push_error("FAIL DamageLog autoload missing")
 		print("RESULT: FAILED")
@@ -61,9 +62,11 @@ func _ready() -> void:
 	if entries.size() != 4:
 		push_error("FAIL expected 4 entries after lethal sequence, got %d" % entries.size())
 		failed = true
-	elif not bool(entries[3].get("fatal", false)):
-		push_error("FAIL last orb should be fatal")
-		failed = true
+	else:
+		var last: Dictionary = entries[3]
+		if not bool(last.get("fatal", false)):
+			push_error("FAIL last orb should be fatal")
+			failed = true
 
 	log_node.call("set_overlay_enabled", true)
 	if not bool(log_node.call("is_overlay_enabled")):

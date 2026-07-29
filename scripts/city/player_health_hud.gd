@@ -5,6 +5,7 @@
 ## split into four segments instead of one smooth track, and it is captioned with a heart. Two
 ## coloured rectangles of the same shape in the same place would be a UI bug that only shows up
 ## when someone dies while their energy was low.
+class_name PlayerHealthHud
 extends CanvasLayer
 
 const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")

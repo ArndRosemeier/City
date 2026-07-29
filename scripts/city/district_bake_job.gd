@@ -63,12 +63,12 @@ static func bake(params: Dictionary) -> Dictionary:
 				gen.paint_cell_structures(cx2, cz2)
 		gen.decorate_open_spaces()
 
-	var volume = gen.get_offline_volume()
+	var volume: NativeOfflineVoxelVolume = gen.get_offline_volume()
 	if volume == null:
 		return {"ok": false, "error": "volume missing"}
 
 	var blocks: Dictionary = volume.export_blocks_u16()
-	var nav_bake: RefCounted = null
+	var nav_bake: NativeNavBake = null
 	var nav_stats: Dictionary = {}
 	if bool(params.get("bake_nav", false)):
 		var nav: Dictionary = _bake_nav(params, volume, blocks, origin, size_x, size_z, coord)
@@ -107,7 +107,7 @@ static func bake(params: Dictionary) -> Dictionary:
 ## Span field for the district we just painted. Returns {ok, error, bake, stats}.
 static func _bake_nav(
 	params: Dictionary,
-	volume: Object,
+	volume: NativeOfflineVoxelVolume,
 	blocks: Dictionary,
 	origin: Vector3i,
 	size_x: int,
@@ -123,9 +123,7 @@ static func _bake_nav(
 	var solid_climbable: PackedByteArray = tables["climbable"]
 	var link_params: Dictionary = params.get("nav_link_params", {})
 	var y_range := _voxel_y_range(blocks)
-	## NativeNavBake, kept untyped like every other GDExtension handle so scripts still
-	## parse when the DLL is being rebuilt.
-	var bake_obj = CityVoxelNativeScript.make_nav_bake()
+	var bake_obj := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
 	var ok: bool = bake_obj.bake_from_volume(
 		volume,
 		origin,

@@ -63,7 +63,7 @@ const DISTINCT_SEED_MAX := 80
 const FIT_EPS := 0.001
 
 var _failed := false
-var _volume: Object = null
+var _volume: NativeOfflineVoxelVolume = null
 
 
 func _fail(msg: String) -> void:
@@ -116,7 +116,7 @@ func _ready() -> void:
 		_fail("FAIL the bake produced no castle layout")
 		_quit()
 		return
-	_volume = gen.get_offline_volume()
+	_volume = gen.get_offline_volume() as NativeOfflineVoxelVolume
 	if _volume == null:
 		_fail("FAIL the bake kept no voxel volume to probe")
 		_quit()
@@ -1254,7 +1254,7 @@ func _check_keep_door_voxels() -> void:
 		var l := gen.get_castle_layout()
 		if l == null or l.keep_doorways.is_empty():
 			continue
-		_volume = gen.get_offline_volume()
+		_volume = gen.get_offline_volume() as NativeOfflineVoxelVolume
 		if _volume == null:
 			_fail("FAIL seed %d's bake kept no voxel volume to probe" % s)
 			_volume = keep

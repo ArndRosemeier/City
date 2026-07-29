@@ -283,6 +283,42 @@ the wait itself and fail loudly when the bound is exceeded** — a hang is the m
 failure there is, and a hung headless Godot also holds `city_voxel.dll` open, which blocks
 every later `tools/build_city_voxel.ps1` until it is killed.
 
+## Catching script errors before the game runs
+
+`test_scripts_compile` loads every `.gd` under `scripts/`, `tools/` and `addons/` and fails on
+any that does not compile. It takes ~3 s, so run it before launching:
+
+```
+powershell -File tools\run_test.ps1 test_scripts_compile
+```
+
+By default GDScript only checks a member access when the static type is known, so a wrong
+method name reached through an untyped value stayed invisible until that line ran. `project.godot`
+therefore raises two warnings to errors:
+
+```
+[debug]
+
+gdscript/warnings/unsafe_property_access=2
+gdscript/warnings/unsafe_method_access=2
+```
+
+A member the analyser cannot find on the inferred type is now a **parse error**, which means
+`test_scripts_compile` catches it. The fix is always to declare the real type — nearly every
+script has a `class_name` — never to route around the check with `has_method()` / `call("name")`.
+Adding a `class_name` needs the global class cache rebuilt before it resolves:
+
+```
+tools\godot\Godot_v4.6-voxel_win64.exe --headless --path . --import
+```
+
+Checking one file in isolation is `--check-only --script res://path.gd`, but that mode does not
+register autoloads, so `Identifier not found: CityProfiler` from it is an artefact of the mode
+rather than a real error. `test_scripts_compile` runs as a scene and does not have that blind spot.
+
+`untyped_declaration` and `unsafe_call_argument` are left at warning level; the codebase still
+has ~1550 of those.
+
 ## Design rules
 
 - Humans and cars are **meshes**, not voxels.
