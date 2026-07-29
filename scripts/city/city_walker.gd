@@ -3122,18 +3122,24 @@ func _aim_point_at_cursor() -> Vector3:
 	return _aim_ray_at_cursor()["point"] as Vector3
 
 
-## Ground / wall under the cursor — no agent magnet (builds shouldn't snap to peds).
+## Ground / wall under the cursor — physics only (builds shouldn't snap to peds or foliage).
 func aim_ground_at_cursor() -> Dictionary:
-	return _aim_ray_at_cursor(false)
+	return _aim_ray_at_cursor(false, Vector3.INF, false)
+
+
+## Physics + destructible voxel march; never agent magnet (meteor / world powers).
+func aim_world_at_cursor() -> Dictionary:
+	return _aim_ray_at_cursor(false, Vector3.INF, true)
 
 
 ## Camera/crosshair ray: point + normal (UP if miss / far clip).
-## Combat aim (magnet_agents) also voxel-marches so walk-through park mats
-## (bark/leaves/planters) stay targetable without solid collision.
+## probe_destructibles voxel-marches so walk-through park mats (bark/leaves/planters)
+## stay targetable without solid collision. magnet_agents snaps past geometry onto peds/cars.
 ## shot_origin: second agent-magnet probe (eyes / hand). Empty → eye laser origin.
 func _aim_ray_at_cursor(
 	magnet_agents: bool = true,
-	shot_origin: Vector3 = Vector3.INF
+	shot_origin: Vector3 = Vector3.INF,
+	probe_destructibles: bool = true
 ) -> Dictionary:
 	if _camera == null:
 		var fallback := global_position - global_transform.basis.z * 10.0
@@ -3162,7 +3168,7 @@ func _aim_ray_at_cursor(
 		aim_point = hit["position"] as Vector3
 		aim_normal = hit["normal"] as Vector3
 	var root := _city_root()
-	if magnet_agents and root != null and root.has_method("probe_destructible_ray"):
+	if probe_destructibles and root != null and root.has_method("probe_destructible_ray"):
 		## Full ray — trees sit in front of ground/walls the physics hit would prefer.
 		var vhit: Variant = root.call("probe_destructible_ray", from, to)
 		if vhit is Dictionary and not (vhit as Dictionary).is_empty():
@@ -3213,7 +3219,7 @@ func _blaster_shot_endpoints() -> Dictionary:
 
 
 func _request_infection_meteor() -> void:
-	var aim := _aim_ray_at_cursor()
+	var aim := aim_world_at_cursor()
 	meteor_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
