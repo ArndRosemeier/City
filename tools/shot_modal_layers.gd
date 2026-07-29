@@ -7,6 +7,11 @@
 ## last shot pushes the profiler overlay and an error report on top of an open modal, because
 ## the one thing a panel must never be able to do is hide a failure.
 ##
+## The J-hop district picker is photographed alongside them, at the top of its list and scrolled
+## down to Castle. It is a takeover rather than a modal, but it is the surface that has actually
+## run out of room: nine themes are taller than the window, and the last of them was laid out
+## below the bottom edge until the rows were given something to scroll in.
+##
 ## Needs a renderer: the panel previews are SubViewport render targets.
 ##
 ## Run: powershell -File tools\run_test.ps1 shot_modal_layers -Rendered
@@ -17,6 +22,8 @@ const WALKER_TIMEOUT_MS := 120000
 const INVENTORY_PNG := "res://tools/modal_inventory.png"
 const SETTINGS_PNG := "res://tools/modal_settings.png"
 const DEBUG_PNG := "res://tools/modal_debug_above.png"
+const PICKER_TOP_PNG := "res://tools/district_picker_top.png"
+const PICKER_BOTTOM_PNG := "res://tools/district_picker_bottom.png"
 ## One stack per gem type, so the panel has something to show.
 const GEM_TALLIES: Array[int] = [7, 3, 11, 2, 40, 1]
 const TRAP_COST := 5
@@ -75,6 +82,11 @@ func _ready() -> void:
 	await _frames(10)
 	await _shoot(DEBUG_PNG)
 	settings.close_panel()
+	## The debug band is the subject of the shot above and would be in front of every one below.
+	_set_error_panel_shown(false)
+	_set_profiler_shown(false)
+
+	await _shoot_district_picker(city, walker)
 
 	_finish()
 
@@ -82,6 +94,44 @@ func _ready() -> void:
 func _finish() -> void:
 	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
+
+
+## Two shots of the J-hop picker, at the top of the list and scrolled down to the last theme,
+## plus the thing a screenshot cannot show: the picker is a full-screen takeover, so every
+## gameplay hotkey has to stop at it. Parking the walker is not enough — the build strip and the
+## arcade cabinet ask the gate, not the walker's physics.
+func _shoot_district_picker(city: CityRoot, walker: CityWalker) -> void:
+	var splash := _splash(city) as LoadingSplash
+	if splash == null:
+		_fail("FAIL the loading splash is not a LoadingSplash")
+		return
+	if UiInputGate.gameplay_blocked(walker):
+		_fail("FAIL gameplay input was already blocked with nothing on screen")
+		return
+
+	splash.open_district_picker()
+	await _frames(10)
+	if UiInputGate.gameplay_blocked(walker):
+		print("OK the open picker stops gameplay input")
+	else:
+		_fail("FAIL gameplay hotkeys still reach the city behind the open district picker")
+	await _shoot(PICKER_TOP_PNG)
+
+	var last := DistrictTheme.COUNT - 1
+	var label := DistrictTheme.make(last).display_name
+	splash.reveal_theme_button(last)
+	await _frames(6)
+	var rect := splash.theme_button(last).get_global_rect()
+	if get_viewport().get_visible_rect().encloses(rect):
+		print("OK %s is on screen at %s with the list scrolled down" % [label, rect])
+	else:
+		_fail("FAIL %s is at %s, off screen even scrolled to the bottom" % [label, rect])
+	await _shoot(PICKER_BOTTOM_PNG)
+
+	splash.hide_splash()
+	await _frames(10)
+	if UiInputGate.gameplay_blocked(walker):
+		_fail("FAIL gameplay input stayed off after the picker closed")
 
 
 ## An open modal owns the screen: only the debug band may draw in front of it, and the HUD it
@@ -135,7 +185,7 @@ func _check_debug_outranks(modal_layer: int) -> void:
 	if errors.layer <= profiler.layer:
 		_fail("FAIL the error panel (layer %d) is not above the profiler (layer %d)"
 			% [errors.layer, profiler.layer])
-	profiler.call("set_overlay_enabled", true)
+	_set_profiler_shown(true)
 	_set_error_panel_shown(true)
 	errors.call(
 		"enqueue_error",
@@ -225,6 +275,14 @@ func _set_error_panel_shown(shown: bool) -> void:
 		_fail("FAIL no ErrorOverlay autoload")
 		return
 	panel.visible = shown
+
+
+func _set_profiler_shown(shown: bool) -> void:
+	var profiler := get_tree().root.get_node_or_null("CityProfiler") as CanvasLayer
+	if profiler == null:
+		_fail("FAIL no CityProfiler autoload")
+		return
+	profiler.call("set_overlay_enabled", shown)
 
 
 func _pin_hour(city: CityRoot) -> void:

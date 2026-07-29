@@ -15,12 +15,18 @@ const BTN_HOVER := Color(0.42, 0.28, 0.16, 1.0)
 const BTN_PRESS := Color(0.55, 0.36, 0.18, 1.0)
 const TEXT_MAIN := Color(1.0, 0.94, 0.82, 0.98)
 const TEXT_MUTED := Color(0.86, 0.78, 0.66, 0.9)
+const PICKER_WIDTH := 520.0
+## Clearance kept around the panel, so the picker never runs into the window edge.
+const PICKER_MARGIN := 24
 
 var _root: Control
 var _status: Label
 var _picker: Control
 var _picker_title: Label
 var _picker_subtitle: Label
+var _picker_scroll: ScrollContainer
+var _picker_list: VBoxContainer
+var _theme_buttons: Dictionary[int, Button] = {}
 var _fading: bool = false
 var _awaiting_choice: bool = false
 
@@ -112,15 +118,23 @@ func hide_splash() -> void:
 	)
 
 
-## Blocks until the player picks a district type. Returns a DistrictTheme id.
-func prompt_district_choice(
+## True while the splash is actually holding the screen, which is what every gameplay input
+## handler has to stop at. A fade-out has already handed the world back, so the last half
+## second of one must not keep the hotkeys switched off.
+func owns_screen() -> bool:
+	return visible and not _fading
+
+
+## Puts the armed picker on screen without waiting for the answer, for callers that drive the
+## rows themselves. `prompt_district_choice` is this plus the await.
+func open_district_picker(
 	title_text: String = "Jump to District",
 	subtitle_text: String = "Pick a type — we'll teleport you to the nearest matching tile.",
 	status_text: String = "Choose a district type",
-) -> int:
+) -> void:
 	if _picker == null:
-		push_error("LoadingSplash.prompt_district_choice: picker missing")
-		return DistrictTheme.CORE_HIGHRISE
+		push_error("LoadingSplash.open_district_picker: picker missing")
+		return
 	_fading = false
 	visible = true
 	if _root != null:
@@ -131,12 +145,58 @@ func prompt_district_choice(
 		_picker_subtitle.text = subtitle_text
 	_picker.visible = true
 	_awaiting_choice = true
+	## A previous hop leaves the list wherever it was scrolled to.
+	_picker_scroll.scroll_vertical = 0
 	set_status(status_text)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+## Blocks until the player picks a district type. Returns a DistrictTheme id.
+func prompt_district_choice(
+	title_text: String = "Jump to District",
+	subtitle_text: String = "Pick a type — we'll teleport you to the nearest matching tile.",
+	status_text: String = "Choose a district type",
+) -> int:
+	if _picker == null:
+		push_error("LoadingSplash.prompt_district_choice: picker missing")
+		return DistrictTheme.CORE_HIGHRISE
+	open_district_picker(title_text, subtitle_text, status_text)
 	var theme_id: int = await district_chosen
 	_awaiting_choice = false
 	_hide_picker()
 	return theme_id
+
+
+## The picker row for a theme id. Rows are built straight off DistrictTheme, so every id below
+## COUNT has one and anything else is a caller bug.
+func theme_button(theme_id: int) -> Button:
+	if not _theme_buttons.has(theme_id):
+		push_error("LoadingSplash.theme_button: no picker row for theme id %d" % theme_id)
+		return null
+	return _theme_buttons[theme_id]
+
+
+## Every picker row, in theme id order.
+func theme_rows() -> Array[Button]:
+	var out: Array[Button] = []
+	for theme_id: int in _theme_buttons:
+		out.append(_theme_buttons[theme_id])
+	return out
+
+
+## The rectangle the rows are actually drawn in. Anything the list has scrolled outside this is
+## clipped away, however neatly it was laid out.
+func theme_list_rect() -> Rect2:
+	return _picker_scroll.get_global_rect()
+
+
+## Scrolls a row fully into view. From nine themes on the list is taller than the panel, so a
+## row past the fold is only clickable once the picker has been scrolled down to it.
+func reveal_theme_button(theme_id: int) -> void:
+	var btn := theme_button(theme_id)
+	if btn == null:
+		return
+	_picker_scroll.ensure_control_visible(btn)
 
 
 func _hide_picker() -> void:
@@ -160,15 +220,25 @@ func _build_picker() -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	_picker.add_child(dim)
 
-	var center := CenterContainer.new()
-	center.name = "Center"
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_picker.add_child(center)
+	## A MarginContainer rather than a CenterContainer: a CenterContainer hands its child the
+	## full minimum height whatever the window is, so the nine rows the panel wants — 838 of a
+	## 720-unit viewport — were simply laid out past the bottom edge, with Castle fifteen pixels
+	## below it where no click could ever land. Bounding the panel to the window instead makes
+	## the overflow the ScrollContainer's problem, and the layout does the arithmetic.
+	var frame := MarginContainer.new()
+	frame.name = "Frame"
+	frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for side: String in ["left", "right", "top", "bottom"]:
+		frame.add_theme_constant_override("margin_%s" % side, PICKER_MARGIN)
+	_picker.add_child(frame)
 
 	var panel := PanelContainer.new()
 	panel.name = "Panel"
-	panel.custom_minimum_size = Vector2(520, 0)
+	panel.custom_minimum_size = Vector2(PICKER_WIDTH, 0.0)
+	## Full height, so the rows get every unit the window can spare; 520 wide and centred.
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	panel.size_flags_vertical = Control.SIZE_FILL
 	var panel_sb := StyleBoxFlat.new()
 	panel_sb.bg_color = PANEL_BG
 	panel_sb.set_corner_radius_all(10)
@@ -179,7 +249,7 @@ func _build_picker() -> void:
 	panel_sb.content_margin_top = 18
 	panel_sb.content_margin_bottom = 18
 	panel.add_theme_stylebox_override("panel", panel_sb)
-	center.add_child(panel)
+	frame.add_child(panel)
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 10)
@@ -206,9 +276,25 @@ func _build_picker() -> void:
 	spacer.custom_minimum_size = Vector2(0, 4)
 	vbox.add_child(spacer)
 
+	## Takes whatever height the title and the panel margins leave, and scrolls the rest.
+	_picker_scroll = ScrollContainer.new()
+	_picker_scroll.name = "ThemeScroll"
+	_picker_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_picker_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_picker_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_picker_scroll)
+
+	_picker_list = VBoxContainer.new()
+	_picker_list.name = "ThemeList"
+	_picker_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_picker_list.add_theme_constant_override("separation", 10)
+	_picker_scroll.add_child(_picker_list)
+
+	## One row per DistrictTheme, so a theme added to the enum cannot be missing from the hop.
 	for theme_id in range(DistrictTheme.COUNT):
-		var theme := DistrictTheme.make(theme_id)
-		vbox.add_child(_make_theme_button(theme))
+		var btn := _make_theme_button(DistrictTheme.make(theme_id))
+		_theme_buttons[theme_id] = btn
+		_picker_list.add_child(btn)
 
 
 func _make_theme_button(theme: DistrictTheme) -> Button:

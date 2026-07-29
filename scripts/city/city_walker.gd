@@ -484,6 +484,8 @@ func is_blocking_ui_open() -> bool:
 		return true
 	if parent.has_method("is_inventory_open") and bool(parent.call("is_inventory_open")):
 		return true
+	if parent.has_method("is_splash_open") and bool(parent.call("is_splash_open")):
+		return true
 	return false
 
 

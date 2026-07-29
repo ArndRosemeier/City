@@ -331,6 +331,14 @@ func is_modal_open() -> bool:
 	return is_settings_open() or is_inventory_open()
 
 
+## True while the splash covers the world — boot, a hop in flight, and the J picker. It is a
+## screen takeover rather than a modal, but gameplay input has to stop at it just the same:
+## parking the walker only stops walking, and the meteor, build and cabinet keys all kept
+## firing into the city behind the open picker.
+func is_splash_open() -> bool:
+	return _loading_splash != null and bool(_loading_splash.call("owns_screen"))
+
+
 func _is_character_editor_open() -> bool:
 	if _walker == null or not is_instance_valid(_walker):
 		return false
@@ -2883,8 +2891,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "inventory")):
 		## The character editor is a modal of the walker's own, and two open panels would
-		## stack in whatever order UiLayers happens to give them.
-		if _game_over or _booting or _is_character_editor_open():
+		## stack in whatever order UiLayers happens to give them. The splash outranks the whole
+		## modal band, so a panel opened under it is invisible and still takes the keys.
+		if _game_over or _booting or _is_character_editor_open() or is_splash_open():
 			return
 		if _inventory_panel != null:
 			_inventory_panel.call("toggle_panel")
@@ -2896,8 +2905,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if bool(ctl.call("matches_key_pressed", ek, "day_night")):
-		## World keys stop at an open panel; the debug toggles below deliberately do not.
-		if _game_over or is_modal_open():
+		## World keys stop at an open panel or the splash; the debug toggles below deliberately
+		## do not.
+		if _game_over or is_modal_open() or is_splash_open():
 			return
 		if _day_night != null and _day_night.has_method("toggle_day_night"):
 			_day_night.call("toggle_day_night")
