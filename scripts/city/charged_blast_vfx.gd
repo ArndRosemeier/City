@@ -38,8 +38,6 @@ var _elapsed: float = 0.0
 var _phase: float = 0.0
 var _prev_pos: Vector3 = Vector3.ZERO
 var _obstacle_probe: Callable = Callable()
-var _tracking_actor: Node3D = null
-var _tracking_offset: Vector3 = Vector3.ZERO
 
 
 func setup() -> void:
@@ -48,11 +46,6 @@ func setup() -> void:
 
 func set_obstacle_probe(probe: Callable) -> void:
 	_obstacle_probe = probe
-
-
-func set_tracking_target(actor: Node3D, world_point: Vector3) -> void:
-	_tracking_actor = actor
-	_tracking_offset = actor.to_local(world_point) if actor != null else Vector3.ZERO
 
 
 func is_firing() -> bool:
@@ -126,11 +119,6 @@ func _process(delta: float) -> void:
 	if not _active:
 		set_process(false)
 		return
-	if _tracking_actor != null:
-		if is_instance_valid(_tracking_actor):
-			_target = _tracking_actor.to_global(_tracking_offset)
-		else:
-			_tracking_actor = null
 	_elapsed += delta
 	_phase += delta
 	var t := clampf(_elapsed / _duration, 0.0, 1.0)

@@ -34,7 +34,6 @@ const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
 const PlayerInventoryPanelScript := preload("res://scripts/city/player_inventory_panel.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
-const CityTargetingScript := preload("res://scripts/city/city_targeting.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -106,11 +105,9 @@ var _player_score: int = 0
 var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
 var _inventory_panel: Node
 var _monster_summon_panel: Node
-## Free-cursor voxel aim captured when N opens the summon panel, before the cursor moves to UI.
-var _summon_aim: CityTargeting.Result = null
-var _last_summon_requested_point: Vector3 = Vector3.INF
-var _last_summon_actual_point: Vector3 = Vector3.INF
-var _last_summoned_unit: UndeadUnit = null
+## Look-aim captured when N opens the summon panel (before mouse is released onto the UI).
+## Empty when no pending summon. Same dictionary shape as CityWalker.aim_world_at_cursor().
+var _summon_aim: Dictionary = {}
 ## Cached building-nibble probe — the voxel ring scan is far too heavy to run every goal tick.
 var _nibble_cache_from: Vector3 = Vector3.INF
 var _nibble_cache_max_m: float = -1.0
@@ -248,6 +245,7 @@ func _cli_auto_summon_probe() -> void:
 	if _walker == null or not is_instance_valid(_walker):
 		push_error("CityRoot: --auto-summon needs a walker")
 		return
+	var offset_m := _cli_float_flag("--auto-summon-offset=", 28.0)
 	var quit_after := _cli_has_flag("--auto-summon-quit")
 	var use_look := _cli_has_flag("--auto-summon-look")
 	## Pitch toward the plaza like a player looking at ground; free OS cursor may be anywhere.
@@ -257,14 +255,9 @@ func _cli_auto_summon_probe() -> void:
 	## Let physics/voxel colliders settle under the camera before sampling the shared ray.
 	await get_tree().physics_frame
 	await get_tree().physics_frame
-	var source := (
-		CityTargeting.ScreenSource.LOOK_CROSSHAIR
-		if use_look
-		else CityTargeting.ScreenSource.FREE_CURSOR
-	)
-	var look_aim := walker.resolve_target(CityTargeting.TargetMode.VOXELS_ONLY, source)
-	var look_hit := look_aim.did_hit()
-	var look_point := look_aim.point
+	var look_aim: Dictionary = walker.aim_world_at_cursor()
+	var look_hit := bool(look_aim.get("did_hit", false))
+	var look_point: Vector3 = look_aim.get("point", Vector3.INF) as Vector3
 	print(
 		"CityRoot AUTO-SUMMON: look-aim did_hit=%s point=%s (shared meteor/summon ray)"
 		% [look_hit, look_point]
@@ -274,20 +267,30 @@ func _cli_auto_summon_probe() -> void:
 		if quit_after:
 			get_tree().quit(1)
 		return
-	var aim_point := look_point
-	_summon_aim = look_aim
+	var fwd := -_walker.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.0001:
+		fwd = Vector3(0.0, 0.0, -1.0)
+	else:
+		fwd = fwd.normalized()
+	var aim_point := look_point if use_look else _walker.global_position + fwd * offset_m
+	## Feed summon_monster_at_aim the same dictionary shape capture_summon_aim stores.
+	_summon_aim = look_aim if use_look else {
+		"point": aim_point,
+		"normal": Vector3.UP,
+		"did_hit": true,
+		"cam_from": look_aim.get("cam_from", _walker.global_position),
+		"cam_dir": look_aim.get("cam_dir", fwd),
+		"voxel": Vector3i(),
+		"has_voxel": false,
+	}
 	CityProfiler.set_overlay_enabled(true)
 	print(
-		"CityRoot AUTO-SUMMON: body=%s aim=%s source=%s (player=%s)"
-		% [
-			body_id,
-			aim_point,
-			CityTargetingScript.screen_source_name(source),
-			_walker.global_position,
-		]
+		"CityRoot AUTO-SUMMON: body=%s aim=%s offset=%.1fm use_look=%s (player=%s)"
+		% [body_id, aim_point, offset_m, use_look, _walker.global_position]
 	)
 	var unit := summon_monster_at_aim(body_id)
-	_summon_aim = null
+	_summon_aim.clear()
 	if unit == null:
 		push_error("CityRoot AUTO-SUMMON: spawn failed for '%s'" % body_id)
 		if quit_after:
@@ -348,115 +351,6 @@ const AUTO_FIRE_PIN_SLACK_M := 0.5
 const AUTO_FIRE_MIN_RANGE_M := 8.0
 
 
-## Normal-startup probe: no camera changes and no spawned target. Every action enters through its
-## real binding, then the exact combat result captured by CityWalker is inspected.
-func _cli_startup_fire_probe() -> void:
-	if not _cli_has_flag("--startup-fire-probe"):
-		return
-	var quit_after := _cli_has_flag("--startup-fire-probe-quit")
-	if _walker == null or not is_instance_valid(_walker):
-		push_error("CityRoot STARTUP-FIRE: no walker")
-		if quit_after:
-			get_tree().quit(1)
-		return
-	for _i in range(AUTO_FIRE_DECK_TRIES):
-		if not is_splash_open():
-			break
-		await get_tree().physics_frame
-	var walker := _walker as CityWalker
-	var camera := walker.get_camera()
-	if camera == null:
-		push_error("CityRoot STARTUP-FIRE: no camera")
-		if quit_after:
-			get_tree().quit(1)
-		return
-	print(
-		"CityRoot STARTUP-FIRE: default_pitch=%.4f camera=%s player=%s"
-		% [walker._pitch, camera.global_position, walker.global_position]
-	)
-	var failed := false
-	for action: String in ["beam", "blast", "laser"]:
-		var previous := walker.last_combat_target()
-		_auto_fire_send(action, true, _aim_crosshair(camera))
-		if action == "blast":
-			await get_tree().create_timer(0.12).timeout
-		_auto_fire_send(action, false, _aim_crosshair(camera))
-		var wait_sec := 0.45 if action == "blast" else 0.08
-		await get_tree().create_timer(wait_sec).timeout
-		var result := walker.last_combat_target()
-		if result == null or result == previous:
-			push_error("CityRoot STARTUP-FIRE: %s produced no combat target" % action)
-			failed = true
-			continue
-		var final_delta := result.point - result.shot_origin
-		if final_delta.length_squared() < 0.0001:
-			push_error("CityRoot STARTUP-FIRE: %s produced a zero projectile direction" % action)
-			failed = true
-			continue
-		var final_dir := final_delta.normalized()
-		var camera_to_muzzle := (
-			(result.shot_origin - result.ray_origin).dot(result.ray_direction)
-		)
-		var camera_hit_from_muzzle := (
-			(result.geometry_point - result.shot_origin).dot(result.ray_direction)
-			if result.geometry_point.is_finite()
-			else INF
-		)
-		var below_look := final_dir.y - result.ray_direction.y
-		print(
-			(
-				"CityRoot STARTUP-FIRE %s camera_origin=%s muzzle=%s look=%s"
-				+ " camera_geometry=%s camera_geom_dist=%.2f camera_to_muzzle_proj=%.2f"
-				+ " camera_hit_from_muzzle_proj=%.2f muzzle_geometry=%s muzzle_geom_dist=%.2f"
-				+ " muzzle_geom_proj=%.2f muzzle_normal=%s rejected=%s"
-				+ " final=%s point=%s dir=%s below_look=%.4f"
-			)
-			% [
-				action,
-				result.ray_origin,
-				result.shot_origin,
-				result.ray_direction,
-				result.geometry_point,
-				result.geometry_distance,
-				camera_to_muzzle,
-				camera_hit_from_muzzle,
-				result.muzzle_geometry_point,
-				result.muzzle_geometry_distance,
-				result.muzzle_geometry_projection,
-				result.normal,
-				result.muzzle_geometry_rejected,
-				CityTargetingScript.kind_name(result.kind),
-				result.point,
-				final_dir,
-				below_look,
-			]
-		)
-		if final_dir.dot(result.ray_direction) < 0.95 or below_look < -0.05:
-			push_error("CityRoot STARTUP-FIRE: %s redirected below look intent" % action)
-			failed = true
-		if (
-			result.kind == CityTargeting.TargetKind.VOXEL
-			and result.muzzle_geometry_distance < AUTO_FIRE_MIN_RANGE_M
-			and result.normal.dot(Vector3.UP) > 0.65
-		):
-			push_error("CityRoot STARTUP-FIRE: %s still targets near deck" % action)
-			failed = true
-		walker._stop_blaster(true)
-		if walker._eye_laser != null:
-			walker._eye_laser.call("cancel")
-		if walker._charged_blast != null:
-			walker._charged_blast.call("cancel")
-	print("CityRoot STARTUP-FIRE: RESULT %s" % ("FAILED" if failed else "OK"))
-	if quit_after:
-		await get_tree().process_frame
-		get_tree().quit(1 if failed else 0)
-
-
-func _aim_crosshair(camera: Camera3D) -> Vector2:
-	var rect := camera.get_viewport().get_visible_rect()
-	return rect.position + rect.size * 0.5
-
-
 ## In-game blast probe: `--auto-fire=kaykit/Skeleton_Minion [--auto-fire-offset=22]
 ## [--auto-fire-action=beam|blast|laser] [--auto-fire-hold=0.6] [--auto-fire-quit]`.
 ##
@@ -491,35 +385,8 @@ func _cli_auto_fire_probe() -> void:
 		if not is_splash_open():
 			break
 		await get_tree().physics_frame
-	var locator := await _auto_fire_spawn_target(body_id, offset_m)
-	if locator == null:
-		if quit_after:
-			get_tree().quit(1)
-		return
-	var requested_spawn := locator.global_position
-	_undead.call("unregister_unit", locator)
-	locator.queue_free()
-	await get_tree().process_frame
-	var unit := await _auto_summon_via_panel_at(body_id, requested_spawn)
+	var unit := await _auto_fire_spawn_target(body_id, offset_m)
 	if unit == null:
-		if quit_after:
-			get_tree().quit(1)
-		return
-	var spawn_error := _last_summon_actual_point.distance_to(
-		_last_summon_requested_point + Vector3.UP * 0.06
-	)
-	var spawn_player_dist := _last_summon_actual_point.distance_to(walker.global_position)
-	print(
-		"CityRoot AUTO-FIRE: panel spawn requested=%s actual=%s error=%.2fm player_dist=%.2fm"
-		% [
-			_last_summon_requested_point,
-			_last_summon_actual_point,
-			spawn_error,
-			spawn_player_dist,
-		]
-	)
-	if spawn_error > 1.0 or spawn_player_dist < 20.0:
-		push_error("CityRoot AUTO-FIRE: panel summon did not preserve the distant voxel hit")
 		if quit_after:
 			get_tree().quit(1)
 		return
@@ -583,20 +450,17 @@ func _cli_auto_fire_probe() -> void:
 		"CityRoot AUTO-FIRE: action=%s body=%s unit=%s chest=%s dist_from_player=%.2fm"
 		% [action, body_id, unit.global_position, chest, walker.global_position.distance_to(chest)]
 	)
-	var geom := walker.resolve_target(
-		CityTargeting.TargetMode.VOXELS_ONLY,
-		CityTargeting.ScreenSource.LOOK_CROSSHAIR
-	)
-	var geom_point := geom.point
+	var geom: Dictionary = walker.aim_world_at_cursor()
+	var geom_point: Vector3 = geom["point"] as Vector3
 	print(
 		"CityRoot AUTO-FIRE: cam_from=%s cam_dir=%s geometry_point=%s normal=%s did_hit=%s geom_dist=%.2fm"
 		% [
 			cam_from,
 			cam_dir,
 			geom_point,
-			geom.normal,
-			geom.did_hit(),
-			geom.geometry_distance,
+			geom["normal"],
+			bool(geom["did_hit"]),
+			cam_from.distance_to(geom_point),
 		]
 	)
 	var on_ray := _query_closest_agent_hit(cam_from, cam_from + cam_dir * walker.laser_range_m)
@@ -612,22 +476,17 @@ func _cli_auto_fire_probe() -> void:
 				on_ray.get("unit", null) == unit,
 			]
 		)
-	var shot := walker._blaster_shot_endpoints()
-	var shot_origin := shot.origin
-	var shot_point := shot.target.point
-	var target := walker.resolve_target(
-		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
-		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
-		shot_origin
-	)
-	_print_target_trace("first_fire", target)
+	var shot: Dictionary = walker.call("_blaster_shot_endpoints") as Dictionary
+	var shot_origin: Vector3 = shot["origin"] as Vector3
+	var shot_point: Vector3 = shot["aim_point"] as Vector3
+	var target: Dictionary = walker.aim_combat_target(shot_origin)
 	print(
 		"CityRoot AUTO-FIRE: resolved target=%s point=%s dist=%.2fm gap_to_chest=%.2fm"
 		% [
-			CityTargetingScript.kind_name(target.kind),
-			target.point,
-			target.target_distance(shot_origin),
-			target.point.distance_to(chest),
+			"agent" if bool(target["is_agent"]) else "geometry",
+			target["point"],
+			float(target["distance"]),
+			(target["point"] as Vector3).distance_to(chest),
 		]
 	)
 	print(
@@ -682,442 +541,8 @@ func _cli_auto_fire_probe() -> void:
 		"CityRoot AUTO-FIRE: RESULT OK %s took %.2f damage off the %s"
 		% [action, before - after, body_id]
 	)
-	if is_instance_valid(unit) and unit.is_alive():
-		## Re-enable the same live body, move the player materially farther away, reacquire it,
-		## and repeat the real bound input. This is the user-reported state transition.
-		unit.set_physics_process(true)
-		var away := walker.global_position - unit.global_position
-		away.y = 0.0
-		if away.length_squared() < 0.01:
-			away = Vector3.BACK
-		walker.global_position += away.normalized() * 12.0
-		await get_tree().physics_frame
-		chest = _auto_fire_chest(unit)
-		await _auto_fire_look_at(walker, chest)
-		var second_shot := walker._blaster_shot_endpoints()
-		var second_origin := second_shot.origin
-		var second_target := walker.resolve_target(
-			CityTargeting.TargetMode.ACTORS_AND_VOXELS,
-			CityTargeting.ScreenSource.LOOK_CROSSHAIR,
-			second_origin
-		)
-		_print_target_trace("farther_fire", second_target)
-		print(
-			"CityRoot AUTO-FIRE: after_move player=%s mob=%s distance=%.2f final=%s"
-			% [
-				walker.global_position,
-				unit.global_position,
-				walker.global_position.distance_to(unit.global_position),
-				CityTargetingScript.kind_name(second_target.kind),
-			]
-		)
-		if second_target.kind != CityTargeting.TargetKind.ACTOR:
-			push_error("CityRoot AUTO-FIRE: RESULT FAILED — farther reacquire chose geometry")
-			if quit_after:
-				get_tree().quit(1)
-			return
-		var before_second := unit.health()
-		_auto_fire_send(action, true, crosshair)
-		await get_tree().create_timer(maxf(hold_sec, 0.1)).timeout
-		_auto_fire_send(action, false, crosshair)
-		await get_tree().create_timer(AUTO_FIRE_SETTLE_SEC).timeout
-		var after_second := unit.health() if is_instance_valid(unit) else 0.0
-		if before_second - after_second < 0.01:
-			push_error("CityRoot AUTO-FIRE: RESULT FAILED — farther shot dealt no damage")
-			if quit_after:
-				get_tree().quit(1)
-			return
-		print(
-			"CityRoot AUTO-FIRE: RESULT OK farther shot actor damage %.2f"
-			% (before_second - after_second)
-		)
 	if quit_after:
-		if _undead != null and _undead.has_method("clear_all"):
-			_undead.call("clear_all")
-		await get_tree().process_frame
-		await get_tree().process_frame
 		get_tree().quit(0)
-
-
-func _print_target_trace(label: String, result: CityTargeting.Result) -> void:
-	print(
-		(
-			"CityRoot AUTO-FIRE TARGET %s mode=%s source=%s origin=%s dir=%s"
-			+ " geometry=%s geom_dist=%.2f muzzle_geometry=%s muzzle_dist=%.2f"
-			+ " muzzle_proj=%.2f rejected=%s actor=%s actor_dist=%.2f final=%s"
-		)
-		% [
-			label,
-			CityTargetingScript.mode_name(result.mode),
-			CityTargetingScript.screen_source_name(result.screen_source),
-			result.ray_origin,
-			result.ray_direction,
-			result.geometry_point,
-			result.geometry_distance,
-			result.muzzle_geometry_point,
-			result.muzzle_geometry_distance,
-			result.muzzle_geometry_projection,
-			result.muzzle_geometry_rejected,
-			result.actor_point,
-			result.actor_distance,
-			CityTargetingScript.kind_name(result.kind),
-		]
-	)
-
-
-## Live facade probe: `--auto-fire-building [--auto-fire-building-quit]
-## [--auto-fire-building-action=beam|blast|laser|all]`.
-##
-## Finds real building fabric near the player, centres LOOK_CROSSHAIR on the facade, fires the
-## shared combat path, and asserts the endpoint is VOXEL on the building — not the street deck
-## a few metres under the crosshair.
-func _cli_auto_fire_building_probe() -> void:
-	if not _cli_has_flag("--auto-fire-building"):
-		return
-	var quit_after := _cli_has_flag("--auto-fire-building-quit")
-	var action_flag := _cli_string_flag("--auto-fire-building-action=")
-	if action_flag.is_empty():
-		action_flag = "all"
-	var actions: PackedStringArray = ["beam", "blast", "laser"]
-	if action_flag != "all":
-		if not AUTO_FIRE_BINDS.has(action_flag):
-			push_error(
-				"CityRoot AUTO-FIRE-BUILDING: action must be beam/blast/laser/all, got %s"
-				% action_flag
-			)
-			if quit_after:
-				get_tree().quit(1)
-			return
-		actions = PackedStringArray([action_flag])
-	if _walker == null or not is_instance_valid(_walker):
-		push_error("CityRoot AUTO-FIRE-BUILDING: no walker")
-		if quit_after:
-			get_tree().quit(1)
-		return
-	for _i in range(AUTO_FIRE_DECK_TRIES):
-		if not is_splash_open():
-			break
-		await get_tree().physics_frame
-	var walker := _walker as CityWalker
-	var facade := await _auto_fire_building_facade_point(walker)
-	if not facade.is_finite():
-		push_error("CityRoot AUTO-FIRE-BUILDING: no building facade near the player")
-		if quit_after:
-			get_tree().quit(1)
-		return
-	print(
-		"CityRoot AUTO-FIRE-BUILDING: facade=%s player=%s dist=%.2fm"
-		% [facade, walker.global_position, walker.global_position.distance_to(facade)]
-	)
-	## Soft-aim must not steal the facade for a ped/undead standing in the street.
-	if _undead != null and _undead.has_method("clear_all"):
-		_undead.call("clear_all")
-	await _auto_fire_look_at(walker, facade)
-	var cam := walker.get_camera()
-	if cam == null:
-		push_error("CityRoot AUTO-FIRE-BUILDING: no camera")
-		if quit_after:
-			get_tree().quit(1)
-		return
-	var failed := false
-	for action: String in actions:
-		await _auto_fire_look_at(walker, facade)
-		## Lift a few degrees if a living body sits on the look cone between us and the wall.
-		var combat := await _auto_fire_building_resolve(walker, facade)
-		var crosshair := _aim_crosshair(cam)
-		_print_target_trace("building_%s" % action, combat)
-		var hand := combat.shot_origin
-		if not hand.is_finite():
-			hand = (
-				walker.global_position
-				+ Vector3(0.0, 1.15 * maxf(walker.character_scale, 0.05), 0.0)
-			)
-		var shot: CityTargeting.ProjectileSolution = walker.call(
-			"_combat_projectile_solution", hand, combat, action == "beam"
-		) as CityTargeting.ProjectileSolution
-		var aim := shot.target.point
-		var flat_player := Vector3(walker.global_position.x, 0.0, walker.global_position.z)
-		var flat_aim := Vector3(aim.x, 0.0, aim.z)
-		var flat_facade := Vector3(facade.x, 0.0, facade.z)
-		var along := flat_player.distance_to(flat_aim)
-		var facade_gap := aim.distance_to(facade)
-		print(
-			(
-				"CityRoot AUTO-FIRE-BUILDING %s kind=%s aim=%s along_flat=%.2fm"
-				+ " facade_gap=%.2fm rejected=%s"
-			)
-			% [
-				action,
-				CityTargetingScript.kind_name(combat.kind),
-				aim,
-				along,
-				facade_gap,
-				combat.muzzle_geometry_rejected,
-			]
-		)
-		if combat.kind != CityTargeting.TargetKind.VOXEL:
-			push_error(
-				"CityRoot AUTO-FIRE-BUILDING: RESULT FAILED — %s kind=%s (want VOXEL on facade)"
-				% [action, CityTargetingScript.kind_name(combat.kind)]
-			)
-			failed = true
-			continue
-		if aim.y < walker.global_position.y - 1.5:
-			push_error(
-				"CityRoot AUTO-FIRE-BUILDING: RESULT FAILED — %s aim underground %s" % [action, aim]
-			)
-			failed = true
-			continue
-		if along < AUTO_FIRE_MIN_RANGE_M:
-			push_error(
-				(
-					"CityRoot AUTO-FIRE-BUILDING: RESULT FAILED — %s dumped into the ground"
-					+ " %.2fm ahead (facade hint was %.2fm)"
-				)
-				% [action, along, flat_player.distance_to(flat_facade)]
-			)
-			failed = true
-			continue
-		## Impostor hints can sit past the nearer face the look actually hits. Accept any
-		## wall-like VOXEL past min range — the bug is the street dump a few metres ahead.
-		if combat.normal.dot(Vector3.UP) > 0.65:
-			push_error(
-				"CityRoot AUTO-FIRE-BUILDING: RESULT FAILED — %s normal %s is ground-like"
-				% [action, combat.normal]
-			)
-			failed = true
-			continue
-		if facade_gap > 24.0 and along < 12.0:
-			push_error(
-				"CityRoot AUTO-FIRE-BUILDING: RESULT FAILED — %s aim %s nowhere near buildings"
-				% [action, aim]
-			)
-			failed = true
-			continue
-		## Fire through the real binding so VFX / last_combat_target also exercise the path.
-		_auto_fire_send(action, true, crosshair)
-		var hold := 0.55 if action == "blast" else 0.12
-		await get_tree().create_timer(hold).timeout
-		_auto_fire_send(action, false, crosshair)
-		await get_tree().create_timer(0.35).timeout
-		walker._stop_blaster(true)
-		if walker._eye_laser != null:
-			walker._eye_laser.call("cancel")
-		if walker._charged_blast != null:
-			walker._charged_blast.call("cancel")
-		print("CityRoot AUTO-FIRE-BUILDING: %s OK facade_gap=%.2fm" % [action, facade_gap])
-	print("CityRoot AUTO-FIRE-BUILDING: RESULT %s" % ("FAILED" if failed else "OK"))
-	if quit_after:
-		await get_tree().process_frame
-		await get_tree().process_frame
-		await get_tree().create_timer(0.15).timeout
-		get_tree().quit(1 if failed else 0)
-
-
-## Resolve combat on the facade; pitch up past any soft-aimed body still in the cone.
-func _auto_fire_building_resolve(
-	walker: CityWalker, facade: Vector3
-) -> CityTargeting.Result:
-	var hand := (
-		walker.global_position + Vector3(0.0, 1.15 * maxf(walker.character_scale, 0.05), 0.0)
-	)
-	for attempt in range(5):
-		var aim_point := facade + Vector3.UP * (0.6 * float(attempt))
-		await _auto_fire_look_at(walker, aim_point)
-		var combat := walker.resolve_target(
-			CityTargeting.TargetMode.ACTORS_AND_VOXELS,
-			CityTargeting.ScreenSource.LOOK_CROSSHAIR,
-			hand
-		)
-		if combat.kind == CityTargeting.TargetKind.VOXEL:
-			return combat
-	return walker.resolve_target(
-		CityTargeting.TargetMode.ACTORS_AND_VOXELS,
-		CityTargeting.ScreenSource.LOOK_CROSSHAIR,
-		hand
-	)
-
-
-## World point on a nearby building face the player can look at, or INF.
-func _auto_fire_building_facade_point(walker: CityWalker) -> Vector3:
-	## Remesh lag is real — retry the chest probe while the streamer finishes shells.
-	for round_i in range(6):
-		for _wait in range(45):
-			await get_tree().physics_frame
-		var from := walker.global_position
-		var hit := _auto_fire_building_chest_probe(from, walker.character_scale)
-		if hit.is_finite():
-			print(
-				"CityRoot AUTO-FIRE-BUILDING: chest probe facade=%s dist=%.2fm (round %d)"
-				% [hit, from.distance_to(hit), round_i]
-			)
-			return hit
-		var nibble := find_nearest_building_nibble(from, 56.0)
-		if nibble.is_finite():
-			var to_player := from - nibble
-			to_player.y = 0.0
-			if to_player.length_squared() < 0.01:
-				to_player = Vector3.BACK
-			var face := nibble + to_player.normalized() * 0.4
-			face.y = maxf(nibble.y, from.y + 0.8)
-			if from.distance_to(face) >= AUTO_FIRE_MIN_RANGE_M:
-				print(
-					"CityRoot AUTO-FIRE-BUILDING: nibble facade=%s dist=%.2fm (round %d)"
-					% [face, from.distance_to(face), round_i]
-				)
-				return face
-	var from := walker.global_position
-	var footprints: Array = get_minimap_snapshot(64.0).get("buildings", []) as Array
-	footprints.sort_custom(
-		func(a: Dictionary, b: Dictionary) -> bool:
-			return (
-				(a["center"] as Vector3).distance_squared_to(from)
-				< (b["center"] as Vector3).distance_squared_to(from)
-			)
-	)
-	for raw in footprints:
-		var entry: Dictionary = raw as Dictionary
-		var center: Vector3 = entry["center"] as Vector3
-		var size: Vector3 = entry.get("size", Vector3(8, 8, 8)) as Vector3
-		var to_player := from - center
-		to_player.y = 0.0
-		if to_player.length_squared() < 0.01:
-			continue
-		var flat := to_player.normalized()
-		var face := center + flat * (maxf(size.x, size.z) * 0.45)
-		face.y = from.y + clampf(size.y * 0.35, 1.2, 6.0)
-		if from.distance_to(face) < AUTO_FIRE_MIN_RANGE_M:
-			continue
-		print(
-			"CityRoot AUTO-FIRE-BUILDING: impostor facade=%s dist=%.2fm"
-			% [face, from.distance_to(face)]
-		)
-		return face
-	print("CityRoot AUTO-FIRE-BUILDING: no facade after retries")
-	return Vector3.INF
-
-
-func _auto_fire_building_chest_probe(from: Vector3, character_scale: float) -> Vector3:
-	var chest_y := from.y + 1.35 * maxf(character_scale, 0.05)
-	var best := Vector3.INF
-	var best_dist := INF
-	for deg in range(0, 360, 10):
-		var yaw := deg_to_rad(float(deg))
-		var dir := Vector3(-sin(yaw), 0.0, -cos(yaw))
-		var cast_from := Vector3(from.x, chest_y, from.z) + dir * 1.0
-		var cast_to := cast_from + dir * 64.0
-		var point := Vector3.INF
-		var normal := Vector3.UP
-		var query := PhysicsRayQueryParameters3D.create(cast_from, cast_to)
-		query.collision_mask = 1
-		var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-		if not hit.is_empty():
-			point = hit["position"] as Vector3
-			normal = hit["normal"] as Vector3
-		var voxel_hit := probe_destructible_ray(cast_from, cast_to)
-		if not voxel_hit.is_empty():
-			var vpoint: Vector3 = voxel_hit["point"] as Vector3
-			var vdist := from.distance_to(vpoint)
-			if not point.is_finite() or vdist + 0.15 < from.distance_to(point):
-				if _terrain != null and _tool != null:
-					var local := _terrain.to_local(vpoint)
-					var vox := Vector3i(floori(local.x), floori(local.y), floori(local.z))
-					var id := int(_tool.get_voxel(vox))
-					if VoxelMaterial.is_building_fabric(id):
-						point = vpoint
-						normal = voxel_hit["normal"] as Vector3
-		if not point.is_finite():
-			continue
-		if normal.dot(Vector3.UP) > 0.75:
-			continue
-		var dist := from.distance_to(point)
-		if dist < AUTO_FIRE_MIN_RANGE_M or dist > 56.0:
-			continue
-		if dist < best_dist:
-			best_dist = dist
-			best = point
-	return best
-
-
-## Current LOOK_CROSSHAIR hit if it is a wall-like surface past min combat range.
-func _auto_fire_building_look_wall(walker: CityWalker) -> Vector3:
-	var cam := walker.get_camera()
-	if cam == null:
-		return Vector3.INF
-	var cross := _aim_crosshair(cam)
-	var ray_from := cam.project_ray_origin(cross)
-	var ray_dir := cam.project_ray_normal(cross)
-	var cast_from := ray_from + ray_dir * 1.5
-	var cast_to := ray_from + ray_dir * 80.0
-	for _i in range(6):
-		var query := PhysicsRayQueryParameters3D.create(cast_from, cast_to)
-		query.collision_mask = 1
-		var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-		if hit.is_empty():
-			return Vector3.INF
-		var point: Vector3 = hit["position"] as Vector3
-		var normal: Vector3 = hit["normal"] as Vector3
-		var dist := walker.global_position.distance_to(point)
-		var ground_like := (
-			normal.dot(Vector3.UP) > 0.65 and point.y < walker.global_position.y - 0.15
-		)
-		if ground_like:
-			cast_from = point + ray_dir * 0.25
-			continue
-		if dist >= AUTO_FIRE_MIN_RANGE_M and normal.dot(Vector3.UP) <= 0.65:
-			return point
-		return Vector3.INF
-	return Vector3.INF
-
-
-## Open N through the input map, select the visible panel row, and confirm through the panel's
-## real signal path. The free cursor is positioned before N so capture_summon_aim owns the point.
-func _auto_summon_via_panel_at(body_id: String, world_point: Vector3) -> UndeadUnit:
-	var walker := _walker as CityWalker
-	var camera := walker.get_camera()
-	if camera == null or camera.is_position_behind(world_point):
-		push_error("CityRoot AUTO-FIRE: requested panel spawn is not visible")
-		return null
-	var before: Array[UndeadUnit] = []
-	if _undead != null:
-		before = _undead.call("get_alive_units") as Array[UndeadUnit]
-	var screen := camera.unproject_position(world_point)
-	get_viewport().warp_mouse(screen)
-	await get_tree().process_frame
-	_auto_send_key_action("monster_summon", true)
-	_auto_send_key_action("monster_summon", false)
-	await get_tree().process_frame
-	if not is_monster_summon_open():
-		push_error("CityRoot AUTO-FIRE: real N input did not open summon panel")
-		return null
-	_monster_summon_panel.call("select_monster_id", body_id)
-	_monster_summon_panel.call("confirm_selection")
-	await get_tree().process_frame
-	var after: Array[UndeadUnit] = _undead.call("get_alive_units") as Array[UndeadUnit]
-	for unit: UndeadUnit in after:
-		if not before.has(unit):
-			return unit
-	push_error("CityRoot AUTO-FIRE: panel confirm did not add a monster")
-	return null
-
-
-func _auto_send_key_action(action_id: String, pressed: bool) -> void:
-	var ctl := _player_controls()
-	if ctl == null:
-		push_error("CityRoot AUTO-FIRE: no controls for key action '%s'" % action_id)
-		return
-	var bind: Dictionary = ctl.call("get_binding", action_id) as Dictionary
-	if bind["device"] as String != "key":
-		push_error("CityRoot AUTO-FIRE: '%s' is not bound to a key" % action_id)
-		return
-	var event := InputEventKey.new()
-	event.keycode = int(bind["code"]) as Key
-	event.physical_keycode = event.keycode
-	event.pressed = pressed
-	event.shift_pressed = bool(bind["shift"])
-	event.ctrl_pressed = bool(bind["ctrl"])
-	event.alt_pressed = bool(bind["alt"])
-	Input.parse_input_event(event)
 
 
 ## One body standing on the deck `offset_m` away, in a direction the player can actually see it
@@ -2041,7 +1466,7 @@ func _on_monster_summon_opened() -> void:
 
 func _on_monster_summon_closed() -> void:
 	## Cancel clears a pending look-aim; confirm already consumed it in summon_monster_at_aim.
-	_summon_aim = null
+	_summon_aim.clear()
 	_refresh_hud_visibility()
 	if is_settings_open() or is_inventory_open():
 		return
@@ -2058,7 +1483,7 @@ func _on_monster_summon_requested(monster_id: String) -> void:
 			assert(false, "CityRoot: empty summon roster")
 			return
 	var unit := summon_monster_at_aim(body_id)
-	_summon_aim = null
+	_summon_aim.clear()
 	if unit == null:
 		## Miss is a quiet cancel inside summon_monster_at_aim; hard failures already push_error.
 		return
@@ -2072,89 +1497,62 @@ func _roll_random_summon_id() -> String:
 	return ids[randi_range(0, ids.size() - 1)]
 
 
-## Sample the free cursor's voxel-only aim before the summon panel moves that cursor onto its UI.
+## Sample the shared CityWalker look/crosshair aim before the summon panel opens.
+## Must run before the panel releases the cursor onto the UI — a live sample at Summon-click
+## would ray through the button (below centre). Uses the same aim_world_at_cursor as meteor.
 func capture_summon_aim() -> void:
-	_summon_aim = null
+	_summon_aim.clear()
 	if _walker == null or not is_instance_valid(_walker):
 		push_error("CityRoot.capture_summon_aim: no walker")
 		return
-	var walker := _walker as CityWalker
-	var aim: CityTargeting.Result = walker.resolve_target(
-		CityTargeting.TargetMode.VOXELS_ONLY, CityTargeting.ScreenSource.FREE_CURSOR
-	)
+	var aim: Dictionary = _walker.call("aim_world_at_cursor") as Dictionary
 	_summon_aim = aim
-	var point: Vector3 = aim.point
+	var point: Vector3 = aim.get("point", Vector3.INF) as Vector3
 	var player := get_player_position()
 	print(
-		(
-			"CityRoot TARGET mode=%s source=%s origin=%s dir=%s geometry=%s geom_dist=%.2f"
-			+ " actor=%s actor_dist=%.2f final=%s voxel=%s"
-		)
+		"CityRoot: summon aim point=%s voxel=%s did_hit=%s dist_from_player=%.1fm"
 		% [
-			CityTargetingScript.mode_name(aim.mode),
-			CityTargetingScript.screen_source_name(aim.screen_source),
-			aim.ray_origin,
-			aim.ray_direction,
 			point,
-			aim.geometry_distance,
-			aim.actor_point,
-			aim.actor_distance,
-			CityTargetingScript.kind_name(aim.kind),
-			aim.voxel,
+			aim.get("voxel", Vector3i()),
+			bool(aim.get("did_hit", false)),
+			player.distance_to(point) if player != Vector3.INF and point != Vector3.INF else -1.0,
 		]
 	)
-	if player != Vector3.INF and point.is_finite():
-		print("CityRoot: summon captured distance_from_player=%.1fm" % player.distance_to(point))
 
 
-## Spawn at the free-cursor voxel hit captured when N opened. A tiny upward clearance keeps the
-## body's feet out of the hit surface; there is no feet/ring/nav fallback on a true miss.
+## Spawn a combat-table body at the look-aim captured when N opened the panel
+## (same CityWalker.aim_world_at_cursor ray meteor uses). Falls back to a live sample only
+## when no capture exists (tools / CLI). Sky miss → quiet cancel; never the player's feet.
 func summon_monster_at_aim(body_id: String) -> UndeadUnit:
 	if _game_over or _booting:
 		return null
 	if _walker == null or not is_instance_valid(_walker):
 		push_error("CityRoot.summon_monster_at_aim: no walker")
 		return null
-	var aim := _summon_aim
-	if aim == null:
-		var walker := _walker as CityWalker
-		aim = walker.resolve_target(
-			CityTargeting.TargetMode.VOXELS_ONLY, CityTargeting.ScreenSource.FREE_CURSOR
-		)
-	if not aim.did_hit():
-		print("CityRoot: summon cancelled — free-cursor voxel aim missed")
+	var aim: Dictionary = _summon_aim
+	if aim.is_empty():
+		aim = _walker.call("aim_world_at_cursor") as Dictionary
+	if not bool(aim.get("did_hit", false)):
+		## True miss (sky). Meteor still fires at far-clip; we refuse a sky/feet spawn quietly.
+		print("CityRoot: summon cancelled — look aim missed geometry (aim at ground/buildings)")
 		return null
-	if aim.mode != CityTargeting.TargetMode.VOXELS_ONLY:
-		push_error("CityRoot.summon_monster_at_aim: cached aim is not VOXELS_ONLY")
-		assert(false, "CityRoot: contaminated summon aim")
 	_ensure_undead_director()
 	if _undead == null or not _undead.has_method("spawn_monster_by_id"):
 		push_error("CityRoot.summon_monster_at_aim: undead director missing spawn")
 		assert(false, "CityRoot: no spawn_monster_by_id")
 		return null
-	const BODY_CLEARANCE_M := 0.06
-	var requested := aim.point
-	var pos := requested + Vector3.UP * BODY_CLEARANCE_M
-	_last_summon_requested_point = requested
-	_last_summon_actual_point = Vector3.INF
-	_last_summoned_unit = null
+	var pos: Vector3 = aim["point"] as Vector3
 	var player := get_player_position()
 	print(
-		"CityRoot: spawn requested=%s actual_request=%s player=%s flat_dist=%.1fm body=%s"
+		"CityRoot: spawning '%s' at aim=%s (player=%s, flat_dist=%.1fm)"
 		% [
-			requested,
+			body_id,
 			pos,
 			player,
 			Vector2(pos.x - player.x, pos.z - player.z).length() if player != Vector3.INF else -1.0,
-			body_id,
 		]
 	)
-	var unit := _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
-	if unit != null:
-		_last_summoned_unit = unit
-		_last_summon_actual_point = unit.global_position
-		print("CityRoot: spawn actual=%s requested_voxel_hit=%s" % [unit.global_position, requested])
-	return unit
+	return _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
 
 
 func _on_inventory_craft_requested(recipe_id: String) -> void:
@@ -3116,9 +2514,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 		% floor_y
 	)
 	call_deferred("_cli_auto_summon_probe")
-	call_deferred("_cli_startup_fire_probe")
 	call_deferred("_cli_auto_fire_probe")
-	call_deferred("_cli_auto_fire_building_probe")
 	call_deferred("_cli_auto_walk_probe")
 
 
@@ -3495,13 +2891,13 @@ func _on_build_chosen(recipe_id: String) -> void:
 	var recipe: BuildCatalog.Recipe = BuildCatalogScript.by_id(recipe_id)
 	if recipe == null:
 		return
-	var walker := _walker as CityWalker
-	var aim: CityTargeting.Result = walker.resolve_target(
-		CityTargeting.TargetMode.VOXELS_ONLY, CityTargeting.ScreenSource.FREE_CURSOR
-	)
-	if not aim.did_hit():
-		return
-	var hit: Vector3 = aim.point
+	var aim: Dictionary = _walker.call("aim_ground_at_cursor") as Dictionary
+	var hit: Vector3
+	if bool(aim.get("did_hit", false)):
+		hit = aim["point"] as Vector3
+	else:
+		## No ground under the cursor — drop it a few metres in front of the player.
+		hit = _walker.global_position - _walker.global_transform.basis.z * 4.0
 	var written: int = BuildPlacerScript.place(
 		_terrain, _tool, _brush, recipe, hit, _walker.global_position
 	)
@@ -4372,44 +3768,43 @@ const COMBAT_AIM_CONE_DEG := 9.0
 const COMBAT_LOS_SLACK_M := 1.0
 
 
-## Actor phase of CityWalker.resolve_target(ACTORS_AND_VOXELS). Geometry remains in `result`
-## as the fallback and for diagnostics; it never vetoes a visible actor merely because the
-## third-person camera ray grazed the street first.
-func resolve_actor_target(
-	result: CityTargeting.Result, shot_origin: Vector3, reach_m: float
-) -> void:
-	if result == null:
-		push_error("CityRoot.resolve_actor_target: null result")
-		assert(false, "CityRoot: null targeting result")
-		return
-	if result.mode != CityTargeting.TargetMode.ACTORS_AND_VOXELS:
-		push_error("CityRoot.resolve_actor_target: result mode is not ACTORS_AND_VOXELS")
-		assert(false, "CityRoot: actor resolution in voxel-only mode")
-	if result.ray_direction.length_squared() < 0.0001:
-		push_error("CityRoot.resolve_actor_target: look direction is zero")
-		return
-	var look := result.ray_direction.normalized()
-	var range_m := maxf(reach_m, 1.0)
+## The one targeting query behind every player attack: laser, blaster bolts, charged blast.
+##
+## Two things the old aim got wrong live here. Geometry distance cannot veto a body, because in
+## third person the crosshair ray leaves a camera above and behind the player and grazes the
+## street deck long before it reaches a mob. And the ray itself cannot be the test either: a few
+## degrees of aim error — unavoidable without a reticle — puts it metres wide of a body at 30 m.
+##
+## So creatures are picked by *angle* off the look direction, closest to centre first, and the
+## shot is then confirmed with a line-of-sight ray from the muzzle, which stands at body height
+## and sees past the deck. A wall between muzzle and body still blocks. Pedestrians and cars are
+## not soft-locked — they are scenery, and snapping a monster fight onto a passing commuter would
+## be worse than missing — so they keep the tight on-ray test.
+##
+## Keys: point (Vector3), distance (float, from shot_origin), is_agent (bool).
+func resolve_combat_target(
+	cam_from: Vector3,
+	look_dir: Vector3,
+	reach: float,
+	geometry_point: Vector3,
+	shot_origin: Vector3
+) -> Dictionary:
+	if look_dir.length_squared() < 0.0001:
+		push_error("CityRoot.resolve_combat_target: look direction is zero")
+		return _combat_geometry_target(geometry_point, shot_origin)
+	var look := look_dir.normalized()
+	var range_m := maxf(reach, 1.0)
 	## Straight on-ray hit first: whatever the player is actually pointing through wins, ped or
 	## car included, and it is the only way those two stay targetable at all.
-	var on_ray := _query_closest_agent_hit(
-		result.ray_origin, result.ray_origin + look * range_m
-	)
+	var on_ray := _query_closest_agent_hit(cam_from, cam_from + look * range_m)
 	if not on_ray.is_empty():
 		var on_ray_point: Vector3 = on_ray["point"] as Vector3
 		if _muzzle_sees(shot_origin, on_ray_point):
-			_set_actor_target(result, on_ray_point, shot_origin, _actor_from_hit(on_ray))
-			return
-	var soft := _closest_creature_in_cone(
-		result.ray_origin, look, range_m, shot_origin
-	)
-	if not soft.is_empty():
-		_set_actor_target(
-			result,
-			soft["point"] as Vector3,
-			shot_origin,
-			soft["unit"] as Node3D
-		)
+			return _combat_agent_target(on_ray_point, shot_origin)
+	var chest := _closest_creature_in_cone(cam_from, look, range_m, shot_origin)
+	if chest.is_finite():
+		return _combat_agent_target(chest, shot_origin)
+	return _combat_geometry_target(geometry_point, shot_origin)
 
 
 ## Chest of the living creature nearest the centre of the look cone with a clear muzzle line,
@@ -4420,21 +3815,20 @@ func _closest_creature_in_cone(
 	look: Vector3,
 	range_m: float,
 	shot_origin: Vector3
-) -> Dictionary:
+) -> Vector3:
 	if _undead == null or not is_instance_valid(_undead):
-		return {}
+		return Vector3.INF
 	if not _undead.has_method("get_alive_units"):
-		push_error("CityRoot.resolve_actor_target: undead director cannot list its units")
-		return {}
-	var units: Array[UndeadUnit] = _undead.call("get_alive_units") as Array[UndeadUnit]
+		push_error("CityRoot.resolve_combat_target: undead director cannot list its units")
+		return Vector3.INF
+	var units: Array = _undead.call("get_alive_units") as Array
 	var cone := deg_to_rad(COMBAT_AIM_CONE_DEG)
 	var ranked: Array[Dictionary] = []
-	for unit: UndeadUnit in units:
+	for entry: Variant in units:
+		var unit := entry as UndeadUnit
 		if unit == null or not is_instance_valid(unit):
 			continue
-		## Aim above capsule centre. At long range a centre-to-centre line can graze the street
-		## even though the body is fully visible; upper torso remains inside the hit capsule.
-		var chest := unit.global_position + Vector3.UP * unit.hit_half_height() * 1.2
+		var chest := unit.global_position + Vector3(0.0, unit.hit_half_height() * 0.85, 0.0)
 		var to_body := chest - cam_from
 		var dist := to_body.length()
 		if dist < 0.05 or dist > range_m:
@@ -4445,64 +3839,49 @@ func _closest_creature_in_cone(
 		var margin := angle - atan(unit.hit_radius() / dist)
 		if margin > cone:
 			continue
-		ranked.append({"margin": margin, "point": chest, "unit": unit})
+		ranked.append({"margin": margin, "chest": chest})
 	ranked.sort_custom(
 		func(a: Dictionary, b: Dictionary) -> bool:
 			return float(a["margin"]) < float(b["margin"])
 	)
 	for row in ranked:
-		var chest: Vector3 = row["point"] as Vector3
+		var chest: Vector3 = row["chest"] as Vector3
 		if _muzzle_sees(shot_origin, chest):
-			return row
-	return {}
+			return chest
+	return Vector3.INF
 
 
 ## True when nothing solid stands between the muzzle and `point`.
 func _muzzle_sees(from: Vector3, point: Vector3) -> bool:
 	if not from.is_finite():
-		push_error("CityRoot.resolve_actor_target: muzzle origin is not finite")
+		push_error("CityRoot.resolve_combat_target: muzzle origin is not finite")
 		return false
 	var dist := from.distance_to(point)
 	if dist < 0.05:
 		return true
-	## Lift the visibility probe by a palm-width. The projectile still starts at the real muzzle,
-	## but a deck touching the hand must not masquerade as a wall across a 30 m torso shot.
-	var probe_lift := Vector3.UP * 0.12
-	var query := PhysicsRayQueryParameters3D.create(from + probe_lift, point + probe_lift)
+	var query := PhysicsRayQueryParameters3D.create(from, point)
 	## Terrain and buildings only. Bodies live on layer 2 and must never shadow each other here.
 	query.collision_mask = 1
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
 		return true
-	return (from + probe_lift).distance_to(hit["position"] as Vector3) >= (
-		dist - COMBAT_LOS_SLACK_M
-	)
+	return from.distance_to(hit["position"] as Vector3) >= dist - COMBAT_LOS_SLACK_M
 
 
-func _set_actor_target(
-	result: CityTargeting.Result,
-	point: Vector3,
-	shot_origin: Vector3,
-	actor: Node3D
-) -> void:
-	result.kind = CityTargeting.TargetKind.ACTOR
-	result.point = point
-	result.actor_point = point
-	result.actor_distance = shot_origin.distance_to(point)
-	result.actor = actor
+func _combat_agent_target(point: Vector3, shot_origin: Vector3) -> Dictionary:
+	return {
+		"point": point,
+		"distance": shot_origin.distance_to(point),
+		"is_agent": true,
+	}
 
 
-func _actor_from_hit(hit: Dictionary) -> Node3D:
-	var kind: String = hit["kind"] as String
-	match kind:
-		"undead":
-			return hit["unit"] as Node3D
-		"ped", "vehicle":
-			## Their query agents are data objects rather than scene nodes.
-			return null
-	push_error("CityRoot._actor_from_hit: unknown actor kind '%s'" % kind)
-	assert(false, "CityRoot: unknown actor kind")
-	return null
+func _combat_geometry_target(point: Vector3, shot_origin: Vector3) -> Dictionary:
+	return {
+		"point": point,
+		"distance": shot_origin.distance_to(point),
+		"is_agent": false,
+	}
 
 
 ## True when the shot landed on a body along the segment (no voxel carve).
@@ -4670,11 +4049,8 @@ func _restore_bedrock_floor(center_vox: Vector3, radius_vox: float) -> void:
 func _nav_overlay_aim() -> Vector3:
 	if _walker == null or not is_instance_valid(_walker):
 		return Vector3.INF
-	var walker := _walker as CityWalker
-	var aim: CityTargeting.Result = walker.resolve_target(
-		CityTargeting.TargetMode.VOXELS_ONLY, CityTargeting.ScreenSource.FREE_CURSOR
-	)
-	return aim.point if aim.did_hit() else Vector3.INF
+	var aim: Dictionary = _walker.call("aim_ground_at_cursor")
+	return aim["point"]
 
 
 func _player_controls() -> RefCounted:

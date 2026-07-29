@@ -105,17 +105,6 @@ func selected_monster_id() -> String:
 	return _row_ids[idx]
 
 
-## Probe/accessibility helper: choose a concrete row through the same list the player sees.
-func select_monster_id(monster_id: String) -> void:
-	var index := _row_ids.find(monster_id)
-	if index < 0:
-		push_error("MonsterSummonPanel.select_monster_id: '%s' is not in the panel" % monster_id)
-		assert(false, "MonsterSummonPanel: missing requested row")
-		return
-	_list.select(index)
-	_list.ensure_current_is_visible()
-
-
 func confirm_selection() -> void:
 	if not _open:
 		return

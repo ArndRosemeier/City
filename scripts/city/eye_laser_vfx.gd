@@ -40,8 +40,6 @@ var _rad_mul: float = 1.0
 var _tip_mul: float = 1.0
 ## Optional: (from: Vector3, tip: Vector3) -> float distance, or -1 if clear.
 var _obstacle_probe: Callable = Callable()
-var _tracking_actor: Node3D = null
-var _tracking_offset: Vector3 = Vector3.ZERO
 ## Keep a close-range flash on screen even when travel would be one frame.
 const MIN_VISIBLE_SEC := 0.07
 
@@ -54,11 +52,6 @@ func set_obstacle_probe(probe: Callable) -> void:
 	_obstacle_probe = probe
 
 
-func set_tracking_target(actor: Node3D, world_point: Vector3) -> void:
-	_tracking_actor = actor
-	_tracking_offset = actor.to_local(world_point) if actor != null else Vector3.ZERO
-
-
 func set_character_scale(scale: float) -> void:
 	_character_scale = maxf(scale, 0.05)
 	_apply_size()
@@ -66,15 +59,6 @@ func set_character_scale(scale: float) -> void:
 
 func is_firing() -> bool:
 	return _active
-
-
-func cancel() -> void:
-	_active = false
-	set_process(false)
-	if _root != null:
-		_root.visible = false
-	if _light != null:
-		_light.visible = false
 
 
 func _nominal_total() -> float:
@@ -149,7 +133,6 @@ func _process(delta: float) -> void:
 	if not _active:
 		set_process(false)
 		return
-	_update_tracking_target()
 	_traveled += speed_mps * delta
 	_age += delta
 	_phase += delta
@@ -174,22 +157,6 @@ func _process(delta: float) -> void:
 			_finish_impact()
 		return
 	_orient()
-
-
-func _update_tracking_target() -> void:
-	if _tracking_actor == null:
-		return
-	if not is_instance_valid(_tracking_actor):
-		_tracking_actor = null
-		return
-	var target := _tracking_actor.to_global(_tracking_offset)
-	var delta := target - _origin
-	var dist := delta.length()
-	if dist < 0.05:
-		return
-	_dir = delta / dist
-	_aim_dist = dist
-	_refit_to_aim()
 
 
 func _animate_shape(_delta: float) -> void:
