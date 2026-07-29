@@ -55,7 +55,7 @@
       "kind": "projectile_single",
       "damage_vs_player": 18.0,
       "damage_vs_mob": 18.0,
-      "cooldown_s": 0.45,
+      "cooldown_s": 2.0,
       "energy_cost": 1.0,
       "range_m": 100.0,
       "speed_mps": 60.0,

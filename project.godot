@@ -29,6 +29,7 @@ boot_splash/minimum_display_time=800
 
 ErrorOverlay="*res://scripts/debug/error_overlay.gd"
 CityProfiler="*res://scripts/debug/city_profiler.gd"
+DamageLog="*res://scripts/debug/damage_log.gd"
 
 [display]
 

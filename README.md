@@ -68,7 +68,7 @@ powershell -File tools\check_tracking.ps1             -> same check
 `tools/check_tracking.ps1` fails on unexpected untracked files and on missing required
 ship files / `.uid` sidecars. CI runs the same check on every push to `main`.
 
-Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **I** inventory · **J** jump to district type · **Y** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **N** summon monster at mouse aim (Random + catalogue spawnables) · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **F7** profiler (hitches ≥80 ms print to console as `CityProfiler HITCH`) · **Settings** (top-right) for quality. Settings → Graphics → Diagnostics → **Log stutters to file** mirrors those hitch reports into `%APPDATA%\Godot\app_userdata\EccentriCity\city_hitches.log` (the same panel has an *Open log folder* button), so a stutter can be reported without a console open.
+Controls: **WASD** walk · **Mouse** look · **LMB** dig · **R** autorun · **Esc** quit · **I** inventory · **J** jump to district type · **Y** day/night · **F1–F6** build · **Shift+F1–F6** assign build · **N** summon monster at mouse aim (Random + catalogue spawnables) · **M** meteor · **T** Tetris Game Boy · **P** pedestrian · **L** damage log (right-side overlay) · **F7** profiler (hitches ≥80 ms print to console as `CityProfiler HITCH`) · **Settings** (top-right) for quality. Settings → Graphics → Diagnostics → **Log stutters to file** mirrors those hitch reports into `%APPDATA%\Godot\app_userdata\EccentriCity\city_hitches.log` (the same panel has an *Open log folder* button), so a stutter can be reported without a console open.
 
 Build: aim with the mouse, press **F1–F6** to stamp the bound recipe at the cursor (cottage / pool / hot tub / statues by default). **Shift+F1–F6** opens the full recipe list to rebind a slot. Fronts face you. Builds are session-local and disappear when that district streams out.
 
@@ -94,7 +94,8 @@ LICENSE_ASSETS.md  Content license provenance
 Editable data for monster templates, behaviours, attacks, and per-body overrides lives in
 JSON under `assets/combat/` and `assets/monsters/combat_table.json`. Resolve rules
 (template scalar **max**, list **union**, prey-weight **average**, body
-`attacks_extra` / hard `attacks`) are implemented twice and kept in lockstep:
+`attacks_extra` / hard `attacks`, attack damage = `damage_vs_*` × `damage_mult`)
+are implemented twice and kept in lockstep:
 
 - Python: `tools/combat_resolve.py` (used by the editor and validators)
 - Godot: `scripts/city/combat_table.gd` (`CombatTable.resolve`)

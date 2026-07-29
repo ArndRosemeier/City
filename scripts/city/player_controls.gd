@@ -37,6 +37,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "build_5", "label": "Build slot 5", "group": "Build"},
 	{"id": "build_6", "label": "Build slot 6", "group": "Build"},
 	{"id": "build_assign", "label": "Build assign modifier", "group": "Build"},
+	{"id": "damage_log", "label": "Damage log (L)", "group": "System"},
 	{"id": "profiler", "label": "Profiler overlay", "group": "System"},
 	{"id": "nav_overlay", "label": "Navigation overlay", "group": "System"},
 	{"id": "nav_overlay_colour", "label": "Navigation overlay colouring", "group": "System"},
@@ -134,6 +135,8 @@ static func default_binding(action_id: String) -> Dictionary:
 			return _key(KEY_F6)
 		"build_assign":
 			return _key(KEY_SHIFT)
+		"damage_log":
+			return _key(KEY_L)
 		"profiler":
 			return _key(KEY_F7)
 		"nav_overlay":

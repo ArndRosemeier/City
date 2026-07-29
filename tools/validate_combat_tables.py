@@ -111,6 +111,8 @@ merge_template_scalars = resolve_mod.merge_template_scalars
 merge_template_lists = resolve_mod.merge_template_lists
 apply_body_list_overrides = resolve_mod.apply_body_list_overrides
 effective_monster_combat = resolve_mod.effective_monster_combat
+effective_attack_damage = resolve_mod.effective_attack_damage
+effective_attack_damages = resolve_mod.effective_attack_damages
 
 
 def fail(msg: str, errors: list[str]) -> None:

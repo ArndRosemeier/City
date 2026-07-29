@@ -762,6 +762,9 @@ func _on_controls_changed(controls: Variant) -> void:
 	var profiler := get_tree().root.get_node_or_null("CityProfiler")
 	if profiler != null and profiler.has_method("set_controls"):
 		profiler.call("set_controls", controls)
+	var damage_log := get_tree().root.get_node_or_null("DamageLog")
+	if damage_log != null and damage_log.has_method("set_controls"):
+		damage_log.call("set_controls", controls)
 
 
 func _on_settings_applied(settings: Dictionary) -> void:

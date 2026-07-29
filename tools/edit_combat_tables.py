@@ -1658,12 +1658,30 @@ class CombatEditor(tk.Tk):
                         "end", f"{', '.join(specialty)}\n", "accent"
                     )
             atk = list(eff["attacks"])
-            self._monster_preview.insert("end", "  effective:\n", "muted")
+            dmg_mult = float(eff["scalars"]["damage_mult"])
+            attacks_map = self.attacks_doc.get("attacks", {})
+            assert isinstance(attacks_map, dict)
+            self._monster_preview.insert(
+                "end",
+                "  effective (damage = base × damage_mult):\n",
+                "muted",
+            )
             if not atk:
                 self._monster_preview.insert("end", "  (empty)\n", "muted")
             else:
                 for a in atk:
+                    dmg = validate_mod.effective_attack_damage(
+                        a, dmg_mult, attacks_map
+                    )
                     self._monster_preview.insert("end", f"  • {a}\n", "accent")
+                    self._monster_preview.insert("end", "      vs player ", "muted")
+                    self._monster_preview.insert(
+                        "end", f"{dmg['vs_player']:g}", "accent"
+                    )
+                    self._monster_preview.insert("end", "  vs mob ", "muted")
+                    self._monster_preview.insert(
+                        "end", f"{dmg['vs_mob']:g}\n", "accent"
+                    )
             self._monster_preview.insert("end", "\n")
 
             self._insert_preview_heading("TAGS / CROWD ROLES")
@@ -2053,21 +2071,24 @@ def _smoke_assert_preview_live_refresh(app: CombatEditor) -> None:
 
 
 def _smoke_effective_attack_ids(preview: str) -> list[str]:
-    """Parse attack ids under the 'effective:' block in the monster preview text."""
+    """Parse attack ids under the effective-attacks block in the monster preview text."""
     lines = preview.splitlines()
     collecting = False
     out: list[str] = []
     for line in lines:
         stripped = line.strip()
-        if stripped == "effective:":
+        if stripped.startswith("effective") and "damage" in stripped and stripped.endswith(":"):
             collecting = True
             continue
         if collecting:
             if stripped.startswith("• "):
+                # "• melee" — ignore the following "vs player / vs mob" detail lines.
                 out.append(stripped[2:].strip())
                 continue
             if stripped.startswith("TAGS") or stripped.startswith("ATTACKS"):
                 break
+            if stripped.startswith("vs "):
+                continue
             if stripped and not stripped.startswith("("):
                 # Next heading or unrelated block.
                 if stripped.endswith(":") or stripped.isupper():

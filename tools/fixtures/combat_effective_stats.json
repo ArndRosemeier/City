@@ -17,6 +17,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -45,6 +51,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -75,6 +87,16 @@
         "melee",
         "stomp"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 26.4,
+          "vs_mob": 0.0
+        },
+        "stomp": {
+          "vs_player": 110.0,
+          "vs_mob": 110.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.65,
@@ -107,6 +129,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -139,6 +167,20 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "debris": {
+          "vs_player": 18.0,
+          "vs_mob": 0.0
+        },
+        "melee": {
+          "vs_player": 21.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.666667,
         "monsters": 0.5,
@@ -170,6 +212,16 @@
         "blaster",
         "eye_laser"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 39.6,
+          "vs_mob": 39.6
+        },
+        "eye_laser": {
+          "vs_player": 39.6,
+          "vs_mob": 39.6
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.0,
@@ -202,6 +254,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.5,
         "monsters": 0.75,
@@ -231,6 +293,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -259,6 +327,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -287,6 +361,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -322,6 +402,28 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 39.6,
+          "vs_mob": 39.6
+        },
+        "debris": {
+          "vs_player": 22.0,
+          "vs_mob": 0.0
+        },
+        "eye_laser": {
+          "vs_player": 39.6,
+          "vs_mob": 39.6
+        },
+        "melee": {
+          "vs_player": 26.4,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.5,
         "monsters": 0.375,
@@ -354,6 +456,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -384,6 +492,16 @@
         "melee",
         "stomp"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 26.4,
+          "vs_mob": 0.0
+        },
+        "stomp": {
+          "vs_player": 110.0,
+          "vs_mob": 110.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -415,6 +533,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.65,
@@ -449,6 +573,20 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "debris": {
+          "vs_player": 18.0,
+          "vs_mob": 0.0
+        },
+        "melee": {
+          "vs_player": 21.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.666667,
         "monsters": 0.5,
@@ -480,6 +618,16 @@
         "melee",
         "stomp"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 26.4,
+          "vs_mob": 0.0
+        },
+        "stomp": {
+          "vs_player": 110.0,
+          "vs_mob": 110.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -514,6 +662,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -547,6 +705,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -580,6 +748,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 12.0,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -614,6 +792,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -648,6 +836,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -682,6 +880,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -716,6 +924,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -749,6 +967,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -782,6 +1010,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -816,6 +1054,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -849,6 +1097,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -883,6 +1141,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -916,6 +1184,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -949,6 +1227,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -983,6 +1271,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1015,6 +1313,16 @@
         "blaster",
         "eye_laser"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 39.6,
+          "vs_mob": 39.6
+        },
+        "eye_laser": {
+          "vs_player": 39.6,
+          "vs_mob": 39.6
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.0,
@@ -1048,6 +1356,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1083,6 +1401,20 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "debris": {
+          "vs_player": 18.0,
+          "vs_mob": 0.0
+        },
+        "melee": {
+          "vs_player": 21.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.666667,
         "monsters": 0.5,
@@ -1116,6 +1448,20 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "debris": {
+          "vs_player": 18.0,
+          "vs_mob": 0.0
+        },
+        "melee": {
+          "vs_player": 21.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.666667,
         "monsters": 0.5,
@@ -1148,6 +1494,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1180,6 +1536,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1209,6 +1575,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.8,
@@ -1244,6 +1616,28 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 32.4,
+          "vs_mob": 32.4
+        },
+        "debris": {
+          "vs_player": 18.0,
+          "vs_mob": 0.0
+        },
+        "eye_laser": {
+          "vs_player": 32.4,
+          "vs_mob": 32.4
+        },
+        "melee": {
+          "vs_player": 21.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.5,
         "monsters": 0.375,
@@ -1282,6 +1676,28 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 32.4,
+          "vs_mob": 32.4
+        },
+        "debris": {
+          "vs_player": 18.0,
+          "vs_mob": 0.0
+        },
+        "eye_laser": {
+          "vs_player": 32.4,
+          "vs_mob": 32.4
+        },
+        "melee": {
+          "vs_player": 21.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.5,
         "monsters": 0.375,
@@ -1316,6 +1732,20 @@
         "eye_laser",
         "melee"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "eye_laser": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "melee": {
+          "vs_player": 12.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.4,
@@ -1348,6 +1778,20 @@
         "eye_laser",
         "melee"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "eye_laser": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "melee": {
+          "vs_player": 12.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.4,
@@ -1380,6 +1824,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1412,6 +1866,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1443,6 +1907,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.65,
@@ -1473,6 +1943,12 @@
       "attacks": [
         "melee"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.65,
@@ -1505,6 +1981,20 @@
         "eye_laser",
         "melee"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "eye_laser": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "melee": {
+          "vs_player": 12.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.4,
@@ -1537,6 +2027,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1569,6 +2069,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1602,6 +2112,20 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "debris": {
+          "vs_player": 18.0,
+          "vs_mob": 0.0
+        },
+        "melee": {
+          "vs_player": 21.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.666667,
         "monsters": 0.5,
@@ -1636,6 +2160,24 @@
         "melee",
         "orb_convert"
       ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "eye_laser": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "melee": {
+          "vs_player": 12.0,
+          "vs_mob": 0.0
+        },
+        "orb_convert": {
+          "vs_player": 70.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.4,
@@ -1668,6 +2210,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 10.2,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,
@@ -1701,6 +2253,20 @@
         "melee",
         "orb_convert"
       ],
+      "attack_damage": {
+        "eye_laser": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "melee": {
+          "vs_player": 12.0,
+          "vs_mob": 0.0
+        },
+        "orb_convert": {
+          "vs_player": 70.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.0,
         "monsters": 0.4,
@@ -1735,6 +2301,16 @@
         "melee",
         "nibble"
       ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 15.6,
+          "vs_mob": 0.0
+        },
+        "nibble": {
+          "vs_player": 0.0,
+          "vs_mob": 0.0
+        }
+      },
       "prey_weights": {
         "building": 0.333333,
         "monsters": 0.833333,

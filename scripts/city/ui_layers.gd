@@ -35,5 +35,6 @@ const LOADING_SPLASH := 50
 
 ## Debug and failure surfaces, above modals and takeovers.
 const DEBUG_NAV_COUNTERS := 110
+const DEBUG_DAMAGE_LOG := 115
 const DEBUG_PROFILER := 120
 const ERROR_OVERLAY := 128

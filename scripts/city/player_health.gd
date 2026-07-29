@@ -95,9 +95,25 @@ func apply_damage_scaled(source: DamageSource.Id, scale: float) -> float:
 	_current = maxf(_current - DamageSourceScript.amount(source) * scale, 0.0)
 	_regen_block_sec = _regen_delay_sec
 	changed.emit(_current, _maximum)
+	var taken := before - _current
+	var tree := Engine.get_main_loop() as SceneTree
+	var log_node: Node = null
+	if tree != null:
+		log_node = tree.root.get_node_or_null("DamageLog")
+	if log_node != null and log_node.has_method("record"):
+		log_node.call(
+			"record",
+			DamageSourceScript.source_name(source),
+			"player",
+			source,
+			taken,
+			_current,
+			_maximum,
+			is_depleted()
+		)
 	if is_depleted():
 		depleted.emit(source)
-	return before - _current
+	return taken
 
 
 ## Out-of-combat recovery. The delay is spent first and the same frame does not also heal, so

@@ -9,6 +9,7 @@
 ##   merge_template_lists / apply_body_list_overrides — union; *_extra adds; bare hard-replaces
 ##   average_prey_weights — mean across effective behaviours (missing key = 0)
 ##   attacks_from_behaviours + body attacks_extra (add) / attacks (hard-replace)
+##   effective_attack_damage — attack damage_vs_* × damage_mult
 class_name CombatTable
 extends RefCounted
 
@@ -55,6 +56,8 @@ class EffectiveStats:
 	var crowd_roles: PackedStringArray = PackedStringArray()
 	## prey key → averaged weight
 	var prey_weights: Dictionary = {}
+	## attack_id → { "vs_player": float, "vs_mob": float } (base × damage_mult)
+	var attack_damage: Dictionary = {}
 
 	func scalar(key: String) -> float:
 		match key:
@@ -122,6 +125,21 @@ class EffectiveStats:
 			roles.append(r)
 		roles.sort()
 		beh.sort()
+		var dmg_out: Dictionary = {}
+		var dmg_keys: Array = attack_damage.keys()
+		dmg_keys.sort()
+		for aid_v: Variant in dmg_keys:
+			var aid := str(aid_v)
+			var pair_raw: Variant = attack_damage[aid]
+			if typeof(pair_raw) != TYPE_DICTIONARY:
+				push_error("CombatTable.EffectiveStats: attack_damage['%s'] must be an object" % aid)
+				assert(false, "CombatTable: bad attack_damage entry")
+				continue
+			var pair: Dictionary = pair_raw
+			dmg_out[aid] = {
+				"vs_player": _round_sync(float(pair.get("vs_player", 0.0))),
+				"vs_mob": _round_sync(float(pair.get("vs_mob", 0.0))),
+			}
 		return {
 			"hp_mult": _round_sync(hp_mult),
 			"damage_mult": _round_sync(damage_mult),
@@ -133,6 +151,7 @@ class EffectiveStats:
 			"score_mult": _round_sync(score_mult),
 			"behaviour": beh,
 			"attacks": atk,
+			"attack_damage": dmg_out,
 			"prey_weights": prey_out,
 			"tags": tag_list,
 			"crowd_roles": roles,
@@ -258,6 +277,40 @@ static func attack_def(attack_id: String) -> Dictionary:
 	return _attacks[attack_id]
 
 
+## Python: combat_resolve.effective_attack_damage
+static func effective_attack_damage(attack_id: String, damage_mult: float) -> Dictionary:
+	if damage_mult <= 0.0:
+		push_error("CombatTable.effective_attack_damage: damage_mult %f is not positive" % damage_mult)
+		assert(false, "CombatTable: bad damage_mult")
+		return {"vs_player": 0.0, "vs_mob": 0.0}
+	var row := attack_def(attack_id)
+	var vs_player := _require_number(
+		row.get("damage_vs_player", null), "attack '%s' damage_vs_player" % attack_id
+	)
+	var vs_mob := _require_number(
+		row.get("damage_vs_mob", null), "attack '%s' damage_vs_mob" % attack_id
+	)
+	return {
+		"vs_player": vs_player * damage_mult,
+		"vs_mob": vs_mob * damage_mult,
+	}
+
+
+## Python: combat_resolve.effective_attack_damages
+static func effective_attack_damages(
+	attack_ids: PackedStringArray, damage_mult: float
+) -> Dictionary:
+	var out: Dictionary = {}
+	var keys: Array = []
+	for aid: String in attack_ids:
+		keys.append(aid)
+	keys.sort()
+	for aid_v: Variant in keys:
+		var aid := str(aid_v)
+		out[aid] = effective_attack_damage(aid, damage_mult)
+	return out
+
+
 static func behaviour_def(behaviour_id: String) -> Dictionary:
 	ensure_loaded()
 	if not _behaviours.has(behaviour_id):
@@ -314,6 +367,7 @@ static func effective_monster_combat(
 	eff.tags = lists["tags"] as PackedStringArray
 	eff.crowd_roles = lists["crowd_roles"] as PackedStringArray
 	eff.prey_weights = prey
+	eff.attack_damage = effective_attack_damages(attacks, eff.damage_mult)
 	return eff
 
 

@@ -2,8 +2,8 @@
 """Keep Python combat resolve and GDScript CombatTable in lockstep via a golden file.
 
 Writes / checks tools/fixtures/combat_effective_stats.json — every monster id mapped to
-its effective scalars, behaviours, sorted attacks, averaged prey weights, tags, and
-crowd_roles.
+its effective scalars, behaviours, sorted attacks (with vs_player/vs_mob damage ×
+damage_mult), averaged prey weights, tags, and crowd_roles.
 
 When merge rules change:
   1. Update tools/combat_resolve.py AND scripts/city/combat_table.gd identically
@@ -49,17 +49,20 @@ def _load_docs() -> tuple[dict, dict, dict]:
 
 
 def build_golden_from_disk() -> dict:
-    _attacks_doc, behaviours_doc, table_doc = _load_docs()
+    attacks_doc, behaviours_doc, table_doc = _load_docs()
+    attacks = attacks_doc.get("attacks")
     behaviours = behaviours_doc.get("behaviours")
     templates = table_doc.get("templates")
     monsters = table_doc.get("monsters")
+    if not isinstance(attacks, dict):
+        raise TypeError("attacks.json: 'attacks' must be an object")
     if not isinstance(behaviours, dict):
         raise TypeError("behaviours.json: 'behaviours' must be an object")
     if not isinstance(templates, dict):
         raise TypeError("combat_table.json: 'templates' must be an object")
     if not isinstance(monsters, list):
         raise TypeError("combat_table.json: 'monsters' must be a list")
-    return resolve_mod.build_golden_document(templates, monsters, behaviours)
+    return resolve_mod.build_golden_document(templates, monsters, behaviours, attacks)
 
 
 def write_golden(path: Path = FIXTURE_PATH) -> dict:

@@ -12,6 +12,7 @@ Merge rules:
   - Attacks: union from effective behaviours, then body overrides:
       hard body `attacks` → full effective list (drops behaviour-derived)
       else → behaviour pool ∪ template specialty ∪ body `attacks_extra`
+  - Effective attack damage: attack row damage_vs_player/mob × body damage_mult
 """
 
 from __future__ import annotations
@@ -223,7 +224,54 @@ def _round_sync_float(value: float) -> float:
     return round(float(value), SYNC_FLOAT_DECIMALS)
 
 
-def sync_payload(eff: dict[str, Any]) -> dict[str, Any]:
+def effective_attack_damage(
+    attack_id: str,
+    damage_mult: float,
+    attacks: dict[str, dict],
+) -> dict[str, float]:
+    """Scaled damage a monster deals with one attack id.
+
+    # GDScript: CombatTable.effective_attack_damage
+    Live MonsterCombat multiplies DamageSource bases (mirroring damage_vs_player) by
+    damage_mult; vs_mob uses the attack row's damage_vs_mob the same way.
+    """
+    if not isinstance(attack_id, str) or not attack_id:
+        raise ValueError("attack_id must be a non-empty string")
+    if not isinstance(damage_mult, (int, float)) or isinstance(damage_mult, bool):
+        raise TypeError("damage_mult must be numeric")
+    if damage_mult <= 0.0:
+        raise ValueError(f"damage_mult must be positive, got {damage_mult}")
+    row = attacks.get(attack_id)
+    if not isinstance(row, dict):
+        raise KeyError(f"unknown attack '{attack_id}'")
+    vs_player = row.get("damage_vs_player")
+    vs_mob = row.get("damage_vs_mob")
+    if not isinstance(vs_player, (int, float)) or isinstance(vs_player, bool):
+        raise TypeError(f"attack '{attack_id}' damage_vs_player must be numeric")
+    if not isinstance(vs_mob, (int, float)) or isinstance(vs_mob, bool):
+        raise TypeError(f"attack '{attack_id}' damage_vs_mob must be numeric")
+    mult = float(damage_mult)
+    return {
+        "vs_player": float(vs_player) * mult,
+        "vs_mob": float(vs_mob) * mult,
+    }
+
+
+def effective_attack_damages(
+    attack_ids: list[str],
+    damage_mult: float,
+    attacks: dict[str, dict],
+) -> dict[str, dict[str, float]]:
+    """Sorted attack_id → {vs_player, vs_mob} for an effective attack list.
+    # GDScript: CombatTable.effective_attack_damages
+    """
+    out: dict[str, dict[str, float]] = {}
+    for aid in attack_ids:
+        out[aid] = effective_attack_damage(aid, damage_mult, attacks)
+    return dict(sorted(out.items()))
+
+
+def sync_payload(eff: dict[str, Any], attacks: dict[str, dict]) -> dict[str, Any]:
     """Normalize an effective_monster_combat result for the golden sync fixture.
 
     Attacks / behaviour / tags / crowd_roles are sorted; prey keys sorted; scalars
@@ -237,6 +285,15 @@ def sync_payload(eff: dict[str, Any]) -> dict[str, Any]:
         out[key] = _round_sync_float(float(scalars[key]))
     out["behaviour"] = sorted(eff["behaviour"])
     out["attacks"] = sorted(eff["attacks"])
+    damage_mult = float(scalars["damage_mult"])
+    attack_damage = effective_attack_damages(list(eff["attacks"]), damage_mult, attacks)
+    out["attack_damage"] = {
+        aid: {
+            "vs_player": _round_sync_float(vals["vs_player"]),
+            "vs_mob": _round_sync_float(vals["vs_mob"]),
+        }
+        for aid, vals in attack_damage.items()
+    }
     out["prey_weights"] = {
         key: _round_sync_float(float(prey[key])) for key in sorted(ALLOWED_PREY)
     }
@@ -249,6 +306,7 @@ def resolve_all_monsters(
     templates: dict,
     monsters: list,
     behaviours: dict[str, dict],
+    attacks: dict[str, dict],
 ) -> dict[str, dict[str, Any]]:
     """Resolve every monster row → sync_payload, keyed by monster id (sorted keys)."""
     out: dict[str, dict[str, Any]] = {}
@@ -262,7 +320,7 @@ def resolve_all_monsters(
         if not isinstance(tids, list) or not tids or not all(isinstance(t, str) for t in tids):
             raise ValueError(f"monster '{mid}': templates must be a non-empty list of strings")
         eff = effective_monster_combat(tids, templates, mon, behaviours)
-        out[mid] = sync_payload(eff)
+        out[mid] = sync_payload(eff, attacks)
     return dict(sorted(out.items()))
 
 
@@ -270,6 +328,7 @@ def build_golden_document(
     templates: dict,
     monsters: list,
     behaviours: dict[str, dict],
+    attacks: dict[str, dict],
 ) -> dict[str, Any]:
     """Full golden fixture document written to tools/fixtures/combat_effective_stats.json."""
     return {
@@ -279,5 +338,5 @@ def build_golden_document(
             "Regenerate after changing merge rules or combat JSON. "
             "GDScript mirror: scripts/city/combat_table.gd"
         ),
-        "monsters": resolve_all_monsters(templates, monsters, behaviours),
+        "monsters": resolve_all_monsters(templates, monsters, behaviours, attacks),
     }

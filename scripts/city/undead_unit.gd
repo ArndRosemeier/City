@@ -358,10 +358,26 @@ func apply_damage(source: DamageSource.Id) -> int:
 	var armor := 1.0
 	if _combat != null:
 		armor = maxf(float(_combat.call("armor_mult")), 0.001)
-	_health -= DamageSourceScript.amount(source) / armor
+	var before := _health
+	var raw := DamageSourceScript.amount(source) / armor
+	_health -= raw
+	var taken := minf(raw, before)
+	var body_name: String = _entry.id if _entry != null else String(name)
+	var tree := Engine.get_main_loop() as SceneTree
+	var log_node: Node = null
+	if tree != null:
+		log_node = tree.root.get_node_or_null("DamageLog")
 	if CreatureHealthScript.is_dead(_health):
 		_health = 0.0
+		if log_node != null and log_node.has_method("record"):
+			log_node.call(
+				"record", "player", body_name, source, taken, 0.0, _health_max, true
+			)
 		return kill_from_player()
+	if log_node != null and log_node.has_method("record"):
+		log_node.call(
+			"record", "player", body_name, source, taken, _health, _health_max, false
+		)
 	_update_health_bar()
 	_play_hit_reaction()
 	return 0

@@ -26,6 +26,7 @@ const SURFACES: Array[Dictionary] = [
 ## Autoload → the layer it must sit on. Both outrank every panel, so a hitch report or an error
 ## can never end up hidden behind one.
 const AUTOLOADS: Dictionary = {
+	"DamageLog": UiLayers.DEBUG_DAMAGE_LOG,
 	"CityProfiler": UiLayers.DEBUG_PROFILER,
 	"ErrorOverlay": UiLayers.ERROR_OVERLAY,
 }
@@ -53,6 +54,7 @@ const TAKEOVERS: Array[int] = [
 
 const DEBUG: Array[int] = [
 	UiLayers.DEBUG_NAV_COUNTERS,
+	UiLayers.DEBUG_DAMAGE_LOG,
 	UiLayers.DEBUG_PROFILER,
 	UiLayers.ERROR_OVERLAY,
 ]
