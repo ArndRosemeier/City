@@ -379,13 +379,12 @@ func district_y_band(coord: Vector2i) -> Vector2i:
 ## Copy the region's materials out of the live terrain into the layout `rebuild_region`
 ## expects: a dense box, Y fastest, then X, then Z, `stride` bytes per voxel.
 ##
-## The box carries the region's columns plus `MARGIN_VOX` either side, over the full Y band
-## `rebuild_y_range` reported at registration (field rows + link-probe headroom) and no more.
-## That band is sized by the offline bake, which can reach past the live terrain ceiling —
-## clamping to `terrain.bounds` used to hand NativeNavWorld a short box (e.g. 0..223 when the
-## district needs 0..229) and the rebuild refused it. Rows the terrain does not store are
-## filled with air (sky). The XZ margin is read as context, never rebuilt. False means the
-## region cannot be rebuilt right now.
+## The box carries the region's columns plus `MARGIN_VOX` either side, over the Y band the
+## nav field occupies and no more — the terrain is 220 voxels tall and a field a fraction of
+## that, and a copy sized from the terrain spends most of itself on rock and sky the rescan
+## never reads. The box doubles as the sector selector and a sector is only rebuilt when the
+## box carries all of it, so the XZ margin costs nothing but the copy: it is read as
+## context, never rebuilt. False means the region cannot be rebuilt right now.
 func fill_materials(region: NavDirtyRegion) -> bool:
 	if _brush == null or _brush.tool == null:
 		push_error("NavDirtyTracker.fill_materials: no live brush attached")
@@ -399,63 +398,32 @@ func fill_materials(region: NavDirtyRegion) -> bool:
 			"NavDirtyTracker.fill_materials: no nav Y band for district %s" % str(region.coord)
 		)
 		return false
-	## Full band — never shorten to terrain.bounds. `rebuild_region` requires every row.
-	var y_min := int(band.x)
-	var y_max := int(band.y)
-	var y_size := y_max - y_min + 1
 	var bounds := _terrain.bounds
-	var terrain_y_min := floori(bounds.position.y)
-	var terrain_y_max := floori(bounds.position.y) + ceili(bounds.size.y) - 1
+	## The terrain is taller than any field baked out of it, so this only ever clips a band
+	## whose link probes reach past the top of the world.
+	var y_min := maxi(band.x, floori(bounds.position.y))
+	var y_size := mini(band.y, floori(bounds.position.y) + ceili(bounds.size.y) - 1) - y_min + 1
+	if y_size <= 0:
+		push_error(
+			"NavDirtyTracker.fill_materials: nav band %s lies outside terrain bounds %s"
+			% [str(band), str(bounds)]
+		)
+		return false
 	var box_min := Vector3i(region.min_x - MARGIN_VOX, y_min, region.min_z - MARGIN_VOX)
 	var box_size := Vector3i(
 		region.max_x - region.min_x + 1 + 2 * MARGIN_VOX,
 		y_size,
 		region.max_z - region.min_z + 1 + 2 * MARGIN_VOX
 	)
-	## Probe editability on the XZ footprint at a Y the terrain actually holds. Upper sky
-	## rows past the ceiling are padded with air and do not need to be streamed.
-	var copy_y0 := maxi(y_min, terrain_y_min)
-	var copy_y1 := mini(y_max, terrain_y_max)
-	var probe_y0 := copy_y0
-	var probe_y1 := copy_y1
-	if probe_y1 < probe_y0:
-		if y_max < terrain_y_min or y_min > terrain_y_max:
-			push_error(
-				"NavDirtyTracker.fill_materials: nav band %s lies outside terrain bounds %s"
-				% [str(band), str(bounds)]
-			)
-			return false
-		## Band is entirely above/below the stored ceiling — still need the columns loaded.
-		probe_y0 = clampi(y_min, terrain_y_min, terrain_y_max)
-		probe_y1 = probe_y0
-	var probe_box := AABB(
-		Vector3(float(box_min.x), float(probe_y0), float(box_min.z)),
-		Vector3(float(box_size.x), float(probe_y1 - probe_y0 + 1), float(box_size.z))
-	)
-	if not _brush.tool.is_area_editable(probe_box):
+	var box := AABB(Vector3(box_min), Vector3(box_size))
+	if not _brush.tool.is_area_editable(box):
 		## The tile streamed out from under a queued edit. Rebuilding from a half-loaded
 		## copy would carve holes into the field, so drop the region instead.
 		_skipped_unloaded += 1
 		return false
 	var t0 := Time.get_ticks_usec()
 	var buffer := _buffer_for(box_size)
-	## Sky / unstored headroom starts as air; the terrain slice overwrites what exists.
-	buffer.fill(VoxelMaterial.AIR, VoxelBuffer.CHANNEL_TYPE)
-	if copy_y1 >= copy_y0:
-		var slice_h := copy_y1 - copy_y0 + 1
-		var slice := VoxelBuffer.new()
-		slice.create(box_size.x, slice_h, box_size.z)
-		var slice_min := Vector3i(box_min.x, copy_y0, box_min.z)
-		_brush.tool.copy(slice_min, slice, 1 << VoxelBuffer.CHANNEL_TYPE)
-		slice.decompress_channel(VoxelBuffer.CHANNEL_TYPE)
-		var dst_y := copy_y0 - y_min
-		buffer.copy_channel_from_area(
-			slice,
-			Vector3i.ZERO,
-			Vector3i(box_size.x, slice_h, box_size.z),
-			Vector3i(0, dst_y, 0),
-			VoxelBuffer.CHANNEL_TYPE
-		)
+	_brush.tool.copy(box_min, buffer, 1 << VoxelBuffer.CHANNEL_TYPE)
 	buffer.decompress_channel(VoxelBuffer.CHANNEL_TYPE)
 	var stride := 1 << buffer.get_channel_depth(VoxelBuffer.CHANNEL_TYPE)
 	var data := buffer.get_channel_as_byte_array(VoxelBuffer.CHANNEL_TYPE)

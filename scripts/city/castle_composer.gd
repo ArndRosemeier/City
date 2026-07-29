@@ -183,11 +183,6 @@ const GRAIN_WHOLE := 0
 const GRAIN_CLOSET := -1
 const DUNGEON_DOOR_W := 5
 const DUNGEON_STAIR_W := 5
-## Air carved above each tread of a descent. One more than the chamber height: carving only
-## `DUNGEON_HEAD` leaves the well through the slab above one station short (the earliest tread
-## that still needs both slab courses cleared keeps a one-voxel lid), and a body climbing out
-## jams against that lip.
-const DUNGEON_SHAFT_HEAD := DUNGEON_HEAD + 1
 ## Openings past the spanning tree, so a level loops instead of being a tree of dead ends.
 const DUNGEON_LOOP_CHANCE := 0.35
 ## Chambers that reach up through the level above. Never guaranteed: a dungeon of one storey
@@ -211,8 +206,8 @@ const DUNGEON_TOWER_LANE_OFF := LANE_MARGIN + 2
 const DUNGEON_TOWER_HEAD_IN := 4
 ## Width of the passage joining a hollowed tower base to the bailey. It meets the flight at the
 ## only place a flank can be stepped onto — the two flat treads at the head and the one below
-## them. Five matches the flight: four leaves a one-column pinch that zeroes nav clearance.
-const DUNGEON_TOWER_PASS_W := 5
+## them — so what this buys is a passage worth walking, not a wider way onto the stair.
+const DUNGEON_TOWER_PASS_W := 4
 ## Clear bailey kept between a courtyard trench and the curtain, so the crown ramp still has a
 ## wall to climb and the trench does not undercut the terrace.
 const DUNGEON_COURT_MARGIN := 8
@@ -2249,18 +2244,12 @@ func _build_flight(st: CastleStair) -> void:
 	var last := st.run_len() - 1 if st.to_storey < 0 else st.run_len() - 2
 	for t in range(last + 1):
 		var s := st.surface_at(t)
-		## Arrival treads through a storey slab are a single surface course, not a full wedge:
-		## a two-course lip at the well edge is coplanar with the last rising tread and jams a
-		## capsule that still has one foot on the step below.
-		var fill_lo := (
-			s if st.to_storey >= 0 and t >= st.rise + 1 else st.y_from + 1
-		)
 		for k in range(st.lane_w):
 			var p := st.column(t, k)
 			if not _in_region(p.x, p.y):
 				continue
 			brush.fill_box(
-				Vector3i(p.x, fill_lo, p.y),
+				Vector3i(p.x, st.y_from + 1, p.y),
 				Vector3i(p.x + 1, s + 1, p.y + 1),
 				VoxelMaterial.CASTLE_BLOCK
 			)
@@ -2296,16 +2285,12 @@ func _build_crown_ramp() -> void:
 
 
 ## Columns a slab must leave open for the flight climbing into it.
-##
-## Includes the arrival tread (`t = rise + 1`): that column carries only the thin landing the
-## flight writes, not the two-course storey slab. Leaving the slab there made the well one
-## voxel short at the lip — coplanar with the last rising tread — and jammed the walker.
 func _well_columns(storey: int) -> Dictionary[Vector2i, bool]:
 	var out: Dictionary[Vector2i, bool] = {}
 	for st: CastleStair in layout.keep_stairs:
 		if st.to_storey != storey:
 			continue
-		for t in range(1, st.rise + 2):
+		for t in range(1, st.rise + 1):
 			for k in range(st.lane_w):
 				out[st.column(t, k)] = true
 	return out
@@ -2418,27 +2403,16 @@ func _carve_vault(v: CastleVault) -> void:
 func _carve_descent(st: CastleStair) -> void:
 	for t in range(st.run_len()):
 		var s := st.surface_at(t)
-		## Arrival columns are a single surface course over open shaft, matching the keep's
-		## thin landing: a full wedge here re-builds the two-course lip the shaft just cut.
-		var thin := t >= st.rise + 1
 		for k in range(st.lane_w):
 			var p := st.column(t, k)
 			if not _in_region(p.x, p.y):
 				continue
-			if thin:
-				_carve_column(p.x, p.y, st.y_from + 1, s - 1)
-				brush.fill_box(
-					Vector3i(p.x, s, p.y),
-					Vector3i(p.x + 1, s + 1, p.y + 1),
-					VoxelMaterial.CASTLE_BLOCK
-				)
-			else:
-				brush.fill_box(
-					Vector3i(p.x, st.y_from + 1, p.y),
-					Vector3i(p.x + 1, s + 1, p.y + 1),
-					VoxelMaterial.CASTLE_BLOCK
-				)
-			_carve_column(p.x, p.y, s + 1, s + DUNGEON_SHAFT_HEAD)
+			brush.fill_box(
+				Vector3i(p.x, st.y_from + 1, p.y),
+				Vector3i(p.x + 1, s + 1, p.y + 1),
+				VoxelMaterial.CASTLE_BLOCK
+			)
+			_carve_column(p.x, p.y, s + 1, s + DUNGEON_HEAD)
 
 
 ## Hollowed base of a corner tower, following the tower's own plan rather than assuming a

@@ -68,31 +68,19 @@ func seconds_until_regen() -> float:
 	return _regen_block_sec
 
 
-## One hit at 1× the table amount. Returns the points actually taken, which is zero only when
-## the player is already down — a hit on a corpse is not a second game over.
+## One hit. Returns the points actually taken, which is zero only when the player is already
+## down — a hit on a corpse is not a second game over.
 func apply_damage(source: DamageSource.Id) -> float:
-	return apply_damage_scaled(source, 1.0)
-
-
-## One hit scaled by `scale` (a body's resolved `damage_mult`). Scale must be positive — a
-## zero or negative multiplier is a content bug, not a miss.
-func apply_damage_scaled(source: DamageSource.Id, scale: float) -> float:
 	if DamageSourceScript.target(source) != DamageSourceScript.Target.PLAYER:
 		push_error(
 			"PlayerHealth: %s hurts creatures, not the player"
 			% DamageSourceScript.source_name(source)
 		)
 		return 0.0
-	if scale <= 0.0:
-		push_error(
-			"PlayerHealth: damage scale %f for %s is not a hit"
-			% [scale, DamageSourceScript.source_name(source)]
-		)
-		return 0.0
 	if is_depleted():
 		return 0.0
 	var before := _current
-	_current = maxf(_current - DamageSourceScript.amount(source) * scale, 0.0)
+	_current = maxf(_current - DamageSourceScript.amount(source), 0.0)
 	_regen_block_sec = _regen_delay_sec
 	changed.emit(_current, _maximum)
 	if is_depleted():

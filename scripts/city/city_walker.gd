@@ -484,8 +484,6 @@ func is_blocking_ui_open() -> bool:
 		return true
 	if parent.has_method("is_inventory_open") and bool(parent.call("is_inventory_open")):
 		return true
-	if parent.has_method("is_monster_summon_open") and bool(parent.call("is_monster_summon_open")):
-		return true
 	if parent.has_method("is_splash_open") and bool(parent.call("is_splash_open")):
 		return true
 	return false
@@ -781,41 +779,6 @@ func get_energy_max() -> float:
 	return energy_max
 
 
-## Player projectiles in the air right now: blaster bolts, the charged-blast orb, the eye dart.
-## Diagnostics read this to tell "the shot missed" apart from "the shot never left the player",
-## which the energy pool cannot answer — regen refills a burst while the shot is still flying.
-func live_projectile_count() -> int:
-	var n := 0
-	for bolt in _live_blaster_bolts:
-		if bolt != null and is_instance_valid(bolt):
-			n += 1
-	if _charged_blast != null and bool(_charged_blast.call("is_firing")):
-		n += 1
-	if _eye_laser != null and bool(_eye_laser.call("is_firing")):
-		n += 1
-	return n
-
-
-## Whether something is holding the body up right now. `is_on_floor()` cannot answer this:
-## walking runs through VoxelBoxMover against live voxel data, so CharacterBody3D's own contact
-## flag is never set while terrain is bound. Diagnostics read this to tell standing from falling.
-func is_supported() -> bool:
-	return _floor_contacted()
-
-
-## Floating in water instead of standing on something. Locomotion already counts this as not
-## airborne (see `airborne_now`), so diagnostics must not read a swim as a fall.
-func is_swimming() -> bool:
-	return _swimming
-
-
-## Whether the last motion tick climbed a step rather than being stopped by it — what carries the
-## player up kerbs, terraces and stairs. Diagnostics count it to tell walking over stepped ground
-## apart from walking a flat deck, which look the same in a position trace.
-func has_stepped_up() -> bool:
-	return bool(_voxel_motion.call("has_stepped_up"))
-
-
 func try_spend_energy(cost: float) -> bool:
 	if cost <= 0.0:
 		return true
@@ -856,14 +819,9 @@ func is_health_depleted() -> bool:
 ## Deliberately not scaled by `character_scale`. Growing is already the strongest thing the
 ## player can do — free durability on top of it would make the giant form the only form.
 func take_damage(source: DamageSource.Id) -> float:
-	return take_damage_scaled(source, 1.0)
-
-
-## Monster hits pass their resolved `damage_mult` as `scale`. Player-facing sources stay at 1×.
-func take_damage_scaled(source: DamageSource.Id, scale: float) -> float:
 	if _game_over_locked:
 		return 0.0
-	var taken := _health.apply_damage_scaled(source, scale)
+	var taken := _health.apply_damage(source)
 	if taken > 0.0 and not _health.is_depleted():
 		_play_hit_reaction()
 	return taken
@@ -2369,16 +2327,11 @@ func _ensure_safety_deck() -> void:
 	## Own layer so cascading debris (mask=terrain) never rests on this failsafe.
 	_safety_deck.collision_layer = SAFETY_DECK_LAYER
 	_safety_deck.collision_mask = 0
-	## Carried as a child so the deck cannot outlive the body it catches, and top-level so it
-	## still keeps the world position written below rather than turning and growing with it.
-	_safety_deck.top_level = true
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
 	box.size = Vector3(80.0, 1.0, 80.0)
 	shape.shape = box
 	_safety_deck.add_child(shape)
-	add_child(_safety_deck)
-	_update_safety_deck()
 
 
 func _update_safety_deck() -> void:
@@ -2386,6 +2339,13 @@ func _update_safety_deck() -> void:
 	## at sidewalk height dual-contacted giants and caused vertical jitter).
 	if _safety_deck == null or not is_instance_valid(_safety_deck):
 		return
+	var host := get_parent()
+	if host == null:
+		return
+	if _safety_deck.get_parent() != host:
+		if _safety_deck.get_parent() != null:
+			_safety_deck.get_parent().remove_child(_safety_deck)
+		host.add_child(_safety_deck)
 	_safety_deck.global_position = Vector3(
 		global_position.x,
 		global_position.y - 8.0,
@@ -3158,83 +3118,22 @@ func _on_charged_blast_impact(hit_point: Vector3, direction: Vector3, radius_m: 
 		root.call("apply_charged_blast", hit_point, radius_m)
 
 
-## Shared look/crosshair→world aim for meteor / tetris / ped / monster summon. Always rays
-## through the viewport centre so N/M match the camera the player is looking through
-## (hold-to-look releases the OS cursor; free-cursor screen picks belong to aim_ground_at_cursor).
-## Placement wants the world, never a body — combat targeting is `aim_combat_target`.
-## Keys: point, normal, did_hit, cam_from, cam_dir, voxel (Vector3i), has_voxel (bool).
-func aim_world_at_cursor() -> Dictionary:
-	return _enrich_aim_voxel(_aim_ray_at_cursor())
+func _aim_point_at_cursor() -> Vector3:
+	return _aim_ray_at_cursor()["point"] as Vector3
 
 
-## Ground / wall under the free mouse cursor (builds place where the pointer is). Solid geometry
-## only: a build must land on the deck, not on the bark mat lying on it.
-## Same key set as `aim_world_at_cursor`.
+## Ground / wall under the cursor — no agent magnet (builds shouldn't snap to peds).
 func aim_ground_at_cursor() -> Dictionary:
-	return _enrich_aim_voxel(_aim_ray_at_cursor(get_viewport().get_mouse_position(), false))
+	return _aim_ray_at_cursor(false)
 
 
-## What every offensive action shoots at: the creature the player is looking at, else the
-## geometry the crosshair ended on. CityRoot owns the choice so laser, bolts and charged blast
-## cannot drift apart. `shot_origin` is the muzzle the shot leaves from — it is what the
-## line-of-sight check uses, so pass the hand or the eyes, not the camera.
-## Keys: those of `aim_world_at_cursor` plus is_agent (bool) and distance (float from muzzle).
-func aim_combat_target(shot_origin: Vector3 = Vector3.INF) -> Dictionary:
-	var aim := _aim_ray_at_cursor()
-	var muzzle := shot_origin if shot_origin.is_finite() else _laser_eye_origin()
-	var root := _city_root()
-	if root == null:
-		push_error("CityWalker.aim_combat_target: no CityRoot parent to resolve targets")
-		aim["is_agent"] = false
-		aim["distance"] = muzzle.distance_to(aim["point"] as Vector3)
-		return aim
-	var target: Dictionary = root.call(
-		"resolve_combat_target",
-		aim["cam_from"] as Vector3,
-		aim["cam_dir"] as Vector3,
-		laser_range_m,
-		aim["point"] as Vector3,
-		muzzle
-	) as Dictionary
-	aim["point"] = target["point"] as Vector3
-	aim["distance"] = float(target["distance"])
-	aim["is_agent"] = bool(target["is_agent"])
-	if aim["is_agent"]:
-		aim["did_hit"] = true
-	return aim
-
-
-## Attach the aimed voxel cell when terrain is available (shared by meteor + summon).
-func _enrich_aim_voxel(aim: Dictionary) -> Dictionary:
-	aim["has_voxel"] = false
-	aim["voxel"] = Vector3i()
-	if not bool(aim.get("did_hit", false)):
-		return aim
-	var root := _city_root()
-	if root == null or not root.has_method("voxel_terrain"):
-		return aim
-	var terrain: VoxelTerrain = root.call("voxel_terrain") as VoxelTerrain
-	if terrain == null:
-		return aim
-	var local: Vector3 = terrain.to_local(aim["point"] as Vector3)
-	aim["voxel"] = Vector3i(floori(local.x), floori(local.y), floori(local.z))
-	aim["has_voxel"] = true
-	return aim
-
-
-## Viewport-centre crosshair (combat / look aim). Independent of free OS cursor position.
-func _aim_crosshair_screen_pos() -> Vector2:
-	var rect := get_viewport().get_visible_rect()
-	return rect.position + rect.size * 0.5
-
-
-## Camera ray against the world: point + normal (UP if miss / far clip).
-## screen_pos: INF → crosshair centre; pass get_mouse_position() for free-cursor builds.
-## march_destructible also walks the voxel volume, so walk-through park mats (bark / leaves /
-## planters) are targetable even though nothing collides with them.
+## Camera/crosshair ray: point + normal (UP if miss / far clip).
+## Combat aim (magnet_agents) also voxel-marches so walk-through park mats
+## (bark/leaves/planters) stay targetable without solid collision.
+## shot_origin: second agent-magnet probe (eyes / hand). Empty → eye laser origin.
 func _aim_ray_at_cursor(
-	screen_pos: Vector2 = Vector2.INF,
-	march_destructible: bool = true
+	magnet_agents: bool = true,
+	shot_origin: Vector3 = Vector3.INF
 ) -> Dictionary:
 	if _camera == null:
 		var fallback := global_position - global_transform.basis.z * 10.0
@@ -3245,7 +3144,7 @@ func _aim_ray_at_cursor(
 			"cam_from": fallback,
 			"cam_dir": -global_transform.basis.z,
 		}
-	var mouse := screen_pos if screen_pos.is_finite() else _aim_crosshair_screen_pos()
+	var mouse := get_viewport().get_mouse_position()
 	var from := _camera.project_ray_origin(mouse)
 	var ray_dir := _camera.project_ray_normal(mouse)
 	if ray_dir.length_squared() < 0.0001:
@@ -3263,7 +3162,7 @@ func _aim_ray_at_cursor(
 		aim_point = hit["position"] as Vector3
 		aim_normal = hit["normal"] as Vector3
 	var root := _city_root()
-	if march_destructible and root != null and root.has_method("probe_destructible_ray"):
+	if magnet_agents and root != null and root.has_method("probe_destructible_ray"):
 		## Full ray — trees sit in front of ground/walls the physics hit would prefer.
 		var vhit: Variant = root.call("probe_destructible_ray", from, to)
 		if vhit is Dictionary and not (vhit as Dictionary).is_empty():
@@ -3274,6 +3173,9 @@ func _aim_ray_at_cursor(
 				aim_point = vd["point"] as Vector3
 				aim_normal = vd.get("normal", -ray_dir) as Vector3
 				did_hit = true
+	if magnet_agents and root != null and root.has_method("resolve_laser_aim"):
+		var origin := shot_origin if shot_origin.is_finite() else _laser_eye_origin()
+		aim_point = root.call("resolve_laser_aim", from, aim_point, origin) as Vector3
 	return {
 		"point": aim_point,
 		"normal": aim_normal,
@@ -3291,7 +3193,7 @@ func _blaster_shot_endpoints() -> Dictionary:
 	)
 	if not hand.is_finite():
 		hand = global_position + Vector3(0.0, 1.15 * s, 0.0)
-	var aim := aim_combat_target(hand)
+	var aim := _aim_ray_at_cursor(true, hand)
 	var aim_point: Vector3 = aim["point"] as Vector3
 	var cam_dir: Vector3 = aim["cam_dir"] as Vector3
 	var to_aim := aim_point - hand
@@ -3300,9 +3202,8 @@ func _blaster_shot_endpoints() -> Dictionary:
 		dir = cam_dir
 	else:
 		dir = to_aim.normalized()
-		## Hand can sit past a close geometry hit — shoot along the camera ray instead. A body
-		## the targeting picked is never overridden: its line from this muzzle is already clear.
-		if not bool(aim["is_agent"]) and dir.dot(cam_dir) < 0.2:
+		## Hand can sit past a close cursor hit — shoot along the camera ray instead.
+		if dir.dot(cam_dir) < 0.2:
 			dir = cam_dir
 			var cam_from: Vector3 = aim["cam_from"] as Vector3
 			var along := maxf(cam_from.distance_to(aim_point), 1.25 * s)
@@ -3312,17 +3213,17 @@ func _blaster_shot_endpoints() -> Dictionary:
 
 
 func _request_infection_meteor() -> void:
-	var aim := aim_world_at_cursor()
+	var aim := _aim_ray_at_cursor()
 	meteor_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
 func _request_tetris_machine() -> void:
-	var aim := aim_world_at_cursor()
+	var aim := _aim_ray_at_cursor()
 	tetris_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
 func _request_pedestrian() -> void:
-	var aim := aim_world_at_cursor()
+	var aim := _aim_ray_at_cursor()
 	pedestrian_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
@@ -3369,7 +3270,7 @@ func _start_charged_blast_at_cursor() -> void:
 	if _blast_charge < 0.05:
 		_blast_charge = 0.05
 	_blast_pending_radius = _charged_blast_radius()
-	_blast_pending_aim = aim_combat_target(_spell_hand_origin())["point"] as Vector3
+	_blast_pending_aim = _aim_point_at_cursor()
 	_blast_charge = 0.0
 	_blast_ready_at_msec = now + int(maxi(int(charged_blast_cooldown_sec * 1000.0), 50))
 	if _charge_orb != null:
@@ -3446,10 +3347,10 @@ func _start_laser_eyes_at_cursor() -> void:
 	if not try_spend_energy(energy_cost_laser):
 		return
 
-	var origin := _laser_eye_origin()
-	var aim_point := aim_combat_target(origin)["point"] as Vector3
+	var aim_point := _aim_point_at_cursor()
 	_laser_ready_at_msec = now + int(maxi(int(laser_cooldown_sec * 1000.0), 50))
 
+	var origin := _laser_eye_origin()
 	_laser_shot_origin = origin
 	var audio := _city_audio()
 	if audio != null and audio.has_method("play_laser_fire"):
@@ -3599,7 +3500,7 @@ func _on_blaster_impact(hit_point: Vector3, direction: Vector3, shot_origin: Vec
 func _city_root() -> Node:
 	var n: Node = get_parent()
 	while n != null:
-		if n.has_method("resolve_combat_target") and n.has_method("apply_laser_agent_hit"):
+		if n.has_method("resolve_laser_aim") and n.has_method("apply_laser_agent_hit"):
 			return n
 		n = n.get_parent()
 	return null

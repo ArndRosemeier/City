@@ -175,11 +175,10 @@ func touches_xz(x0: float, z0: float, x1: float, z1: float, margin: int) -> bool
 
 
 ## Release the material copy: one region holds megabytes and the staleness log keeps
-## finished regions alive for a while. `box_min` / `box_size` stay — they are three ints
-## and name the rows the rebuild was handed (needed when the terrain ceiling is shorter
-## than the nav band).
+## finished regions alive for a while.
 func drop_materials() -> void:
 	materials = PackedByteArray()
+	box_size = Vector3i.ZERO
 	stride = 0
 
 

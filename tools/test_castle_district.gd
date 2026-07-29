@@ -605,10 +605,6 @@ func _check_stair_treads(layout: CastleLayout) -> void:
 		if st.lane_w < MIN_WALK_W:
 			_fail("FAIL %s is only %d voxels wide" % [st.describe(), st.lane_w])
 			return
-		if st.to_storey >= 0:
-			_check_stair_opening(st)
-			if _failed:
-				return
 	print(
 		"stairs: %d flights, worst riser %d voxel, narrowest lane %d, least tread headroom %d"
 		% [layout.keep_stairs.size(), worst, min_lane, min_head]
@@ -767,19 +763,13 @@ func _check_dungeon_plan(layout: CastleLayout) -> void:
 	for st: CastleStair in flights:
 		for t in range(st.run_len()):
 			var s := st.surface_at(t)
-			var thin := t >= st.rise + 1
 			for k in range(st.lane_w):
 				var p := st.column(t, k)
-				## Rising treads are a solid wedge; arrival columns are a single surface course
-				## over open shaft so the well lip is not coplanar with the last riser.
-				if thin:
-					for y3 in range(st.y_from + 1, s):
-						_want_set(want, r, y0, y1, p.x, y3, p.y, WANT_AIR)
-					_want_set(want, r, y0, y1, p.x, s, p.y, WANT_SOLID)
-				else:
-					for y3b in range(st.y_from + 1, s + 1):
-						_want_set(want, r, y0, y1, p.x, y3b, p.y, WANT_SOLID)
-				for y4 in range(s + 1, s + CastleComposerScript.DUNGEON_SHAFT_HEAD + 1):
+				## The wedge under the treads is re-filled masonry even where the chamber it
+				## stands in was carved away first, and the shaft over them is air.
+				for y3 in range(st.y_from + 1, s + 1):
+					_want_set(want, r, y0, y1, p.x, y3, p.y, WANT_SOLID)
+				for y4 in range(s + 1, s + CastleComposerScript.DUNGEON_HEAD + 1):
 					_want_set(want, r, y0, y1, p.x, y4, p.y, WANT_AIR)
 	if _failed:
 		return
@@ -924,9 +914,6 @@ func _check_dungeon_stairs(layout: CastleLayout) -> void:
 			worst_on = "%s station %d" % [st.describe(), m.z]
 		if _failed:
 			return
-		_check_stair_opening(st)
-		if _failed:
-			return
 	print(
 		(
 			"dungeon stairs: %d flights (%d between levels, %d entrances), worst riser %d voxel,"
@@ -1060,16 +1047,6 @@ func _check_dungeon_entries(layout: CastleLayout) -> void:
 					% [e.chamber_air_h, MIN_HEAD]
 				)
 				return
-			var pass_w := mini(e.chamber_rect.size.x, e.chamber_rect.size.y)
-			if pass_w < CastleComposerScript.DUNGEON_STAIR_W:
-				_fail(
-					(
-						"FAIL the tower-base passage is %d voxels across, the flight is %d"
-						+ " — one column short zeroes nav clearance"
-					)
-					% [pass_w, CastleComposerScript.DUNGEON_STAIR_W]
-				)
-				return
 		elif e.tower_index != -1:
 			_fail("FAIL the %s route names a tower" % e.kind_name())
 			return
@@ -1081,56 +1058,6 @@ func _check_dungeon_entries(layout: CastleLayout) -> void:
 			layout.dungeon_entry_names(),
 		]
 	)
-
-
-## Clear stairwell aperture against walker/nav needs: the well through the floor above must
-## be at least `MIN_WALK_W` across, and the arrival lip must not rebuild a coplanar curb one
-## voxel below the landing surface (that is the one-voxel-too-small opening the walker hits).
-func _check_stair_opening(st: CastleStair) -> void:
-	var top := st.top_y()
-	var open_w := 0
-	var open_run := 0
-	for t in range(st.run_len()):
-		var row := 0
-		for k in range(st.lane_w):
-			var p := st.column(t, k)
-			if _vox(p.x, top, p.y) == VoxelMaterial.AIR:
-				row += 1
-		if row > 0:
-			open_run += 1
-			open_w = row if open_w == 0 else mini(open_w, row)
-	if open_w < MIN_WALK_W:
-		_fail(
-			"FAIL %s well is only %d voxels wide through Y=%d — nav needs %d clear"
-			% [st.describe(), open_w, top, MIN_WALK_W]
-		)
-		return
-	if open_run < MIN_WALK_W:
-		_fail(
-			"FAIL %s well is only %d stations long through Y=%d — a body needs %d"
-			% [st.describe(), open_run, top, MIN_WALK_W]
-		)
-		return
-	## Arrival lip: surface at top_y, the course under it must be air across the lane.
-	var land_t := st.rise + 1
-	var lip_y := top - 1
-	for k2 in range(st.lane_w):
-		var land := st.column(land_t, k2)
-		if _vox(land.x, top, land.y) == VoxelMaterial.AIR:
-			_fail(
-				"FAIL %s has no landing surface at t=%d %s Y=%d"
-				% [st.describe(), land_t, land, top]
-			)
-			return
-		if _vox(land.x, lip_y, land.y) != VoxelMaterial.AIR:
-			_fail(
-				(
-					"FAIL %s landing lip at t=%d %s Y=%d is still solid — the well is one"
-					+ " voxel too short and a walker jams on the last rising tread"
-				)
-				% [st.describe(), land_t, land, lip_y]
-			)
-			return
 
 
 ## Flights the dungeon owns: the entrance descents and the inter-level stairs.

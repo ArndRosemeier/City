@@ -27,7 +27,6 @@ const HUD_MAX := 19
 const MODAL_SETTINGS := 20
 const MODAL_INVENTORY := 21
 const MODAL_CHARACTER_EDITOR := 22
-const MODAL_MONSTER_SUMMON := 23
 
 ## Whole-screen state changes, above any modal.
 const GAME_OVER := 40

@@ -7,11 +7,6 @@
 ## and one sealed sixteen-metre tower that is simultaneously a facade to chew, an
 ## unreachable roof, and somewhere to be entombed.
 ##
-## Two `NavAgent ... TRAPPED ... escape=TELEPORTED / DUG_OUT` warnings on stderr are expected and
-## are the last two cases asserting themselves: being loud about an entombment is the behaviour
-## under test, so silencing them here would delete the signal the port was written to produce.
-## Every other line on stderr is a defect.
-##
 ## Run: tools/godot/Godot_v4.6-voxel_win64.exe --headless --path . res://tools/test_undead_nav.tscn
 extends Node
 
@@ -78,24 +73,18 @@ class TestCity:
 	var scrape_removes: int = 12
 
 	func is_player_alive() -> bool:
-		## Units refuse to tick while the player is dead; keep them alive for the sim.
 		return true
 
 	func get_player_position() -> Vector3:
-		## LOD observer — kept near the body so nav tiers stay NEAR.
 		return player_at
 
 	func get_player_target_position() -> Vector3:
-		## Not a combatant. Headless undead tests hunt `prey_at` via the ped query.
-		return Vector3.INF
+		return player_at
 
 	func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
 		if prey_at == Vector3.INF or from.distance_to(prey_at) > max_dist:
 			return Vector3.INF
 		return prey_at
-
-	func find_nearest_ped_only(from: Vector3, max_dist: float) -> Vector3:
-		return find_nearest_ped_position(from, max_dist)
 
 	func find_nearest_building_nibble(from: Vector3, max_dist: float) -> Vector3:
 		if fabric_at == Vector3.INF or from.distance_to(fabric_at) > max_dist:
@@ -566,10 +555,7 @@ func _spawn(spawn_role: UndeadUnit.Role, at: Vector3, body_id: String = "") -> U
 	return unit
 
 
-## Dropping a body straight out of the tree trips the director's registered-on-exit alarm, so
-## the roster loses it first — the same order a death goes in.
 func _despawn(unit: UndeadUnit) -> void:
-	_director.unregister_unit(unit)
 	unit.queue_free()
 
 

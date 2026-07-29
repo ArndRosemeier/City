@@ -99,7 +99,6 @@ func show_splash(status: String = "Loading EccentriCity…") -> void:
 	visible = true
 	if _root != null:
 		_root.modulate = Color.WHITE
-		_root.mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func hide_splash() -> void:
@@ -107,10 +106,6 @@ func hide_splash() -> void:
 		return
 	_hide_picker()
 	_fading = true
-	## The fade has already handed the world back, so the full-screen Control must stop taking
-	## clicks now — `owns_screen()` says the splash is gone, and a mouse press that still landed
-	## on it never reached the walker's combat binds.
-	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var tw := create_tween()
 	tw.tween_property(_root, "modulate:a", 0.0, FADE_OUT_SEC).set_ease(Tween.EASE_IN).set_trans(
 		Tween.TRANS_CUBIC
@@ -144,7 +139,6 @@ func open_district_picker(
 	visible = true
 	if _root != null:
 		_root.modulate = Color.WHITE
-		_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	if _picker_title != null:
 		_picker_title.text = title_text
 	if _picker_subtitle != null:
