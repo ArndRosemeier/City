@@ -64,11 +64,14 @@ func size() -> Vector2:
 
 
 ## Register a pressable UV region. Call before or after `begin` (meshes refresh either way).
+## Pass `defer_rebuild` while adding a batch, then call `rebuild_buttons` once — each
+## rebuild respawns every button mesh, which is wasteful for large keypads.
 func add_button(
 	button_id: StringName,
 	uv_rect: Rect2,
 	label: String = "",
-	color: Color = Color(0.15, 0.15, 0.18, 1.0)
+	color: Color = Color(0.15, 0.15, 0.18, 1.0),
+	defer_rebuild: bool = false
 ) -> void:
 	for i in range(_buttons.size()):
 		if _buttons[i]["id"] == button_id:
@@ -79,7 +82,8 @@ func add_button(
 				"color": color,
 				"mesh": _buttons[i].get("mesh"),
 			}
-			_rebuild_button_meshes()
+			if not defer_rebuild:
+				_rebuild_button_meshes()
 			return
 	_buttons.append({
 		"id": button_id,
@@ -88,12 +92,31 @@ func add_button(
 		"color": color,
 		"mesh": null,
 	})
+	if not defer_rebuild:
+		_rebuild_button_meshes()
+
+
+## Respawn button meshes after a batch of deferred `add_button` calls.
+func rebuild_buttons() -> void:
 	_rebuild_button_meshes()
 
 
 func clear_buttons() -> void:
 	_buttons.clear()
 	_rebuild_button_meshes()
+
+
+func button_count() -> int:
+	return _buttons.size()
+
+
+## Hiding a panel leaves its collider in the world, so the aim ray would still press
+## an invisible surface. Toggle both together.
+func set_hit_enabled(enabled: bool) -> void:
+	visible = enabled
+	if _body == null or not is_instance_valid(_body):
+		return
+	_body.collision_layer = 1 if enabled else 0
 
 
 ## Live update of the face colour (e.g. Mandelbrot UI strip feedback).

@@ -1173,7 +1173,7 @@ func _record_interior_room(
 
 
 ## Multi-storey lots: 3×3 cabin in the corner opposite the street door.
-## Adds the cabin rect to the ground InteriorRoom keep_clear when present.
+## Carves the cabin voxels, then records the shaft and its InteriorRoom keep_clear.
 func _record_elevator_shaft(
 	bmin: Vector3i, bmax: Vector3i, grammar: BuildingGrammar, room: InteriorRoom
 ) -> void:
@@ -1187,23 +1187,126 @@ func _record_elevator_shaft(
 		maxi(bmax.z - bmin.z - 2, 0)
 	)
 	const CABIN := 3
-	## Need cabin + 1-cell inset on each side so walls stay outside the pad.
-	if clear.size.x < CABIN + 2 or clear.size.y < CABIN + 2:
+	## Cabin + its enclosure walls is CABIN + 2 wide; the extra margin keeps a walkable
+	## lobby beside the shaft instead of a bay that swallows the whole room.
+	if clear.size.x < CABIN + 5 or clear.size.y < CABIN + 5:
 		return
 	var local_rect := _elevator_cabin_rect(clear, grammar.last_facing, CABIN)
-	var floor_ys := PackedInt32Array()
+	## Storeys the cabin actually stands on. Tower shafts and courtyard voids sit inside
+	## the lot AABB, so upper storeys can have no floor under this corner — riding to one
+	## would drop the player outside the building.
+	var local_ys := PackedInt32Array()
 	for f in range(floors):
-		floor_ys.append(grammar.landing_y(bmin.y, f) + origin_vox.y)
+		var pad_y := grammar.landing_y(bmin.y, f)
+		if not _cabin_floor_is_solid(local_rect, pad_y):
+			break
+		local_ys.append(pad_y)
+	if local_ys.size() < 2:
+		return
+	var bay_dir := _elevator_bay_dir(grammar.last_facing)
+	var ceil_ys := _cabin_ceiling_ys(local_ys, grammar.floor_height)
+	_paint_elevator_cabin(local_rect, local_ys, ceil_ys, bay_dir)
+	var floor_ys := PackedInt32Array()
+	for y in local_ys:
+		floor_ys.append(int(y) + origin_vox.y)
 	var world_rect := Rect2i(
 		local_rect.position.x + origin_vox.x,
 		local_rect.position.y + origin_vox.z,
 		local_rect.size.x,
 		local_rect.size.y
 	)
-	var shaft: RefCounted = ElevatorShaftScript.make(world_rect, floor_ys) as RefCounted
+	var shaft: RefCounted = (
+		ElevatorShaftScript.make(world_rect, floor_ys, bay_dir) as RefCounted
+	)
 	elevator_shafts.append(shaft)
 	if room != null:
-		room.keep_clear.append(world_rect)
+		## Reserve the enclosure too — props stamped into the shaft walls would sink
+		## halfway into metal, and props in the bay would block the doorway.
+		room.keep_clear.append(world_rect.grow(1))
+
+
+## Every cabin cell rests on building floor at `pad_y` (district-local).
+func _cabin_floor_is_solid(cabin: Rect2i, pad_y: int) -> bool:
+	for z in range(cabin.position.y, cabin.end.y):
+		for x in range(cabin.position.x, cabin.end.x):
+			if _brush.get_vox(Vector3i(x, pad_y, z)) == VoxelMaterial.AIR:
+				return false
+	return true
+
+
+## Ceiling slab Y per storey: the next landing's deck, or one storey up for the top.
+func _cabin_ceiling_ys(local_ys: PackedInt32Array, floor_height: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for i in range(local_ys.size()):
+		if i + 1 < local_ys.size():
+			out.append(int(local_ys[i + 1]) - 1)
+		else:
+			out.append(int(local_ys[i]) + maxi(floor_height, 3) - 1)
+	return out
+
+
+## Metal bay per storey: walkable pad, clear cabin, and a three-sided enclosure whose
+## opening faces the street door so the elevator reads from the entrance.
+func _paint_elevator_cabin(
+	cabin: Rect2i, local_ys: PackedInt32Array, ceil_ys: PackedInt32Array, bay_dir: Vector2i
+) -> void:
+	var bay := _elevator_bay_rect(cabin, bay_dir)
+	for i in range(local_ys.size()):
+		var pad_y := int(local_ys[i])
+		var ceil_y := int(ceil_ys[i])
+		## Two clear rows minimum, else the bay is a crawlspace, not a cabin.
+		if ceil_y - pad_y < 3:
+			continue
+		_brush.fill_box(
+			Vector3i(cabin.position.x, pad_y, cabin.position.y),
+			Vector3i(cabin.end.x, pad_y + 1, cabin.end.y),
+			VoxelMaterial.METAL_PLATE
+		)
+		## Enclosure over the grown footprint, then the cabin void back out of it.
+		_brush.fill_box(
+			Vector3i(cabin.position.x - 1, pad_y + 1, cabin.position.y - 1),
+			Vector3i(cabin.end.x + 1, ceil_y, cabin.end.y + 1),
+			VoxelMaterial.METAL_PLATE
+		)
+		_brush.fill_box(
+			Vector3i(cabin.position.x, pad_y + 1, cabin.position.y),
+			Vector3i(cabin.end.x, ceil_y, cabin.end.y),
+			VoxelMaterial.AIR
+		)
+		## Bay doorway. Tall storeys keep a lintel course; a 2 m storey opens full height
+		## because a 1 m head clearance is not walkable.
+		var band_h := ceil_y - pad_y - 1
+		var open_top := ceil_y - 1 if band_h >= 5 else ceil_y
+		_brush.fill_box(
+			Vector3i(bay.position.x, pad_y + 1, bay.position.y),
+			Vector3i(bay.end.x, open_top, bay.end.y),
+			VoxelMaterial.AIR
+		)
+
+
+## Cabin side left open as the doorway: the street side, so the bay reads from the
+## entrance. facing: 0=+Z, 1=−Z, 2=+X, 3=−X (DistrictPlanner.street_facing).
+func _elevator_bay_dir(facing: int) -> Vector2i:
+	match facing:
+		0:
+			return Vector2i(0, 1)
+		1:
+			return Vector2i(0, -1)
+		2:
+			return Vector2i(1, 0)
+		_:
+			return Vector2i(-1, 0)
+
+
+## The one-cell strip hugging the cabin's open face.
+func _elevator_bay_rect(cabin: Rect2i, bay_dir: Vector2i) -> Rect2i:
+	if bay_dir.x > 0:
+		return Rect2i(cabin.end.x, cabin.position.y, 1, cabin.size.y)
+	if bay_dir.x < 0:
+		return Rect2i(cabin.position.x - 1, cabin.position.y, 1, cabin.size.y)
+	if bay_dir.y > 0:
+		return Rect2i(cabin.position.x, cabin.end.y, cabin.size.x, 1)
+	return Rect2i(cabin.position.x, cabin.position.y - 1, cabin.size.x, 1)
 
 
 ## Cabin footprint inside `clear` (district-local XZ), opposite street `facing`.

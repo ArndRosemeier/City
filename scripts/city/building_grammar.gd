@@ -905,9 +905,13 @@ func _note_storeys(bmin: Vector3i, bmax: Vector3i, floors: int, facing: int) -> 
 	last_bmax = bmax
 
 
-## Walkable landing Y for storey `f` (district-local), matching InteriorRoom ground convention.
+## Topmost solid floor voxel of storey `f` (district-local) — where a body stands.
+## The ground storey carries a solid interior fill one voxel above its deck; upper
+## storeys walk directly on their own deck (see `_fill_shell`).
 func landing_y(base_y: int, floor_index: int) -> int:
-	return _floor_y(base_y, floor_index) + 1
+	if floor_index <= 0:
+		return base_y + 1
+	return _floor_y(base_y, floor_index)
 
 
 func _footprint_wide_enough(bmin: Vector3i, bmax: Vector3i, min_w: int, min_d: int) -> bool:

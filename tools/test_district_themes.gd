@@ -291,6 +291,7 @@ func _check_parks(stats: Array) -> void:
 	var graveyards := 0
 	var basins := 0
 	var castles := 0
+	var fractals := 0
 	for s: Variant in stats:
 		var d: Dictionary = s
 		var m: Dictionary = d["walls"]
@@ -366,6 +367,12 @@ func _check_parks(stats: Array) -> void:
 				_fail("FAIL %s Castle district has no approach track" % d["coord"])
 				return
 			continue
+		if int(d["theme_id"]) == DistrictTheme.FRACTAL:
+			## A glowing deck with Mandelbrot walls — no buildings and no urban parks, so
+			## the park recipe below does not apply. An empty fractal reserve already
+			## push_errors in DistrictPlanner._build_fractal_layout.
+			fractals += 1
+			continue
 		urban += 1
 		if int(m[VoxelMaterial.GRAVEL]) <= 0:
 			_fail("FAIL %s (%s) has no park paths" % [d["coord"], d["theme"]])
@@ -381,9 +388,9 @@ func _check_parks(stats: Array) -> void:
 	print(
 		(
 			"OK open space: parks on %d tiles (ponds %d), hills on %d, graveyards on %d,"
-			+ " lakes on %d, castles on %d"
+			+ " lakes on %d, castles on %d, fractals on %d"
 		)
-		% [urban, ponds, hills, graveyards, basins, castles]
+		% [urban, ponds, hills, graveyards, basins, castles, fractals]
 	)
 
 

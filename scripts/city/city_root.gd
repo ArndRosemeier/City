@@ -27,6 +27,7 @@ const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
 const TetrisMachineScript := preload("res://scripts/city/tetris_machine.gd")
 const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
 const AimPanelScript := preload("res://scripts/city/aim_panel.gd")
+const ElevatorPanelScript := preload("res://scripts/city/elevator_panel.gd")
 const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
 const BuildPlacerScript := preload("res://scripts/city/build_placer.gd")
 const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
@@ -78,6 +79,8 @@ var _hud_layer: CanvasLayer
 ## Proximity prompt when a hung door or elevator is in interact range ("E to open").
 var _interact_hint_layer: CanvasLayer
 var _interact_hint: Label
+## Pooled floor selector, rebound to whichever elevator cabin the player is standing in.
+var _elevator_panel: ElevatorPanel
 ## False while the splash owns the screen (boot, district hop). Combined with is_modal_open()
 ## in _refresh_hud_visibility; nothing sets a HUD layer's visibility outside that.
 var _hud_enabled: bool = false
@@ -873,8 +876,12 @@ func _process(delta: float) -> void:
 		and _streamer != null
 	):
 		_refresh_interact_hint()
-	elif _interact_hint != null:
-		_interact_hint.visible = false
+		_refresh_elevator_panel()
+	else:
+		if _interact_hint != null:
+			_interact_hint.visible = false
+		if _elevator_panel != null:
+			_elevator_panel.unbind()
 	if _gem_pickup_accum >= GEM_PICKUP_INTERVAL_SEC:
 		_gem_pickup_accum = 0.0
 		CityProfiler.begin("gem_pickup")
@@ -3599,6 +3606,24 @@ func _nearest_interact_target() -> Dictionary:
 func _nearest_elevator_in_district(
 	inst: DistrictInstance, feet: Vector3, best_d2: float
 ) -> Dictionary:
+	var at := _elevator_at_feet(inst, feet)
+	if at.is_empty() or float(at["d2"]) > best_d2:
+		return {}
+	var shaft: ElevatorShaft = at["shaft"] as ElevatorShaft
+	var from_i := int(at["from_i"])
+	return {
+		"kind": "elevator",
+		"verb": "Elevator",
+		"d2": float(at["d2"]),
+		"shaft": shaft,
+		"from_i": from_i,
+		"to": shaft.world_anchor(shaft.next_landing_index(from_i), VOXEL_SIZE),
+	}
+
+
+## Closest cabin in `inst` whose footprint (plus a 1-cell apron) holds the feet at a
+## landing. Keys: shaft, from_i (landing the player is on), d2. Empty when none.
+func _elevator_at_feet(inst: DistrictInstance, feet: Vector3) -> Dictionary:
 	var shafts: Array = inst.elevator_shafts
 	if shafts.is_empty():
 		return {}
@@ -3608,39 +3633,69 @@ func _nearest_elevator_in_district(
 		int(floor(feet.z / VOXEL_SIZE))
 	)
 	var best := {}
+	var best_d2 := INF
 	for shaft_v in shafts:
 		var shaft: ElevatorShaft = shaft_v as ElevatorShaft
 		if shaft == null:
 			continue
 		if shaft.landing_count() < 2:
 			continue
-		var rect: Rect2i = shaft.rect
-		## Cabin or 1-cell apron (XZ); Y near any landing.
-		var apron := Rect2i(rect.position.x - 1, rect.position.y - 1, rect.size.x + 2, rect.size.y + 2)
-		if not apron.has_point(Vector2i(foot_vox.x, foot_vox.z)):
+		var from_i := shaft.foot_landing_index(foot_vox)
+		if from_i < 0:
 			continue
-		var near_y := false
-		for y in shaft.floor_ys:
-			if absi(foot_vox.y - int(y)) <= 1:
-				near_y = true
-				break
-		if not near_y:
-			continue
-		var from_i: int = shaft.nearest_landing_index(foot_vox.y)
-		var to_i: int = shaft.next_landing_index(from_i)
-		var at: Vector3 = shaft.world_anchor(from_i, VOXEL_SIZE)
-		var d2: float = at.distance_squared_to(feet)
-		if d2 > best_d2:
+		var d2: float = shaft.world_anchor(from_i, VOXEL_SIZE).distance_squared_to(feet)
+		if d2 >= best_d2:
 			continue
 		best_d2 = d2
-		best = {
-			"kind": "elevator",
-			"verb": "Elevator",
-			"d2": d2,
-			"shaft": shaft,
-			"to": shaft.world_anchor(to_i, VOXEL_SIZE),
-		}
+		best = {"shaft": shaft, "from_i": from_i, "d2": d2}
 	return best
+
+
+## Mount the floor selector on the cabin the player is standing in, or park it.
+func _refresh_elevator_panel() -> void:
+	if _game_over or _walker.is_elevator_riding():
+		if _elevator_panel != null:
+			_elevator_panel.unbind()
+		return
+	var feet: Vector3 = _walker.global_position
+	var best := {}
+	var best_d2 := INF
+	for entry in _streamer.get_loaded_districts():
+		var inst: DistrictInstance = _as_district_instance(entry)
+		if inst == null:
+			continue
+		var at := _elevator_at_feet(inst, feet)
+		if at.is_empty() or float(at["d2"]) >= best_d2:
+			continue
+		best_d2 = float(at["d2"])
+		best = at
+	if best.is_empty():
+		if _elevator_panel != null:
+			_elevator_panel.unbind()
+		return
+	_ensure_elevator_panel()
+	_elevator_panel.bind_to(best["shaft"] as ElevatorShaft, int(best["from_i"]), VOXEL_SIZE)
+
+
+func _ensure_elevator_panel() -> void:
+	if _elevator_panel != null and is_instance_valid(_elevator_panel):
+		return
+	_elevator_panel = ElevatorPanelScript.new() as ElevatorPanel
+	_elevator_panel.name = "ElevatorPanel"
+	add_child(_elevator_panel)
+	_elevator_panel.floor_selected.connect(_on_elevator_floor_selected)
+
+
+func _on_elevator_floor_selected(landing_index: int) -> void:
+	if _walker == null or not is_instance_valid(_walker) or _elevator_panel == null:
+		return
+	var shaft := _elevator_panel.bound_shaft()
+	if shaft == null:
+		return
+	if landing_index < 0 or landing_index >= shaft.landing_count():
+		push_error("CityRoot: elevator floor %d of %d" % [landing_index, shaft.landing_count()])
+		return
+	_walker.begin_elevator_ride(shaft.world_anchor(landing_index, VOXEL_SIZE))
 
 
 func _try_interact_nearest() -> bool:
