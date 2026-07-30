@@ -44,7 +44,9 @@ pub const PROP_FIRST: i32 = 75;
 pub const PROP_LAST: i32 = 179;
 #[allow(dead_code)]
 pub const PROP_FOOTPRINT: i32 = 180;
-pub const COUNT: i32 = 181;
+#[allow(dead_code)]
+pub const DOOR: i32 = 181;
+pub const COUNT: i32 = 182;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR

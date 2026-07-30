@@ -458,6 +458,16 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.grime = 0.75
 			s.grime_height = 8.0
 			s.streaks = 0.5
+		VoxelMaterial.DOOR:
+			## Closed doorway plug — timber, not masonry.
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tile_meters = Vector2(1.0, 1.0)
+			s.tint = Color(0.40, 0.26, 0.14, 1.0)
+			s.roughness = 0.85
+			s.normal_strength = 0.9
+			s.tint_variation = 0.1
+			s.weathering = 0.25
 		_:
 			push_error(
 				"VoxelSurfaceSpec.for_id: no surface spec for voxel material %d — showing magenta"

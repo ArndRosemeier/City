@@ -105,11 +105,13 @@ const PROP_LAST := 179
 const PROP_COUNT := 105
 ## Invisible solid filler for multi-cell prop footprints (nav / occupancy).
 const PROP_FOOTPRINT := 180
+## Closed door plug — solid barrier in a doorway clear (E-toggle; open restores AIR).
+const DOOR := 181
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
-const COUNT := 181
+const COUNT := 182
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -238,6 +240,10 @@ static func is_room_prop(id: int) -> bool:
 ## Visible prop mesh or its invisible multi-cell footprint filler.
 static func is_prop_furniture(id: int) -> bool:
 	return is_room_prop(id) or id == PROP_FOOTPRINT
+
+
+static func is_door(id: int) -> bool:
+	return id == DOOR
 
 
 static func is_destructible(id: int) -> bool:
@@ -422,6 +428,9 @@ static func color(id: int) -> Color:
 			return Color(0.52, 0.5, 0.46)
 		CASTLE_BLOCK_MOSSY:
 			return Color(0.4, 0.44, 0.34)
+		DOOR:
+			## Timber plug — reads as a shut door, not masonry.
+			return Color(0.40, 0.26, 0.14)
 		FRACTAL_GLOW:
 			## Sapphire-leaning cyan — gem look without GEM_* collect/immune rules.
 			return Color(0.18, 0.48, 0.95)

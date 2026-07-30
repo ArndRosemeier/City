@@ -85,6 +85,9 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 		_:
 			if id == VoxelMaterial.PROP_FOOTPRINT:
 				return _make_prop_footprint_model()
+			if id == VoxelMaterial.DOOR:
+				## Full-cell solid — motion/nav block; leaf meshes are visual only.
+				return _make_cube(id)
 			if VoxelMaterial.is_room_prop(id):
 				return _make_room_prop_model(id)
 			return _make_cube(id)

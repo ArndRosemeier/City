@@ -194,9 +194,11 @@ func _seed_opening_aprons(volume: RoomVolume, blocked: Dictionary) -> void:
 			_block_opening_apron(volume, blocked, Vector2i(r.end.x - 1, z), Vector2i(-1, 0), depth)
 
 
-## Passable punched opening (city door / castle carve). Not glass, not solid masonry.
+## Passable punched opening (city door / castle carve). Closed DOOR plugs still mark the
+## doorway for furniture aprons — the leaf/barrier occupies the opening, not the apron.
 func _is_opening_wall_cell(wall_vox: Vector3i) -> bool:
-	return brush.get_vox(wall_vox) == VoxelMaterial.AIR
+	var id := brush.get_vox(wall_vox)
+	return id == VoxelMaterial.AIR or VoxelMaterial.is_door(id)
 
 
 func _block_opening_apron(

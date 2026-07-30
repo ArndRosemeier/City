@@ -66,6 +66,10 @@ var _bake_key_index: int = 0
 var _bake_impostors: Array = []
 ## JIT furniture targets (InteriorRoom). Empty on far / non-lot tiles.
 var interior_rooms: Array = []
+## City lot street doors (CastleDoorway, world voxel coords). Hung with castle doors.
+var lot_doorways: Array = []
+## Multi-storey elevators (ElevatorShaft, world voxel coords).
+var elevator_shafts: Array = []
 ## Hill gem ore in world voxel coords (empty outside Hill districts).
 var hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var hill_gem_mats: PackedInt32Array = PackedInt32Array()
@@ -190,6 +194,8 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_bake_key_index = 0
 	_bake_impostors.clear()
 	interior_rooms.clear()
+	lot_doorways.clear()
+	elevator_shafts.clear()
 	hill_gem_positions = PackedVector3Array()
 	hill_gem_mats = PackedInt32Array()
 	if building_lod != null and is_instance_valid(building_lod):
@@ -293,6 +299,8 @@ func _stamp_ground_async() -> void:
 	_ground_thickness = int(payload.get("ground_thickness", 6))
 	_bake_impostors = payload.get("impostors", [])
 	interior_rooms = payload.get("interior_rooms", [])
+	lot_doorways = payload.get("lot_doorways", [])
+	elevator_shafts = payload.get("elevator_shafts", [])
 	_bake_blocks = payload.get("blocks", {})
 	hill_gem_positions = payload.get("hill_gem_positions", PackedVector3Array()) as PackedVector3Array
 	hill_gem_mats = payload.get("hill_gem_mats", PackedInt32Array()) as PackedInt32Array
@@ -461,16 +469,17 @@ func _stamp_detail_async() -> void:
 		CityProfiler.end("stream_pads")
 		await get_tree().process_frame
 
-	## Mesh doors for the fortress openings. `get_castle_layout()` is null on every other
-	## district, and the placer treats that as "no doors" rather than an error, so this stays a
-	## single unconditional step in the detail stream.
+	## Mesh doors + DOOR voxel barriers (castle layout and/or city lot façades).
 	CityProfiler.begin("stream_castle_doors")
 	castle_doors = CastleDoorPlacerScript.new()
 	castle_doors.name = "CastleDoors"
 	add_child(castle_doors)
+	var door_brush: CityBrush = live_brush()
 	castle_doors.place_from_layout(
-		generator.get_castle_layout(), _voxel_size, origin_vox, camera
+		generator.get_castle_layout(), _voxel_size, origin_vox, camera, door_brush
 	)
+	if not lot_doorways.is_empty():
+		castle_doors.hang_lot_doorways(lot_doorways, _voxel_size, camera, door_brush)
 	CityProfiler.end("stream_castle_doors")
 	await get_tree().process_frame
 

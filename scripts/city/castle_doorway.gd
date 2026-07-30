@@ -65,13 +65,15 @@ var depth: int = 0
 ## Keep storey (or dungeon level) the opening belongs to, and the surface it stands on.
 var storey: int = 0
 var floor_y: int = 0
-## Clear voxels above `floor_y` on the centre line. The arch takes `ARCH_COURSES` of it back
+## Clear voxels above `floor_y` on the centre line. The arch takes `arch_courses` of it back
 ## at the shoulders, so this is taller than the rectangle a leaf can fill.
 var height: int = 0
 ## Which door hangs here.
 var leaf: int = LEAF_DOOR
 ## Whether the opening is load-bearing for reachability.
 var link: int = LINK_TREE
+## Stepped arch courses (castle). City lot punches are rectangles — set to 0.
+var arch_courses: int = ARCH_COURSES
 
 
 ## Axis the width is measured along.
@@ -93,14 +95,14 @@ func columns() -> Array[Vector2i]:
 ## Half-width of the opening at `row` courses above `floor_y`, the stepped arch included.
 ## Negative above the crown, where the arch has closed over.
 func row_half(row: int) -> int:
-	return width / 2 - maxi(row - (height - ARCH_COURSES), 0)
+	return width / 2 - maxi(row - (height - arch_courses), 0)
 
 
 ## Courses at the foot of the opening that keep its full width: the clear rectangle a
 ## rectangular leaf would have to fit inside. The leaf this plan hangs is stepped to
 ## `row_half()` instead, so it fills the arch rather than sitting under it.
 func clear_rows() -> int:
-	return height - ARCH_COURSES
+	return height - arch_courses
 
 
 ## Offset of the leaf's own mid-plane from `center`'s column centre, along `axis`, in voxels.
@@ -198,6 +200,7 @@ func matches(other: CastleDoorway) -> bool:
 		and height == other.height
 		and leaf == other.leaf
 		and link == other.link
+		and arch_courses == other.arch_courses
 	)
 
 

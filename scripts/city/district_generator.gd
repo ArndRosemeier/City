@@ -13,6 +13,8 @@ const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
 const FractalComposerScript := preload("res://scripts/city/fractal_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
+const CastleDoorwayScript := preload("res://scripts/city/castle_doorway.gd")
+const ElevatorShaftScript := preload("res://scripts/city/elevator_shaft.gd")
 
 @export var city_seed: int = 42
 ## Rectangular district in voxels (0.5 m each). Default 784×560 → 392×280 m.
@@ -57,6 +59,10 @@ var _grammar: BuildingGrammar
 var building_impostors: Array = []
 ## Ground-floor interiors for JIT RoomDecorator (InteriorRoom, world voxel coords).
 var interior_rooms: Array = []
+## City lot street doors (CastleDoorway, world voxel coords).
+var lot_doorways: Array = []
+## Multi-storey lot elevator cabins (ElevatorShaft, world voxel coords).
+var elevator_shafts: Array = []
 ## Hill gem ore (world voxel coords + material ids) collected during compose.
 var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
@@ -91,6 +97,8 @@ func begin_generate(
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
 	interior_rooms.clear()
+	lot_doorways.clear()
+	elevator_shafts.clear()
 	_brush = CityBrushScript.new(tool, origin_vox)
 	_setup_composers()
 
@@ -109,6 +117,8 @@ func begin_generate_offline(
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
 	interior_rooms.clear()
+	lot_doorways.clear()
+	elevator_shafts.clear()
 	_brush = CityBrushScript.new(null, Vector3i.ZERO)
 	_brush.use_offline_volume()
 	_setup_composers()
@@ -1085,7 +1095,9 @@ func _paint_lot(
 			% [zone, cx, cz]
 		)
 	_record_building_impostor(grammar.impostor_parts, zone)
-	_record_interior_room(bmin, bmax, zone, grammar)
+	var room := _record_interior_room(bmin, bmax, zone, grammar)
+	_record_lot_doorways(grammar)
+	_record_elevator_shaft(bmin, bmax, grammar, room)
 	grammar.max_height = saved
 
 
@@ -1093,7 +1105,7 @@ func _paint_lot(
 ## fill raises the walking surface one voxel above the deck (see BuildingGrammar._fill_shell).
 func _record_interior_room(
 	bmin: Vector3i, bmax: Vector3i, zone: int, grammar: BuildingGrammar
-) -> void:
+) -> InteriorRoom:
 	var inner := Rect2i(
 		bmin.x + 1,
 		bmin.z + 1,
@@ -1101,7 +1113,7 @@ func _record_interior_room(
 		maxi(bmax.z - bmin.z - 2, 0)
 	)
 	if inner.size.x < 3 or inner.size.y < 3:
-		return
+		return null
 	var local_floor_y := bmin.y + 1
 	var fh := grammar.ground_floor_height
 	## Clear band under the ceiling slab at y0+fh-1.
@@ -1119,6 +1131,81 @@ func _record_interior_room(
 		_interior_purpose_for_zone(zone, world_rect)
 	)
 	interior_rooms.append(room)
+	return room
+
+
+## Multi-storey lots: 3×3 cabin in the corner opposite the street door.
+## Adds the cabin rect to the ground InteriorRoom keep_clear when present.
+func _record_elevator_shaft(
+	bmin: Vector3i, bmax: Vector3i, grammar: BuildingGrammar, room: InteriorRoom
+) -> void:
+	var floors := grammar.last_floors
+	if floors < 2:
+		return
+	var clear := Rect2i(
+		bmin.x + 1,
+		bmin.z + 1,
+		maxi(bmax.x - bmin.x - 2, 0),
+		maxi(bmax.z - bmin.z - 2, 0)
+	)
+	const CABIN := 3
+	## Need cabin + 1-cell inset on each side so walls stay outside the pad.
+	if clear.size.x < CABIN + 2 or clear.size.y < CABIN + 2:
+		return
+	var local_rect := _elevator_cabin_rect(clear, grammar.last_facing, CABIN)
+	var floor_ys := PackedInt32Array()
+	for f in range(floors):
+		floor_ys.append(grammar.landing_y(bmin.y, f) + origin_vox.y)
+	var world_rect := Rect2i(
+		local_rect.position.x + origin_vox.x,
+		local_rect.position.y + origin_vox.z,
+		local_rect.size.x,
+		local_rect.size.y
+	)
+	var shaft: RefCounted = ElevatorShaftScript.make(world_rect, floor_ys) as RefCounted
+	elevator_shafts.append(shaft)
+	if room != null:
+		room.keep_clear.append(world_rect)
+
+
+## Cabin footprint inside `clear` (district-local XZ), opposite street `facing`.
+## facing: 0=+Z, 1=-Z, 2=+X, 3=-X (DistrictPlanner.street_facing).
+func _elevator_cabin_rect(clear: Rect2i, facing: int, cabin: int) -> Rect2i:
+	var x_lo := clear.position.x + 1
+	var z_lo := clear.position.y + 1
+	var x_hi := clear.position.x + clear.size.x - cabin - 1
+	var z_hi := clear.position.y + clear.size.y - cabin - 1
+	match facing:
+		0: ## Street +Z → back at −Z.
+			return Rect2i(x_hi, z_lo, cabin, cabin)
+		1: ## Street −Z → back at +Z.
+			return Rect2i(x_hi, z_hi, cabin, cabin)
+		2: ## Street +X → back at −X.
+			return Rect2i(x_lo, z_hi, cabin, cabin)
+		_: ## Street −X → back at +X.
+			return Rect2i(x_hi, z_hi, cabin, cabin)
+
+
+## Promote grammar-local door punches to world-space CastleDoorway records.
+func _record_lot_doorways(grammar: BuildingGrammar) -> void:
+	for item in grammar.lot_doorways:
+		var local_d: CastleDoorway = item as CastleDoorway
+		if local_d == null:
+			continue
+		var world_d: CastleDoorway = CastleDoorwayScript.new() as CastleDoorway
+		world_d.center = Vector2i(
+			local_d.center.x + origin_vox.x, local_d.center.y + origin_vox.z
+		)
+		world_d.axis = local_d.axis
+		world_d.width = local_d.width
+		world_d.depth = local_d.depth
+		world_d.storey = local_d.storey
+		world_d.floor_y = local_d.floor_y + origin_vox.y
+		world_d.height = local_d.height
+		world_d.leaf = local_d.leaf
+		world_d.link = local_d.link
+		world_d.arch_courses = local_d.arch_courses
+		lot_doorways.append(world_d)
 
 
 func _interior_purpose_for_zone(zone: int, rect: Rect2i) -> int:

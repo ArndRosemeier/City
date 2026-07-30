@@ -3,6 +3,8 @@
 class_name BuildingGrammar
 extends RefCounted
 
+const CastleDoorwayScript := preload("res://scripts/city/castle_doorway.gd")
+
 var brush: CityBrush
 var rng: RandomNumberGenerator
 ## Palette and archetype weights for the district this lot sits in.
@@ -33,6 +35,13 @@ var built_height_vox: int = 0
 var impostor_parts: Array[Dictionary] = []
 ## Last L/T footprint parts from `_massed_floors` so roofs match (re-roll would diverge).
 var _mass_parts_cache: Array = []
+## Ground-floor street doors punched this build (district-local CastleDoorway).
+var lot_doorways: Array = []
+## Last massing: storey count and lot box (district-local) for elevator emit.
+var last_floors: int = 0
+var last_facing: int = 0
+var last_bmin: Vector3i = Vector3i.ZERO
+var last_bmax: Vector3i = Vector3i.ZERO
 
 
 func build_for_zone(
@@ -50,6 +59,11 @@ func build_for_zone(
 	_mass_parts_cache.clear()
 	built_height_vox = 0
 	impostor_parts.clear()
+	lot_doorways.clear()
+	last_floors = 0
+	last_facing = facing
+	last_bmin = bmin
+	last_bmax = bmax
 	## Wild forms need room for a hole / arch / pod cluster, and they only belong on
 	## the bigger commercial zones — a twisted tower on a townhouse lot is nonsense.
 	var wild_zone := (
@@ -255,6 +269,8 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 		Vector3i(smin.x + 2, crown_y, smin.z + 2),
 		Vector3i(smax.x - 2, shaft_top + 2, smax.z - 2)
 	)
+	## Elevator landings span podium + shaft (not just the podium _box_floors note).
+	_note_storeys(bmin, bmax, podium_floors + built_floors, facing)
 
 
 func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
@@ -866,6 +882,19 @@ func _floor_y(base_y: int, floor_index: int) -> int:
 	return y
 
 
+## Remember storeys for elevator shaft emit (multi-floor lots only).
+func _note_storeys(bmin: Vector3i, bmax: Vector3i, floors: int, facing: int) -> void:
+	last_floors = maxi(floors, last_floors)
+	last_facing = facing
+	last_bmin = bmin
+	last_bmax = bmax
+
+
+## Walkable landing Y for storey `f` (district-local), matching InteriorRoom ground convention.
+func landing_y(base_y: int, floor_index: int) -> int:
+	return _floor_y(base_y, floor_index) + 1
+
+
 func _footprint_wide_enough(bmin: Vector3i, bmax: Vector3i, min_w: int, min_d: int) -> bool:
 	return (bmax.x - bmin.x) >= min_w and (bmax.z - bmin.z) >= min_d
 
@@ -1270,6 +1299,7 @@ func _box_floors(
 	door: bool,
 	ribbon: bool
 ) -> void:
+	_note_storeys(bmin, bmax, floors, facing)
 	for f in range(floors):
 		var y0 := _floor_y(bmin.y, f)
 		var fh := _floor_h(f)
@@ -1288,6 +1318,7 @@ func _tripartite(
 	on_plaza: bool,
 	punched: bool
 ) -> void:
+	_note_storeys(bmin, bmax, floors, facing)
 	var base_floors := 1
 	var crown_floors := 1 if floors > 4 else 0
 	var shaft_floors := floors - base_floors - crown_floors
@@ -1373,6 +1404,37 @@ func _fill_shell(
 	)
 	## Windows / doors only on façade strips (not the volume interior).
 	_punch_facades(min_v, max_v, facing, door_on_ground, ribbon_windows, is_ground)
+	if door_on_ground:
+		_record_lot_doorway(min_v, max_v, facing)
+
+
+func _record_lot_doorway(min_v: Vector3i, max_v: Vector3i, facing: int) -> void:
+	var cx := (min_v.x + max_v.x) / 2
+	var cz := (min_v.z + max_v.z) / 2
+	var d: CastleDoorway = CastleDoorwayScript.new() as CastleDoorway
+	d.width = 3
+	d.depth = 1
+	## Punch band is y in [min_v.y+1, min_v.y+ground_floor_height-1].
+	d.floor_y = min_v.y
+	d.height = maxi(ground_floor_height - 1, 1)
+	d.arch_courses = 0
+	d.leaf = CastleDoorway.LEAF_DOOR
+	d.link = CastleDoorway.LINK_TREE
+	match facing:
+		0:
+			## Door on +Z wall; walk inward toward −Z.
+			d.center = Vector2i(cx, max_v.z - 1)
+			d.axis = Vector2i(0, -1)
+		1:
+			d.center = Vector2i(cx, min_v.z)
+			d.axis = Vector2i(0, 1)
+		2:
+			d.center = Vector2i(max_v.x - 1, cz)
+			d.axis = Vector2i(-1, 0)
+		_:
+			d.center = Vector2i(min_v.x, cz)
+			d.axis = Vector2i(1, 0)
+	lot_doorways.append(d)
 
 
 func _punch_facades(

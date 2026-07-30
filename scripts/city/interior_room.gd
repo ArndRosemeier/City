@@ -15,6 +15,8 @@ var air_h: int = 0
 var purpose: int = 0
 ## True after decorate finished (even if zero props).
 var decorated: bool = false
+## XZ cells the decorator must not furnish (elevator cabin, etc.).
+var keep_clear: Array[Rect2i] = []
 
 
 func contains_xz(world_xz: Vector2i) -> bool:
@@ -31,7 +33,9 @@ func contains_foot_voxel(world_vox: Vector3i) -> bool:
 
 
 func to_volume() -> RoomVolume:
-	return RoomVolume.make(rect, floor_y, air_h)
+	var vol := RoomVolume.make(rect, floor_y, air_h)
+	vol.keep_clear = keep_clear.duplicate()
+	return vol
 
 
 static func make(
@@ -43,4 +47,5 @@ static func make(
 	r.air_h = p_air_h
 	r.purpose = p_purpose
 	r.decorated = false
+	r.keep_clear = []
 	return r

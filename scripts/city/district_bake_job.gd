@@ -88,6 +88,10 @@ static func bake(params: Dictionary) -> Dictionary:
 		"impostors": gen.building_impostors.duplicate(true),
 		## InteriorRoom refs — mutable so runtime can flip `decorated`.
 		"interior_rooms": gen.interior_rooms.duplicate(),
+		## CastleDoorway refs (world voxels) for city lot street doors.
+		"lot_doorways": gen.lot_doorways.duplicate(),
+		## ElevatorShaft refs (world voxels) for multi-storey lots.
+		"elevator_shafts": gen.elevator_shafts.duplicate(),
 		"seed": dseed,
 		"ground_thickness": gen.ground_thickness,
 		"cell_size": cell_size,

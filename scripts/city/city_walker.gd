@@ -299,6 +299,11 @@ var _swim_exit_boost_left: float = 0.0
 var _swim_exit_immune_left: float = 0.0
 var _swim_exit_dir: Vector3 = Vector3.ZERO
 var _climb_mode: ClimbMode = ClimbMode.NONE
+## Scripted elevator ride: locks voxel motion while lerping feet between landings.
+var _elevator_ride_t: float = -1.0
+var _elevator_ride_duration: float = 0.85
+var _elevator_ride_from: Vector3 = Vector3.ZERO
+var _elevator_ride_to: Vector3 = Vector3.ZERO
 ## Outward wall normal (flattened) while climbing.
 var _climb_wall_n: Vector3 = Vector3.ZERO
 ## After starting climb-down, ignore ground so the roof lip doesn't cancel the hang.
@@ -1512,9 +1517,44 @@ func _process(_delta: float) -> void:
 	CityProfiler.end("walker_underground")
 
 
+## True while a scripted elevator ride owns the body (bypass VoxelBoxMover).
+func is_elevator_riding() -> bool:
+	return _elevator_ride_t >= 0.0
+
+
+## Lerp feet from the current position to `to_world` over `duration_sec`.
+## Ignores a new ride while one is already running.
+func begin_elevator_ride(to_world: Vector3, duration_sec: float = 0.85) -> void:
+	if is_elevator_riding():
+		return
+	_elevator_ride_from = global_position
+	_elevator_ride_to = to_world
+	_elevator_ride_duration = maxf(duration_sec, 0.05)
+	_elevator_ride_t = 0.0
+	velocity = Vector3.ZERO
+	_end_jump_rise()
+	_climb_mode = ClimbMode.NONE
+
+
+func _physics_elevator_ride(delta: float) -> void:
+	_elevator_ride_t += delta
+	var u := clampf(_elevator_ride_t / _elevator_ride_duration, 0.0, 1.0)
+	## Smoothstep so the cabin eases in/out.
+	u = u * u * (3.0 - 2.0 * u)
+	global_position = _elevator_ride_from.lerp(_elevator_ride_to, u)
+	velocity = Vector3.ZERO
+	if u >= 1.0:
+		global_position = _elevator_ride_to
+		_elevator_ride_t = -1.0
+	_apply_camera_angles()
+
+
 func _physics_process(delta: float) -> void:
 	_regen_energy(delta)
 	_regen_health(delta)
+	if is_elevator_riding():
+		_physics_elevator_ride(delta)
+		return
 	if is_blocking_ui_open():
 		velocity.x = 0.0
 		velocity.z = 0.0
