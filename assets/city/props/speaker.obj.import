@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://bihx7k4rcd6ue"
+path="res://.godot/imported/speaker.obj-f3e5df779deca060f5237bb80f1f6cfe.mesh"
+
+[deps]
+
+files=["res://.godot/imported/speaker.obj-f3e5df779deca060f5237bb80f1f6cfe.mesh"]
+
+source_file="res://assets/city/props/speaker.obj"
+dest_files=["res://.godot/imported/speaker.obj-f3e5df779deca060f5237bb80f1f6cfe.mesh", "res://.godot/imported/speaker.obj-f3e5df779deca060f5237bb80f1f6cfe.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

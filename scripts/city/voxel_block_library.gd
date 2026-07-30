@@ -82,7 +82,19 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 				id, _mesh_slope_45(VoxelMaterial.SLOPE_HIGH_NEG_Z), VoxelMaterial.SLOPE_HIGH_NEG_Z
 			)
 		_:
+			if VoxelMaterial.is_room_prop(id):
+				return _make_room_prop_model(id)
 			return _make_cube(id)
+
+
+static func _make_room_prop_model(id: int) -> VoxelBlockyModelMesh:
+	var e := RoomPropCatalog.entry(id)
+	var stem := String(e.get("stem", ""))
+	var walk := bool(e.get("walk_through", false))
+	var origin: Vector3 = e.get("aabb", Vector3.ZERO)
+	var size: Vector3 = e.get("aabb_size", Vector3.ONE)
+	var box := AABB(origin, size)
+	return _mesh_model_prop(id, _mesh_prop(stem), box, walk)
 
 
 static func _make_cube(id: int) -> VoxelBlockyModelCube:
@@ -92,6 +104,25 @@ static func _make_cube(id: int) -> VoxelBlockyModelCube:
 	if id == VoxelMaterial.GLASS or id == VoxelMaterial.GLASS_LIT or id == VoxelMaterial.WATER:
 		cube.transparency_index = 1
 	return cube
+
+
+## Room furniture: visual only + collision AABBs. Never attach a full-cell discard
+## mesh (egg-crate cull) — props are partial fills with culls_neighbors off.
+static func _mesh_model_prop(
+	id: int, visual: ArrayMesh, collision_aabb: AABB, walk_through: bool = false
+) -> VoxelBlockyModelMesh:
+	var model := VoxelBlockyModelMesh.new()
+	var mat := block_material_for(id)
+	model.mesh = visual
+	model.set_material_override(0, mat)
+	model.set_mesh_collision_enabled(0, false)
+	model.culls_neighbors = false
+	if walk_through or collision_aabb.size == Vector3.ZERO:
+		model.collision_aabbs = []
+		model.collision_mask = 0
+	else:
+		model.collision_aabbs = [collision_aabb]
+	return model
 
 
 ## Visual mesh (surface 0) + optional collision mesh (surface 1).
@@ -499,6 +530,32 @@ static func _mesh_flower() -> ArrayMesh:
 	return st.commit()
 
 
+static var _prop_mesh_cache: Dictionary = {}  # stem → ArrayMesh
+
+
+## Unit-cell prop OBJ from tools/gen_room_prop_catalog.py (0..1).
+static func _mesh_prop(stem: String) -> ArrayMesh:
+	var cached: Variant = _prop_mesh_cache.get(stem)
+	if cached is ArrayMesh:
+		return cached
+	var path := RoomPropCatalog.PROP_MESH_DIR + stem + ".obj"
+	var loaded: Resource = load(path)
+	var mesh: ArrayMesh = null
+	if loaded is ArrayMesh:
+		mesh = loaded
+	elif loaded is Mesh:
+		## Importer may yield Mesh; copy surfaces into ArrayMesh for the library.
+		var src := loaded as Mesh
+		mesh = ArrayMesh.new()
+		for s in range(src.get_surface_count()):
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, src.surface_get_arrays(s))
+	if mesh == null or mesh.get_surface_count() == 0:
+		push_error("VoxelBlockLibrary._mesh_prop: missing/empty %s — using planter stub" % path)
+		mesh = _mesh_planter()
+	_prop_mesh_cache[stem] = mesh
+	return mesh
+
+
 static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 	_add_quad(st, Vector3(bmin.x, bmin.y, bmax.z), Vector3(bmax.x, bmin.y, bmax.z), Vector3(bmax.x, bmax.y, bmax.z), Vector3(bmin.x, bmax.y, bmax.z), Vector3(0, 0, 1))
 	_add_quad(st, Vector3(bmax.x, bmin.y, bmin.z), Vector3(bmin.x, bmin.y, bmin.z), Vector3(bmin.x, bmax.y, bmin.z), Vector3(bmax.x, bmax.y, bmin.z), Vector3(0, 0, -1))
@@ -547,6 +604,9 @@ static func block_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
+	## Room props are small authored meshes — grain follows the prop, not the street.
+	if VoxelMaterial.is_room_prop(id):
+		return surface_material(id, true)
 	return surface_material(id, false)
 
 

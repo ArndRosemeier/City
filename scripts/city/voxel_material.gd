@@ -99,8 +99,15 @@ const FRACTAL_BAND_14 := 72
 const FRACTAL_BAND_15 := 73
 ## Mandelbrot set body (interior) — dark deck, not the glowing plaza.
 const FRACTAL_INTERIOR := 74
-
-const COUNT := 75
+## Room prop kit — see RoomPropCatalog / tools/gen_room_prop_catalog.py.
+const PROP_FIRST := 75
+const PROP_LAST := 179
+const PROP_COUNT := 105
+## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
+const PROP_CRATE := PROP_FIRST
+const PROP_BARREL := PROP_FIRST + 1
+const PROP_CHAIR := PROP_FIRST + 2
+const COUNT := 180
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -219,6 +226,11 @@ static func is_undead_structure_target(id: int) -> bool:
 ## Park / plaza greenery — giants and minions should ignore these.
 static func is_vegetation(id: int) -> bool:
 	return id == BARK or id == LEAVES or id == PLANTER or id == YEW
+
+
+## Indoor / room furniture stamps (custom meshes in the block library).
+static func is_room_prop(id: int) -> bool:
+	return id >= PROP_FIRST and id <= PROP_LAST
 
 
 static func is_destructible(id: int) -> bool:
@@ -410,6 +422,8 @@ static func color(id: int) -> Color:
 			## Mandelbrot set body — near-black, not the glowing deck.
 			return Color(0.04, 0.04, 0.06)
 		_:
+			if is_room_prop(id):
+				return Color(0.55, 0.4, 0.26)
 			if is_fractal_band(id):
 				return fractal_band_color(id - FRACTAL_BAND_FIRST)
 			return Color(1, 0, 1)

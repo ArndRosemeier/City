@@ -54,6 +54,8 @@ static func has_bespoke_shader(id: int) -> bool:
 
 
 static func for_id(id: int) -> VoxelSurfaceSpec:
+	if VoxelMaterial.is_room_prop(id):
+		return _spec_for_room_prop(id)
 	var s := VoxelSurfaceSpec.new()
 	match id:
 		VoxelMaterial.BEDROCK:
@@ -457,4 +459,43 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			)
 			s.albedo_file = "plaster.jpg"
 			s.tint = Color(1, 0, 1, 1)
+	return s
+
+
+## Family tints for RoomPropCatalog meshes. Avoid metal.jpg — its authored tile pitch
+## is curtain-panel scale and fails tools/test_texture_scale.gd.
+static func _spec_for_room_prop(id: int) -> VoxelSurfaceSpec:
+	var s := VoxelSurfaceSpec.new()
+	var family := RoomPropCatalog.family_of(id)
+	s.tile_meters = Vector2(1.0, 1.0)
+	s.tint_variation = 0.12
+	s.weathering = 0.2
+	match family:
+		"fabric":
+			s.albedo_file = "plaster.jpg"
+			s.normal_file = "plaster_normal.jpg"
+			s.tint = Color(0.72, 0.62, 0.55, 1.0)
+			s.roughness = 0.9
+		"metal":
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tint = Color(0.55, 0.58, 0.62, 1.0)
+			s.roughness = 0.55
+			s.metallic = 0.25
+		"ceramic":
+			s.albedo_file = "plaster.jpg"
+			s.normal_file = "plaster_normal.jpg"
+			s.tint = Color(0.88, 0.9, 0.92, 1.0)
+			s.roughness = 0.35
+		"foliage":
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tint = Color(0.28, 0.48, 0.26, 1.0)
+			s.roughness = 0.85
+		_:
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tint = Color(0.55, 0.4, 0.26, 1.0)
+			s.roughness = 0.82
+			s.normal_strength = 0.9
 	return s

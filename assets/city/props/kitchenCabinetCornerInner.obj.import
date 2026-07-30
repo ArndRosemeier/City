@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://dkn5jt5fua5tv"
+path="res://.godot/imported/kitchenCabinetCornerInner.obj-8f1fed493391fdeb276b71adef85625d.mesh"
+
+[deps]
+
+files=["res://.godot/imported/kitchenCabinetCornerInner.obj-8f1fed493391fdeb276b71adef85625d.mesh"]
+
+source_file="res://assets/city/props/kitchenCabinetCornerInner.obj"
+dest_files=["res://.godot/imported/kitchenCabinetCornerInner.obj-8f1fed493391fdeb276b71adef85625d.mesh", "res://.godot/imported/kitchenCabinetCornerInner.obj-8f1fed493391fdeb276b71adef85625d.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

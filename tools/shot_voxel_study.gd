@@ -30,19 +30,19 @@ func _ready() -> void:
 	terrain.mesher = mesher
 	const AirGeneratorScript := preload("res://scripts/city/air_generator.gd")
 	terrain.generator = AirGeneratorScript.new()
-	terrain.bounds = AABB(Vector3(-8, 0, -8), Vector3(40, 24, 32))
-	terrain.max_view_distance = 80
+	terrain.bounds = AABB(Vector3(-8, 0, -8), Vector3(48, 24, 48))
+	terrain.max_view_distance = 128
 	terrain.generate_collisions = false
 	root.add_child(terrain)
 	var viewer := VoxelViewer.new()
-	viewer.view_distance = 80
+	viewer.view_distance = 128
 	viewer.requires_visuals = true
 	root.add_child(viewer)
 
 	var tool := terrain.get_voxel_tool()
 	tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var guard := 0
-	while not tool.is_area_editable(AABB(Vector3(0, 0, 0), Vector3(28, 14, 20))) and guard < 300:
+	while not tool.is_area_editable(AABB(Vector3(0, 0, 0), Vector3(36, 14, 36))) and guard < 300:
 		guard += 1
 		await get_tree().process_frame
 
@@ -55,10 +55,17 @@ func _ready() -> void:
 	var cam := Camera3D.new()
 	root.add_child(cam)
 	cam.current = true
-	if ids.size() == 1:
+	if ids.size() == 1 and VoxelMaterial.is_room_prop(ids[0]):
+		## Room-corner props sit around voxel (4..6, 1, 4..6) → world ~2–3 m.
+		cam.global_position = Vector3(3.6, 2.2, 1.4)
+		cam.look_at(Vector3(2.5, 0.9, 2.5))
+	elif ids.size() == 1:
 		## Close enough that fine grain / texel density is readable in the PNG.
 		cam.global_position = Vector3(2.0, 2.8, 3.2)
 		cam.look_at(Vector3(3.6, 1.8, 5.2))
+	elif ids.size() > 0 and VoxelMaterial.is_room_prop(ids[0]):
+		cam.global_position = Vector3(14.0, 12.0, -2.0)
+		cam.look_at(Vector3(12.0, 0.5, 8.0))
 	else:
 		cam.global_position = Vector3(1.2, 4.8, -1.2)
 		cam.look_at(Vector3(6.5, 1.8, 4.0))
@@ -95,7 +102,22 @@ func _build_environment(root: Node3D) -> void:
 
 
 ## Single-material deep study: floor sheet + wall curtain + 0.5 m scale cube.
+## Room props get a room corner with a few instances (not a solid curtain of chairs).
 func _place_single(tool: VoxelTool, id: int) -> void:
+	if VoxelMaterial.is_room_prop(id):
+		for z in range(1, 12):
+			for x in range(1, 12):
+				tool.set_voxel(Vector3i(x, 0, z), VoxelMaterial.CASTLE_BLOCK)
+		for y in range(1, 5):
+			for x in range(1, 12):
+				tool.set_voxel(Vector3i(x, y, 10), VoxelMaterial.CASTLE_BLOCK)
+			for z in range(1, 11):
+				tool.set_voxel(Vector3i(1, y, z), VoxelMaterial.CASTLE_BLOCK)
+		tool.set_voxel(Vector3i(4, 1, 4), id)
+		tool.set_voxel(Vector3i(6, 1, 4), id)
+		tool.set_voxel(Vector3i(5, 1, 6), id)
+		return
+
 	var contrast := VoxelMaterial.BRICK if id != VoxelMaterial.BRICK else VoxelMaterial.METAL
 	for z in range(1, 14):
 		for x in range(1, 14):
@@ -126,10 +148,32 @@ func _place_single(tool: VoxelTool, id: int) -> void:
 
 
 ## Side-by-side upright panels + short floor pads for a material family.
+## Room props get a floor grid + back wall, not upright panels.
 func _place_lineup(tool: VoxelTool, ids: Array[int]) -> void:
-	for z in range(0, 12):
-		for x in range(0, 4 + ids.size() * 5):
-			tool.set_voxel(Vector3i(x, 0, z), VoxelMaterial.BRICK)
+	var props := ids.size() > 0 and VoxelMaterial.is_room_prop(ids[0])
+	if not props:
+		var width := 4 + ids.size() * 5
+		for z in range(0, 12):
+			for x in range(0, width):
+				tool.set_voxel(Vector3i(x, 0, z), VoxelMaterial.BRICK)
+
+	if props:
+		## Grid on the floor with a back wall — fits the full catalog.
+		var cols := 12
+		var rows := int(ceili(float(ids.size()) / float(cols)))
+		var grid_w := 2 + cols * 2
+		var grid_d := 2 + rows * 2
+		for z in range(0, grid_d + 2):
+			for x in range(0, grid_w + 2):
+				tool.set_voxel(Vector3i(x, 0, z), VoxelMaterial.CASTLE_BLOCK)
+		for y in range(1, 4):
+			for x in range(0, grid_w + 2):
+				tool.set_voxel(Vector3i(x, y, grid_d + 1), VoxelMaterial.CASTLE_BLOCK)
+		for i in range(ids.size()):
+			var col := i % cols
+			var row := int(i / cols)
+			tool.set_voxel(Vector3i(2 + col * 2, 1, 2 + row * 2), ids[i])
+		return
 
 	for i in range(ids.size()):
 		var id := ids[i]
@@ -191,6 +235,11 @@ func _resolve_materials() -> Array[int]:
 			VoxelMaterial.STONE,
 			VoxelMaterial.BEDROCK,
 		] as Array[int]
+	if flag == "props" or flag == "room_props" or flag == "furniture":
+		var all_props: Array[int] = []
+		for i in range(RoomPropCatalog.PROP_COUNT):
+			all_props.append(RoomPropCatalog.PROP_FIRST + i)
+		return all_props
 	var id := _parse_material(flag)
 	if id < 0:
 		push_error("Unknown --material=%s" % flag)
@@ -202,6 +251,8 @@ func _resolve_materials() -> Array[int]:
 func _study_label(ids: Array[int]) -> String:
 	if ids.size() == 1:
 		return _material_name(ids[0]).to_lower()
+	if ids.size() > 1 and VoxelMaterial.is_room_prop(ids[0]):
+		return "props"
 	return "rock"
 
 
@@ -241,10 +292,20 @@ func _parse_material(raw: String) -> int:
 		var n := raw.to_int()
 		if n > 0 and n < VoxelMaterial.COUNT:
 			return n
+	## Catalog stem (chair, bedDouble, lampRoundTable, …).
+	var prop_id := RoomPropCatalog.find_stem(raw)
+	if prop_id >= RoomPropCatalog.PROP_FIRST:
+		return prop_id
+	var camel := raw.replace("-", "").replace("_", "")
+	prop_id = RoomPropCatalog.find_stem(camel)
+	if prop_id >= RoomPropCatalog.PROP_FIRST:
+		return prop_id
 	return -1
 
 
 func _material_name(id: int) -> String:
+	if VoxelMaterial.is_room_prop(id):
+		return RoomPropCatalog.stem_of(id)
 	match id:
 		VoxelMaterial.GLASS:
 			return "GLASS"

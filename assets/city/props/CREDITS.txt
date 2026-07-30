@@ -1,0 +1,8 @@
+Room prop meshes (unit cell 0..1) — 105 pieces
+
+Sources
+- Kenney Furniture Kit (CC0 1.0) — https://kenney.nl/assets/furniture-kit
+  OpenGameArt mirror; blockified by tools/gen_room_prop_catalog.py
+- barrel.obj — project-authored lathed cylinder
+
+Regenerate: python tools/gen_room_prop_catalog.py
