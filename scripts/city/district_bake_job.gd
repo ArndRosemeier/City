@@ -86,8 +86,9 @@ static func bake(params: Dictionary) -> Dictionary:
 		"nav_bake": nav_bake,
 		"nav_stats": nav_stats,
 		"impostors": gen.building_impostors.duplicate(true),
-		## InteriorRoom refs — mutable so runtime can flip `decorated`.
-		"interior_rooms": gen.interior_rooms.duplicate(),
+		## BuildingInterior refs keyed by district cell — mutable so runtime can flip
+		## `subdivided` / `decorated` on the storeys.
+		"interior_buildings": gen.interior_buildings.duplicate(),
 		## CastleDoorway refs (world voxels) for city lot street doors.
 		"lot_doorways": gen.lot_doorways.duplicate(),
 		## ElevatorShaft refs (world voxels) for multi-storey lots.

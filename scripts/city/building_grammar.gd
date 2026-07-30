@@ -44,6 +44,9 @@ var impostor_parts: Array[Dictionary] = []
 var _mass_parts_cache: Array = []
 ## Ground-floor street doors punched this build (district-local CastleDoorway).
 var lot_doorways: Array = []
+## Walkable storeys `_fill_shell` painted this build (district-local StoreyPlate).
+## Round archetypes (cylinder, spiral, blob) never call it and stay ground-room only.
+var storey_plates: Array[StoreyPlate] = []
 ## Last massing: storey count and lot box (district-local) for elevator emit.
 var last_floors: int = 0
 var last_facing: int = 0
@@ -67,6 +70,7 @@ func build_for_zone(
 	built_height_vox = 0
 	impostor_parts.clear()
 	lot_doorways.clear()
+	storey_plates.clear()
 	last_floors = 0
 	last_facing = facing
 	last_bmin = bmin
@@ -80,7 +84,23 @@ func build_for_zone(
 	)
 	if wild_zone and _footprint_wide_enough(bmin, bmax, 16, 16) and rng.randf() < theme.wild_chance:
 		wild_building(bmin, bmax, facing, on_plaza)
-		return
+	else:
+		_build_zone_form(bmin, bmax, zone, facing, corner, on_plaza, on_park)
+	## Storefronts, awnings and balconies are painted outside the façade after the shell,
+	## and any of them will happily seal the entrance they were meant to dress. The
+	## entrance gets the last word.
+	_clear_door_approaches()
+
+
+func _build_zone_form(
+	bmin: Vector3i,
+	bmax: Vector3i,
+	zone: int,
+	facing: int,
+	corner: bool,
+	on_plaza: bool,
+	on_park: bool
+) -> void:
 	match zone:
 		LandUse.CIVIC_LOT:
 			if _can_host_tower(bmin, bmax) and rng.randf() < theme.spiral_chance:
@@ -1471,6 +1491,22 @@ func _fill_shell(
 	_punch_facades(min_v, max_v, facing, hang_door, ribbon_windows, is_ground)
 	if hang_door:
 		_record_lot_doorway(min_v, max_v, facing, wall_mat)
+	_note_storey_plate(min_v, max_v, is_ground)
+
+
+## Ground storeys carry a solid interior fill one voxel above their deck; upper storeys
+## walk on the deck itself. Both lose the ceiling course at the top (see above).
+func _note_storey_plate(min_v: Vector3i, max_v: Vector3i, is_ground: bool) -> void:
+	var rect := Rect2i(
+		min_v.x + 1, min_v.z + 1, max_v.x - min_v.x - 2, max_v.z - min_v.z - 2
+	)
+	if rect.size.x < 3 or rect.size.y < 3:
+		return
+	var floor_y := min_v.y + 1 if is_ground else min_v.y
+	var air_h := max_v.y - 2 - floor_y
+	if air_h < 2:
+		return
+	storey_plates.append(StoreyPlate.make(rect, floor_y, air_h))
 
 
 func _shell_can_hang_door(min_v: Vector3i, max_v: Vector3i, facing: int) -> bool:
@@ -1513,6 +1549,27 @@ func _record_lot_doorway(
 	## still has a frame (DoorBarrier.has_wall_frame rejects glass/AIR jambs).
 	_reinforce_door_jambs(d, wall_mat)
 	lot_doorways.append(d)
+
+
+## One metre of clearance: enough to step past protruding trim without cutting a notch
+## into whatever stands beyond the pavement.
+const DOOR_APPROACH_DEPTH := 2
+
+
+## Clear a walk-out tunnel in front of every door this lot recorded, as wide and as tall
+## as the opening itself.
+func _clear_door_approaches() -> void:
+	for item in lot_doorways:
+		var d: CastleDoorway = item as CastleDoorway
+		var s := d.side()
+		var half := d.width / 2
+		var near: Vector2i = d.center - d.axis - s * half
+		var far: Vector2i = d.center - d.axis * DOOR_APPROACH_DEPTH + s * half
+		brush.fill_box(
+			Vector3i(mini(near.x, far.x), d.floor_y + 1, mini(near.y, far.y)),
+			Vector3i(maxi(near.x, far.x) + 1, d.floor_y + d.height + 1, maxi(near.y, far.y) + 1),
+			VoxelMaterial.AIR
+		)
 
 
 ## Paint solid jamb posts beside a recorded doorway (and a lintel course).

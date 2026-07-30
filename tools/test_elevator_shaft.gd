@@ -220,7 +220,7 @@ func _check_bake() -> void:
 	if shafts.is_empty():
 		_fail("FAIL full bake emitted zero elevator_shafts")
 		return
-	var rooms: Array = payload.get("interior_rooms", [])
+	var index: Dictionary = payload.get("interior_buildings", {})
 	var reserved := 0
 	for shaft_v in shafts:
 		var shaft: ElevatorShaft = shaft_v as ElevatorShaft
@@ -238,14 +238,15 @@ func _check_bake() -> void:
 				_fail("FAIL floor_ys not ascending: %s" % str(shaft.floor_ys))
 				return
 		## The enclosure walls and bay must be off limits to the prop decorator, not
-		## just the cabin pad.
-		for room_v in rooms:
-			var room: InteriorRoom = room_v as InteriorRoom
-			if room == null:
+		## just the cabin pad — on every storey the cabin serves.
+		for building_v in index.values():
+			var building: BuildingInterior = building_v as BuildingInterior
+			if building == null:
 				continue
-			for c: Rect2i in room.keep_clear:
-				if c.encloses(shaft.rect):
-					reserved += 1
+			for room in building.storeys:
+				for c: Rect2i in room.keep_clear:
+					if c.encloses(shaft.rect):
+						reserved += 1
 	if reserved <= 0:
 		_fail("FAIL no InteriorRoom keep_clear covers a shaft cabin")
 		return

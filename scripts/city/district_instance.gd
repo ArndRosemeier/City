@@ -64,8 +64,11 @@ var _bake_blocks: Dictionary = {}
 var _bake_block_keys: Array[Vector3i] = []
 var _bake_key_index: int = 0
 var _bake_impostors: Array = []
-## JIT furniture targets (InteriorRoom). Empty on far / non-lot tiles.
-var interior_rooms: Array = []
+## JIT subdivision + furniture targets (BuildingInterior), keyed by district cell.
+## Empty on far / non-lot tiles.
+var interior_buildings: Dictionary = {}
+## Cell pitch of that index, in voxels — the decorator maps a foot position to a cell.
+var interior_cell_size: int = 0
 ## City lot street doors (CastleDoorway, world voxel coords). Hung with castle doors.
 var lot_doorways: Array = []
 ## Multi-storey elevators (ElevatorShaft, world voxel coords).
@@ -193,7 +196,8 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_bake_block_keys.clear()
 	_bake_key_index = 0
 	_bake_impostors.clear()
-	interior_rooms.clear()
+	interior_buildings.clear()
+	interior_cell_size = 0
 	lot_doorways.clear()
 	elevator_shafts.clear()
 	hill_gem_positions = PackedVector3Array()
@@ -298,7 +302,8 @@ func _stamp_ground_async() -> void:
 	_dseed = int(payload.get("seed", 0))
 	_ground_thickness = int(payload.get("ground_thickness", 6))
 	_bake_impostors = payload.get("impostors", [])
-	interior_rooms = payload.get("interior_rooms", [])
+	interior_buildings = payload.get("interior_buildings", {})
+	interior_cell_size = int(payload.get("cell_size", 0))
 	lot_doorways = payload.get("lot_doorways", [])
 	elevator_shafts = payload.get("elevator_shafts", [])
 	_bake_blocks = payload.get("blocks", {})

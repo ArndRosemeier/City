@@ -37,10 +37,16 @@ func _initialize() -> void:
 		RoomDecoratorScript.Purpose.ARMORY,
 		RoomDecoratorScript.Purpose.WORKSHOP,
 		RoomDecoratorScript.Purpose.GENERIC,
+		RoomDecoratorScript.Purpose.RECEPTION,
+		RoomDecoratorScript.Purpose.MEETING_ROOM,
+		RoomDecoratorScript.Purpose.BREAK_ROOM,
+		RoomDecoratorScript.Purpose.CORRIDOR,
+		RoomDecoratorScript.Purpose.SHOP,
 	]
 	for purpose in purposes:
 		failed = _check_purpose(purpose, rng, failed)
 
+	failed = _check_ceiling_clearance(failed)
 	failed = _check_keep_clear(rng, failed)
 	failed = _check_opening_apron(rng, failed)
 	failed = _check_preserves_stairs(rng, failed)
@@ -173,6 +179,66 @@ func _check_purpose(purpose: int, rng: RandomNumberGenerator, failed: bool) -> b
 		failed = true
 	print("  %s: placed=%d" % [name, placed])
 	return failed
+
+
+## Lamps and fans belong against the ceiling course. Anything hanging lower is something
+## the walker walks into — and a 2 m storey has no room for one at all.
+func _check_ceiling_clearance(failed: bool) -> bool:
+	var clear: int = RoomDecoratorScript.WALK_CLEAR_VOX
+	for air_h in [4, 5, 7]:
+		## Own seed: this check asserts a prop count, so it must not drift when another
+		## check above it draws a different number of randoms.
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 1000 + air_h
+		var dec: RoomDecorator = _make_decorator(rng) as RoomDecorator
+		var volume: RoomVolume = RoomVolumeScript.make(Rect2i(0, 0, 16, 14), 0, air_h)
+		_shell_room(dec.brush, volume)
+		dec.decorate(volume, RoomDecoratorScript.Purpose.LIVING_ROOM)
+		var hung := 0
+		for z in range(volume.rect.position.y, volume.rect.end.y):
+			for x in range(volume.rect.position.x, volume.rect.end.x):
+				var bottom := _hanging_bottom(dec.brush, volume, x, z)
+				if bottom < 0:
+					continue
+				hung += 1
+				if bottom - volume.prop_y() < clear:
+					push_error(
+						"FAIL air_h=%d: prop hangs to y=%d, only %d clear cells over the floor"
+						% [air_h, bottom, bottom - volume.prop_y()]
+					)
+					failed = true
+				if not _solid_to_ceiling(dec.brush, volume, x, z, bottom):
+					push_error(
+						"FAIL air_h=%d: prop at (%d,%d) floats below the ceiling" % [air_h, x, z]
+					)
+					failed = true
+		if air_h < clear + 1 and hung > 0:
+			push_error("FAIL air_h=%d is too low for ceiling props, got %d" % [air_h, hung])
+			failed = true
+		if air_h >= clear + 1 and hung == 0:
+			push_error("FAIL air_h=%d has headroom to spare but hung nothing" % air_h)
+			failed = true
+		print("  ceiling clearance air_h=%d: %d hanging columns" % [air_h, hung])
+	return failed
+
+
+## Y of the lowest prop cell in a column that has open air under it, or -1 when nothing
+## in the column hangs (a lamp may share a column with the table it lights).
+func _hanging_bottom(brush: CityBrush, volume: RoomVolume, x: int, z: int) -> int:
+	for y in range(volume.prop_y() + 1, volume.floor_y + volume.air_h + 1):
+		if not VoxelMaterial.is_prop_furniture(brush.get_vox(Vector3i(x, y, z))):
+			continue
+		if brush.get_vox(Vector3i(x, y - 1, z)) == VoxelMaterial.AIR:
+			return y
+		return -1
+	return -1
+
+
+func _solid_to_ceiling(brush: CityBrush, volume: RoomVolume, x: int, z: int, from: int) -> bool:
+	for y in range(from, volume.floor_y + volume.air_h + 1):
+		if not VoxelMaterial.is_prop_furniture(brush.get_vox(Vector3i(x, y, z))):
+			return false
+	return true
 
 
 func _check_keep_clear(rng: RandomNumberGenerator, failed: bool) -> bool:

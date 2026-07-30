@@ -73,8 +73,10 @@ var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
-## Ground-floor interiors for JIT RoomDecorator (InteriorRoom, world voxel coords).
-var interior_rooms: Array = []
+## Per-lot interiors for the JIT decorator, keyed by district cell (Vector2i) so a foot
+## position resolves to its building in one lookup. Merged parcels register every cell
+## they cover, so all keys of one parcel point at the same BuildingInterior.
+var interior_buildings: Dictionary = {}
 ## City lot street doors (CastleDoorway, world voxel coords).
 var lot_doorways: Array = []
 ## Multi-storey lot elevator cabins (ElevatorShaft, world voxel coords).
@@ -112,7 +114,7 @@ func begin_generate(
 	size_xz = maxi(size_x, size_z)
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
-	interior_rooms.clear()
+	interior_buildings.clear()
 	lot_doorways.clear()
 	elevator_shafts.clear()
 	_brush = CityBrushScript.new(tool, origin_vox)
@@ -132,7 +134,7 @@ func begin_generate_offline(
 	size_xz = maxi(size_x, size_z)
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
-	interior_rooms.clear()
+	interior_buildings.clear()
 	lot_doorways.clear()
 	elevator_shafts.clear()
 	_brush = CityBrushScript.new(null, Vector3i.ZERO)
@@ -1187,17 +1189,74 @@ func _paint_lot(
 			% [zone, cx, cz]
 		)
 	_record_building_impostor(grammar.impostor_parts, zone)
-	var room := _record_interior_room(bmin, bmax, zone, grammar)
+	var building := _record_building_interior(bmin, bmax, cx, cz, zone, grammar)
 	_record_lot_doorways(grammar)
-	_record_elevator_shaft(bmin, bmax, grammar, room)
+	_record_elevator_shaft(bmin, bmax, grammar, building)
 	grammar.max_height = saved
 
 
-## One ground-floor room per lot shell (world voxels). Walls are 1 cell thick; ground
-## fill raises the walking surface one voxel above the deck (see BuildingGrammar._fill_shell).
-func _record_interior_room(
-	bmin: Vector3i, bmax: Vector3i, zone: int, grammar: BuildingGrammar
-) -> InteriorRoom:
+## One InteriorRoom per walkable storey of a lot (world voxels), indexed under every
+## district cell the lot covers. Walls are 1 cell thick; ground fill raises the walking
+## surface one voxel above the deck (see BuildingGrammar._fill_shell).
+func _record_building_interior(
+	bmin: Vector3i, bmax: Vector3i, cx: int, cz: int, zone: int, grammar: BuildingGrammar
+) -> BuildingInterior:
+	var plates: Array[StoreyPlate] = grammar.storey_plates.duplicate()
+	if plates.is_empty():
+		## Round archetypes (cylinder, spiral, blob) never paint a rect shell — they keep
+		## the single ground room the bake has always emitted.
+		var ground := _ground_plate(bmin, bmax, grammar)
+		if ground != null:
+			plates.append(ground)
+	plates.sort_custom(_plate_is_lower)
+	var world_lot := Rect2i(
+		bmin.x + origin_vox.x, bmin.z + origin_vox.z, bmax.x - bmin.x, bmax.z - bmin.z
+	)
+	var building := BuildingInterior.make(
+		world_lot, _building_use_for(zone, world_lot, plates.size())
+	)
+	var storey := -1
+	var prev_floor_y := -1
+	for plate in plates:
+		## Arch legs paint two shells per storey — they share one index.
+		if plate.floor_y != prev_floor_y:
+			storey += 1
+			prev_floor_y = plate.floor_y
+		building.storeys.append(_storey_room(plate, storey, building.use, zone))
+	if building.storeys.is_empty():
+		return building
+	var cells := _lot_rect(cx, cz)
+	for z in range(cells.position.y, cells.end.y):
+		for x in range(cells.position.x, cells.end.x):
+			interior_buildings[Vector2i(x, z)] = building
+	return building
+
+
+func _plate_is_lower(a: StoreyPlate, b: StoreyPlate) -> bool:
+	return a.floor_y < b.floor_y
+
+
+func _storey_room(plate: StoreyPlate, storey: int, use: int, zone: int) -> InteriorRoom:
+	var world_rect := Rect2i(
+		plate.rect.position.x + origin_vox.x,
+		plate.rect.position.y + origin_vox.z,
+		plate.rect.size.x,
+		plate.rect.size.y
+	)
+	var room := InteriorRoom.make(
+		world_rect,
+		plate.floor_y + origin_vox.y,
+		plate.air_h,
+		_interior_purpose_for_zone(zone, world_rect)
+	)
+	room.storey = storey
+	room.use = use
+	return room
+
+
+func _ground_plate(
+	bmin: Vector3i, bmax: Vector3i, grammar: BuildingGrammar
+) -> StoreyPlate:
 	var inner := Rect2i(
 		bmin.x + 1,
 		bmin.z + 1,
@@ -1206,30 +1265,16 @@ func _record_interior_room(
 	)
 	if inner.size.x < 3 or inner.size.y < 3:
 		return null
-	var local_floor_y := bmin.y + 1
-	var fh := grammar.ground_floor_height
 	## Clear band under the ceiling slab at y0+fh-1.
-	var air_h := maxi(fh - 3, 2)
-	var world_rect := Rect2i(
-		inner.position.x + origin_vox.x,
-		inner.position.y + origin_vox.z,
-		inner.size.x,
-		inner.size.y
+	return StoreyPlate.make(
+		inner, bmin.y + 1, maxi(grammar.ground_floor_height - 3, 2)
 	)
-	var room := InteriorRoom.make(
-		world_rect,
-		local_floor_y + origin_vox.y,
-		air_h,
-		_interior_purpose_for_zone(zone, world_rect)
-	)
-	interior_rooms.append(room)
-	return room
 
 
 ## Multi-storey lots: 3×3 cabin in the corner opposite the street door.
 ## Carves the cabin voxels, then records the shaft and its InteriorRoom keep_clear.
 func _record_elevator_shaft(
-	bmin: Vector3i, bmax: Vector3i, grammar: BuildingGrammar, room: InteriorRoom
+	bmin: Vector3i, bmax: Vector3i, grammar: BuildingGrammar, building: BuildingInterior
 ) -> void:
 	var floors := grammar.last_floors
 	if floors < 2:
@@ -1273,10 +1318,10 @@ func _record_elevator_shaft(
 		ElevatorShaftScript.make(world_rect, floor_ys, bay_dir) as RefCounted
 	)
 	elevator_shafts.append(shaft)
-	if room != null:
-		## Reserve the enclosure too — props stamped into the shaft walls would sink
-		## halfway into metal, and props in the bay would block the doorway.
-		room.keep_clear.append(world_rect.grow(1))
+	## Reserve the enclosure too — props stamped into the shaft walls would sink halfway
+	## into metal, and props in the bay would block the doorway. Every storey the cabin
+	## serves needs the reservation, not just the ground one.
+	building.reserve_on_floors(world_rect.grow(1), floor_ys)
 
 
 ## Every cabin cell rests on building floor at `pad_y` (district-local).
@@ -1445,6 +1490,28 @@ func _sample_door_frame_mat(d: CastleDoorway) -> int:
 		if VoxelMaterial.is_solid(id):
 			return id
 	return -1
+
+
+## What the building is *for*: FloorPlanner turns this into a partition layout per
+## storey. Downtown gets offices over a shop floor, the fabric gets flats, and anything
+## single-storey skips the retail podium because there is nothing above it.
+func _building_use_for(zone: int, rect: Rect2i, storeys: int) -> int:
+	var h := absi(rect.position.x * 73856093 ^ rect.position.y * 19349663 ^ zone * 83492791)
+	match zone:
+		LandUse.CORE_LOT, LandUse.CIVIC_LOT:
+			if storeys < 2:
+				return FloorPlanner.Use.OFFICE
+			return FloorPlanner.Use.RETAIL_OVER_OFFICE
+		LandUse.MID_LOT:
+			if storeys < 2:
+				return FloorPlanner.Use.OFFICE if h % 2 == 0 else FloorPlanner.Use.RESIDENTIAL
+			return (
+				FloorPlanner.Use.RETAIL_OVER_OFFICE
+				if h % 2 == 0
+				else FloorPlanner.Use.RETAIL_OVER_FLATS
+			)
+		_:
+			return FloorPlanner.Use.RESIDENTIAL
 
 
 func _interior_purpose_for_zone(zone: int, rect: Rect2i) -> int:

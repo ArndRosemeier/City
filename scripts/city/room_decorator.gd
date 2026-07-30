@@ -23,6 +23,12 @@ enum Purpose {
 	ARMORY,
 	WORKSHOP,
 	GENERIC,
+	## Cut by FloorPlanner when a storey is subdivided by purpose.
+	RECEPTION,
+	MEETING_ROOM,
+	BREAK_ROOM,
+	CORRIDOR,
+	SHOP,
 }
 
 ## Placement role for one plan step.
@@ -37,6 +43,9 @@ enum Role {
 ## How far into the room an opening reserves (matches castle door swing reach).
 ## City façades punch AIR doorways; later real doors keep the same clear apron.
 const OPENING_APRON_DEPTH := 3
+## Clear cells a walker needs over the floor: the capsule is 1.7 m plus its sole, and
+## anything hanging into that band is something to bump into, not decoration.
+const WALK_CLEAR_VOX := 4
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
@@ -104,6 +113,16 @@ static func purpose_name(purpose: Purpose) -> String:
 			return "workshop"
 		Purpose.GENERIC:
 			return "generic"
+		Purpose.RECEPTION:
+			return "reception"
+		Purpose.MEETING_ROOM:
+			return "meeting_room"
+		Purpose.BREAK_ROOM:
+			return "break_room"
+		Purpose.CORRIDOR:
+			return "corridor"
+		Purpose.SHOP:
+			return "shop"
 	return "unknown"
 
 
@@ -137,6 +156,16 @@ static func purpose_from_name(name: String) -> Purpose:
 			return Purpose.ARMORY
 		"workshop", "smithy":
 			return Purpose.WORKSHOP
+		"reception", "lobby":
+			return Purpose.RECEPTION
+		"meeting_room", "meeting", "conference":
+			return Purpose.MEETING_ROOM
+		"break_room", "break", "pantry_room":
+			return Purpose.BREAK_ROOM
+		"corridor", "hallway", "landing":
+			return Purpose.CORRIDOR
+		"shop", "retail", "store_front":
+			return Purpose.SHOP
 		_:
 			return Purpose.GENERIC
 
@@ -256,6 +285,7 @@ func _plan_for(purpose: Purpose, volume: RoomVolume) -> Array[Dictionary]:
 		Purpose.BATHROOM:
 			return _steps([
 				_step(Role.WALL, ["bathtub", "shower"], 1),
+				_step(Role.WALL, ["toilet"], 1),
 				_step(Role.WALL, ["bathroomSink", "bathroomCabinet"], 1),
 				_step(Role.WALL, ["bathroomMirror"], 1),
 				_step(Role.CORNER, ["plantSmall3"], mini(1, corner_n)),
@@ -335,6 +365,47 @@ func _plan_for(purpose: Purpose, volume: RoomVolume) -> Array[Dictionary]:
 				_step(Role.CORNER, ["crate", "plantSmall1", "lampRoundFloor"], corner_n),
 				_step(Role.SCATTER, ["crate", "barrel"], scatter_n),
 			])
+		Purpose.RECEPTION:
+			return _steps([
+				_step(Role.WALL, ["kitchenBar", "kitchenBarEnd", "desk"], 1),
+				_step(Role.WALL, ["chairDesk", "loungeSofa", "benchCushion"], maxi(2, wall_n)),
+				_step(Role.CENTER, ["rugRectangle", "tableCoffeeGlass"], 1),
+				_step(Role.CORNER, ["pottedPlant", "plantSmall2", "coatRackStanding"], corner_n),
+				_step(Role.CEILING, ["lampSquareCeiling"], maxi(1, area / 200)),
+			])
+		Purpose.MEETING_ROOM:
+			return _steps([
+				_step(Role.CENTER, ["tableGlass", "table", "tableCross"], 1),
+				_step(Role.WALL, ["chairDesk", "chairRounded", "chair"], maxi(4, wall_n)),
+				_step(Role.WALL, ["cabinetTelevision", "televisionModern"], 1),
+				_step(Role.CORNER, ["plantSmall2", "pottedPlant"], corner_n),
+				_step(Role.CEILING, ["lampSquareCeiling"], 1),
+			])
+		Purpose.BREAK_ROOM:
+			return _steps([
+				_step(Role.WALL, ["kitchenCabinet", "kitchenSink", "kitchenCabinetDrawer"], wall_n),
+				_step(Role.WALL, ["kitchenCoffeeMachine", "kitchenMicrowave"], 1),
+				_step(Role.WALL, ["kitchenFridgeSmall", "kitchenFridge"], 1),
+				_step(Role.CENTER, ["table", "tableRound"], 1),
+				_step(Role.WALL, ["chair", "stoolBar"], maxi(2, wall_n)),
+				_step(Role.CEILING, ["lampSquareCeiling"], 1),
+			])
+		Purpose.CORRIDOR:
+			## Circulation stays walkable: only the wall line and the ceiling get dressed.
+			return _steps([
+				_step(Role.WALL, ["bench", "benchCushionLow", "coatRack"], mini(2, wall_n), 6),
+				_step(Role.WALL, ["pottedPlant", "plantSmall3"], mini(2, wall_n), 8),
+				_step(Role.CEILING, ["lampSquareCeiling"], maxi(1, area / 120)),
+			])
+		Purpose.SHOP:
+			return _steps([
+				_step(Role.WALL, ["bookcaseOpen", "bookcaseOpenLow", "kitchenCabinetUpper"], maxi(3, wall_n)),
+				_step(Role.WALL, ["kitchenBar", "kitchenBarEnd"], 1),
+				_step(Role.CENTER, ["table", "tableCloth"], maxi(1, area / 150)),
+				_step(Role.SCATTER, ["crate", "cardboardBoxOpen"], scatter_n),
+				_step(Role.CORNER, ["pottedPlant", "trashcan", "plantSmall1"], corner_n),
+				_step(Role.CEILING, ["lampSquareCeiling"], maxi(1, area / 150)),
+			])
 	return [] as Array[Dictionary]
 
 
@@ -399,7 +470,9 @@ func _apply_step(
 		Role.SCATTER:
 			slots = _scatter_slots(volume, reserved, count * 3)
 		Role.CEILING:
-			if volume.air_h < 3:
+			## A 2 m city storey has no room for anything under its ceiling: the walker
+			## would wear it. Leave those floors bare rather than hang a hazard.
+			if volume.air_h < WALK_CLEAR_VOX + 1:
 				return 0
 			slots = _center_slots(volume, reserved)
 		_:
@@ -418,9 +491,11 @@ func _apply_step(
 		var size := RoomPropKit.size_of(stem)
 		var y := volume.prop_y()
 		if role == Role.CEILING:
-			## Hang multi-cell-tall lamps down from the ceiling course.
+			## Hang multi-cell-tall lamps down from the ceiling course, and only when
+			## what is left below is still a corridor the walker fits through.
 			y = volume.ceiling_prop_y() - size.y + 1
-			y = maxi(y, volume.prop_y())
+			if y - volume.prop_y() < WALK_CLEAR_VOX:
+				continue
 		var slot_i := _find_fitting_slot(volume, slots, size, y, stem, reserved)
 		if slot_i < 0:
 			continue

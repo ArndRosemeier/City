@@ -22,9 +22,9 @@ func prop_y() -> int:
 	return floor_y + 1
 
 
-## One cell below the exclusive air top when the room is tall enough.
+## Topmost clear cell — a light or a fan hangs here, tight under the ceiling course.
 func ceiling_prop_y() -> int:
-	return floor_y + maxi(air_h - 1, 1)
+	return floor_y + maxi(air_h, 1)
 
 
 func top_y() -> int:
