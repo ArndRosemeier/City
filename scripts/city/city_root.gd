@@ -37,6 +37,7 @@ const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_pan
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
+const InteriorDecoratorScript := preload("res://scripts/city/interior_decorator.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -65,6 +66,8 @@ var _terrain: VoxelTerrain
 var _tool: VoxelTool
 ## Single funnel for every live voxel write; publishes voxels_changed(aabb_vox).
 var _brush: CityBrush
+## JIT furniture when the walker steps into an undecorated InteriorRoom.
+var _interior_decorator: InteriorDecorator
 ## Outfit scenes kept referenced for the session so gameplay loads hit the resource cache.
 var _warm_scenes: Array[PackedScene] = []
 var _streamer: Node
@@ -835,6 +838,19 @@ func _process(delta: float) -> void:
 	CityProfiler.begin("underground")
 	_sync_underground_lighting()
 	CityProfiler.end("underground")
+	if (
+		not _game_over
+		and _interior_decorator != null
+		and _walker != null
+		and is_instance_valid(_walker)
+		and _streamer != null
+	):
+		CityProfiler.begin("interior_decorate")
+		_interior_decorator.tick(
+			_walker.global_position,
+			_streamer.call("get_loaded_districts") as Array
+		)
+		CityProfiler.end("interior_decorate")
 	if _gem_pickup_accum >= GEM_PICKUP_INTERVAL_SEC:
 		_gem_pickup_accum = 0.0
 		CityProfiler.begin("gem_pickup")
@@ -888,6 +904,7 @@ func _create_terrain() -> void:
 		_terrain = null
 		_tool = null
 		_brush = null
+		_interior_decorator = null
 
 	_terrain = VoxelTerrain.new()
 	_terrain.name = "VoxelTerrain"
@@ -915,6 +932,9 @@ func _create_terrain() -> void:
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	## Gameplay edits are already in world voxel space, so no origin offset.
 	_brush = CityBrushScript.new(_tool) as CityBrush
+	_interior_decorator = InteriorDecoratorScript.new() as InteriorDecorator
+	_interior_decorator.brush = _brush
+	_interior_decorator.voxel_size = VOXEL_SIZE
 	CityProfiler.set_terrain(_terrain)
 
 
@@ -2111,17 +2131,20 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 				if center.distance_squared_to(local) > r2 + 0.0001:
 					continue
 				var vox := Vector3i(x, y, z)
-				var mat_id := int(_tool.get_voxel(vox))
+				## Brush sees pending AIR from earlier furniture assembly clears.
+				var mat_id := _brush.get_vox(vox)
 				if not VoxelMaterial.is_destructible(mat_id):
 					continue
-				if detached.size() < MAX_DEBRIS:
-					detached.append({"vox": vox, "mat": mat_id})
-				var col := Vector2i(x, z)
-				if column_max_y.has(col):
-					column_max_y[col] = maxi(int(column_max_y[col]), y)
-				else:
-					column_max_y[col] = y
-				_brush.set_vox(vox, VoxelMaterial.AIR)
+				var carved := _brush.destroy_vox(vox)
+				for entry in carved:
+					var ev: Vector3i = entry["vox"] as Vector3i
+					if detached.size() < MAX_DEBRIS:
+						detached.append(entry)
+					var col := Vector2i(ev.x, ev.z)
+					if column_max_y.has(col):
+						column_max_y[col] = maxi(int(column_max_y[col]), ev.y)
+					else:
+						column_max_y[col] = ev.y
 	_restore_bedrock_floor(local, radius_vox)
 	_brush.end_edit()
 	CityProfiler.end("voxel_blast")
@@ -2241,6 +2264,7 @@ func _on_melee_strike(
 	## hole — starting from the bottom found only AIR (sphere already wiped the column).
 	var detached: Array = []
 	var column_max_y: Dictionary = {}  # Vector2i → int
+	_brush.begin_edit()
 	for z in range(hit_vox.z - r_i, hit_vox.z + r_i + 1):
 		for y in range(hit_vox.y - r_i, hit_vox.y + r_i + 1):
 			for x in range(hit_vox.x - r_i, hit_vox.x + r_i + 1):
@@ -2248,26 +2272,25 @@ func _on_melee_strike(
 				if center.distance_squared_to(hit_center) > r2 + 0.0001:
 					continue
 				var vox := Vector3i(x, y, z)
-				var mat_id := int(_tool.get_voxel(vox))
+				var mat_id := _brush.get_vox(vox)
 				if VoxelMaterial.is_gem(mat_id):
 					try_collect_gem_at(vox)
 					continue
 				if not VoxelMaterial.is_destructible(mat_id):
 					continue
-				detached.append({"vox": vox, "mat": mat_id})
-				var col := Vector2i(x, z)
-				if column_max_y.has(col):
-					column_max_y[col] = maxi(int(column_max_y[col]), y)
-				else:
-					column_max_y[col] = y
+				var carved := _brush.destroy_vox(vox)
+				for entry in carved:
+					var ev: Vector3i = entry["vox"] as Vector3i
+					detached.append(entry)
+					var col := Vector2i(ev.x, ev.z)
+					if column_max_y.has(col):
+						column_max_y[col] = maxi(int(column_max_y[col]), ev.y)
+					else:
+						column_max_y[col] = ev.y
+	_brush.end_edit()
 
 	if hit_gem and detached.is_empty():
 		return
-
-	_brush.begin_edit()
-	for entry in detached:
-		_brush.set_vox(entry["vox"] as Vector3i, VoxelMaterial.AIR)
-	_brush.end_edit()
 
 	if _cascade == null:
 		return
@@ -2755,13 +2778,14 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 			var col_z := hit.z + sx.z * a + ix.z * d
 			for y3 in range(y_lo, y_hi + 1):
 				var vox := Vector3i(col_x, y3, col_z)
-				var mat_id := int(_tool.get_voxel(vox))
+				var mat_id := _brush.get_vox(vox)
 				if not VoxelMaterial.is_undead_structure_target(mat_id):
 					continue
-				if detached.size() < MAX_DEBRIS:
-					detached.append({"vox": vox, "mat": mat_id})
-				_brush.set_vox(vox, VoxelMaterial.AIR)
-				removed += 1
+				var carved := _brush.destroy_vox(vox)
+				for entry in carved:
+					if detached.size() < MAX_DEBRIS:
+						detached.append(entry)
+					removed += 1
 	_brush.end_edit()
 	if removed <= 0:
 		return 0
@@ -2799,11 +2823,12 @@ func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
 	if vox == Vector3i(2147483647, 2147483647, 2147483647):
 		return false
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	var mat_id := int(_tool.get_voxel(vox))
-	_brush.set_vox(vox, VoxelMaterial.AIR)
-	adjust_player_score(-1)
+	var carved := _brush.destroy_vox(vox)
+	if carved.is_empty():
+		return false
+	adjust_player_score(-carved.size())
 	var world := _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
-	_notify_tetris_damage([{"vox": vox, "mat": mat_id}])
+	_notify_tetris_damage(carved)
 	_notify_destruction(world, 10.0)
 	return true
 
@@ -3020,11 +3045,10 @@ func _carve_building_sphere_counted(local_center: Vector3, radius_vox: float) ->
 				if center.distance_squared_to(local_center) > r2 + 0.0001:
 					continue
 				var vox := Vector3i(x, y, z)
-				var id := int(_tool.get_voxel(vox))
+				var id := _brush.get_vox(vox)
 				if not VoxelMaterial.is_undead_structure_target(id):
 					continue
-				_brush.set_vox(vox, VoxelMaterial.AIR)
-				removed += 1
+				removed += _brush.destroy_vox(vox).size()
 	_brush.end_edit()
 	return removed
 
@@ -3447,10 +3471,10 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 				if center.distance_squared_to(local_center) > r2 + 0.0001:
 					continue
 				var vox := Vector3i(x, y, z)
-				if not VoxelMaterial.is_destructible(int(_tool.get_voxel(vox))):
+				var mat_id := _brush.get_vox(vox)
+				if not VoxelMaterial.is_destructible(mat_id):
 					continue
-				_brush.set_vox(vox, VoxelMaterial.AIR)
-				removed += 1
+				removed += _brush.destroy_vox(vox).size()
 	_brush.end_edit()
 	return removed
 

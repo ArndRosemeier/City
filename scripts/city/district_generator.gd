@@ -55,6 +55,8 @@ var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
+## Ground-floor interiors for JIT RoomDecorator (InteriorRoom, world voxel coords).
+var interior_rooms: Array = []
 ## Hill gem ore (world voxel coords + material ids) collected during compose.
 var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
@@ -88,6 +90,7 @@ func begin_generate(
 	size_xz = maxi(size_x, size_z)
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
+	interior_rooms.clear()
 	_brush = CityBrushScript.new(tool, origin_vox)
 	_setup_composers()
 
@@ -105,6 +108,7 @@ func begin_generate_offline(
 	size_xz = maxi(size_x, size_z)
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
+	interior_rooms.clear()
 	_brush = CityBrushScript.new(null, Vector3i.ZERO)
 	_brush.use_offline_volume()
 	_setup_composers()
@@ -1081,7 +1085,65 @@ func _paint_lot(
 			% [zone, cx, cz]
 		)
 	_record_building_impostor(grammar.impostor_parts, zone)
+	_record_interior_room(bmin, bmax, zone, grammar)
 	grammar.max_height = saved
+
+
+## One ground-floor room per lot shell (world voxels). Walls are 1 cell thick; ground
+## fill raises the walking surface one voxel above the deck (see BuildingGrammar._fill_shell).
+func _record_interior_room(
+	bmin: Vector3i, bmax: Vector3i, zone: int, grammar: BuildingGrammar
+) -> void:
+	var inner := Rect2i(
+		bmin.x + 1,
+		bmin.z + 1,
+		maxi(bmax.x - bmin.x - 2, 0),
+		maxi(bmax.z - bmin.z - 2, 0)
+	)
+	if inner.size.x < 3 or inner.size.y < 3:
+		return
+	var local_floor_y := bmin.y + 1
+	var fh := grammar.ground_floor_height
+	## Clear band under the ceiling slab at y0+fh-1.
+	var air_h := maxi(fh - 3, 2)
+	var world_rect := Rect2i(
+		inner.position.x + origin_vox.x,
+		inner.position.y + origin_vox.z,
+		inner.size.x,
+		inner.size.y
+	)
+	var room := InteriorRoom.make(
+		world_rect,
+		local_floor_y + origin_vox.y,
+		air_h,
+		_interior_purpose_for_zone(zone, world_rect)
+	)
+	interior_rooms.append(room)
+
+
+func _interior_purpose_for_zone(zone: int, rect: Rect2i) -> int:
+	var h := absi(rect.position.x * 73856093 ^ rect.position.y * 19349663 ^ zone * 83492791)
+	match zone:
+		LandUse.CORE_LOT, LandUse.CIVIC_LOT:
+			return RoomDecorator.Purpose.OFFICE
+		LandUse.MID_LOT:
+			var mid: Array[int] = [
+				RoomDecorator.Purpose.OFFICE,
+				RoomDecorator.Purpose.LIVING_ROOM,
+				RoomDecorator.Purpose.DINING_ROOM,
+			]
+			return mid[h % mid.size()]
+		LandUse.COURTYARD_LOT:
+			return RoomDecorator.Purpose.LIVING_ROOM
+		_:
+			## Town / generic lots — domestic mix.
+			var home: Array[int] = [
+				RoomDecorator.Purpose.LIVING_ROOM,
+				RoomDecorator.Purpose.BEDROOM,
+				RoomDecorator.Purpose.KITCHEN,
+				RoomDecorator.Purpose.DINING_ROOM,
+			]
+			return home[h % home.size()]
 
 
 func _height_cap_for(cx: int, cz: int, zone_ceiling: int) -> int:

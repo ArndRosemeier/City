@@ -42,6 +42,7 @@ func _initialize() -> void:
 		failed = _check_purpose(purpose, rng, failed)
 
 	failed = _check_keep_clear(rng, failed)
+	failed = _check_opening_apron(rng, failed)
 	failed = _check_preserves_stairs(rng, failed)
 	failed = _check_tiny_room(rng, failed)
 
@@ -187,6 +188,31 @@ func _check_keep_clear(rng: RandomNumberGenerator, failed: bool) -> bool:
 			if VoxelMaterial.is_prop_furniture(id):
 				push_error("FAIL keep_clear: prop at door apron (%d,%d)" % [x, z])
 				failed = true
+	return failed
+
+
+## City façades punch AIR doorways in the wall ring outside the room rect — the
+## decorator must reserve an inward apron without an explicit keep_clear list.
+func _check_opening_apron(rng: RandomNumberGenerator, failed: bool) -> bool:
+	var dec: RoomDecorator = _make_decorator(rng) as RoomDecorator
+	var volume: RoomVolume = RoomVolumeScript.make(Rect2i(0, 0, 14, 14), 0, 5)
+	_shell_room(dec.brush, volume)
+	## Punch a 3-wide door in the -Z wall (outside z = -1), centered.
+	for x in range(6, 9):
+		for y in range(volume.floor_y + 1, volume.floor_y + volume.air_h):
+			dec.brush.set_vox(Vector3i(x, y, -1), VoxelMaterial.AIR)
+	dec.decorate(volume, RoomDecoratorScript.Purpose.LIVING_ROOM)
+	var depth: int = RoomDecoratorScript.OPENING_APRON_DEPTH
+	for z in range(0, depth):
+		for x in range(6, 9):
+			for y in range(volume.prop_y(), volume.floor_y + volume.air_h + 1):
+				var id := dec.brush.get_vox(Vector3i(x, y, z))
+				if VoxelMaterial.is_prop_furniture(id):
+					push_error(
+						"FAIL opening_apron: prop in doorway lane (%d,%d,%d)" % [x, y, z]
+					)
+					failed = true
+	print("  opening_apron: ok")
 	return failed
 
 

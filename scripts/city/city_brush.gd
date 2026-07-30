@@ -4,6 +4,9 @@
 ## This is the single funnel for live voxel writes: nothing outside this class may
 ## call VoxelTool.do_point / do_box / set_voxel on the city terrain, because every
 ## live write has to be observable through `voxels_changed`.
+##
+## Clearing voxels (AIR): use `destroy_vox` / `set_vox(..., AIR)` / `fill_box(..., AIR)`.
+## All three go through furniture assembly clearing. Non-AIR `fill_box` stays a fast bulk paint.
 class_name CityBrush
 extends RefCounted
 
@@ -17,6 +20,8 @@ extends RefCounted
 signal voxels_changed(aabb_vox: AABB)
 
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+## Match OfflineVolumeCommitter / VoxelTerrain block edge.
+const _BLOCK := 16
 
 var tool: VoxelTool
 var origin: Vector3i = Vector3i.ZERO
@@ -28,6 +33,10 @@ var _edit_depth: int = 0
 var _dirty: bool = false
 var _dirty_min: Vector3i = Vector3i.ZERO
 var _dirty_max: Vector3i = Vector3i.ZERO
+## Live `set_vox` calls inside begin_edit — flushed as whole 16³ blocks on end_edit
+## (copy → patch → paste) so the remesher does one pass per block instead of thrashing
+## on every furniture cell. World voxel → material id.
+var _pending_live: Dictionary = {}
 
 
 func _init(p_tool: VoxelTool = null, p_origin: Vector3i = Vector3i.ZERO) -> void:
@@ -76,10 +85,44 @@ func _touch(min_incl: Vector3i, max_excl: Vector3i) -> void:
 
 
 func _flush_edit() -> void:
+	if tool != null and volume == null and not _pending_live.is_empty():
+		_flush_pending_live_blocks()
+	_pending_live.clear()
 	if not _dirty:
 		return
 	_dirty = false
 	voxels_changed.emit(AABB(Vector3(_dirty_min), Vector3(_dirty_max - _dirty_min)))
+
+
+## Apply buffered cell writes like a district stamp: one remesh per touched block.
+func _flush_pending_live_blocks() -> void:
+	var mask := 1 << VoxelBuffer.CHANNEL_TYPE
+	var groups: Dictionary = {}  # Vector3i block_pos → Dictionary local → id
+	for pos_v: Variant in _pending_live.keys():
+		var pos: Vector3i = pos_v as Vector3i
+		var wbp := Vector3i(
+			int(floor(float(pos.x) / float(_BLOCK))),
+			int(floor(float(pos.y) / float(_BLOCK))),
+			int(floor(float(pos.z) / float(_BLOCK)))
+		)
+		if not groups.has(wbp):
+			groups[wbp] = {}
+		var local := pos - wbp * _BLOCK
+		(groups[wbp] as Dictionary)[local] = int(_pending_live[pos])
+	for wbp_v: Variant in groups.keys():
+		var wbp: Vector3i = wbp_v as Vector3i
+		var cells: Dictionary = groups[wbp] as Dictionary
+		var block_origin := wbp * _BLOCK
+		var buf := VoxelBuffer.new()
+		buf.create(_BLOCK, _BLOCK, _BLOCK)
+		tool.copy(block_origin, buf, mask)
+		buf.decompress_channel(VoxelBuffer.CHANNEL_TYPE)
+		for local_v: Variant in cells.keys():
+			var local: Vector3i = local_v as Vector3i
+			buf.set_voxel(
+				int(cells[local]), local.x, local.y, local.z, VoxelBuffer.CHANNEL_TYPE
+			)
+		tool.paste(block_origin, buf, mask)
 
 
 func use_offline_volume(p_volume = null) -> void:
@@ -91,9 +134,34 @@ func use_offline_volume(p_volume = null) -> void:
 	origin = Vector3i.ZERO
 
 
+## Fill an axis-aligned box [min_v, max_v) with `material_id` (local coords).
+##
+## CORRECT USAGE
+## - Painting solid materials (brick, stone, park, …): call fill_box as usual — fast
+##   bulk path (`tool.do_box` / offline `volume.fill_box`).
+## - Clearing volume to AIR (doors, courtyards, vaults, dig-out, morph shrink): still
+##   call `fill_box(..., VoxelMaterial.AIR)`. AIR is routed through `_clear_box` →
+##   `destroy_vox` so multi-cell furniture (origin mesh + PROP_FOOTPRINT) is removed
+##   as one assembly.
+## - Single-cell runtime destruction: prefer `destroy_vox(pos)` (or `set_vox(pos, AIR)`,
+##   which redirects furniture through the same path).
+##
+## DO NOT
+## - Bypass CityBrush with `VoxelTool.do_box` / `set_voxel` / offline volume writes for
+##   AIR. A bulk AIR paint that skips `destroy_vox` leaves ghost furniture: the visual
+##   mesh lives on the origin cell while sibling cells are only PROP_FOOTPRINT fillers.
+## - Assume "fill_box is always a dumb overwrite". For AIR it intentionally expands
+##   clears outside the box when a prop assembly straddles the boundary.
+## - Reintroduce a fast AIR do_box path for performance without also resolving prop
+##   assemblies — that regression is a gameplay bug (blasts / dig-out "go through" sofas).
+##
+## COST: AIR clears are O(volume) per-cell; non-AIR fills stay O(1) bulk ops. Bake-sized
+## hollows are fine; do not micro-optimize AIR back to do_box.
 func fill_box(min_v: Vector3i, max_v: Vector3i, material_id: int) -> void:
-	## Inclusive min, exclusive max (local — callers use local).
 	if min_v.x >= max_v.x or min_v.y >= max_v.y or min_v.z >= max_v.z:
+		return
+	if material_id == VoxelMaterial.AIR:
+		_clear_box(min_v, max_v)
 		return
 	if volume != null:
 		volume.fill_box(min_v, max_v, material_id)
@@ -109,7 +177,54 @@ func fill_box(min_v: Vector3i, max_v: Vector3i, material_id: int) -> void:
 	_touch(a, b + Vector3i.ONE)
 
 
+## AIR half of fill_box: per-cell clear so multi-cell props die as assemblies.
+func _clear_box(min_v: Vector3i, max_v: Vector3i) -> void:
+	begin_edit()
+	for y in range(min_v.y, max_v.y):
+		for z in range(min_v.z, max_v.z):
+			for x in range(min_v.x, max_v.x):
+				var pos := Vector3i(x, y, z)
+				var id := get_vox(pos)
+				if id == VoxelMaterial.AIR:
+					continue
+				if VoxelMaterial.is_prop_furniture(id):
+					destroy_vox(pos)
+				else:
+					_write_vox(pos, VoxelMaterial.AIR)
+	end_edit()
+
+
+## Paint a cell. Writing AIR onto furniture is redirected to `destroy_vox` so a
+## multi-cell prop cannot leave a ghost mesh when only one footprint cell is cleared.
+## Prefer `destroy_vox` explicitly from runtime destruction code.
 func set_vox(pos: Vector3i, material_id: int) -> void:
+	if material_id == VoxelMaterial.AIR and VoxelMaterial.is_prop_furniture(get_vox(pos)):
+		destroy_vox(pos)
+		return
+	_write_vox(pos, material_id)
+
+
+## Runtime destruction funnel. Clears `pos`; if it is furniture, clears the whole
+## stamped assembly (origin mesh + PROP_FOOTPRINT siblings). Returns carved
+## `{vox, mat}` entries (empty when already AIR). Does not enforce is_destructible —
+## callers that care filter first.
+func destroy_vox(pos: Vector3i) -> Array:
+	var id := get_vox(pos)
+	if id == VoxelMaterial.AIR:
+		return []
+	if VoxelMaterial.is_prop_furniture(id):
+		var entries: Array = RoomPropKit.assembly_entries(self, pos)
+		if entries.is_empty():
+			_write_vox(pos, VoxelMaterial.AIR)
+			return [{"vox": pos, "mat": id}]
+		for entry in entries:
+			_write_vox(entry["vox"] as Vector3i, VoxelMaterial.AIR)
+		return entries
+	_write_vox(pos, VoxelMaterial.AIR)
+	return [{"vox": pos, "mat": id}]
+
+
+func _write_vox(pos: Vector3i, material_id: int) -> void:
 	if volume != null:
 		volume.set_vox(pos, material_id)
 		return
@@ -117,6 +232,11 @@ func set_vox(pos: Vector3i, material_id: int) -> void:
 		push_error("CityBrush.set_vox: no tool or volume")
 		return
 	var world := pos + origin
+	if _edit_depth > 0:
+		## Defer to end_edit block paste — see _flush_pending_live_blocks.
+		_pending_live[world] = material_id
+		_touch(world, world + Vector3i.ONE)
+		return
 	tool.set_voxel(world, material_id)
 	_touch(world, world + Vector3i.ONE)
 
@@ -126,7 +246,10 @@ func get_vox(pos: Vector3i) -> int:
 		return int(volume.get_vox(pos))
 	if tool == null:
 		return 0
-	return tool.get_voxel(pos + origin)
+	var world := pos + origin
+	if _pending_live.has(world):
+		return int(_pending_live[world])
+	return tool.get_voxel(world)
 
 
 func column(x: int, z: int, y0: int, y1: int, material_id: int) -> void:

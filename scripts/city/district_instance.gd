@@ -64,6 +64,8 @@ var _bake_blocks: Dictionary = {}
 var _bake_block_keys: Array[Vector3i] = []
 var _bake_key_index: int = 0
 var _bake_impostors: Array = []
+## JIT furniture targets (InteriorRoom). Empty on far / non-lot tiles.
+var interior_rooms: Array = []
 ## Hill gem ore in world voxel coords (empty outside Hill districts).
 var hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var hill_gem_mats: PackedInt32Array = PackedInt32Array()
@@ -187,6 +189,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_bake_block_keys.clear()
 	_bake_key_index = 0
 	_bake_impostors.clear()
+	interior_rooms.clear()
 	hill_gem_positions = PackedVector3Array()
 	hill_gem_mats = PackedInt32Array()
 	if building_lod != null and is_instance_valid(building_lod):
@@ -289,6 +292,7 @@ func _stamp_ground_async() -> void:
 	_dseed = int(payload.get("seed", 0))
 	_ground_thickness = int(payload.get("ground_thickness", 6))
 	_bake_impostors = payload.get("impostors", [])
+	interior_rooms = payload.get("interior_rooms", [])
 	_bake_blocks = payload.get("blocks", {})
 	hill_gem_positions = payload.get("hill_gem_positions", PackedVector3Array()) as PackedVector3Array
 	hill_gem_mats = payload.get("hill_gem_mats", PackedInt32Array()) as PackedInt32Array

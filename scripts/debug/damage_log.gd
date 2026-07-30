@@ -82,6 +82,7 @@ func record(
 	if amount <= 0.0 and not fatal:
 		return
 	var row: Dictionary = {
+		"kind": "hit",
 		"msec": Time.get_ticks_msec(),
 		"attacker": attacker,
 		"victim": victim,
@@ -91,6 +92,19 @@ func record(
 		"maximum": maximum,
 		"fatal": fatal,
 	}
+	_push(row)
+
+
+## Free-form debug line (misused for interior-enter probes, etc.). Press L to show.
+func note(text: String) -> void:
+	_push({
+		"kind": "note",
+		"msec": Time.get_ticks_msec(),
+		"text": text,
+	})
+
+
+func _push(row: Dictionary) -> void:
 	_entries.append(row)
 	while _entries.size() > MAX_LINES:
 		_entries.remove_at(0)
@@ -156,6 +170,11 @@ func _refresh() -> void:
 		return
 	var lines: PackedStringArray = PackedStringArray()
 	for row in _entries:
+		if str(row.get("kind", "hit")) == "note":
+			lines.append(
+				"[color=#88ccaa]note[/color]  [color=#ddeeff]%s[/color]" % str(row.get("text", ""))
+			)
+			continue
 		var fatal_tag := " [color=#ff6666]KILL[/color]" if bool(row["fatal"]) else ""
 		lines.append(
 			"[color=#aabbcc]%s[/color] → [color=#ddeeff]%s[/color]\n  %s  −%.1f  (%.0f/%.0f)%s"

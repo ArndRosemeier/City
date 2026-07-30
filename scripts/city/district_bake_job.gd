@@ -86,6 +86,8 @@ static func bake(params: Dictionary) -> Dictionary:
 		"nav_bake": nav_bake,
 		"nav_stats": nav_stats,
 		"impostors": gen.building_impostors.duplicate(true),
+		## InteriorRoom refs — mutable so runtime can flip `decorated`.
+		"interior_rooms": gen.interior_rooms.duplicate(),
 		"seed": dseed,
 		"ground_thickness": gen.ground_thickness,
 		"cell_size": cell_size,

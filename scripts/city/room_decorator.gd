@@ -34,6 +34,10 @@ enum Role {
 	CEILING,
 }
 
+## How far into the room an opening reserves (matches castle door swing reach).
+## City façades punch AIR doorways; later real doors keep the same clear apron.
+const OPENING_APRON_DEPTH := 3
+
 var brush: CityBrush
 var rng: RandomNumberGenerator
 
@@ -56,6 +60,7 @@ func decorate(volume: RoomVolume, purpose: Purpose) -> int:
 	var blocked: Dictionary = {}
 	_mark_clears(volume, blocked)
 	_seed_blocked_from_voxels(volume, blocked)
+	_seed_opening_aprons(volume, blocked)
 	## Columns we filled with floor props this pass (ceiling may still share XZ).
 	var occupied: Dictionary = {}
 
@@ -160,6 +165,51 @@ func _seed_blocked_from_voxels(volume: RoomVolume, blocked: Dictionary) -> void:
 				if brush.get_vox(Vector3i(x, y, z)) != VoxelMaterial.AIR:
 					blocked[p] = true
 					break
+
+
+## Walk the room perimeter: AIR in the wall cell outside = doorway / open passage.
+## Glass windows stay solid ids and do not clear. Reserves an inward apron so WALL
+## props cannot smother the opening (same clearance future hinged doors need).
+func _seed_opening_aprons(volume: RoomVolume, blocked: Dictionary) -> void:
+	var r := volume.rect
+	var depth := mini(
+		OPENING_APRON_DEPTH,
+		maxi(1, mini(r.size.x, r.size.y) / 3)
+	)
+	## -Z wall (outside z = r.position.y - 1), apron grows +Z into the room.
+	for x in range(r.position.x, r.end.x):
+		if _is_opening_wall_cell(Vector3i(x, volume.floor_y + 1, r.position.y - 1)):
+			_block_opening_apron(volume, blocked, Vector2i(x, r.position.y), Vector2i(0, 1), depth)
+	## +Z wall (outside z = r.end.y).
+	for x in range(r.position.x, r.end.x):
+		if _is_opening_wall_cell(Vector3i(x, volume.floor_y + 1, r.end.y)):
+			_block_opening_apron(volume, blocked, Vector2i(x, r.end.y - 1), Vector2i(0, -1), depth)
+	## -X wall.
+	for z in range(r.position.y, r.end.y):
+		if _is_opening_wall_cell(Vector3i(r.position.x - 1, volume.floor_y + 1, z)):
+			_block_opening_apron(volume, blocked, Vector2i(r.position.x, z), Vector2i(1, 0), depth)
+	## +X wall.
+	for z in range(r.position.y, r.end.y):
+		if _is_opening_wall_cell(Vector3i(r.end.x, volume.floor_y + 1, z)):
+			_block_opening_apron(volume, blocked, Vector2i(r.end.x - 1, z), Vector2i(-1, 0), depth)
+
+
+## Passable punched opening (city door / castle carve). Not glass, not solid masonry.
+func _is_opening_wall_cell(wall_vox: Vector3i) -> bool:
+	return brush.get_vox(wall_vox) == VoxelMaterial.AIR
+
+
+func _block_opening_apron(
+	volume: RoomVolume,
+	blocked: Dictionary,
+	edge: Vector2i,
+	inward: Vector2i,
+	depth: int
+) -> void:
+	for d in range(depth):
+		var p := edge + inward * d
+		if volume.contains_xz(p):
+			blocked[p] = true
 
 
 func _plan_for(purpose: Purpose, volume: RoomVolume) -> Array[Dictionary]:

@@ -50,11 +50,12 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			water.collision_mask = 2
 			return water
 		VoxelMaterial.GLASS:
-			## Full-cell visual + neighbor cull so a deck/curtain reads as one volume,
-			## not a grate of inset panes. Collision fills the cell (walk / no worming).
-			return _mesh_model(id, _mesh_glass(), true, true, AABB(Vector3.ZERO, Vector3.ONE))
+			## Engine cube geometry — custom full-cell meshes were wound such that
+			## cull_back dropped every face (windows read as air holes). Opaque cube
+			## + glass shader = solid pane that sorts with brick.
+			return _make_glass_cube(id)
 		VoxelMaterial.GLASS_LIT:
-			return _mesh_model(id, _mesh_glass(), true, true, AABB(Vector3.ZERO, Vector3.ONE))
+			return _make_glass_cube(id)
 		VoxelMaterial.CURB:
 			## Low curb lip (~0.2 m world) so CharacterBody can step/jump it.
 			return _mesh_model(id, _mesh_curb(), false, true, AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.4, 1.0)))
@@ -113,8 +114,16 @@ static func _make_cube(id: int) -> VoxelBlockyModelCube:
 	var cube := VoxelBlockyModelCube.new()
 	cube.color = Color(1, 1, 1, 1)
 	cube.set_material_override(0, block_material_for(id))
-	if id == VoxelMaterial.GLASS or id == VoxelMaterial.GLASS_LIT or id == VoxelMaterial.WATER:
+	if id == VoxelMaterial.WATER:
 		cube.transparency_index = 1
+	return cube
+
+
+static func _make_glass_cube(id: int) -> VoxelBlockyModelCube:
+	var cube := VoxelBlockyModelCube.new()
+	cube.color = Color(1, 1, 1, 1)
+	cube.set_material_override(0, block_material_for(id))
+	## Stay on the opaque mesher path (no transparency_index).
 	return cube
 
 
@@ -133,7 +142,9 @@ static func _mesh_model_prop(
 		model.collision_aabbs = []
 		model.collision_mask = 0
 	else:
-		model.collision_aabbs = [collision_aabb]
+		## Full cell so blasts / rays hit the furniture volume (catalog AABB is only a
+		## subset of the multi-cell mesh; footprint siblings use PROP_FOOTPRINT boxes).
+		model.collision_aabbs = [AABB(Vector3.ZERO, Vector3.ONE)]
 	return model
 
 

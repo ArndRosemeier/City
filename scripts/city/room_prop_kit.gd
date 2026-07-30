@@ -96,3 +96,64 @@ static func kit_names() -> PackedStringArray:
 
 static func prop_count() -> int:
 	return RoomPropCatalog.PROP_COUNT
+
+
+## Largest catalog footprint axis — search window when resolving a PROP_FOOTPRINT hit.
+const _ORIGIN_SEARCH := 8
+
+
+## World cells belonging to the stamped prop that owns `hit` (origin + footprints).
+## Empty when `hit` is not furniture. Does not write.
+static func assembly_entries(brush: CityBrush, hit: Vector3i) -> Array:
+	if brush == null:
+		return []
+	var id := brush.get_vox(hit)
+	if not VoxelMaterial.is_prop_furniture(id):
+		return []
+	var origin := hit
+	var origin_id := id
+	if id == VoxelMaterial.PROP_FOOTPRINT:
+		var found := _find_origin(brush, hit)
+		if found.x == -2147483648:
+			## Orphan footprint — clear just this cell.
+			return [{"vox": hit, "mat": id}]
+		origin = found
+		origin_id = brush.get_vox(origin)
+		if not VoxelMaterial.is_room_prop(origin_id):
+			return [{"vox": hit, "mat": id}]
+	var size := RoomPropCatalog.size_of_id(origin_id)
+	var out: Array = []
+	for y in range(size.y):
+		for z in range(size.z):
+			for x in range(size.x):
+				var at := origin + Vector3i(x, y, z)
+				var mid := brush.get_vox(at)
+				if VoxelMaterial.is_prop_furniture(mid):
+					out.append({"vox": at, "mat": mid})
+	return out
+
+
+## Clear every cell of the prop assembly containing `hit`. Returns carved entries.
+## Delegates to CityBrush.destroy_vox — do not clear furniture via set_vox(AIR) loops.
+static func destroy_assembly(brush: CityBrush, hit: Vector3i) -> Array:
+	if brush == null:
+		return []
+	if not VoxelMaterial.is_prop_furniture(brush.get_vox(hit)):
+		return []
+	return brush.destroy_vox(hit)
+
+
+## Origin cell of the prop that covers `foot`, or a sentinel if none.
+static func _find_origin(brush: CityBrush, foot: Vector3i) -> Vector3i:
+	var miss := Vector3i(-2147483648, 0, 0)
+	for oy in range(0, _ORIGIN_SEARCH):
+		for oz in range(0, _ORIGIN_SEARCH):
+			for ox in range(0, _ORIGIN_SEARCH):
+				var cand := foot - Vector3i(ox, oy, oz)
+				var id := brush.get_vox(cand)
+				if not VoxelMaterial.is_room_prop(id):
+					continue
+				var sz := RoomPropCatalog.size_of_id(id)
+				if ox < sz.x and oy < sz.y and oz < sz.z:
+					return cand
+	return miss
