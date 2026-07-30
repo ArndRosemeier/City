@@ -99,6 +99,9 @@ static func make_buffer_u16(data: PackedByteArray) -> VoxelBuffer:
 static func commit_block(terrain: VoxelTerrain, origin_vox: Vector3i, local_bp: Vector3i, data_u16: PackedByteArray) -> bool:
 	if terrain == null:
 		return false
-	var buf := make_buffer_u16(data_u16)
 	var wbp := world_block_pos(origin_vox, local_bp)
+	## Live terrain bounds start at world Y=0 — skip below-ground bake leftovers.
+	if wbp.y < 0:
+		return true
+	var buf := make_buffer_u16(data_u16)
 	return terrain.try_set_block_data(wbp, buf)

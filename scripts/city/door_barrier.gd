@@ -60,6 +60,37 @@ static func apply_open(
 	return n
 
 
+## True when the opening still has masonry to hang on: solid left/right jambs at
+## two heights. Rejects arcade niches, U-court street openings, and other façades
+## that were carved fully open after the door was recorded. Glass does not count.
+static func has_wall_frame(
+	brush: CityBrush, d: CastleDoorway, origin_vox: Vector3i = Vector3i.ZERO
+) -> bool:
+	if brush == null or d == null or d.width <= 0 or d.height <= 0:
+		return false
+	var s := d.side()
+	var half := d.width / 2
+	var y_lo := d.floor_y + mini(2, d.height)
+	var y_hi := d.floor_y + maxi(d.height / 2, y_lo)
+	var left_xz := Vector2i(d.center.x + s.x * (half + 1), d.center.y + s.y * (half + 1))
+	var right_xz := Vector2i(d.center.x - s.x * (half + 1), d.center.y - s.y * (half + 1))
+	return (
+		_is_frame_solid(brush, Vector3i(left_xz.x, y_lo, left_xz.y) + origin_vox)
+		and _is_frame_solid(brush, Vector3i(left_xz.x, y_hi, left_xz.y) + origin_vox)
+		and _is_frame_solid(brush, Vector3i(right_xz.x, y_lo, right_xz.y) + origin_vox)
+		and _is_frame_solid(brush, Vector3i(right_xz.x, y_hi, right_xz.y) + origin_vox)
+	)
+
+
+static func _is_frame_solid(brush: CityBrush, vox: Vector3i) -> bool:
+	var id := brush.get_vox(vox)
+	if id == VoxelMaterial.AIR:
+		return false
+	if id == VoxelMaterial.GLASS or id == VoxelMaterial.GLASS_LIT:
+		return false
+	return VoxelMaterial.is_solid(id)
+
+
 ## World-space centre of the threshold (for proximity / hints).
 static func world_anchor(d: CastleDoorway, voxel_size: float, origin_vox: Vector3i = Vector3i.ZERO) -> Vector3:
 	if d == null:

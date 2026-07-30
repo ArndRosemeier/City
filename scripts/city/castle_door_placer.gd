@@ -124,6 +124,7 @@ func place_from_layout(
 
 
 ## Hang city lot doorways (already in world voxel space). Does not clear castle doors.
+## Skips openings with no solid jambs/lintel (open façades, arcade niches).
 func hang_lot_doorways(
 	doorways: Array, voxel_size: float, camera: Camera3D, brush: CityBrush = null
 ) -> void:
@@ -137,6 +138,8 @@ func hang_lot_doorways(
 	for item in doorways:
 		var d := item as CastleDoorway
 		if d == null:
+			continue
+		if _brush != null and not DoorBarrierScript.has_wall_frame(_brush, d):
 			continue
 		_hang(d, Vector3i.ZERO)
 	_seal_closed_subset(start)
@@ -384,15 +387,9 @@ func _process(delta: float) -> void:
 	if _accum >= REFRESH_S:
 		_accum = 0.0
 		_refresh_visibility()
-	## Autoload may be absent in some headless -s loads; swing still runs.
-	if Engine.get_main_loop() != null:
-		var profiler: Node = Engine.get_main_loop().root.get_node_or_null("CityProfiler")
-		if profiler != null and profiler.has_method("begin"):
-			profiler.call("begin", "castle_doors")
-			_advance(delta)
-			profiler.call("end", "castle_doors")
-			return
+	CityProfiler.begin("castle_doors")
 	_advance(delta)
+	CityProfiler.end("castle_doors")
 
 
 func _refresh_visibility() -> void:

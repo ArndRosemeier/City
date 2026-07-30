@@ -307,11 +307,15 @@ func _rebuild_button_meshes() -> void:
 
 
 func _add_button_glyph(parent: MeshInstance3D, label: String, base: Color) -> void:
+	var parent_quad := parent.mesh as QuadMesh
+	if parent_quad == null:
+		push_error("Ui3D._add_button_glyph: parent mesh must be QuadMesh")
+		return
 	var glyph := MeshInstance3D.new()
 	glyph.name = "Glyph"
 	var quad := QuadMesh.new()
 	## Horizontal bar shared by + and −.
-	quad.size = Vector2(parent.mesh.size.x * 0.45, parent.mesh.size.y * 0.12)
+	quad.size = Vector2(parent_quad.size.x * 0.45, parent_quad.size.y * 0.12)
 	glyph.mesh = quad
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -324,7 +328,7 @@ func _add_button_glyph(parent: MeshInstance3D, label: String, base: Color) -> vo
 		var vert := MeshInstance3D.new()
 		vert.name = "GlyphV"
 		var vquad := QuadMesh.new()
-		vquad.size = Vector2(parent.mesh.size.x * 0.12, parent.mesh.size.y * 0.45)
+		vquad.size = Vector2(parent_quad.size.x * 0.12, parent_quad.size.y * 0.45)
 		vert.mesh = vquad
 		vert.material_override = mat
 		vert.position = Vector3(0.0, 0.0, -BUTTON_DEPTH)

@@ -320,8 +320,11 @@ func fill_ellipsoid(center: Vector3i, radii: Vector3i, material_id: int) -> void
 	var fx := float(radii.x)
 	var fy := float(radii.y)
 	var fz := float(radii.z)
+	## Terrain bounds start at Y=0 — never allocate underground blocks.
+	var y0 := maxi(center.y - radii.y, 0)
+	var y1 := center.y + radii.y + 1
 	begin_edit()
-	for y in range(center.y - radii.y, center.y + radii.y + 1):
+	for y in range(y0, y1):
 		var ny := float(y - center.y) / fy
 		for z in range(center.z - radii.z, center.z + radii.z + 1):
 			var nz := float(z - center.z) / fz
@@ -347,8 +350,10 @@ func fill_ellipsoid_shell(
 	var ix := maxf(fx - float(wall_thick), 0.001)
 	var iy := maxf(fy - float(wall_thick), 0.001)
 	var iz := maxf(fz - float(wall_thick), 0.001)
+	var y0 := maxi(center.y - radii.y, 0)
+	var y1 := center.y + radii.y + 1
 	begin_edit()
-	for y in range(center.y - radii.y, center.y + radii.y + 1):
+	for y in range(y0, y1):
 		var dy := float(y - center.y)
 		for z in range(center.z - radii.z, center.z + radii.z + 1):
 			var dz := float(z - center.z)

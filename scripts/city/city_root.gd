@@ -75,7 +75,8 @@ var _streamer: CityStreamer
 var _walker: CityWalker
 var _hud: Label
 var _hud_layer: CanvasLayer
-## Proximity prompt when a hung door or elevator is in interact range ("Press E").
+## Proximity prompt when a hung door or elevator is in interact range ("E to open").
+var _interact_hint_layer: CanvasLayer
 var _interact_hint: Label
 ## False while the splash owns the screen (boot, district hop). Combined with is_modal_open()
 ## in _refresh_hud_visibility; nothing sets a HUD layer's visibility outside that.
@@ -450,19 +451,29 @@ func _build_hud() -> void:
 	_hud.text = "—"
 	_hud_layer.add_child(_hud)
 
+	## Own layer at the top of the HUD band so the action bar cannot cover it.
+	_interact_hint_layer = CanvasLayer.new()
+	_interact_hint_layer.name = "InteractHintLayer"
+	_interact_hint_layer.layer = UiLayers.HUD_MAX
+	_interact_hint_layer.visible = false
+	add_child(_interact_hint_layer)
 	_interact_hint = Label.new()
-	_interact_hint.add_theme_font_size_override("font_size", 20)
-	_interact_hint.add_theme_color_override("font_color", Color(0.95, 0.92, 0.75, 0.95))
-	_interact_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
-	_interact_hint.add_theme_constant_override("outline_size", 4)
+	_interact_hint.name = "InteractHint"
+	_interact_hint.add_theme_font_size_override("font_size", 22)
+	_interact_hint.add_theme_color_override("font_color", Color(0.98, 0.95, 0.82, 0.98))
+	_interact_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_interact_hint.add_theme_constant_override("outline_size", 6)
 	_interact_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_interact_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_interact_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_interact_hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_interact_hint.offset_left = -160
-	_interact_hint.offset_right = 160
-	_interact_hint.offset_top = -96
-	_interact_hint.offset_bottom = -64
+	_interact_hint.offset_left = -200
+	_interact_hint.offset_right = 200
+	## Above the energy bar (bar top is -168); build strip sits lower still.
+	_interact_hint.offset_top = -214
+	_interact_hint.offset_bottom = -178
 	_interact_hint.visible = false
-	_hud_layer.add_child(_interact_hint)
+	_interact_hint_layer.add_child(_interact_hint)
 
 	_tendril_hud = InfectionTendrilHudScript.new()
 	_tendril_hud.name = "InfectionTendrilHud"
@@ -853,11 +864,14 @@ func _process(delta: float) -> void:
 		and _streamer != null
 	):
 		CityProfiler.begin("interior_decorate")
-		_interior_decorator.tick(
-			_walker.global_position,
-			_streamer.call("get_loaded_districts") as Array
-		)
+		_interior_decorator.tick(_walker.global_position, _streamer.get_loaded_districts())
 		CityProfiler.end("interior_decorate")
+	if (
+		not _game_over
+		and _walker != null
+		and is_instance_valid(_walker)
+		and _streamer != null
+	):
 		_refresh_interact_hint()
 	elif _interact_hint != null:
 		_interact_hint.visible = false
@@ -1531,10 +1545,14 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 	var hop_started := Time.get_ticks_msec()
 	var hop_deadline := hop_started + HOP_WAIT_MS
 	var last_status_ms := 0
-	while not inst.is_ready and Time.get_ticks_msec() < hop_deadline:
+	## Check validity before any property access — a failed bake frees the instance
+	## between frames and `while not inst.is_ready` would then dereference a freed object.
+	while Time.get_ticks_msec() < hop_deadline:
 		if not is_instance_valid(inst):
 			await _finish_district_hop_fail("district unloaded while hopping", origin_pos)
 			return
+		if inst.is_ready:
+			break
 		var elapsed_ms := Time.get_ticks_msec() - hop_started
 		if _loading_splash != null and elapsed_ms - last_status_ms >= HOP_STATUS_EVERY_MS:
 			last_status_ms = elapsed_ms
@@ -3527,9 +3545,17 @@ func _refresh_interact_hint() -> void:
 		return
 	var ctl := _player_controls()
 	var key := "E"
-	if ctl != null and ctl.has_method("binding_label"):
-		key = str(ctl.call("binding_label", "interact"))
-	_interact_hint.text = "%s — Press %s" % [str(target.get("verb", "Use")), key]
+	if ctl != null:
+		key = ctl.binding_label("interact")
+	var kind := str(target.get("kind", ""))
+	match kind:
+		"door":
+			var verb := "close" if str(target.get("verb", "")) == "Close" else "open"
+			_interact_hint.text = "%s to %s" % [key, verb]
+		"elevator":
+			_interact_hint.text = "%s to ride" % key
+		_:
+			_interact_hint.text = "%s to use" % key
 	_interact_hint.visible = true
 
 
@@ -3538,25 +3564,23 @@ func _refresh_interact_hint() -> void:
 func _nearest_interact_target() -> Dictionary:
 	if _walker == null or not is_instance_valid(_walker) or _streamer == null:
 		return {}
-	if not _streamer.has_method("get_loaded_districts"):
-		return {}
-	if _walker.has_method("is_elevator_riding") and bool(_walker.call("is_elevator_riding")):
+	if _walker.is_elevator_riding():
 		return {}
 	var feet: Vector3 = _walker.global_position
-	var reach: float = float(CastleDoorPlacerScript.INTERACT_DISTANCE)
+	var reach: float = float(CastleDoorPlacer.INTERACT_DISTANCE)
 	var best_d2 := reach * reach
 	var best := {}
-	for entry in _streamer.call("get_loaded_districts") as Array:
-		var inst = _as_district_instance(entry)
+	for entry in _streamer.get_loaded_districts():
+		var inst: DistrictInstance = _as_district_instance(entry)
 		if inst == null:
 			continue
 		if inst.castle_doors != null and is_instance_valid(inst.castle_doors):
-			var door = inst.castle_doors.nearest_door(feet, reach)
+			var door: CastleDoorPlacer.Hung = inst.castle_doors.nearest_door(feet, reach)
 			if door != null:
 				var d2: float = door.at.distance_squared_to(feet)
 				if d2 <= best_d2:
 					best_d2 = d2
-					var verb := "Close" if not bool(door.closed) else "Open"
+					var verb := "Close" if not door.closed else "Open"
 					best = {
 						"kind": "door",
 						"verb": verb,
@@ -3572,8 +3596,10 @@ func _nearest_interact_target() -> Dictionary:
 
 
 ## Elevator candidate inside one district, or {} if none closer than `best_d2`.
-func _nearest_elevator_in_district(inst: Variant, feet: Vector3, best_d2: float) -> Dictionary:
-	var shafts: Array = inst.elevator_shafts as Array
+func _nearest_elevator_in_district(
+	inst: DistrictInstance, feet: Vector3, best_d2: float
+) -> Dictionary:
+	var shafts: Array = inst.elevator_shafts
 	if shafts.is_empty():
 		return {}
 	var foot_vox := Vector3i(
@@ -3583,27 +3609,26 @@ func _nearest_elevator_in_district(inst: Variant, feet: Vector3, best_d2: float)
 	)
 	var best := {}
 	for shaft_v in shafts:
-		var shaft: RefCounted = shaft_v as RefCounted
-		if shaft == null or not shaft.has_method("landing_count"):
+		var shaft: ElevatorShaft = shaft_v as ElevatorShaft
+		if shaft == null:
 			continue
-		if int(shaft.call("landing_count")) < 2:
+		if shaft.landing_count() < 2:
 			continue
-		var rect: Rect2i = shaft.get("rect") as Rect2i
+		var rect: Rect2i = shaft.rect
 		## Cabin or 1-cell apron (XZ); Y near any landing.
 		var apron := Rect2i(rect.position.x - 1, rect.position.y - 1, rect.size.x + 2, rect.size.y + 2)
 		if not apron.has_point(Vector2i(foot_vox.x, foot_vox.z)):
 			continue
 		var near_y := false
-		var floor_ys: PackedInt32Array = shaft.get("floor_ys") as PackedInt32Array
-		for y in floor_ys:
+		for y in shaft.floor_ys:
 			if absi(foot_vox.y - int(y)) <= 1:
 				near_y = true
 				break
 		if not near_y:
 			continue
-		var from_i: int = int(shaft.call("nearest_landing_index", foot_vox.y))
-		var to_i: int = int(shaft.call("next_landing_index", from_i))
-		var at: Vector3 = shaft.call("world_anchor", from_i, VOXEL_SIZE) as Vector3
+		var from_i: int = shaft.nearest_landing_index(foot_vox.y)
+		var to_i: int = shaft.next_landing_index(from_i)
+		var at: Vector3 = shaft.world_anchor(from_i, VOXEL_SIZE)
 		var d2: float = at.distance_squared_to(feet)
 		if d2 > best_d2:
 			continue
@@ -3613,7 +3638,7 @@ func _nearest_elevator_in_district(inst: Variant, feet: Vector3, best_d2: float)
 			"verb": "Elevator",
 			"d2": d2,
 			"shaft": shaft,
-			"to": shaft.call("world_anchor", to_i, VOXEL_SIZE) as Vector3,
+			"to": shaft.world_anchor(to_i, VOXEL_SIZE),
 		}
 	return best
 
@@ -3624,16 +3649,16 @@ func _try_interact_nearest() -> bool:
 		return false
 	match str(target.get("kind", "")):
 		"door":
-			var placer = target.get("placer")
-			var door = target.get("door")
+			var placer: CastleDoorPlacer = target.get("placer") as CastleDoorPlacer
+			var door: CastleDoorPlacer.Hung = target.get("door") as CastleDoorPlacer.Hung
 			if placer == null or door == null:
 				return false
-			return bool(placer.toggle_door(door))
+			return placer.toggle_door(door)
 		"elevator":
-			if _walker == null or not _walker.has_method("begin_elevator_ride"):
+			if _walker == null:
 				return false
 			var dest: Vector3 = target.get("to", Vector3.ZERO) as Vector3
-			_walker.call("begin_elevator_ride", dest)
+			_walker.begin_elevator_ride(dest)
 			return true
 		_:
 			return false
@@ -3692,7 +3717,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_day_night.toggle_day_night()
 		get_viewport().set_input_as_handled()
 		return
-	if bool(ctl.call("matches_key_pressed", ek, "interact")):
+	if ctl.matches_key_pressed(ek, "interact"):
 		if _game_over or is_modal_open() or is_splash_open():
 			return
 		if _try_interact_nearest():

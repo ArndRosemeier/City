@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/test_townhouse_doors.gd" id="1_townhouse_doors"]
+
+[node name="TestTownhouseDoors" type="Node"]
+script = ExtResource("1_townhouse_doors")

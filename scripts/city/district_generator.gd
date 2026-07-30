@@ -33,7 +33,7 @@ const ElevatorShaftScript := preload("res://scripts/city/elevator_shaft.gd")
 ## Typical residential floor-to-floor ≈ 3.0 m.
 @export var floor_height_vox: int = 6
 @export var voxel_size: float = 0.5
-## Planner cell ≈ 14 m — mid-size city lot / street ROW (euro mid-rise depth).
+## Planner cell ≈ 14 m — street ROW / single lot. CORE towers merge 3×3–4×4 cells.
 @export var cell_size: int = 28
 
 ## District personality. DistrictBakeJob sets it from the world seed + coord; the
@@ -49,9 +49,7 @@ var _hill: HillComposer
 var _graveyard: GraveyardComposer
 var _lake: LakeComposer
 var _castle: CastleComposer
-## Typed as RefCounted so parse does not depend on the global class_name cache
-## (new scripts are often missing from it until the editor rescans).
-var _fractal: RefCounted
+var _fractal: FractalComposer
 ## Survives end_generate so DistrictInstance can spawn MandelbrotArena.
 var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
@@ -341,10 +339,15 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 		return
 	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:
 		return
+	## Secondary cells of a multi-cell tower parcel only carry sidewalk from the slab —
+	## the anchor paints the whole building.
+	if _planner.is_tower_parcel_secondary(cx, cz):
+		return
 	_reseed_cell(cx, cz)
 	var tag := _planner.tag_at(cx, cz)
-	var smin := Vector3i(cx * cell_size, ground_thickness, cz * cell_size)
-	var smax := Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size)
+	var bounds := _lot_paint_bounds(cx, cz)
+	var smin: Vector3i = bounds[0]
+	var smax: Vector3i = bounds[1]
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
@@ -360,14 +363,17 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	if cx < 0 or cz < 0 or cx >= _planner.cells_x or cz >= _planner.cells_z:
 		return
+	if _planner.is_tower_parcel_secondary(cx, cz):
+		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL:
 			return
 		_:
 			pass
-	var smin := Vector3i(cx * cell_size, ground_thickness, cz * cell_size)
-	var smax := Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size)
+	var bounds := _lot_paint_bounds(cx, cz)
+	var smin: Vector3i = bounds[0]
+	var smax: Vector3i = bounds[1]
 	var ring := 1 if cell_size < 20 else 2
 	var bmin := smin + Vector3i(ring, 0, ring)
 	var bmax := smax - Vector3i(ring, 0, ring)
@@ -388,8 +394,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		_:
 			mass_h = 48
 	## Far tiles deliberately skip the grammar, so there is no real massing to describe —
-	## one coarse block per lot. These sit beyond the voxel radius entirely; when a tile
-	## is upgraded to "full" it re-bakes and gets the grammar's actual shapes.
+	## one coarse block per lot (or one block per multi-cell tower parcel).
 	_record_building_impostor(
 		[{
 			"shape": int(BuildingGrammar.ImpostorShape.BOX),
@@ -403,6 +408,20 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		}] as Array[Dictionary],
 		tag
 	)
+
+
+## World-voxel AABB for painting a lot cell. Tower parcel anchors span the full rect.
+func _lot_paint_bounds(cx: int, cz: int) -> Array[Vector3i]:
+	var parcel := _planner.tower_parcel_at(cx, cz)
+	if parcel.size.x > 0 and _planner.is_tower_parcel_anchor(cx, cz):
+		return [
+			Vector3i(parcel.position.x * cell_size, ground_thickness, parcel.position.y * cell_size),
+			Vector3i(parcel.end.x * cell_size, ground_thickness + 1, parcel.end.y * cell_size),
+		] as Array[Vector3i]
+	return [
+		Vector3i(cx * cell_size, ground_thickness, cz * cell_size),
+		Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size),
+	] as Array[Vector3i]
 
 
 func decorate_open_spaces() -> void:
@@ -745,7 +764,10 @@ func _paint_cell(cx: int, cz: int) -> void:
 		LandUse.GRAVEYARD:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.GRAVE_SOIL)
 		_:
-			_paint_lot(min_v, max_v, cx, cz, tag, _grammar)
+			if _planner.is_tower_parcel_secondary(cx, cz):
+				return
+			var bounds := _lot_paint_bounds(cx, cz)
+			_paint_lot(bounds[0], bounds[1], cx, cz, tag, _grammar)
 
 
 func get_planner() -> DistrictPlanner:
@@ -1054,7 +1076,7 @@ func _paint_lot(
 	grammar: BuildingGrammar
 ) -> void:
 	_brush.fill_box(min_v, max_v, theme.sidewalk_mat)
-	# Small private setback (~0.5–1.0 m) — footprint stays ~12–13 m on a 14 m lot.
+	## Setback ~1 m. Single lots stay ~12 m; multi-cell CORE parcels reach ~40–54 m.
 	var ring := 1 if cell_size < 20 else 2
 	var bmin := min_v + Vector3i(ring, 0, ring)
 	var bmax := max_v - Vector3i(ring, 0, ring)
@@ -1075,11 +1097,27 @@ func _paint_lot(
 			ceiling = mini(saved, 72)  # 36 m
 		_:
 			pass
-	grammar.max_height = _height_cap_for(cx, cz, ceiling)
-	var facing := _planner.street_facing(cx, cz)
-	var corner := _planner.is_corner_lot(cx, cz)
-	var on_plaza := _planner.faces_plaza(cx, cz)
-	var on_park := _planner.faces_park(cx, cz)
+	var parcel := _planner.tower_parcel_at(cx, cz)
+	var intensity := (
+		_planner.intensity_max_in_rect(parcel)
+		if parcel.size.x > 0
+		else _planner.intensity_at(cx, cz)
+	)
+	grammar.max_height = _height_cap_for_intensity(intensity, ceiling)
+	var facing: int
+	var corner: bool
+	var on_plaza: bool
+	var on_park: bool
+	if parcel.size.x > 0:
+		facing = _planner.street_facing_rect(parcel)
+		corner = _planner.is_corner_parcel(parcel)
+		on_plaza = _planner.faces_plaza_rect(parcel)
+		on_park = _planner.faces_park_rect(parcel)
+	else:
+		facing = _planner.street_facing(cx, cz)
+		corner = _planner.is_corner_lot(cx, cz)
+		on_plaza = _planner.faces_plaza(cx, cz)
+		on_park = _planner.faces_park(cx, cz)
 	grammar.build_for_zone(bmin, bmax, zone, facing, corner, on_plaza, on_park)
 	## Far LOD uses the height the grammar actually painted. Deriving it from the cap
 	## instead made distant impostors overshoot the real voxels — archetypes routinely
@@ -1187,11 +1225,18 @@ func _elevator_cabin_rect(clear: Rect2i, facing: int, cabin: int) -> Rect2i:
 
 
 ## Promote grammar-local door punches to world-space CastleDoorway records.
+## Drop openings whose façade was carved open after the punch (arcade, U-court, …).
 func _record_lot_doorways(grammar: BuildingGrammar) -> void:
 	for item in grammar.lot_doorways:
 		var local_d: CastleDoorway = item as CastleDoorway
 		if local_d == null:
 			continue
+		if not DoorBarrier.has_wall_frame(_brush, local_d):
+			## Window / trim passes sometimes glaze posts after the grammar seal —
+			## restore masonry from a neighbouring solid wall cell when possible.
+			_repair_lot_door_frame(local_d)
+			if not DoorBarrier.has_wall_frame(_brush, local_d):
+				continue
 		var world_d: CastleDoorway = CastleDoorwayScript.new() as CastleDoorway
 		world_d.center = Vector2i(
 			local_d.center.x + origin_vox.x, local_d.center.y + origin_vox.z
@@ -1206,6 +1251,43 @@ func _record_lot_doorways(grammar: BuildingGrammar) -> void:
 		world_d.link = local_d.link
 		world_d.arch_courses = local_d.arch_courses
 		lot_doorways.append(world_d)
+
+
+## Sample a solid non-glass wall id beside the opening and repaint full jamb columns.
+func _repair_lot_door_frame(d: CastleDoorway) -> void:
+	var mat := _sample_door_frame_mat(d)
+	if mat < 0:
+		return
+	var s := d.side()
+	var half := d.width / 2
+	for row in range(1, d.height + 1):
+		var y := d.floor_y + row
+		for j in [-1, 1]:
+			var jxz: Vector2i = d.center + s * ((half + 1) * j)
+			_brush.set_vox(Vector3i(jxz.x, y, jxz.y), mat)
+	_brush.set_vox(Vector3i(d.center.x, d.floor_y + d.height + 1, d.center.y), mat)
+
+
+func _sample_door_frame_mat(d: CastleDoorway) -> int:
+	var s := d.side()
+	var half := d.width / 2
+	var y := d.floor_y + mini(2, d.height)
+	## Prefer cells just outside the clear (true jambs), then further along the wall.
+	var probes: Array[Vector2i] = [
+		d.center + s * (half + 1),
+		d.center - s * (half + 1),
+		d.center + s * (half + 2),
+		d.center - s * (half + 2),
+	]
+	for xz in probes:
+		var id := _brush.get_vox(Vector3i(xz.x, y, xz.y))
+		if id == VoxelMaterial.AIR:
+			continue
+		if id == VoxelMaterial.GLASS or id == VoxelMaterial.GLASS_LIT:
+			continue
+		if VoxelMaterial.is_solid(id):
+			return id
+	return -1
 
 
 func _interior_purpose_for_zone(zone: int, rect: Rect2i) -> int:
@@ -1234,9 +1316,12 @@ func _interior_purpose_for_zone(zone: int, rect: Rect2i) -> int:
 
 
 func _height_cap_for(cx: int, cz: int, zone_ceiling: int) -> int:
+	return _height_cap_for_intensity(_planner.intensity_at(cx, cz), zone_ceiling)
+
+
+func _height_cap_for_intensity(intensity: float, zone_ceiling: int) -> int:
 	## Non-linear so only genuinely dense cells reach for the sky.
-	var v := _planner.intensity_at(cx, cz)
-	var shaped := pow(clampf(v, 0.0, 1.0), 1.7)
+	var shaped := pow(clampf(intensity, 0.0, 1.0), 1.7)
 	var scaled := float(max_building_height_vox) * theme.height_scale * lerpf(0.14, 1.0, shaped)
 	## 12 vox ≈ 6 m: never below a two-storey house.
 	return clampi(int(round(scaled)), 12, zone_ceiling)

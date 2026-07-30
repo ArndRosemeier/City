@@ -29,6 +29,9 @@ var large_castle: Rect2i = Rect2i()
 ## Bounding rect of LandUse.FRACTAL cells. Empty when unused.
 var large_fractal: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
+## Multi-cell CORE tower parcels (planner cells). `position` is the anchor corner;
+## every cell in the rect stays `CORE_LOT`, but only the anchor paints a building.
+var tower_parcels: Array[Rect2i] = []
 ## World-space tips for street lights (cell centers along avenues).
 var avenue_light_cells: Array[Vector2i] = []
 
@@ -55,6 +58,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	pocket_parks.clear()
 	avenue_light_cells.clear()
 	civic_lot = Vector2i(-1, -1)
+	tower_parcels.clear()
 	grand_plaza = Rect2i()
 	large_park = Rect2i()
 	large_hill = Rect2i()
@@ -92,6 +96,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 		_stamp_pocket_parks()
 		_assign_zones()
 		_place_civic()
+		_place_tower_parcels()
 	_collect_avenue_lights()
 
 
@@ -565,6 +570,206 @@ func _place_civic() -> void:
 		return
 	civic_lot = edges[_rng.randi() % edges.size()]
 	grid[civic_lot.y][civic_lot.x] = LandUse.CIVIC_LOT
+
+
+## Merge contiguous CORE_LOT cells into 3×3 / 4×4 tower parcels (~42–56 m).
+## Streets stay one cell wide; only the building footprint grows.
+func _place_tower_parcels() -> void:
+	tower_parcels.clear()
+	if theme == null or theme.tower_chance <= 0.0:
+		return
+	var cap := _tower_parcel_cap()
+	if cap <= 0:
+		return
+	var occupied := PackedByteArray()
+	occupied.resize(cells_x * cells_z)
+	var candidates: Array[Dictionary] = []
+	for z in range(cells_z):
+		for x in range(cells_x):
+			if tag_at(x, z) != LandUse.CORE_LOT:
+				continue
+			if civic_lot.x == x and civic_lot.y == z:
+				continue
+			for size in [4, 3]:
+				var rect := Rect2i(x, z, size, size)
+				if not _tower_parcel_cells_ok(rect):
+					continue
+				var score := _tower_parcel_score(rect, size)
+				candidates.append({"rect": rect, "score": score, "x": x, "z": z, "size": size})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var sa := float(a["score"])
+		var sb := float(b["score"])
+		if not is_equal_approx(sa, sb):
+			return sa > sb
+		if int(a["z"]) != int(b["z"]):
+			return int(a["z"]) < int(b["z"])
+		if int(a["x"]) != int(b["x"]):
+			return int(a["x"]) < int(b["x"])
+		return int(a["size"]) > int(b["size"])
+	)
+	for c in candidates:
+		if tower_parcels.size() >= cap:
+			break
+		var rect: Rect2i = c["rect"]
+		if _tower_parcel_overlaps_occupied(rect, occupied):
+			continue
+		tower_parcels.append(rect)
+		for zz in range(rect.position.y, rect.end.y):
+			for xx in range(rect.position.x, rect.end.x):
+				occupied[zz * cells_x + xx] = 1
+
+
+func _tower_parcel_cap() -> int:
+	match theme.id:
+		DistrictTheme.CORE_HIGHRISE:
+			return 10
+		DistrictTheme.CIVIC_QUARTER:
+			return 3
+		DistrictTheme.WATERFRONT_INDUSTRIAL:
+			return 2
+		_:
+			## Occasional CORE pockets elsewhere — one landmark is enough.
+			return 1 if theme.tower_chance >= 0.15 else 0
+
+
+func _tower_parcel_cells_ok(rect: Rect2i) -> bool:
+	if rect.position.x < 0 or rect.position.y < 0:
+		return false
+	if rect.end.x > cells_x or rect.end.y > cells_z:
+		return false
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if tag_at(x, z) != LandUse.CORE_LOT:
+				return false
+			if civic_lot.x == x and civic_lot.y == z:
+				return false
+	return true
+
+
+func _tower_parcel_score(rect: Rect2i, size: int) -> float:
+	var sum := 0.0
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			sum += intensity_at(x, z)
+	## Prefer larger plates and parcels that actually touch a street.
+	var street_bonus := 0.35 if _rect_touches_road(rect) else 0.0
+	var size_bonus := 0.5 if size >= 4 else 0.0
+	return sum + street_bonus + size_bonus
+
+
+func _tower_parcel_overlaps_occupied(rect: Rect2i, occupied: PackedByteArray) -> bool:
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if occupied[z * cells_x + x] != 0:
+				return true
+	return false
+
+
+func _rect_touches_road(rect: Rect2i) -> bool:
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if is_corner_lot(x, z) or _cell_touches_road(x, z):
+				return true
+	return false
+
+
+func _cell_touches_road(cx: int, cz: int) -> bool:
+	return (
+		LandUse.is_road(tag_at(cx + 1, cz))
+		or LandUse.is_road(tag_at(cx - 1, cz))
+		or LandUse.is_road(tag_at(cx, cz + 1))
+		or LandUse.is_road(tag_at(cx, cz - 1))
+	)
+
+
+## Parcel covering (cx, cz), or empty Rect2i if the cell is not in a tower parcel.
+func tower_parcel_at(cx: int, cz: int) -> Rect2i:
+	var p := Vector2i(cx, cz)
+	for rect in tower_parcels:
+		if rect.has_point(p):
+			return rect
+	return Rect2i()
+
+
+func is_tower_parcel_anchor(cx: int, cz: int) -> bool:
+	for rect in tower_parcels:
+		if rect.position.x == cx and rect.position.y == cz:
+			return true
+	return false
+
+
+func is_tower_parcel_secondary(cx: int, cz: int) -> bool:
+	var rect := tower_parcel_at(cx, cz)
+	if rect.size.x <= 0:
+		return false
+	return rect.position.x != cx or rect.position.y != cz
+
+
+## Street façade for a multi-cell parcel (0=+Z … 3=-X), preferring road-touching sides.
+func street_facing_rect(rect: Rect2i) -> int:
+	if rect.size.x <= 0:
+		return _rng.randi() % 4
+	var scores := [0, 0, 0, 0]
+	for x in range(rect.position.x, rect.end.x):
+		if LandUse.is_road(tag_at(x, rect.end.y)):
+			scores[0] += 1
+		if LandUse.is_road(tag_at(x, rect.position.y - 1)):
+			scores[1] += 1
+	for z in range(rect.position.y, rect.end.y):
+		if LandUse.is_road(tag_at(rect.end.x, z)):
+			scores[2] += 1
+		if LandUse.is_road(tag_at(rect.position.x - 1, z)):
+			scores[3] += 1
+	var best := 0
+	for i in range(1, 4):
+		if scores[i] > scores[best]:
+			best = i
+	if scores[best] > 0:
+		return best
+	return street_facing(rect.position.x, rect.position.y)
+
+
+func is_corner_parcel(rect: Rect2i) -> bool:
+	var sides := 0
+	for x in range(rect.position.x, rect.end.x):
+		if LandUse.is_road(tag_at(x, rect.end.y)):
+			sides |= 1
+		if LandUse.is_road(tag_at(x, rect.position.y - 1)):
+			sides |= 2
+	for z in range(rect.position.y, rect.end.y):
+		if LandUse.is_road(tag_at(rect.end.x, z)):
+			sides |= 4
+		if LandUse.is_road(tag_at(rect.position.x - 1, z)):
+			sides |= 8
+	var n := 0
+	for bit in [1, 2, 4, 8]:
+		if (sides & bit) != 0:
+			n += 1
+	return n >= 2
+
+
+func faces_plaza_rect(rect: Rect2i) -> bool:
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if faces_plaza(x, z):
+				return true
+	return false
+
+
+func faces_park_rect(rect: Rect2i) -> bool:
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if faces_park(x, z):
+				return true
+	return false
+
+
+func intensity_max_in_rect(rect: Rect2i) -> float:
+	var best := 0.0
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			best = maxf(best, intensity_at(x, z))
+	return best
 
 
 func _collect_avenue_lights() -> void:

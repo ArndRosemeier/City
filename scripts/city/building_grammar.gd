@@ -1,5 +1,6 @@
 ## Architectural building grammars for 0.5m voxels.
-## Footprints come from planner lots (~12–14 m mid-rise depth); height capped externally (~100 m).
+## Footprints come from planner lots (~12 m on a single cell) or multi-cell CORE
+## tower parcels (~40–54 m). Height capped externally (~100 m).
 class_name BuildingGrammar
 extends RefCounted
 
@@ -118,8 +119,9 @@ func build_for_zone(
 
 func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 	var w := bmax.x - bmin.x
-	# ~5.5–6.5 m frontage per townhouse (common mid-density row width).
-	var unit_w_target := 12
+	## Minimum ~10 m frontage per house. A standard 12 m lot stays one dwelling —
+	## splitting into ~6 m units made interiors feel like corridors.
+	var unit_w_target := 20
 	var units := maxi(1, w / unit_w_target)
 	var unit_w := w / units
 	for u in range(units):
@@ -132,7 +134,8 @@ func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 		var eaves := _floor_y(umin.y, floors)
 		## Each row unit gets its own walls-plus-pitched-roof pair, so a row reads as a
 		## row of houses at distance instead of one long block.
-		if rng.randf() < theme.l_mass_chance and _footprint_wide_enough(umin, umax, 10, 10):
+		## L-mass only when both axes clear ~8 m so wings stay walkable rooms.
+		if rng.randf() < theme.l_mass_chance and _footprint_wide_enough(umin, umax, 16, 16):
 			_massed_floors(umin, umax, floors, wall, facing, true, false)
 			## Capture the wings first: _gable_roof_massed clears the cache.
 			var wings := _mass_parts_cache.duplicate()
@@ -148,6 +151,9 @@ func townhouse_row(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 		_stoop(umin, umax, facing)
 		_add_awnings(umin, umax, facing, true)
 		_add_balconies(umin, umax, floors, facing, 0.55)
+		## Stoop / awnings sit outside the wall, but re-seal jambs so any façade
+		## trim that overlapped the posts cannot drop the hung door.
+		_reseal_lot_door_frames(wall)
 		# Chimney
 		if rng.randf() < 0.6:
 			var chx := (umin.x + umax.x) / 2
@@ -215,9 +221,10 @@ func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -
 	_retail_storefront(bmin, bmax, facing)
 	if on_plaza:
 		_arcade_ground(bmin, bmax, facing)
-	# Shaft stays substantial (~8–12 m): inset scales with lot, not a tiny needle.
+	## Shaft plate ~75–85% of the podium. On a 40–54 m parcel that yields a
+	## ~30–45 m tower floor — medium urban office scale — not a 9 m needle.
 	var lot_w := mini(bmax.x - bmin.x, bmax.z - bmin.z)
-	var inset := clampi(lot_w / 8, 2, 6)
+	var inset := clampi(lot_w / 10, 2, 14)
 	var smin := bmin + Vector3i(inset, 0, inset)
 	var smax := bmax - Vector3i(inset, 0, inset)
 	if smax.x - smin.x < 10 or smax.z - smin.z < 10:
@@ -277,16 +284,20 @@ func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 	var top_floors := mini(8, _floors_for_cap(3, 40))
 	var floors := rng.randi_range(mini(4, top_floors), top_floors)
 	var wall := _pick_wall_mat(false)
-	_box_floors(bmin, bmax, floors, wall, facing, true, false)
-	# Wing depth ~3–4 m around a central court (euroblock-ish on a single lot).
+	## Decide U-court before the shell: an open street face has no jambs to hang on,
+	## so punching a door first left a permanent empty entrance.
 	var lot_w := mini(bmax.x - bmin.x, bmax.z - bmin.z)
-	var wing := clampi(lot_w / 4, 5, 8)
+	var wing := clampi(lot_w / 3, 8, 12)
 	var hole_min := bmin + Vector3i(wing, 1, wing)
 	var hole_max := Vector3i(bmax.x - wing, _floor_y(bmin.y, floors), bmax.z - wing)
-	if hole_max.x > hole_min.x + 3 and hole_max.z > hole_min.z + 3:
+	var can_court := hole_max.x > hole_min.x + 3 and hole_max.z > hole_min.z + 3
+	var open_street := can_court and rng.randf() < theme.l_mass_chance
+	_box_floors(bmin, bmax, floors, wall, facing, not open_street, false)
+	## Wing depth ~4–6 m around a central court (was 2.5–4 m — corridor-thin inside).
+	if can_court:
 		brush.fill_box(hole_min, hole_max, VoxelMaterial.AIR)
 		## Open one side toward the street → U / C court (theme-driven).
-		if rng.randf() < theme.l_mass_chance:
+		if open_street:
 			_open_courtyard_to_street(hole_min, hole_max, bmin, bmax, facing, floors)
 		if park != null:
 			park.compose_courtyard_garden(hole_min, hole_max)
@@ -296,6 +307,8 @@ func courtyard_block(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 				Vector3i(hole_max.x, bmin.y + 1, hole_max.z),
 				VoxelMaterial.PARK
 			)
+	if not open_street:
+		_reseal_lot_door_frames(wall)
 	_add_balconies(bmin, bmax, floors, facing, 0.35)
 	_flat_roof_parapet(bmin, bmax, floors, theme.roof_for(rng))
 	_roof_clutter(bmin, bmax, floors)
@@ -362,8 +375,8 @@ func spiral_tower(bmin: Vector3i, bmax: Vector3i, facing: int, campanile: bool =
 	var cx := (bmin.x + bmax.x) / 2
 	var cz := (bmin.z + bmax.z) / 2
 	var lot_w := mini(bmax.x - bmin.x, bmax.z - bmin.z)
-	## Thick enough to read as a landmark (not a 1-voxel needle).
-	var radius := clampi(lot_w / 2 - 1, 5, 10)
+	## Thick enough to read as a landmark; scales up on multi-cell parcels.
+	var radius := clampi(lot_w / 2 - 2, 5, 48)
 	var shaft_base := _floor_y(bmin.y, podium_floors)
 	var shaft_h: int
 	if campanile:
@@ -447,19 +460,18 @@ func cylinder_midrise(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: boo
 	var cx := (bmin.x + bmax.x) / 2
 	var cz := (bmin.z + bmax.z) / 2
 	var lot_w := mini(bmax.x - bmin.x, bmax.z - bmin.z)
-	var radius := clampi(lot_w / 2 - 1, 5, 10)
+	var radius := clampi(lot_w / 2 - 2, 5, 48)
 	var top_y := _floor_y(bmin.y, floors)
 	## Low shed bar along the street when lot is wide enough (silo + warehouse).
+	## No door on the bar — the hung door is punched into the cylinder rim after.
 	if _footprint_wide_enough(bmin, bmax, 14, 12) and rng.randf() < 0.65:
 		var bar := _street_bar_aabb(bmin, bmax, facing)
-		_box_floors(bar[0], bar[1], mini(2, floors), theme.base_mat, facing, true, false)
+		_box_floors(bar[0], bar[1], mini(2, floors), theme.base_mat, facing, false, false)
 		_retail_storefront(bar[0], bar[1], facing)
-	else:
-		## Door punch on cylinder via a small porch box on the facing side.
-		_cylinder_porch(bmin, bmax, facing, theme.base_mat)
 	brush.fill_disk(cx, cz, bmin.y, radius, wall)
 	brush.fill_cylinder_shell(cx, cz, bmin.y + 1, top_y, radius, wall, true, 2)
 	_punch_cylinder_windows(cx, cz, bmin.y + 2, top_y - 1, radius)
+	_cylinder_street_door(cx, cz, radius, bmin.y, facing, wall, 2)
 	var roof_mat := theme.roof_for(rng)
 	brush.fill_disk(cx, cz, top_y, radius, roof_mat)
 	brush.fill_disk_ring(cx, cz, top_y + 1, radius, 1, roof_mat)
@@ -698,7 +710,7 @@ func blob_stack(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 	## Central stalk carries the pods and gives the interior a stair core.
 	brush.fill_cylinder_shell(cx, cz, bmin.y, cap, core_r, wall, true, 2)
 	brush.fill_disk(cx, cz, bmin.y, core_r, wall)
-	_cylinder_porch(bmin, bmax, facing, theme.base_mat)
+	_cylinder_street_door(cx, cz, core_r, bmin.y, facing, wall, 2)
 	var pods := 3 + rng.randi() % 4
 	var top_reached := cap
 	var max_pod_r := maxi(3, lot_w / 3)
@@ -714,7 +726,10 @@ func blob_stack(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 		## Stay inside the lot so pods never overhang the carriageway.
 		px = clampi(px, bmin.x + pod_r, bmax.x - pod_r)
 		pz = clampi(pz, bmin.z + pod_r, bmax.z - pod_r)
-		var radii := Vector3i(pod_r, maxi(2, pod_r - 1 + rng.randi() % 3), pod_r)
+		## Keep the vertical radius inside the lot so large multi-cell parcels cannot
+		## paint ellipsoids below Y=0 (those blocks fail terrain commit).
+		var ry := maxi(2, mini(pod_r - 1 + rng.randi() % 3, py - bmin.y))
+		var radii := Vector3i(pod_r, ry, pod_r)
 		var pod_mat := band if p % 2 == 1 else wall
 		brush.fill_ellipsoid_shell(Vector3i(px, py, pz), radii, pod_mat, 2)
 		_note_sphere(Vector3i(px, py, pz), radii)
@@ -978,7 +993,8 @@ func _note_part(shape: ImpostorShape, min_v: Vector3i, max_v: Vector3i, yaw: flo
 
 ## Street-facing bar AABB (y from lot). Used for silo sheds and L street wings.
 func _street_bar_aabb(bmin: Vector3i, bmax: Vector3i, facing: int) -> Array[Vector3i]:
-	var depth := maxi(6, mini(bmax.x - bmin.x, bmax.z - bmin.z) * 2 / 3)
+	## At least ~5 m deep so the street wing is a room, not a hallway.
+	var depth := maxi(10, mini(bmax.x - bmin.x, bmax.z - bmin.z) * 2 / 3)
 	match facing:
 		0:
 			return [
@@ -1008,7 +1024,8 @@ func _wing_footprint_parts(bmin: Vector3i, bmax: Vector3i, facing: int) -> Array
 	var parts: Array = []
 	var bar := _street_bar_aabb(bmin, bmax, facing)
 	parts.append(bar)
-	var wing_thick := maxi(5, mini(bmax.x - bmin.x, bmax.z - bmin.z) / 3)
+	## Side/rear wing ≥ ~4 m exterior (~3 m clear after walls).
+	var wing_thick := maxi(8, mini(bmax.x - bmin.x, bmax.z - bmin.z) / 3)
 	if use_t:
 		## T: rear stem centered.
 		match facing:
@@ -1101,7 +1118,7 @@ func _massed_floors(
 		var part: Array = _mass_parts_cache[i]
 		var pmin: Vector3i = part[0]
 		var pmax: Vector3i = part[1]
-		if pmax.x - pmin.x < 4 or pmax.z - pmin.z < 4:
+		if pmax.x - pmin.x < 6 or pmax.z - pmin.z < 6:
 			continue
 		_box_floors(pmin, pmax, floors, wall, facing, door and i == 0, ribbon)
 
@@ -1195,40 +1212,65 @@ func _punch_cylinder_windows(cx: int, cz: int, y0: int, y1: int, radius: int) ->
 					brush.set_vox(Vector3i(x, y, z), glass_id)
 
 
-func _cylinder_porch(bmin: Vector3i, bmax: Vector3i, facing: int, mat: int) -> void:
-	var cx := (bmin.x + bmax.x) / 2
-	var cz := (bmin.z + bmax.z) / 2
-	var y0 := bmin.y
-	var y1 := bmin.y + ground_floor_height
+## Punch a street door into a finished cylinder shell and register a hung doorway.
+## Must run *after* the shell/windows so the clear and jambs survive.
+func _cylinder_street_door(
+	cx: int, cz: int, radius: int, floor_y: int, facing: int, wall_mat: int, wall_thick: int
+) -> void:
+	if radius < 3:
+		return
+	var thick := maxi(wall_thick, 1)
+	var half := 1  ## width 3 clear
+	var door_h := maxi(ground_floor_height - 1, 3)
+	var center: Vector2i
+	var axis: Vector2i
+	var side: Vector2i
 	match facing:
 		0:
-			brush.fill_box(
-				Vector3i(cx - 2, y0, bmax.z - 1), Vector3i(cx + 3, y1, bmax.z + 1), mat
-			)
-			brush.fill_box(
-				Vector3i(cx - 1, y0 + 1, bmax.z), Vector3i(cx + 2, y1 - 1, bmax.z + 1), VoxelMaterial.AIR
-			)
+			center = Vector2i(cx, cz + radius)
+			axis = Vector2i(0, -1)
+			side = Vector2i(1, 0)
 		1:
-			brush.fill_box(
-				Vector3i(cx - 2, y0, bmin.z - 1), Vector3i(cx + 3, y1, bmin.z + 1), mat
-			)
-			brush.fill_box(
-				Vector3i(cx - 1, y0 + 1, bmin.z - 1), Vector3i(cx + 2, y1 - 1, bmin.z), VoxelMaterial.AIR
-			)
+			center = Vector2i(cx, cz - radius)
+			axis = Vector2i(0, 1)
+			side = Vector2i(1, 0)
 		2:
-			brush.fill_box(
-				Vector3i(bmax.x - 1, y0, cz - 2), Vector3i(bmax.x + 1, y1, cz + 3), mat
-			)
-			brush.fill_box(
-				Vector3i(bmax.x, y0 + 1, cz - 1), Vector3i(bmax.x + 1, y1 - 1, cz + 2), VoxelMaterial.AIR
-			)
+			center = Vector2i(cx + radius, cz)
+			axis = Vector2i(-1, 0)
+			side = Vector2i(0, 1)
 		_:
-			brush.fill_box(
-				Vector3i(bmin.x - 1, y0, cz - 2), Vector3i(bmin.x + 1, y1, cz + 3), mat
-			)
-			brush.fill_box(
-				Vector3i(bmin.x - 1, y0 + 1, cz - 1), Vector3i(bmin.x, y1 - 1, cz + 2), VoxelMaterial.AIR
-			)
+			center = Vector2i(cx - radius, cz)
+			axis = Vector2i(1, 0)
+			side = Vector2i(0, 1)
+	## Clear the walk-through through the shell thickness.
+	for depth_i in range(thick):
+		for row in range(1, door_h + 1):
+			for t in range(-half, half + 1):
+				var col: Vector2i = center + axis * depth_i + side * t
+				brush.set_vox(Vector3i(col.x, floor_y + row, col.y), VoxelMaterial.AIR)
+	## Tunnel outward to the street so a street-bar shed cannot brick up the approach.
+	for out_i in range(1, maxi(radius, 4) + 2):
+		for row in range(1, door_h + 1):
+			for t in range(-half, half + 1):
+				var out_col: Vector2i = center - axis * out_i + side * t
+				brush.set_vox(Vector3i(out_col.x, floor_y + row, out_col.y), VoxelMaterial.AIR)
+	## Small porch lips outside the rim so the door reads from the street.
+	for t in range(-half - 1, half + 2):
+		var lip := center - axis + side * t
+		brush.set_vox(Vector3i(lip.x, floor_y, lip.y), wall_mat)
+	var d: CastleDoorway = CastleDoorwayScript.new() as CastleDoorway
+	d.center = center
+	d.axis = axis
+	d.width = half * 2 + 1
+	d.depth = thick
+	d.floor_y = floor_y
+	d.height = door_h
+	d.arch_courses = 0
+	d.leaf = CastleDoorway.LEAF_DOOR
+	d.link = CastleDoorway.LINK_TREE
+	## Jambs after the clear so window/tunnel passes cannot leave glass posts.
+	_reinforce_door_jambs(d, wall_mat)
+	lot_doorways.append(d)
 
 
 func _civic_cylinder_annex(bmin: Vector3i, bmax: Vector3i, facing: int, hall_top: int) -> void:
@@ -1403,12 +1445,25 @@ func _fill_shell(
 		wall_mat
 	)
 	## Windows / doors only on façade strips (not the volume interior).
-	_punch_facades(min_v, max_v, facing, door_on_ground, ribbon_windows, is_ground)
-	if door_on_ground:
-		_record_lot_doorway(min_v, max_v, facing)
+	## Skip the door punch when the wall is too narrow for jambs — otherwise we leave
+	## an empty hole that DoorBarrier.has_wall_frame will refuse to hang.
+	var hang_door := door_on_ground and _shell_can_hang_door(min_v, max_v, facing)
+	_punch_facades(min_v, max_v, facing, hang_door, ribbon_windows, is_ground)
+	if hang_door:
+		_record_lot_doorway(min_v, max_v, facing, wall_mat)
 
 
-func _record_lot_doorway(min_v: Vector3i, max_v: Vector3i, facing: int) -> void:
+func _shell_can_hang_door(min_v: Vector3i, max_v: Vector3i, facing: int) -> bool:
+	## Width-3 clear + jamb posts at ±2 need at least 5 voxels along the façade.
+	var along := max_v.x - min_v.x if facing == 0 or facing == 1 else max_v.z - min_v.z
+	return along >= 5
+
+
+func _record_lot_doorway(
+	min_v: Vector3i, max_v: Vector3i, facing: int, wall_mat: int
+) -> void:
+	if not _shell_can_hang_door(min_v, max_v, facing):
+		return
 	var cx := (min_v.x + max_v.x) / 2
 	var cz := (min_v.z + max_v.z) / 2
 	var d: CastleDoorway = CastleDoorwayScript.new() as CastleDoorway
@@ -1434,7 +1489,33 @@ func _record_lot_doorway(min_v: Vector3i, max_v: Vector3i, facing: int) -> void:
 		_:
 			d.center = Vector2i(min_v.x, cz)
 			d.axis = Vector2i(1, 0)
+	## Window punch often glazes the jamb columns; restore masonry so a hung door
+	## still has a frame (DoorBarrier.has_wall_frame rejects glass/AIR jambs).
+	_reinforce_door_jambs(d, wall_mat)
 	lot_doorways.append(d)
+
+
+## Paint solid jamb posts beside a recorded doorway (and a lintel course).
+## Full clear-height columns — sample Ys alone still failed when a later window
+## pass re-glazed the mid-jamb after a sparse reinforce.
+func _reinforce_door_jambs(d: CastleDoorway, wall_mat: int) -> void:
+	var s := d.side()
+	var half := d.width / 2
+	for row in range(1, d.height + 1):
+		var y := d.floor_y + row
+		for j in [-1, 1]:
+			var jxz: Vector2i = d.center + s * ((half + 1) * j)
+			brush.set_vox(Vector3i(jxz.x, y, jxz.y), wall_mat)
+	brush.set_vox(Vector3i(d.center.x, d.floor_y + d.height + 1, d.center.y), wall_mat)
+
+
+## Re-apply jamb masonry for every doorway recorded this build (post-façade trim).
+func _reseal_lot_door_frames(wall_mat: int) -> void:
+	for item in lot_doorways:
+		var d: CastleDoorway = item as CastleDoorway
+		if d == null:
+			continue
+		_reinforce_door_jambs(d, wall_mat)
 
 
 func _punch_facades(
@@ -1470,6 +1551,9 @@ func _punch_facade_cell(
 	if door_on_ground and _is_door_cell(x, y, z, min_v, max_v, facing):
 		brush.set_vox(Vector3i(x, y, z), VoxelMaterial.AIR)
 		return
+	## Leave the posts beside the clear as masonry — glass jambs drop hung doors.
+	if door_on_ground and _is_door_jamb_cell(x, y, z, min_v, max_v, facing):
+		return
 	if _is_window_cell(x, y, z, min_v, max_v, ribbon_windows, is_ground):
 		## A fraction of panes stay lit at night (emissive glass variant).
 		var glass_id := VoxelMaterial.GLASS_LIT if rng.randf() < 0.28 else VoxelMaterial.GLASS
@@ -1490,6 +1574,25 @@ func _is_door_cell(x: int, y: int, z: int, min_v: Vector3i, max_v: Vector3i, fac
 			return x == max_v.x - 1 and absi(z - cz) <= 1
 		_:
 			return x == min_v.x and absi(z - cz) <= 1
+
+
+## Columns immediately outside the width-3 door clear (centers ±2 on the facing wall).
+func _is_door_jamb_cell(
+	x: int, y: int, z: int, min_v: Vector3i, max_v: Vector3i, facing: int
+) -> bool:
+	if y < min_v.y + 1 or y > min_v.y + ground_floor_height - 1:
+		return false
+	var cx := (min_v.x + max_v.x) / 2
+	var cz := (min_v.z + max_v.z) / 2
+	match facing:
+		0:
+			return z == max_v.z - 1 and absi(x - cx) == 2
+		1:
+			return z == min_v.z and absi(x - cx) == 2
+		2:
+			return x == max_v.x - 1 and absi(z - cz) == 2
+		_:
+			return x == min_v.x and absi(z - cz) == 2
 
 
 func _is_window_cell(
