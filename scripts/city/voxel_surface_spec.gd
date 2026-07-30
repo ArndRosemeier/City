@@ -136,14 +136,16 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.grime = 0.8
 			s.streaks = 0.55
 		VoxelMaterial.STONE:
+			## Fine-grained Rock020 face (2K). Square tile — no ashlar courses in the map.
 			s.albedo_file = "stone.jpg"
 			s.normal_file = "stone_normal.jpg"
-			s.tile_meters = Vector2(2.5, 2.5)
+			s.tile_meters = Vector2(1.25, 1.25)
 			s.roughness = 0.88
-			s.tint_variation = 0.35
-			s.weathering = 0.5
-			s.grime = 0.65
-			s.streaks = 0.3
+			s.normal_strength = 1.15
+			s.tint_variation = 0.3
+			s.weathering = 0.45
+			s.grime = 0.55
+			s.streaks = 0.25
 		VoxelMaterial.PLAZA:
 			s.albedo_file = "plaza.jpg"
 			s.normal_file = "plaza_normal.jpg"
@@ -422,34 +424,32 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.roughness = 0.92
 			s.tint_variation = 0.3
 		VoxelMaterial.CASTLE_BLOCK:
-			## Dressed ashlar: tile at roughly one course per metre so a curtain wall reads
-			## as coursed blocks rather than one smeared cliff of rock.
+			## Fine-grained rock face (Rock020 2K). 1.25 m repeat ≈ 1640 texels/m.
 			s.albedo_file = "stone.jpg"
 			s.normal_file = "stone_normal.jpg"
-			s.tile_meters = Vector2(1.5, 1.0)
-			s.tint = Color(0.62, 0.6, 0.55, 1.0)
+			s.tile_meters = Vector2(1.25, 1.25)
+			s.tint = Color(0.92, 0.9, 0.86, 1.0)
 			s.roughness = 0.9
-			s.normal_strength = 1.1
-			s.tint_variation = 0.22
-			s.weathering = 0.55
-			s.grime = 0.7
+			s.normal_strength = 1.25
+			s.tint_variation = 0.16
+			s.weathering = 0.4
+			s.grime = 0.5
 			## Tall walls: the wash has to run much further down than a two-storey facade.
 			s.grime_height = 8.0
-			s.streaks = 0.5
+			s.streaks = 0.35
 		VoxelMaterial.CASTLE_BLOCK_MOSSY:
-			## Same ashlar, greened. Used for lower courses and weathered patches, so it has
-			## to read as the *same* wall at a different age, not as a second material.
+			## Same rock face, greened. Lower courses / weathered patches — same wall, older.
 			s.albedo_file = "stone.jpg"
 			s.normal_file = "stone_normal.jpg"
-			s.tile_meters = Vector2(1.5, 1.0)
-			s.tint = Color(0.42, 0.47, 0.36, 1.0)
+			s.tile_meters = Vector2(1.25, 1.25)
+			s.tint = Color(0.58, 0.66, 0.5, 1.0)
 			s.roughness = 0.95
-			s.normal_strength = 1.1
-			s.tint_variation = 0.28
-			s.weathering = 0.75
-			s.grime = 0.85
+			s.normal_strength = 1.25
+			s.tint_variation = 0.22
+			s.weathering = 0.65
+			s.grime = 0.75
 			s.grime_height = 8.0
-			s.streaks = 0.65
+			s.streaks = 0.5
 		_:
 			push_error(
 				"VoxelSurfaceSpec.for_id: no surface spec for voxel material %d — showing magenta"
