@@ -26,6 +26,7 @@ const UndeadInvasionHudScript := preload("res://scripts/city/undead_invasion_hud
 const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
 const TetrisMachineScript := preload("res://scripts/city/tetris_machine.gd")
 const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
+const AimPanelScript := preload("res://scripts/city/aim_panel.gd")
 const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
 const BuildPlacerScript := preload("res://scripts/city/build_placer.gd")
 const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
@@ -90,6 +91,7 @@ var _minimap: Node
 var _nav_overlay: NavDebugOverlay
 var _tetris: Node3D
 var _tetris_peds: Array[Node3D] = []
+var _aim_panel: Node3D
 var _game_over_layer: CanvasLayer
 var _game_over_title: Label
 var _game_over_detail: Label
@@ -1493,6 +1495,9 @@ func _regenerate() -> void:
 		_tetris.queue_free()
 		_tetris = null
 	_clear_tetris_peds()
+	if _aim_panel != null and is_instance_valid(_aim_panel):
+		_aim_panel.queue_free()
+		_aim_panel = null
 	if _streamer != null and is_instance_valid(_streamer):
 		_streamer.call("clear_all")
 		_streamer.queue_free()
@@ -1613,6 +1618,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	_walker.health_depleted.connect(_on_player_health_depleted)
 	_walker.meteor_requested.connect(_on_meteor_requested)
 	_walker.tetris_requested.connect(_on_tetris_requested)
+	_walker.aim_panel_requested.connect(_on_aim_panel_requested)
 	_walker.pedestrian_requested.connect(_on_pedestrian_requested)
 	var cam: Camera3D = _walker.call("get_camera") as Camera3D
 	## Visuals out to settings radius; collisions only near the player (big remesh win).
@@ -2153,8 +2159,36 @@ func _on_tetris_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
 	_spawn_tetris_at(hit_point)
 
 
+func _on_aim_panel_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
+	_spawn_aim_panel_at(hit_point)
+
+
 func _on_pedestrian_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
 	_spawn_tetris_ped_at(hit_point)
+
+
+func _spawn_aim_panel_at(hit_point: Vector3) -> void:
+	if _aim_panel != null and is_instance_valid(_aim_panel):
+		_aim_panel.queue_free()
+		_aim_panel = null
+	var face_yaw := 0.0
+	var to_player := get_player_position() - hit_point
+	to_player.y = 0.0
+	if to_player.length_squared() > 0.01:
+		face_yaw = atan2(-to_player.x, -to_player.z)
+	elif _walker != null and is_instance_valid(_walker):
+		face_yaw = _walker.rotation.y + PI
+	## Cardinal facing only — keeps the click surface axis-aligned like Tetris.
+	face_yaw = roundf(face_yaw / (PI * 0.5)) * (PI * 0.5)
+	var panel: Node3D = AimPanelScript.new() as Node3D
+	panel.name = "AimPanel"
+	_aim_panel = panel
+	add_child(panel)
+	panel.tree_exited.connect(func() -> void:
+		if _aim_panel == panel:
+			_aim_panel = null
+	)
+	panel.call("begin", hit_point, face_yaw)
 
 
 func _spawn_tetris_at(hit_point: Vector3) -> void:

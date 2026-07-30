@@ -22,6 +22,8 @@ signal health_depleted(source: DamageSource.Id)
 signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
 ## T-key: summon a Game Boy Tetris machine at aim hit_point.
 signal tetris_requested(hit_point: Vector3, hit_normal: Vector3)
+## Z-key: summon a vertical aim panel for world-space click targeting.
+signal aim_panel_requested(hit_point: Vector3, hit_normal: Vector3)
 ## P-key: spawn a pedestrian at aim hit_point (plays nearby Tetris if present).
 signal pedestrian_requested(hit_point: Vector3, hit_normal: Vector3)
 
@@ -1334,6 +1336,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if ctl.matches_key_pressed(ek, "tetris"):
 			_request_tetris_machine()
+			get_viewport().set_input_as_handled()
+			return
+		if ctl.matches_key_pressed(ek, "aim_panel"):
+			_request_aim_panel()
 			get_viewport().set_input_as_handled()
 			return
 		if ctl.matches_key_pressed(ek, "pedestrian"):
@@ -3236,6 +3242,11 @@ func _request_tetris_machine() -> void:
 	tetris_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
+func _request_aim_panel() -> void:
+	var aim := _aim_ray_at_cursor()
+	aim_panel_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+
+
 func _request_pedestrian() -> void:
 	var aim := _aim_ray_at_cursor()
 	pedestrian_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
@@ -3443,6 +3454,9 @@ func _is_beam_held() -> bool:
 func _fire_blaster_bolt() -> void:
 	if _camera == null:
 		return
+	## Aim panels swallow the beam: paint a marker, never spawn a bolt or spend energy.
+	if _try_mark_aim_panel():
+		return
 	if not try_spend_energy(energy_cost_blaster):
 		return
 	## Same shoot flick as charged blast release — hand casts each bolt.
@@ -3478,6 +3492,39 @@ func _fire_blaster_bolt() -> void:
 	if bolt.has_signal("impact"):
 		bolt.connect("impact", _on_blaster_impact)
 	bolt.call("fire", origin, aim_point, blaster_speed_mps, _effective_body_scale())
+
+
+## If the blaster aim ray hits an AimPanel, place its marker and consume the shot.
+func _try_mark_aim_panel() -> bool:
+	var shot := _blaster_shot_endpoints()
+	var origin: Vector3 = shot["origin"] as Vector3
+	var aim_point: Vector3 = shot["aim_point"] as Vector3
+	var dir := aim_point - origin
+	if dir.length_squared() < 0.000001:
+		return false
+	dir = dir.normalized()
+	var to := origin + dir * laser_range_m
+	var query := PhysicsRayQueryParameters3D.create(origin, to)
+	query.collision_mask = 1
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return false
+	var panel := _aim_panel_from_collider(hit.get("collider"))
+	if panel == null:
+		return false
+	return bool(panel.call("mark_at_world", hit["position"] as Vector3))
+
+
+func _aim_panel_from_collider(collider: Variant) -> Node:
+	var node := collider as Node
+	while node != null:
+		if node.has_method("mark_at_world") and (
+			node.is_in_group("aim_panel") or bool(node.has_meta("aim_panel"))
+		):
+			return node
+		node = node.get_parent()
+	return null
 
 
 func _on_blaster_impact(hit_point: Vector3, direction: Vector3, shot_origin: Vector3) -> void:
