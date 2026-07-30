@@ -38,15 +38,18 @@ pub const FRACTAL_BAND_0: i32 = 58;
 pub const FRACTAL_BAND_15: i32 = 73;
 #[allow(dead_code)]
 pub const FRACTAL_INTERIOR: i32 = 74;
+/// Bridge planking. Ordinary destructible, cascading structure to native code.
 #[allow(dead_code)]
-pub const PROP_FIRST: i32 = 75;
+pub const TIMBER: i32 = 75;
 #[allow(dead_code)]
-pub const PROP_LAST: i32 = 179;
+pub const PROP_FIRST: i32 = 76;
 #[allow(dead_code)]
-pub const PROP_FOOTPRINT: i32 = 180;
+pub const PROP_LAST: i32 = 249;
 #[allow(dead_code)]
-pub const DOOR: i32 = 181;
-pub const COUNT: i32 = 182;
+pub const PROP_FOOTPRINT: i32 = 250;
+#[allow(dead_code)]
+pub const DOOR: i32 = 251;
+pub const COUNT: i32 = 252;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR

@@ -99,6 +99,49 @@ const CAUSEWAY_HW_MIN := 6
 const CAUSEWAY_HW_MAX := 8
 const PARAPET_H := 2
 
+## ── Moat ──────────────────────────────────────────────────────────────────
+## Seeds that get a ditch at all, and how many of those flood it. A dry moat is a
+## legitimate castle and the two read very differently, so neither is guaranteed.
+const MOAT_CHANCE := 0.6
+const MOAT_WET_CHANCE := 0.6
+const MOAT_W_MIN := 12
+const MOAT_W_MAX := 18
+## Flat ground between the plinth's toe and the water's edge, so the scarp is a face and
+## not the batter continuing under the surface.
+const MOAT_BERM_MIN := 2
+const MOAT_BERM_MAX := 4
+## Bedrock owns Y0 and the deck is at BUDGET_GROUND_Y, so five is the whole budget.
+const MOAT_DEPTH_MIN := 4
+const MOAT_DEPTH_MAX := 5
+## Columns per voxel of the counterscarp's fall. The outer bank steps down in one-voxel
+## risers a pedestrian can climb back out on; the inner face deliberately does not.
+const MOAT_TERRACE_RUN := 2
+## Columns of the berm revetted in ashlar, so the scarp reads as a built face from the
+## ditch rather than as a cut through the meadow.
+const MOAT_REVET_T := 2
+## Masonry piers under the bridge deck, and how long each one is along the crossing.
+const BRIDGE_PIERS := 2
+const BRIDGE_PIER_LEN := 3
+## Stations of the crossing the lifting leaf occupies, at the castle-side abutment.
+const DRAWBRIDGE_LEN := 6
+## Winch posts either side of the leaf, above the deck.
+const WINCH_H := 5
+
+## ── Gardens ───────────────────────────────────────────────────────────────
+## Side of a meadow parterre and of the orchard, and the margin kept between a plot and
+## anything it must not touch (the ditch, the approach track, a road stub).
+const GARDEN_SIDE_MIN := GardenComposer.PARTERRE_MIN
+const GARDEN_SIDE_MAX := 34
+const ORCHARD_SIDE_MIN := GardenComposer.ORCHARD_MIN
+const ORCHARD_SIDE_MAX := 44
+const GARDEN_MARGIN := 3
+## Stride the meadow is scanned on for a free plot. Finer than this only moves a garden a
+## voxel or two and costs a whole extra sweep of the reserve.
+const GARDEN_STRIDE := 4
+## Side of the bailey's privy garden, and the lane kept clear from the gate to the keep.
+const PRIVY_SIDE_MAX := 30
+const PRIVY_LANE_HW := 6
+
 ## ── Keep ──────────────────────────────────────────────────────────────────
 const KEEP_W_MIN := 44
 const KEEP_W_MAX := 52
@@ -258,6 +301,9 @@ var _detail: bool = true
 var _plinth_voxels: int = 0
 var _dungeon_voxels: int = 0
 var _room_props: int = 0
+var _moat_voxels: int = 0
+var _water_voxels: int = 0
+var _garden_props: int = 0
 ## Footprints the room subdivision must not cut through: the keep entrance approach and
 ## every stair lane with its parapet.
 var _keep_reserved: Array[Rect2i] = []
@@ -286,9 +332,15 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_towers()
 	_build_gatehouse()
 	_build_causeway()
+	## After the causeway on purpose: the carve takes the ramp's fill out of the ditch, and
+	## the bridge puts a deck back over the gap it left.
+	_carve_moat()
+	_build_bridge()
+	_fill_moat_water()
 	_build_keep()
 	_build_crown_ramp()
 	_build_dungeon()
+	_build_gardens()
 	_report()
 
 
@@ -307,6 +359,9 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_towers()
 	_build_gatehouse()
 	_build_causeway()
+	_carve_moat()
+	_build_bridge()
+	_fill_moat_water()
 	_build_keep()
 	_build_crown_ramp()
 	_build_dungeon()
@@ -344,6 +399,9 @@ func _begin(min_v: Vector3i, max_v: Vector3i) -> bool:
 	_plinth_voxels = 0
 	_dungeon_voxels = 0
 	_room_props = 0
+	_moat_voxels = 0
+	_water_voxels = 0
+	_garden_props = 0
 	_keep_reserved.clear()
 	_keep_storeys = 0
 	_courtyard_claims.clear()
@@ -402,12 +460,31 @@ func _build_clearance() -> void:
 ## Everything the castle is, decided before a voxel is written. Returns null when the
 ## reserve cannot hold one, which is a bake error rather than a smaller castle.
 func _plan() -> CastleLayout:
-	var site := _pick_site()
+	## The ditch is rolled before the site is picked, because its ring is part of what the
+	## pocket has to hold. Every number is rolled whether or not the moat survives, so a
+	## seed's fortress is the same fortress with the ditch and without it.
+	var want_moat := rng.randf() < MOAT_CHANCE
+	var moat_berm := rng.randi_range(MOAT_BERM_MIN, MOAT_BERM_MAX)
+	var moat_width := rng.randi_range(MOAT_W_MIN, MOAT_W_MAX)
+	var moat_depth := rng.randi_range(MOAT_DEPTH_MIN, MOAT_DEPTH_MAX)
+	var moat_wet := rng.randf() < MOAT_WET_CHANCE
+	var ring := (moat_berm + moat_width) if want_moat else 0
+	var site := _pick_site(ring, ring == 0)
+	if site.x < 0 and ring > 0:
+		## No pocket wide enough for the ring. A castle without its ditch beats no castle,
+		## so the moat is what gives way.
+		want_moat = false
+		ring = 0
+		site = _pick_site(0, true)
 	if site.x < 0:
 		return null
 	var room := _room_at(site.x, site.y)
-	## Largest span that still leaves the skirt and the verge inside the reserve.
-	var fits := int((room - float(SKIRT_COLS + VERGE)) * 2.0)
+	## Largest span that still leaves the skirt, the verge and any ditch inside the reserve.
+	var fits := int((room - float(SKIRT_COLS + VERGE + ring)) * 2.0)
+	if fits < SPAN_MIN and ring > 0:
+		want_moat = false
+		ring = 0
+		fits = int((room - float(SKIRT_COLS + VERGE)) * 2.0)
 	if fits < SPAN_MIN:
 		push_error(
 			"CastleComposer: widest pocket in the reserve fits a %d voxel castle, needs %d"
@@ -425,6 +502,14 @@ func _plan() -> CastleLayout:
 		site.x - span_x / 2, site.y - span_z / 2, span_x, span_z
 	)
 	out.plinth_rect = out.plateau_rect.grow(SKIRT_COLS)
+	out.has_moat = want_moat
+	if want_moat:
+		out.moat_berm = moat_berm
+		out.moat_width = moat_width
+		out.moat_depth = moat_depth
+		out.moat_wet = moat_wet
+		out.moat_bed_y = ground_y - moat_depth
+		out.moat_rect = out.plinth_rect.grow(moat_berm + moat_width)
 	out.wall_inset = rng.randi_range(WALL_INSET_MIN, WALL_INSET_MAX)
 	out.wall_rect = out.plateau_rect.grow(-out.wall_inset)
 	out.wall_thick = rng.randi_range(WALL_THICK_MIN, WALL_THICK_MAX)
@@ -434,6 +519,7 @@ func _plan() -> CastleLayout:
 	_plan_keep(out)
 	_plan_towers(out)
 	_plan_causeway(out)
+	_plan_bridge(out)
 	## The ways down are sited between the keep's circulation and its subdivision. The keep's
 	## own entrance and flights have first claim on the plate — a cellar well that took their
 	## lane would leave a storey unreachable — the well then takes a lane out of what is left
@@ -445,12 +531,14 @@ func _plan() -> CastleLayout:
 	_plan_keep_floors(out, _keep_storeys)
 	_plan_crown_ramp(out)
 	_plan_dungeon_interior(out)
+	_plan_gardens(out)
 	return out
 
 
 ## Widest pocket of the reserve near its middle. Searching the whole region instead would
-## drift the castle out to whichever stub-free corner happens to be roomiest.
-func _pick_site() -> Vector2i:
+## drift the castle out to whichever stub-free corner happens to be roomiest. `extra` is
+## the moat ring, which the pocket has to hold on top of the fortress itself.
+func _pick_site(extra: int, complain: bool) -> Vector2i:
 	var cx := _x0 + _w / 2
 	var cz := _z0 + _d / 2
 	var best := Vector2i(cx, cz)
@@ -466,11 +554,13 @@ func _pick_site() -> Vector2i:
 				best = Vector2i(x, z)
 			x += 4
 		z += 4
-	if best_room < float(SPAN_MIN / 2 + SKIRT_COLS + VERGE):
-		push_error(
-			"CastleComposer: best pocket has %.1f voxels of room, a castle needs %d"
-			% [best_room, SPAN_MIN / 2 + SKIRT_COLS + VERGE]
-		)
+	var need := SPAN_MIN / 2 + SKIRT_COLS + VERGE + extra
+	if best_room < float(need):
+		if complain:
+			push_error(
+				"CastleComposer: best pocket has %.1f voxels of room, a castle needs %d"
+				% [best_room, need]
+			)
 		return Vector2i(-1, -1)
 	## Jitter so two tiles with the same reserve shape do not sit their keeps on the same
 	## voxel, then snap back if the nudge landed on a stub skirt.
@@ -478,7 +568,8 @@ func _pick_site() -> Vector2i:
 		clampi(best.x + rng.randi_range(-10, 10), _x0 + 2, _x1 - 3),
 		clampi(best.y + rng.randi_range(-10, 10), _z0 + 2, _z1 - 3)
 	)
-	if _room_at(jitter.x, jitter.y) >= best_room * 0.92:
+	var jitter_room := _room_at(jitter.x, jitter.y)
+	if jitter_room >= best_room * 0.92 and jitter_room >= float(need):
 		return jitter
 	return best
 
@@ -1842,6 +1933,231 @@ func _plan_causeway(out: CastleLayout) -> void:
 	out.causeway_line = line
 
 
+# ---------------------------------------------------------------------------
+# Garden planning
+# ---------------------------------------------------------------------------
+
+## Where the gardens go, decided with the rest of the plan. Parterres on the flanks of the
+## fortress and an orchard behind it, all outside any ditch, plus one privy garden inside
+## the bailey. Nothing here is guaranteed: a reserve with no room for a plot gets no
+## garden, which is a tight site rather than a broken bake.
+func _plan_gardens(out: CastleLayout) -> void:
+	var base := out.moat_rect if out.has_moat else out.plinth_rect
+	var avoid := _garden_avoid(out, base)
+	var side := Vector2i(-out.gate_dir.y, out.gate_dir.x)
+	for d: Vector2i in [side, -side]:
+		var plot := _meadow_plot(base, d, avoid, GARDEN_SIDE_MIN, GARDEN_SIDE_MAX)
+		if plot.size.x <= 0:
+			continue
+		avoid.append(plot.grow(GARDEN_MARGIN))
+		out.gardens.append(
+			_garden(plot, ground_y, GardenComposer.Style.PARTERRE, CastleGarden.KIND_MEADOW)
+		)
+	var back := _meadow_plot(base, -out.gate_dir, avoid, ORCHARD_SIDE_MIN, ORCHARD_SIDE_MAX)
+	if back.size.x > 0:
+		avoid.append(back.grow(GARDEN_MARGIN))
+		out.gardens.append(
+			_garden(back, ground_y, GardenComposer.Style.ORCHARD, CastleGarden.KIND_ORCHARD)
+		)
+	_plan_privy_garden(out)
+
+
+## Everything on the meadow a garden must keep off: the fortress and its ditch, the ramp,
+## and the approach track's two legs.
+func _garden_avoid(out: CastleLayout, base: Rect2i) -> Array[Rect2i]:
+	var hw := out.causeway_hw + GARDEN_MARGIN
+	var edge := _plateau_edge_point(out)
+	var foot := edge + out.gate_dir * out.causeway_run
+	var corner := (
+		Vector2i(out.road_target.x, foot.y)
+		if out.gate_dir.x != 0
+		else Vector2i(foot.x, out.road_target.y)
+	)
+	var avoid: Array[Rect2i] = [
+		base.grow(GARDEN_MARGIN),
+		_span_rect(edge, foot).grow(hw),
+		_span_rect(foot, corner).grow(hw),
+		_span_rect(corner, out.road_target).grow(hw),
+	]
+	return avoid
+
+
+## Best plot in the band between one face of `base` and the edge of the reserve. Tries the
+## middle of the face first, then either end, so a garden reads as placed against the
+## fortress rather than dropped wherever it happened to fit.
+func _meadow_plot(
+	base: Rect2i, d: Vector2i, avoid: Array[Rect2i], side_min: int, side_max: int
+) -> Rect2i:
+	var depth := _band_depth(base, d)
+	if depth < side_min:
+		return Rect2i()
+	var along := base.size.y if d.x != 0 else base.size.x
+	var s := mini(side_max, mini(depth, along))
+	if s < side_min:
+		return Rect2i()
+	for f: float in [0.5, 0.2, 0.8]:
+		var plot := _band_plot(base, d, s, f)
+		if not _in_region(plot.position.x, plot.position.y):
+			continue
+		if not _in_region(plot.end.x - 1, plot.end.y - 1):
+			continue
+		if _rects_block(avoid, plot):
+			continue
+		if not _plot_is_open(plot):
+			continue
+		return plot
+	return Rect2i()
+
+
+## Voxels between one face of `base` and the reserve border, the garden margin taken off
+## both ends.
+func _band_depth(base: Rect2i, d: Vector2i) -> int:
+	if d.x > 0:
+		return (_x1 - 2) - (base.end.x + GARDEN_MARGIN)
+	if d.x < 0:
+		return (base.position.x - GARDEN_MARGIN) - (_x0 + 2)
+	if d.y > 0:
+		return (_z1 - 2) - (base.end.y + GARDEN_MARGIN)
+	return (base.position.y - GARDEN_MARGIN) - (_z0 + 2)
+
+
+## Square plot of side `s` in the band off face `d`, `f` of the way along that face.
+func _band_plot(base: Rect2i, d: Vector2i, s: int, f: float) -> Rect2i:
+	if d.x != 0:
+		var x := (
+			base.end.x + GARDEN_MARGIN if d.x > 0 else base.position.x - GARDEN_MARGIN - s
+		)
+		var z := base.position.y + int(float(base.size.y) * f) - s / 2
+		return Rect2i(x, z, s, s)
+	var z2 := (
+		base.end.y + GARDEN_MARGIN if d.y > 0 else base.position.y - GARDEN_MARGIN - s
+	)
+	var x2 := base.position.x + int(float(base.size.x) * f) - s / 2
+	return Rect2i(x2, z2, s, s)
+
+
+## No road stub under the plot. The clearance field is a distance transform seeded from the
+## roads and the border, so sampling it on a lattice finer than the threshold cannot miss
+## one: a road column would pull every sample within GARDEN_MARGIN of it below the bar.
+func _plot_is_open(plot: Rect2i) -> bool:
+	var z := plot.position.y
+	while z < plot.end.y:
+		var x := plot.position.x
+		while x < plot.end.x:
+			if not _in_region(x, z) or _room_at(x, z) < float(GARDEN_MARGIN):
+				return false
+			x += GARDEN_STRIDE
+		z += GARDEN_STRIDE
+	return true
+
+
+## The castle's own garden, in whichever band of the bailey has room for it. It has to
+## leave a walkable lane on both sides — the bailey is a ring, and a plot that spans a band
+## would cut it.
+func _plan_privy_garden(out: CastleLayout) -> void:
+	var avoid := _privy_avoid(out)
+	var cr := out.courtyard_rect
+	var kr := out.keep_rect.grow(2)
+	var bands: Array[Rect2i] = [
+		Rect2i(cr.position.x, cr.position.y, cr.size.x, kr.position.y - cr.position.y),
+		Rect2i(cr.position.x, kr.end.y, cr.size.x, cr.end.y - kr.end.y),
+		Rect2i(cr.position.x, kr.position.y, kr.position.x - cr.position.x, kr.size.y),
+		Rect2i(kr.end.x, kr.position.y, cr.end.x - kr.end.x, kr.size.y),
+	]
+	for band: Rect2i in bands:
+		var across := mini(band.size.x, band.size.y) - 2 * PRIVY_LANE_HW
+		var along := maxi(band.size.x, band.size.y)
+		var s := mini(PRIVY_SIDE_MAX, mini(across, along))
+		if s < GardenComposer.PARTERRE_MIN:
+			continue
+		var wide := band.size.x >= band.size.y
+		for f: float in [0.5, 0.22, 0.78]:
+			var plot := (
+				Rect2i(
+					band.position.x + int(float(band.size.x) * f) - s / 2,
+					band.position.y + (band.size.y - s) / 2,
+					s,
+					s
+				)
+				if wide
+				else Rect2i(
+					band.position.x + (band.size.x - s) / 2,
+					band.position.y + int(float(band.size.y) * f) - s / 2,
+					s,
+					s
+				)
+			)
+			if not band.encloses(plot):
+				continue
+			if _rects_block(avoid, plot):
+				continue
+			out.gardens.append(
+				_garden(
+					plot,
+					out.courtyard_y,
+					GardenComposer.Style.RAISED,
+					CastleGarden.KIND_PRIVY
+				)
+			)
+			return
+
+
+## Bailey footprints the privy garden must miss. Not a route bbox: the bailey is a ring, so
+## keeping the plot out of these and off both lanes of its own band is what keeps every
+## route through the courtyard open.
+func _privy_avoid(out: CastleLayout) -> Array[Rect2i]:
+	var avoid: Array[Rect2i] = []
+	avoid.append_array(_courtyard_claims)
+	avoid.append(Rect2i(out.courtyard_center - Vector2i(4, 4), Vector2i(9, 9)))
+	## The mouth of the gate, and the ground a body coming through it steps onto.
+	avoid.append(
+		_span_rect(
+			out.gate_center, out.gate_center - out.gate_dir * (out.wall_thick + 12)
+		).grow(out.gate_width)
+	)
+	if out.keep_entrance != null:
+		var d := out.keep_entrance
+		avoid.append(
+			_span_rect(d.center, d.center - d.axis * PRIVY_LANE_HW).grow(d.width)
+		)
+	if out.crown_stair != null:
+		avoid.append(out.crown_stair.footprint().grow(LANE_MARGIN))
+	return avoid
+
+
+func _garden(rect: Rect2i, y: int, style: GardenComposer.Style, kind: int) -> CastleGarden:
+	var g := CastleGarden.new()
+	g.rect = rect
+	g.surface_y = y
+	g.style = style
+	g.kind = kind
+	return g
+
+
+## The stations of the causeway the ditch cuts away, and the leaf that closes the gap at
+## the castle end of the crossing.
+##
+## The gate stands eighteen voxels up a battered plinth and the ramp takes fifty-four
+## voxels to get there, so a drawbridge at the gate itself is not a thing that can exist.
+## The leaf goes where the crossing meets the castle-side abutment instead, which is where
+## the one on a real ramped approach is.
+func _plan_bridge(out: CastleLayout) -> void:
+	if not out.has_moat:
+		return
+	## Station s sits s columns outside the plateau, so the ring the moat carves out of the
+	## ramp is exactly the columns between the berm's edge and the ditch's outer face.
+	out.bridge_from = SKIRT_COLS + out.moat_berm + 1
+	out.bridge_to = SKIRT_COLS + out.moat_berm + out.moat_width
+	var leaf_to := mini(out.bridge_from + DRAWBRIDGE_LEN - 1, out.bridge_to)
+	var edge := _plateau_edge_point(out)
+	var side := Vector2i(-out.gate_dir.y, out.gate_dir.x)
+	var hw := out.causeway_hw
+	out.drawbridge_rect = _span_rect(
+		edge + out.gate_dir * out.bridge_from - side * hw,
+		edge + out.gate_dir * leaf_to + side * hw
+	)
+
+
 ## Plateau boundary column on the gate axis, on the passage centre line. Station 0 of the
 ## causeway — everything further out is ramp.
 func _plateau_edge_point(out: CastleLayout) -> Vector2i:
@@ -2124,6 +2440,193 @@ func _pave_approach() -> void:
 			at.y += 1 if target.y > at.y else -1
 		else:
 			break
+
+
+# ---------------------------------------------------------------------------
+# Moat
+# ---------------------------------------------------------------------------
+
+## The ditch, dug out of the meadow and out of whatever the causeway put in its way.
+##
+## Cross-section from the outside in: terraced steps of one voxel each, so anything that
+## falls in can walk back out towards the city; a flat bed; and a sheer revetted face
+## against the plinth's toe, which stays unclimbable because that is the entire point of
+## digging the thing.
+func _carve_moat() -> void:
+	if not layout.has_moat:
+		return
+	var outer := layout.moat_rect
+	var inner := layout.moat_inner_rect()
+	## Above the ramp's parapet, so the crossing's fill comes out with everything else.
+	var ramp_top := ground_y + PLINTH_RISE + PARAPET_H
+	for z in range(outer.position.y, outer.end.y):
+		for x in range(outer.position.x, outer.end.x):
+			if not _in_region(x, z):
+				continue
+			if inner.has_point(Vector2i(x, z)):
+				continue
+			var drop := mini(
+				layout.moat_depth, 1 + _inside_dist(outer, x, z) / MOAT_TERRACE_RUN
+			)
+			var floor_y := ground_y - drop
+			var top := ramp_top if _on_causeway(x, z) else ground_y
+			brush.fill_box(
+				Vector3i(x, floor_y + 1, z), Vector3i(x + 1, top + 1, z + 1), VoxelMaterial.AIR
+			)
+			brush.set_vox(
+				Vector3i(x, floor_y, z),
+				VoxelMaterial.GRAVEL if drop == layout.moat_depth else VoxelMaterial.DIRT
+			)
+			_moat_voxels += drop
+	_revet_scarp()
+
+
+## Ashlar face on the ditch side of the berm, so the scarp reads as built rather than as a
+## cut through a field. Only the face is dressed — the meadow keeps its turf.
+func _revet_scarp() -> void:
+	var inner := layout.moat_inner_rect()
+	for z in range(inner.position.y, inner.end.y):
+		for x in range(inner.position.x, inner.end.x):
+			if not _in_region(x, z):
+				continue
+			if _inside_dist(inner, x, z) >= MOAT_REVET_T:
+				continue
+			brush.fill_box(
+				Vector3i(x, layout.moat_bed_y, z),
+				Vector3i(x + 1, ground_y, z + 1),
+				VoxelMaterial.CASTLE_BLOCK
+			)
+
+
+## Station and cross-offset of a column in causeway coordinates: `x` counts out from the
+## plateau edge along the gate axis, `y` across it.
+func _on_causeway(x: int, z: int) -> bool:
+	var p := Vector2i(x, z) - _plateau_edge_point(layout)
+	var d := layout.gate_dir
+	var s := p.x * d.x + p.y * d.y
+	var t := p.x * -d.y + p.y * d.x
+	return s >= 0 and s <= layout.causeway_run and absi(t) <= layout.causeway_hw
+
+
+## Deck level of the ramp at one station — the bridge has to land on exactly this, or the
+## crossing gains a riser no pedestrian can climb.
+func _causeway_top(station: int) -> int:
+	return ground_y + PLINTH_RISE - station / CAUSEWAY_STEP_RUN
+
+
+## Masonry piers out of the bed, a plank deck on them following the ramp's own slope, and
+## the lifting leaf with its winch posts where the crossing meets the castle-side abutment.
+func _build_bridge() -> void:
+	if not layout.has_moat:
+		return
+	var hw := layout.causeway_hw
+	var edge := _plateau_edge_point(layout)
+	var d := layout.gate_dir
+	var side := Vector2i(-d.y, d.x)
+	var span := layout.bridge_to - layout.bridge_from + 1
+	for i in range(BRIDGE_PIERS):
+		var s0 := layout.bridge_from + (i + 1) * span / (BRIDGE_PIERS + 1) - BRIDGE_PIER_LEN / 2
+		for ds in range(BRIDGE_PIER_LEN):
+			var s := s0 + ds
+			if s < layout.bridge_from or s > layout.bridge_to:
+				continue
+			var deck := _causeway_top(s)
+			for t in range(-hw, hw + 1):
+				var p := edge + d * s + side * t
+				if not _in_region(p.x, p.y):
+					continue
+				brush.fill_box(
+					Vector3i(p.x, layout.moat_bed_y + 1, p.y),
+					Vector3i(p.x + 1, deck, p.y + 1),
+					VoxelMaterial.CASTLE_BLOCK
+				)
+	var leaf := layout.drawbridge_rect
+	for s2 in range(layout.bridge_from, layout.bridge_to + 1):
+		var deck2 := _causeway_top(s2)
+		for t2 in range(-hw, hw + 1):
+			var p2 := edge + d * s2 + side * t2
+			if not _in_region(p2.x, p2.y):
+				continue
+			brush.set_vox(Vector3i(p2.x, deck2, p2.y), VoxelMaterial.TIMBER)
+			## Stringers under the deck edges and its spine, so the crossing has a
+			## thickness when it is seen from the ditch.
+			if absi(t2) == hw or t2 == 0:
+				brush.set_vox(Vector3i(p2.x, deck2 - 1, p2.y), VoxelMaterial.TIMBER)
+			## The leaf lifts, so it carries no rail; the fixed spans do.
+			if absi(t2) == hw and not leaf.has_point(p2):
+				brush.fill_box(
+					Vector3i(p2.x, deck2 + 1, p2.y),
+					Vector3i(p2.x + 1, deck2 + 1 + PARAPET_H, p2.y + 1),
+					VoxelMaterial.TIMBER
+				)
+	_build_winch(edge, d, side, hw)
+
+
+## Two stone posts on the abutment with a chain running down to the free end of the leaf.
+## Nothing moves — what makes it read as a drawbridge is the gear around it.
+func _build_winch(edge: Vector2i, d: Vector2i, side: Vector2i, hw: int) -> void:
+	var post_s := layout.bridge_from - 1
+	var deck := _causeway_top(post_s)
+	var top := deck + WINCH_H
+	var leaf_end := mini(layout.bridge_from + DRAWBRIDGE_LEN - 1, layout.bridge_to)
+	for t: int in [-hw, hw]:
+		var post := edge + d * post_s + side * t
+		if not _in_region(post.x, post.y):
+			continue
+		brush.fill_box(
+			Vector3i(post.x, deck + 1, post.y),
+			Vector3i(post.x + 1, top + 1, post.y + 1),
+			VoxelMaterial.CASTLE_BLOCK
+		)
+		var run := leaf_end - post_s
+		if run <= 0:
+			continue
+		for k in range(1, run + 1):
+			var at := edge + d * (post_s + k) + side * t
+			if not _in_region(at.x, at.y):
+				continue
+			var y := top - int(round(float(k) / float(run) * float(top - _causeway_top(leaf_end) - 1)))
+			if brush.get_vox(Vector3i(at.x, y, at.y)) != VoxelMaterial.AIR:
+				continue
+			brush.set_vox(Vector3i(at.x, y, at.y), VoxelMaterial.WROUGHT_IRON)
+
+
+## Flood the ditch, but only where it is still open: the piers keep their feet dry and the
+## surface comes out flush with the meadow it was cut from.
+func _fill_moat_water() -> void:
+	if not layout.has_moat or not layout.moat_wet:
+		return
+	var outer := layout.moat_rect
+	var inner := layout.moat_inner_rect()
+	for z in range(outer.position.y, outer.end.y):
+		for x in range(outer.position.x, outer.end.x):
+			if not _in_region(x, z):
+				continue
+			if inner.has_point(Vector2i(x, z)):
+				continue
+			for y in range(layout.moat_bed_y + 1, ground_y + 1):
+				var at := Vector3i(x, y, z)
+				if brush.get_vox(at) != VoxelMaterial.AIR:
+					continue
+				brush.set_vox(at, VoxelMaterial.WATER)
+				_water_voxels += 1
+
+
+# ---------------------------------------------------------------------------
+# Gardens
+# ---------------------------------------------------------------------------
+
+## The plots planned earlier, actually planted. Near tiles only: a garden is per-voxel
+## dressing, and a fortress seen from three districts away is a silhouette.
+func _build_gardens() -> void:
+	if not _detail or layout.gardens.is_empty():
+		return
+	var gc := GardenComposer.new()
+	gc.brush = brush
+	gc.rng = rng
+	for g: CastleGarden in layout.gardens:
+		gc.compose(g.rect, g.surface_y, g.style)
+	_garden_props = gc.props_placed
 
 
 # ---------------------------------------------------------------------------
@@ -2561,8 +3064,11 @@ func _moss_here(x: int, z: int, bias: float) -> bool:
 
 func _report() -> void:
 	print(
-		"CastleComposer: %s plinth=%d vox dungeon=%d vox props=%d"
-		% [layout.describe(), _plinth_voxels, _dungeon_voxels, _room_props]
+		"CastleComposer: %s plinth=%d vox dungeon=%d vox moat=%d vox water=%d vox"
+		% [layout.describe(), _plinth_voxels, _dungeon_voxels, _moat_voxels, _water_voxels]
+	)
+	print(
+		"CastleComposer: props room=%d garden=%d" % [_room_props, _garden_props]
 	)
 
 

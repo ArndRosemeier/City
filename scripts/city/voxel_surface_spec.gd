@@ -41,6 +41,14 @@ var streaks: float = 0.0
 ## GLASS only: fraction of windows that may light up at night.
 var lit_ratio: float = 0.0
 
+## Prop stems that flower, by the prefix the generator names them with.
+const BLOOM_TINTS: Dictionary[String, Color] = {
+	"flower_purple": Color(0.62, 0.38, 0.78, 1.0),
+	"flower_red": Color(0.78, 0.24, 0.22, 1.0),
+	"flower_yellow": Color(0.92, 0.78, 0.26, 1.0),
+	"mushroom_red": Color(0.72, 0.26, 0.24, 1.0),
+}
+
 
 ## Materials with their own bespoke shader (infection, meteor rock, Game Boy, gems).
 static func has_bespoke_shader(id: int) -> bool:
@@ -458,6 +466,19 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.grime = 0.75
 			s.grime_height = 8.0
 			s.streaks = 0.5
+		VoxelMaterial.TIMBER:
+			## Bridge planking. Greyer and rougher than a door leaf: this is structural
+			## timber left out in the weather, not a joiner's panel.
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tile_meters = Vector2(1.0, 1.0)
+			s.tint = Color(0.50, 0.40, 0.30, 1.0)
+			s.roughness = 0.92
+			s.normal_strength = 1.0
+			s.tint_variation = 0.28
+			s.weathering = 0.6
+			s.grime = 0.5
+			s.streaks = 0.35
 		VoxelMaterial.DOOR:
 			## Closed doorway plug — timber, not masonry.
 			s.albedo_file = "wood.jpg"
@@ -504,10 +525,52 @@ static func _spec_for_room_prop(id: int) -> VoxelSurfaceSpec:
 			s.tint = Color(0.88, 0.9, 0.92, 1.0)
 			s.roughness = 0.35
 		"foliage":
-			s.albedo_file = "wood.jpg"
-			s.normal_file = "wood_normal.jpg"
-			s.tint = Color(0.28, 0.48, 0.26, 1.0)
+			## Blooms are the one foliage prop whose point is that it is not green, and the
+			## kit ships them untextured — so the colour has to come from the stem the
+			## generator named them after, over a base pale enough for a saturated tint to
+			## survive it. Bark and leaf keep the wood map.
+			var bloom := _bloom_key(RoomPropCatalog.stem_of(id))
+			if bloom.is_empty():
+				s.albedo_file = "wood.jpg"
+				s.normal_file = "wood_normal.jpg"
+				s.tint = Color(0.28, 0.48, 0.26, 1.0)
+			else:
+				s.albedo_file = "paint.jpg"
+				s.normal_file = "paint_normal.jpg"
+				s.tint = BLOOM_TINTS[bloom]
 			s.roughness = 0.85
+		"timber":
+			## Palings, log piles and stumps: weathered softwood, not the indoor kit's
+			## walnut. The wood map is a dark stained board and a fence cut from it is a
+			## black bar on a lawn, so this is a pale base carrying the brown instead.
+			s.albedo_file = "plaster.jpg"
+			s.normal_file = "plaster_normal.jpg"
+			s.tint = Color(0.70, 0.55, 0.37, 1.0)
+			s.roughness = 0.92
+			s.weathering = 0.45
+			s.grime = 0.35
+		"iron":
+			## Railings, gates, lanterns and fire baskets — painted rather than bare. The
+			## WROUGHT_IRON map is near-black, and a garden's worth of it comes out as a
+			## cage of silhouettes with no form in it; cracked paint at a slate value
+			## reads as the same ironwork and keeps the balusters visible.
+			s.albedo_file = "paint.jpg"
+			s.normal_file = "paint_normal.jpg"
+			s.tint = Color(0.29, 0.31, 0.33, 1.0)
+			s.roughness = 0.5
+			s.metallic = 0.2
+			s.weathering = 0.4
+		"stone":
+			## Urns, pillars, statuary and headstones — pale weathered ashlar so they
+			## read against both a lawn and the castle's own darker block.
+			s.albedo_file = "grave_stone.jpg"
+			s.normal_file = "grave_stone_normal.jpg"
+			s.tint = Color(0.88, 0.87, 0.84, 1.0)
+			s.roughness = 0.93
+			s.normal_strength = 1.05
+			s.tint_variation = 0.2
+			s.weathering = 0.55
+			s.grime = 0.5
 		_:
 			s.albedo_file = "wood.jpg"
 			s.normal_file = "wood_normal.jpg"
@@ -515,3 +578,11 @@ static func _spec_for_room_prop(id: int) -> VoxelSurfaceSpec:
 			s.roughness = 0.82
 			s.normal_strength = 0.9
 	return s
+
+
+## Stem prefix of a flowering prop, or "" for the leaf and bark of the family.
+static func _bloom_key(stem: String) -> String:
+	for key: String in BLOOM_TINTS:
+		if stem.begins_with(key):
+			return key
+	return ""

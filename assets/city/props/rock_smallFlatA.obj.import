@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://brr642f16e7nk"
+path="res://.godot/imported/rock_smallFlatA.obj-e691e777da81f623293bc3d5115c03b2.mesh"
+
+[deps]
+
+files=["res://.godot/imported/rock_smallFlatA.obj-e691e777da81f623293bc3d5115c03b2.mesh"]
+
+source_file="res://assets/city/props/rock_smallFlatA.obj"
+dest_files=["res://.godot/imported/rock_smallFlatA.obj-e691e777da81f623293bc3d5115c03b2.mesh", "res://.godot/imported/rock_smallFlatA.obj-e691e777da81f623293bc3d5115c03b2.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

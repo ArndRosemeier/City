@@ -51,7 +51,11 @@ const WANT_EITHER := 2
 ## reads as an unreachable goal — the opposite of what is being measured. An agent actually
 ## crossing a fortress would path to the next stair head rather than to a cellar three floors
 ## down, so this ceiling says nothing about what the game affords per frame.
-const ROUTE_BUDGET := 400000
+##
+## The gardens push it up: railings, seats and urns each stand a fresh walkable span on the
+## meadow and on the bailey flags, and a search aimed at a cellar drags all of them in before
+## it finds its stair.
+const ROUTE_BUDGET := 700000
 ## Seeds the distinctness measurement bakes, and how far it looks for that many castles. Well
 ## past the handful needed to prove the dungeons differ, because the interesting failure is the
 ## rare seed whose lane claims leave the plan no room, and that only shows up in numbers.
@@ -64,6 +68,9 @@ const FIT_EPS := 0.001
 
 var _failed := false
 var _volume: NativeOfflineVoxelVolume = null
+## Wet / dry: whether a ditch of that kind has already been dug through voxel by voxel.
+var _moat_checked: Dictionary[bool, bool] = {}
+var _garden_props := 0
 
 
 func _fail(msg: String) -> void:
@@ -129,6 +136,7 @@ func _ready() -> void:
 	_check_vertical_budget(layout, int(res["ground_thickness"]))
 	_check_gate(layout)
 	_check_causeway(layout)
+	_check_gardens("seed %d" % WORLD_SEED, res, layout)
 	_check_keep_shell(layout)
 	_check_keep_tree("seed %d" % WORLD_SEED, layout)
 	_check_stair_treads(layout)
@@ -2042,6 +2050,8 @@ func _check_distinctness() -> void:
 		return
 	var masks: Dictionary[int, bool] = {}
 	var shapes: Dictionary[String, bool] = {}
+	var moats := 0
+	var wets := 0
 	var rooms: Array[int] = []
 	var talls: Array[int] = []
 	var flights: Array[int] = []
@@ -2066,6 +2076,18 @@ func _check_distinctness() -> void:
 		var per_level: Array[String] = []
 		for lv in range(l.dungeon_levels):
 			per_level.append("%d" % l.dungeon_vaults_on(lv).size())
+		## The ditch and the gardens are dug and planted here as well, so the first seed of
+		## each kind is checked voxel by voxel rather than bought a bake of its own.
+		if l.has_moat:
+			moats += 1
+			if l.moat_wet:
+				wets += 1
+			if not _moat_checked.has(l.moat_wet):
+				_moat_checked[l.moat_wet] = true
+				_check_moat_voxels(seeds[i], res, l)
+		_check_gardens("seed %d" % seeds[i], res, l)
+		if _failed:
+			return
 		print(
 			(
 				"  seed %2d %s: routes=%-26s rooms=%3d [%-8s] wide=%2d small=%2d"
@@ -2171,6 +2193,20 @@ func _check_distinctness() -> void:
 			% [seeds.size() - shapes.size() + 1, seeds.size()]
 		)
 		return
+	print(
+		"moats: %d of %d seeds dug one (%d wet, %d dry), %d garden props stamped in all"
+		% [moats, seeds.size(), wets, moats - wets, _garden_props]
+	)
+	if wets == 0 or moats == wets:
+		_fail(
+			"FAIL %d seeds produced %d wet and %d dry moats — both kinds are asked for"
+			% [seeds.size(), wets, moats - wets]
+		)
+		return
+	if moats == seeds.size():
+		_fail("FAIL every one of %d seeds dug a moat — a castle without one is the other half"
+			% seeds.size())
+		return
 	if talls.max() == 0:
 		_fail("FAIL not one of %d seeds produced a tall vaulted chamber" % seeds.size())
 		return
@@ -2179,6 +2215,281 @@ func _check_distinctness() -> void:
 			"FAIL every seed has between %d and %d chambers — the grain is not varying"
 			% [rooms[0], rooms[rooms.size() - 1]]
 		)
+
+
+# ---------------------------------------------------------------------------
+# Moat and gardens
+# ---------------------------------------------------------------------------
+
+## The ditch, measured in the voxels rather than trusted from the plan: it has to be a
+## barrier from the castle's side and a way out on the city's, it must not cut into the
+## world floor or into the dungeon behind the scarp, and a wet one has to hold water at the
+## meadow's level and nowhere above it.
+func _check_moat_voxels(seed_no: int, res: Dictionary, l: CastleLayout) -> void:
+	var keep := _volume
+	_volume = (res["generator"] as DistrictGenerator).get_offline_volume()
+	var deck := int(res["ground_thickness"])
+	_check_moat_section(seed_no, l, deck)
+	_check_moat_scarp(seed_no, l, deck)
+	_check_moat_water(seed_no, l, deck)
+	_check_bridge_voxels(seed_no, l)
+	## The approach has to stay one continuous walkable line now that a ditch is cut across
+	## it, which is exactly what this already measures — over the bridge this time.
+	_check_causeway(l)
+	_volume = keep
+
+
+## One ray per side, from the lip of the ditch to the scarp. Every step down is a single
+## voxel — a two-voxel riser bakes as a one-way drop and anything that falls in is stuck —
+## and the bed sits where the plan put it, clear of the world floor.
+func _check_moat_section(seed_no: int, l: CastleLayout, deck: int) -> void:
+	if l.moat_bed_y < 1:
+		_fail(
+			"FAIL seed %d dug the moat bed to Y=%d — Y0 is the world floor"
+			% [seed_no, l.moat_bed_y]
+		)
+		return
+	var inner := l.moat_inner_rect()
+	for step: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var at := _moat_ray_start(l, step)
+		if at.x < 0:
+			_fail("FAIL seed %d: no place to sample the moat off the %s side" % [seed_no, step])
+			return
+		var prev := deck
+		var reached := false
+		while not inner.has_point(at):
+			if _vox(at.x, 0, at.y) == VoxelMaterial.AIR:
+				_fail("FAIL seed %d cut the world floor away under the moat at %s"
+					% [seed_no, at])
+				return
+			var floor_y := _moat_floor_y(at, l)
+			if floor_y > prev:
+				_fail(
+					"FAIL seed %d: the moat bed rises from Y=%d to Y=%d at %s on the way in"
+					% [seed_no, prev, floor_y, at]
+				)
+				return
+			if prev - floor_y > 1:
+				_fail(
+					"FAIL seed %d has a %d voxel drop into the moat at %s — the counterscarp"
+					% [seed_no, prev - floor_y, at]
+					+ " has to be walkable steps"
+				)
+				return
+			reached = reached or floor_y == l.moat_bed_y
+			prev = floor_y
+			at += step
+		if not reached:
+			_fail(
+				"FAIL seed %d: the ray toward %s never reached the planned bed Y=%d"
+				% [seed_no, step, l.moat_bed_y]
+			)
+			return
+
+
+## Where to start a cross-section on one side of the ditch: on the lip, somewhere along the
+## side that the bridge does not cross. The middle is the honest place to sample, so it is
+## tried first and the quarter points are the fallback for the side the gate faces.
+func _moat_ray_start(l: CastleLayout, step: Vector2i) -> Vector2i:
+	var outer := l.moat_rect
+	var along := outer.size.y if step.x != 0 else outer.size.x
+	var lo := outer.position.y if step.x != 0 else outer.position.x
+	var clear := l.causeway_hw + 3
+	var axis := l.gate_center.y if step.x != 0 else l.gate_center.x
+	for f: float in [0.5, 0.25, 0.75]:
+		var t := lo + int(float(along) * f)
+		if absi(t - axis) <= clear:
+			continue
+		if step.x > 0:
+			return Vector2i(outer.position.x, t)
+		if step.x < 0:
+			return Vector2i(outer.end.x - 1, t)
+		if step.y > 0:
+			return Vector2i(t, outer.position.y)
+		return Vector2i(t, outer.end.y - 1)
+	return Vector2i(-1, -1)
+
+
+## The castle side of the ditch is masonry from the bed to the lip, with nothing behind it:
+## an opening here would be a hole from the moat straight into the dungeon.
+func _check_moat_scarp(seed_no: int, l: CastleLayout, deck: int) -> void:
+	var inner := l.moat_inner_rect()
+	var ashlar := 0
+	var checked := 0
+	for z in range(inner.position.y, inner.end.y):
+		for x in range(inner.position.x, inner.end.x):
+			if x != inner.position.x and x != inner.end.x - 1:
+				if z != inner.position.y and z != inner.end.y - 1:
+					continue
+			for y in range(l.moat_bed_y, deck):
+				checked += 1
+				var id := _vox(x, y, z)
+				if id == VoxelMaterial.AIR:
+					_fail(
+						"FAIL seed %d: the moat scarp at (%d,%d) opens at Y=%d"
+						% [seed_no, x, z, y]
+					)
+					return
+				if id == VoxelMaterial.CASTLE_BLOCK:
+					ashlar += 1
+	if ashlar * 2 < checked:
+		_fail(
+			"FAIL seed %d revetted only %d of %d scarp voxels in ashlar"
+			% [seed_no, ashlar, checked]
+		)
+
+
+## A wet ditch is full to the meadow's level and no higher; a dry one holds no water at all.
+func _check_moat_water(seed_no: int, l: CastleLayout, deck: int) -> void:
+	var outer := l.moat_rect
+	var inner := l.moat_inner_rect()
+	var surface := 0
+	var spill := 0
+	var below := 0
+	for z in range(outer.position.y, outer.end.y):
+		for x in range(outer.position.x, outer.end.x):
+			if inner.has_point(Vector2i(x, z)):
+				continue
+			if _vox(x, deck, z) == VoxelMaterial.WATER:
+				surface += 1
+			if _vox(x, deck + 1, z) == VoxelMaterial.WATER:
+				spill += 1
+			if _vox(x, l.moat_bed_y, z) == VoxelMaterial.WATER:
+				below += 1
+	print(
+		"  moat seed %d: %s, bed Y=%d, %d water columns at the deck"
+		% [seed_no, "wet" if l.moat_wet else "dry", l.moat_bed_y, surface]
+	)
+	if spill > 0:
+		_fail("FAIL seed %d has %d water voxels above the deck" % [seed_no, spill])
+		return
+	if below > 0:
+		_fail(
+			"FAIL seed %d flooded the moat bed itself at %d columns — the bed is the floor"
+			% [seed_no, below]
+		)
+		return
+	if l.moat_wet:
+		## A ring 12..18 voxels thick around a fortress is thousands of columns; a tenth of
+		## the ring's area is a floor, not a target.
+		var ring := outer.size.x * outer.size.y - inner.size.x * inner.size.y
+		if surface * 10 < ring:
+			_fail(
+				"FAIL seed %d flooded only %d of %d moat columns" % [seed_no, surface, ring]
+			)
+	elif surface > 0:
+		_fail("FAIL seed %d left %d water columns in a dry moat" % [seed_no, surface])
+
+
+## The crossing: planking over the gap and the drawbridge's winch posts standing over it.
+## That the deck is *walkable* is `_check_causeway`'s job — it walks the same line.
+func _check_bridge_voxels(seed_no: int, l: CastleLayout) -> void:
+	var edge: Vector2i = l.causeway_line[l.causeway_line.size() - 1]
+	var planks := 0
+	var leaf := 0
+	for s in range(l.bridge_from, l.bridge_to + 1):
+		var at := edge + l.gate_dir * s
+		var y := _surface_y(at)
+		if _vox(at.x, y, at.y) != VoxelMaterial.TIMBER:
+			_fail(
+				"FAIL seed %d: station %d of the bridge is %d at Y=%d, not planking"
+				% [seed_no, s, _vox(at.x, y, at.y), y]
+			)
+			return
+		planks += 1
+		if l.drawbridge_rect.has_point(at):
+			leaf += 1
+	if leaf < 2:
+		_fail("FAIL seed %d planked no drawbridge leaf into the crossing" % seed_no)
+		return
+	print(
+		"  bridge seed %d: %d planked stations %d..%d, %d of them the leaf"
+		% [seed_no, planks, l.bridge_from, l.bridge_to, leaf]
+	)
+
+
+## Topmost solid voxel of a column in the ditch. Water is what the moat holds, not what it
+## stands on, so the terrace check has to look past it.
+func _moat_floor_y(at: Vector2i, l: CastleLayout) -> int:
+	for y in range(PROBE_Y_MAX, l.moat_bed_y - 1, -1):
+		var id := _vox(at.x, y, at.y)
+		if id != VoxelMaterial.AIR and id != VoxelMaterial.WATER:
+			return y
+	_fail("FAIL the moat column %s has no floor above Y=%d" % [at, l.moat_bed_y])
+	return l.moat_bed_y
+
+
+## Gardens, as planted rather than as planned: walks, hedges or planters where the plot says
+## there are some, props standing in them, and nothing laid out on top of the fortress.
+func _check_gardens(what: String, res: Dictionary, l: CastleLayout) -> void:
+	if l.gardens.is_empty():
+		_fail("FAIL %s laid out no garden at all — even a tight reserve has a bailey" % what)
+		return
+	var keep := _volume
+	_volume = (res["generator"] as DistrictGenerator).get_offline_volume()
+	for g: CastleGarden in l.gardens:
+		if g.kind != CastleGarden.KIND_PRIVY and g.rect.intersects(l.plinth_rect):
+			_fail("FAIL %s put the %s garden %s on the fortress" % [what, g.kind_name(), g.rect])
+			break
+		if l.has_moat and g.kind != CastleGarden.KIND_PRIVY and g.rect.intersects(l.moat_rect):
+			_fail("FAIL %s put the %s garden %s in the ditch" % [what, g.kind_name(), g.rect])
+			break
+		var counts := _garden_counts(g)
+		_garden_props += int(counts["props"])
+		if int(counts["props"]) < 4:
+			_fail(
+				"FAIL %s: the %s garden %s got %d props stamped into it"
+				% [what, g.kind_name(), g.rect, counts["props"]]
+			)
+			break
+		if int(counts["ground"]) < g.rect.size.x:
+			_fail(
+				"FAIL %s: the %s garden %s has %d voxels of walk, bed or planter"
+				% [what, g.kind_name(), g.rect, counts["ground"]]
+			)
+			break
+		## An orchard is its trees, and it lays its lanes over the same ground it plants —
+		## so it is exactly the plot that can come out as a fenced lawn with gravel stripes
+		## and nothing growing on it, while still passing every count above.
+		if g.style == GardenComposer.Style.ORCHARD and int(counts["trunks"]) < 4:
+			_fail(
+				"FAIL %s: the orchard %s grew %d trees"
+				% [what, g.rect, counts["trunks"]]
+			)
+			break
+		if g.style == GardenComposer.Style.PARTERRE and int(counts["hedge"]) == 0:
+			_fail("FAIL %s: the parterre %s has no clipped hedge" % [what, g.rect])
+			break
+	_volume = keep
+
+
+## Props and made ground inside one plot. Gravel and soil are the parterre's walks and beds,
+## planter its raised boxes, yew its hedges — one of them is there in every style.
+func _garden_counts(g: CastleGarden) -> Dictionary:
+	var props := 0
+	var ground := 0
+	var hedge := 0
+	var trunks := 0
+	for z in range(g.rect.position.y, g.rect.end.y):
+		for x in range(g.rect.position.x, g.rect.end.x):
+			## Counted per column, not per voxel: a trunk is five to seven of these and
+			## the question here is how many trees stand in the plot.
+			if _vox(x, g.surface_y + 1, z) == VoxelMaterial.BARK:
+				trunks += 1
+			for y in range(g.surface_y, g.surface_y + 6):
+				var id := _vox(x, y, z)
+				if RoomPropCatalog.is_prop_id(id) or id == VoxelMaterial.PROP_FOOTPRINT:
+					props += 1
+				elif id == VoxelMaterial.YEW:
+					ground += 1
+					hedge += 1
+				elif (
+					id == VoxelMaterial.GRAVEL
+					or id == VoxelMaterial.DIRT
+					or id == VoxelMaterial.PLANTER
+				):
+					ground += 1
+	return {"props": props, "ground": ground, "hedge": hedge, "trunks": trunks}
 
 
 # ---------------------------------------------------------------------------
@@ -2350,9 +2661,10 @@ func _headroom(at: Vector2i, surface_y: int) -> int:
 ## Column of a room a body can stand in, nearest its middle. Rooms legitimately contain a
 ## stair's solid wedge, so the middle itself is not always free.
 ##
-## The four neighbours have to be standable too: geodesic clearance is zero in any column
-## touching an unwalkable one, and the pedestrian profile needs one cell of it, so a probe
-## tucked against a partition would be a column nav refuses to stand in.
+## The whole 3×3 around it has to be standable too: geodesic clearance is Chebyshev, so it is
+## zero in any column touching an unwalkable one — a diagonal neighbour counts — and the
+## pedestrian profile needs one cell of it. A probe tucked against a partition, or beside the
+## corner of a chest, is a column nav refuses to stand in.
 func _room_probe(f: CastleFloor, room: Rect2i) -> Vector2i:
 	return _probe_in(room, f.floor_y)
 
@@ -2367,15 +2679,7 @@ func _probe_in(room: Rect2i, floor_y: int) -> Vector2i:
 	var best_d := 1 << 30
 	for z in range(room.position.y, room.end.y):
 		for x in range(room.position.x, room.end.x):
-			if not _stands_on(Vector2i(x, z), floor_y):
-				continue
-			if not _stands_on(Vector2i(x - 1, z), floor_y):
-				continue
-			if not _stands_on(Vector2i(x + 1, z), floor_y):
-				continue
-			if not _stands_on(Vector2i(x, z - 1), floor_y):
-				continue
-			if not _stands_on(Vector2i(x, z + 1), floor_y):
+			if not _stands_clear(Vector2i(x, z), floor_y):
 				continue
 			var dx := x - mid.x
 			var dz := z - mid.y
@@ -2384,6 +2688,15 @@ func _probe_in(room: Rect2i, floor_y: int) -> Vector2i:
 				best_d = d
 				best = Vector2i(x, z)
 	return best
+
+
+## Standable with a cell of geodesic clearance all round — nav's pedestrian radius.
+func _stands_clear(at: Vector2i, floor_y: int) -> bool:
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			if not _stands_on(at + Vector2i(dx, dz), floor_y):
+				return false
+	return true
 
 
 ## Centre of a district-local voxel in world metres, the way an agent stands in it.

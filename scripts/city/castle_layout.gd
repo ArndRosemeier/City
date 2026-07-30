@@ -94,7 +94,73 @@ var causeway_line: Array[Vector2i] = []
 ## Road cell centre the approach track is aimed at.
 var road_target: Vector2i = Vector2i.ZERO
 
+## Ditch round the plinth. Rolled per seed and dropped when the reserve cannot spare the
+## ring, so `has_moat` false is an ordinary castle rather than a failure.
+var has_moat: bool = false
+## Outer footprint of the ditch. Its inner void is `plinth_rect.grow(moat_berm)`, so the
+## ring is `moat_width` columns thick all the way round.
+var moat_rect: Rect2i = Rect2i()
+var moat_width: int = 0
+## Flat ground left between the plinth's toe and the water's edge.
+var moat_berm: int = 0
+## Voxels of dig below the street deck. The bed can never reach bedrock at Y0.
+var moat_depth: int = 0
+## Whether the ditch was flooded. A dry moat is terraced the same way.
+var moat_wet: bool = false
+## Y of the moat floor — the topmost solid voxel a body standing in the ditch is on.
+var moat_bed_y: int = 0
+## Stations of the causeway the bridge spans, inclusive. Empty without a moat.
+var bridge_from: int = 0
+var bridge_to: int = 0
+## Footprint of the drawbridge leaf at the castle-side abutment.
+var drawbridge_rect: Rect2i = Rect2i()
+
+## Gardens laid out around and inside the fortress, in plan order.
+var gardens: Array[CastleGarden] = []
+
 var towers: Array[CastleTower] = []
+
+
+## Inner void of the ditch: the berm and everything it rings. Columns inside it are never
+## carved, which is what keeps the plinth's toe dry.
+func moat_inner_rect() -> Rect2i:
+	return plinth_rect.grow(moat_berm)
+
+
+func gardens_of(kind: int) -> Array[CastleGarden]:
+	var out: Array[CastleGarden] = []
+	for g: CastleGarden in gardens:
+		if g.kind == kind:
+			out.append(g)
+	return out
+
+
+func garden_describe() -> String:
+	if gardens.is_empty():
+		return "gardens none"
+	var parts: Array[String] = []
+	for g: CastleGarden in gardens:
+		parts.append(g.describe())
+	return "gardens %d [%s]" % [gardens.size(), ", ".join(parts)]
+
+
+func moat_describe() -> String:
+	if not has_moat:
+		return "moat none"
+	return (
+		"moat %s w=%d berm=%d depth=%d bed=%d %s bridge=%d..%d leaf=%s"
+		% [
+			moat_rect,
+			moat_width,
+			moat_berm,
+			moat_depth,
+			moat_bed_y,
+			"wet" if moat_wet else "dry",
+			bridge_from,
+			bridge_to,
+			drawbridge_rect,
+		]
+	)
 
 
 func keep_storeys() -> int:
@@ -280,6 +346,11 @@ func matches(other: CastleLayout) -> bool:
 		return false
 	if not crown_stair.matches(other.crown_stair):
 		return false
+	if gardens.size() != other.gardens.size():
+		return false
+	for i in range(gardens.size()):
+		if not (gardens[i] as CastleGarden).matches(other.gardens[i]):
+			return false
 	for i in range(towers.size()):
 		var a: CastleTower = towers[i]
 		var b: CastleTower = other.towers[i]
@@ -318,6 +389,16 @@ func matches(other: CastleLayout) -> bool:
 		and causeway_run == other.causeway_run
 		and causeway_line == other.causeway_line
 		and road_target == other.road_target
+		and has_moat == other.has_moat
+		and moat_rect == other.moat_rect
+		and moat_width == other.moat_width
+		and moat_berm == other.moat_berm
+		and moat_depth == other.moat_depth
+		and moat_wet == other.moat_wet
+		and moat_bed_y == other.moat_bed_y
+		and bridge_from == other.bridge_from
+		and bridge_to == other.bridge_to
+		and drawbridge_rect == other.drawbridge_rect
 		and dungeon_y0 == other.dungeon_y0
 		and dungeon_y1 == other.dungeon_y1
 		and dungeon_levels == other.dungeon_levels
@@ -338,7 +419,7 @@ func describe() -> String:
 			+ " gate=%s dir=%s %dx%d towers=%d (corner=%d mid=%d gate=%d) top=%d"
 			+ " causeway run=%d width=%d keep=%s"
 			+ " storeys=%d hall=%d roof=%d rooms=%d doors=%d flights=%d"
-			+ " leaves=%d (tree=%d loop=%d) | %s"
+			+ " leaves=%d (tree=%d loop=%d) | %s | %s | %s"
 		)
 		% [
 			plateau_rect,
@@ -368,6 +449,8 @@ func describe() -> String:
 			doorways().size(),
 			doorway_link_count(CastleDoorway.LINK_TREE),
 			doorway_link_count(CastleDoorway.LINK_LOOP),
+			moat_describe(),
+			garden_describe(),
 			dungeon_describe(),
 		]
 	)

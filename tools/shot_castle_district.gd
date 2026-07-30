@@ -2,8 +2,9 @@
 ## views the fortress has to survive — the whole thing from the air, the causeway seen from
 ## street level, the gatehouse, the bailey, a wall/tower elevation, the Phase 2 interiors
 ## (the keep from the bailey, the great hall, a stairwell, an ordinary room and the rampart
-## from the crown landing) and the Phase 3 dungeon: every way down this seed happens to have,
-## a wide hall, a cramped cell, a tall vault, a corridor and a flight between levels.
+## from the crown landing), the ditch and its drawbridge, the formal gardens, and the Phase 3
+## dungeon: every way down this seed happens to have, a wide hall, a cramped cell, a tall
+## vault, a corridor and a flight between levels.
 ##
 ## Every file is named for the world seed, because the dungeon's whole point is that two seeds
 ## differ: run this two or three times over and compare the same view side by side.
@@ -16,6 +17,9 @@ extends Node
 const VOX := 0.5
 ## Standing eye height, in metres above the walking surface.
 const EYE := 1.7
+## Mid-morning: long enough shadows for the plinth's batter and the moat's terraces to
+## read, high enough that the meadow is not in the fortress's own shadow.
+const SHOT_HOUR := 9.5
 ## Columns in from a chamber's corner a camera stands, so it is not inside the wall it is
 ## photographing and has the clearance the chamber's own floor plan promises.
 const INSET := 3
@@ -49,6 +53,7 @@ func _ready() -> void:
 	## own body is all the frame would contain.
 	_hide_meshes(walker)
 	_hide_overlays(city)
+	_stop_the_clock(city)
 
 	var coord := city.spawn_district_coord
 	var theme := DistrictTheme.for_district(city.city_seed, coord)
@@ -219,10 +224,71 @@ func _ready() -> void:
 		_png("rampart")
 	)
 
+	await _shoot_moat(walker, coord, layout, deck)
+	await _shoot_gardens(walker, coord, layout)
 	await _shoot_dungeon(walker, coord, layout)
 
 	print("RESULT: OK")
 	get_tree().quit(0)
+
+
+# ---------------------------------------------------------------------------
+# Moat and gardens
+# ---------------------------------------------------------------------------
+
+## The ditch from the bank and the crossing from below. Both frames are missing on a seed
+## that rolled no moat, which is the record of the roll — same as the dungeon shots.
+func _shoot_moat(
+	walker: Node3D, coord: Vector2i, layout: CastleLayout, deck: float
+) -> void:
+	if not layout.has_moat:
+		print("moat: none on seed %d" % _seed)
+		return
+	print("moat: %s" % layout.moat_describe())
+	var out := Vector3(layout.gate_dir.x, 0.0, layout.gate_dir.y)
+	var side := Vector3(-out.z, 0.0, out.x)
+	var edge := _at(coord, layout.causeway_line[layout.causeway_line.size() - 1], 0)
+	var span := float(layout.bridge_from + layout.bridge_to) * 0.5 * VOX
+	var over := edge + out * span
+	## Out on the meadow past the far lip, off the causeway's axis and well above head
+	## height, looking down at the bed. A ditch is below the ground it is cut into, so from
+	## standing height the near lip hides the whole thing and the frame is a lawn.
+	var back := float(layout.moat_width) * VOX + 14.0
+	var across := float(layout.moat_width + layout.causeway_hw + 6) * VOX
+	await _shoot_near(
+		walker,
+		over + out * back + side * across + Vector3(0.0, deck + 16.0, 0.0),
+		Vector3(over.x, float(layout.moat_bed_y) * VOX, over.z),
+		_png("moat")
+	)
+	## Down in the ditch beside the piers, looking up at the leaf and its winch posts.
+	await _shoot_near(
+		walker,
+		over + side * float(layout.causeway_hw + 6) * VOX
+			+ Vector3(0.0, float(layout.moat_bed_y) * VOX + EYE, 0.0),
+		Vector3(over.x, deck + float(layout.moat_depth) * VOX + 8.0, over.z),
+		_png("drawbridge")
+	)
+
+
+## One plot of each kind, seen down its long axis from just outside the railing. Two
+## parterres would be the same picture twice, so only the first of a kind is shot.
+func _shoot_gardens(walker: Node3D, coord: Vector2i, layout: CastleLayout) -> void:
+	print("gardens: %s" % layout.garden_describe())
+	var shot: Dictionary[int, bool] = {}
+	for g: CastleGarden in layout.gardens:
+		if shot.has(g.kind):
+			continue
+		shot[g.kind] = true
+		var centre := _at(coord, _rect_centre(g.rect), g.surface_y)
+		var eye := float(g.surface_y) * VOX + EYE
+		var reach := float(g.rect.size.y) * VOX * 0.5
+		await _shoot_near(
+			walker,
+			Vector3(centre.x, eye + 2.5, centre.z - reach - 5.0),
+			Vector3(centre.x, eye, centre.z),
+			_png("garden_%s" % g.kind_name())
+		)
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +514,19 @@ func _crown_along(layout: CastleLayout) -> Vector3:
 	var west := walk.x - w.position.x
 	var east := w.end.x - 1 - walk.x
 	return Vector3(-1.0 if west > east else 1.0, 0.0, 0.0)
+
+
+## A full day is 420 s and this tool takes five minutes of settles, so left running the
+## outdoor half of the set drifts into the dark and photographs a black meadow. Stretching the
+## day out past the run and then pinning the hour freezes the sun where every frame gets it.
+func _stop_the_clock(city: CityRoot) -> void:
+	var cycle := city.get_node_or_null("DayNightCycle")
+	if cycle == null:
+		push_error("FAIL no DayNightCycle to pin the sun with")
+		return
+	cycle.set("day_length_sec", 1_000_000.0)
+	cycle.call("set_hour", SHOT_HOUR)
+	print("sun pinned to %.1f h" % SHOT_HOUR)
 
 
 ## The HUD, the radar, the build slots and the error popup all sit in front of the camera. The

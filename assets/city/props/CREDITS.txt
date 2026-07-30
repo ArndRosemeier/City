@@ -1,11 +1,17 @@
-Room prop meshes (multi-cell voxel footprints) — 105 pieces
+Prop meshes (multi-cell voxel footprints) — 174 pieces (furniture 104, authored 1, graveyard 31, nature 38)
 
-Scale: Kenney chair height → 1.0 m; city voxels are 0.5 m.
-A single bed is several cells long — not crushed into one voxel.
+City voxels are 0.5 m. Each pack is scaled by one anchor model:
+- furniture: chair -> 1.0 m
+- graveyard: ironFence -> 1.6 m
+- nature: flower_purpleA -> 0.45 m
 
-Sources
-- Kenney Furniture Kit (CC0 1.0) — https://kenney.nl/assets/furniture-kit
-  OpenGameArt mirror; scaled by tools/gen_room_prop_catalog.py
+Sources (all CC0 1.0, OpenGameArt mirrors, scaled by tools/gen_room_prop_catalog.py)
+- Kenney Furniture Kit — https://kenney.nl/assets/furniture-kit
+- Kenney Graveyard Kit — https://kenney.nl/assets/graveyard-kit
+- Kenney Nature Kit — https://kenney.nl/assets/nature-kit
 - barrel.obj — project-authored lathed cylinder
+
+Stems ending in _z are quarter-turned copies generated here, because the voxel
+block library has one mesh per id and no rotation.
 
 Regenerate: python tools/gen_room_prop_catalog.py

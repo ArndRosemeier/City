@@ -149,12 +149,90 @@ Parks (`scripts/city/park_composer.gd`) are laid out as landscaping rather than 
 with props on it: a meandering tree-lined promenade, a strolling loop just inside the
 border, a pond scaled to the park with a stone rim and a spur path to the water, clustered
 groves over worn earth, hedges framing the edge, and a few flower beds and benches beside
-the walkways. Planting only ever lands on lawn voxels, which keeps it off the paths and
+the walkways. A large park also gets one formal quarter from the shared `GardenComposer`
+(see below). Planting only ever lands on lawn voxels, which keeps it off the paths and
 out of the water automatically.
 
 Checks: `tools/test_voxel_surface_shader.gd` (run with `--script`),
 `tools/test_district_themes.tscn` and `tools/shot_city_parks.tscn` (run as scenes — the
 city scripts need the `CityProfiler` autoload).
+
+## Castle districts
+
+A castle tile is one open reserve with no lots and no interior roads, filled by
+`scripts/city/castle_composer.gd`: a battered plinth, curtain walls and towers, a gatehouse,
+a causeway climbing to it, a keep, and a dungeon under the whole plate. Two of those parts
+are rolled per seed rather than always built.
+
+**The moat.** It is rolled at the top of `_plan()`, *before* the site is picked, because the
+ring costs the site another `berm + width` of clearance all round — a reserve too tight for
+that gets no ditch, and `_report()` says so. The vertical budget decides the rest: bedrock
+owns Y0, diggable stone is Y1..5 and the meadow deck is Y6, so the bed is at most five voxels
+down. Each column is cut as a terraced counterscarp of one-voxel steps (anything that falls
+in can walk back out towards the city), a flat bed of dirt or gravel, and a sheer
+`CASTLE_BLOCK` revetment against the plinth's toe, which stays unclimbable because that is
+what the ditch is for. A wet moat is flooded flush with the meadow and only into columns that
+are still air, so the bridge piers keep their feet dry; a pedestrian wades one voxel, so water
+is a real barrier while the player can still swim it.
+
+**The crossing.** The gate sits eighteen voxels up the plinth and the causeway descends over
+fifty-four, so there is no drawbridge at the gate. The ramp crosses the ditch on masonry piers
+carrying a `TIMBER` deck that follows its own slope, and the lifting leaf sits at the
+castle-side abutment with two stone winch posts and a chain down to its free end. Nothing
+moves — the gear is what makes it read as a drawbridge.
+
+**The gardens.** `scripts/city/garden_composer.gd` is a plain voxel composer, so the castle
+and the city parks share it. `PARTERRE` lays a gravel walk ring and cross axes, four quadrant
+beds inside clipped yew hedges planted in a figure (a bloom border, a saltire of a second
+bloom, a bush at the crossing), a basin or a statue at the centre, topiary, seats, lanterns
+and an iron railing with a gate. `ORCHARD` plants tree rows on lawn and mows its gravel lanes
+*between* them. `RAISED` is the same geometry for paved ground: the beds become planter boxes
+on the flags instead of dug soil. The castle gets two parterres flanking the fortress, an
+orchard behind it — all outside any ditch — and one privy garden on the bailey flags;
+`ParkComposer.compose_large` puts a formal quarter in a big city park.
+
+Checks: `tools/test_castle_district.tscn`, which bakes several seeds and reads the voxels
+back: the bed never reaches bedrock, the counterscarp rises in single steps, the scarp is
+solid to the deck, a wet ditch has water in its columns and none above the deck, the deck is
+timber with a leaf on it, gardens land off the fortress and out of the ditch and actually grew
+hedges and trees, every room and vault is still reachable, and the seeds differ in moat and
+garden as well as in dungeon. Looks: `tools/shot_castle_district.tscn`, which needs a castle
+to spawn in and pins the sun so the five-minute set does not drift into the dark:
+
+```
+powershell -Command "& '.\tools\run_test.ps1' -Scene shot_castle_district -Rendered
+  -GodotArgs @('--spawn-theme=castle','--city-seed=7')"
+```
+
+## Prop kit
+
+`tools/gen_room_prop_catalog.py` builds every prop mesh and `scripts/city/room_prop_catalog.gd`
+from three Kenney CC0 packs — Furniture indoors, Graveyard and Nature outdoors. Furniture stays
+first in `PACKS` so a new pack appends ids instead of renumbering the indoor kit. The outdoor
+packs are curated by exact stem (`--list` inventories what is in an archive and how big it comes
+out), get their own scale anchor and axis cap, and are emitted with `_z` twins for anything
+directional: the block library has one mesh per id and no rotation, so a fence that runs the
+other way is a second id.
+
+```
+python tools/gen_room_prop_catalog.py --list   # inventory the packs, write nothing
+python tools/gen_room_prop_catalog.py          # regenerate meshes + catalog
+```
+
+The script also patches `PROP_FIRST`, `PROP_LAST`, `PROP_FOOTPRINT`, `DOOR` and `COUNT` into
+`scripts/city/voxel_material.gd` and `native/city_voxel/src/materials.rs`, so **a regeneration
+is followed by a DLL rebuild** (`cargo build --release --manifest-path
+native/city_voxel/Cargo.toml`, then copy the binary over `addons/city_voxel/bin/city_voxel.dll`)
+or GDScript and native disagree about what a voxel id means.
+
+The hard limit is navigation, not the voxel format. The type channel is 16-bit, but the nav
+bake reads a byte per cell and `NavSolidity.TABLE_SIZE` is 256 entries — one id past that
+aliases onto another material's passability, and the failure mode is a district that bakes with
+no walkable spans at all rather than a wall in the wrong place. The generator refuses to write
+a catalog that would cross it, and `tools/test_room_prop_catalog.tscn` re-checks the committed
+result: every stem has a mesh, the ids are one contiguous run, both material tables agree with
+the catalog, every family resolves to a surface spec, each `_z` twin is its original's
+footprint turned, and the whole id space still fits in the nav table.
 
 ## Building interiors
 

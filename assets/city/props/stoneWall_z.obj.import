@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://fuw378wgv8vh"
+path="res://.godot/imported/stoneWall_z.obj-5f33b897b586d8f1855614f27042ac4a.mesh"
+
+[deps]
+
+files=["res://.godot/imported/stoneWall_z.obj-5f33b897b586d8f1855614f27042ac4a.mesh"]
+
+source_file="res://assets/city/props/stoneWall_z.obj"
+dest_files=["res://.godot/imported/stoneWall_z.obj-5f33b897b586d8f1855614f27042ac4a.mesh", "res://.godot/imported/stoneWall_z.obj-5f33b897b586d8f1855614f27042ac4a.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

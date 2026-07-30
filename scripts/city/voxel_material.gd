@@ -99,19 +99,22 @@ const FRACTAL_BAND_14 := 72
 const FRACTAL_BAND_15 := 73
 ## Mandelbrot set body (interior) — dark deck, not the glowing plaza.
 const FRACTAL_INTERIOR := 74
+## Sawn planks: bridge decks and the drawbridge leaf. Walkable like a pavement and
+## destructible like the rest of a built structure — a bridge you can cut is the point.
+const TIMBER := 75
 ## Room prop kit — see RoomPropCatalog / tools/gen_room_prop_catalog.py.
-const PROP_FIRST := 75
-const PROP_LAST := 179
-const PROP_COUNT := 105
+const PROP_FIRST := 76
+const PROP_LAST := 249
+const PROP_COUNT := 174
 ## Invisible solid filler for multi-cell prop footprints (nav / occupancy).
-const PROP_FOOTPRINT := 180
+const PROP_FOOTPRINT := 250
 ## Closed door plug — solid barrier in a doorway clear (E-toggle; open restores AIR).
-const DOOR := 181
+const DOOR := 251
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
-const COUNT := 182
+const COUNT := 252
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -174,6 +177,7 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == FRACTAL_INTERIOR
 		or id == GLASS
 		or id == GLASS_LIT
+		or id == TIMBER
 		or is_fractal_band(id)
 	)
 

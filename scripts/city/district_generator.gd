@@ -684,10 +684,14 @@ func open_space_bounds() -> Array[AABB]:
 		## one box covers the whole fortress. The keep is the tallest of them: an 18-voxel
 		## plinth, five storeys at nine voxels each and a corner turret over that, so the box
 		## has to reach as high as the hill sculpt's does.
+		##
+		## It starts at the world floor rather than at the deck because the castle digs as
+		## well as builds: the dungeon is carved inside the plinth and the moat is cut
+		## below the meadow, and neither is editable in a box that begins at ground level.
 		out.append(
 			AABB(
-				Vector3(ox + lc.position.x * cell_size, y0, oz + lc.position.y * cell_size),
-				Vector3(lc.size.x * cell_size, 90.0, lc.size.y * cell_size)
+				Vector3(ox + lc.position.x * cell_size, 0.0, oz + lc.position.y * cell_size),
+				Vector3(lc.size.x * cell_size, y0 + 90.0, lc.size.y * cell_size)
 			)
 		)
 		return out

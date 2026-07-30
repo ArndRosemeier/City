@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://bbor1kjfu0gwl"
+path="res://.godot/imported/cross.obj-8c9363584e343fd1ff3c39d73de29dad.mesh"
+
+[deps]
+
+files=["res://.godot/imported/cross.obj-8c9363584e343fd1ff3c39d73de29dad.mesh"]
+
+source_file="res://assets/city/props/cross.obj"
+dest_files=["res://.godot/imported/cross.obj-8c9363584e343fd1ff3c39d73de29dad.mesh", "res://.godot/imported/cross.obj-8c9363584e343fd1ff3c39d73de29dad.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

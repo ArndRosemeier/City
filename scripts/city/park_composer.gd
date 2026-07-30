@@ -6,6 +6,7 @@ var brush: CityBrush
 var rng: RandomNumberGenerator
 var ground_y: int = 1
 var stamper: TreeStamper
+var garden: GardenComposer
 
 
 ## Main promenade / loop path width in voxels (0.5 m each).
@@ -13,6 +14,11 @@ const PROMENADE_W := 5
 const LOOP_W := 3
 ## How far the loop path sits inside the park border.
 const LOOP_INSET := 7
+## Side of the formal quarter dropped into a large park, and the inset that keeps it
+## inside the loop path rather than straddling it.
+const FORMAL_SIDE_MIN := GardenComposer.PARTERRE_MIN
+const FORMAL_SIDE_MAX := 34
+const FORMAL_INSET := LOOP_INSET + LOOP_W + 2
 
 
 func _stamper() -> TreeStamper:
@@ -42,6 +48,7 @@ func compose_large(min_v: Vector3i, max_v: Vector3i) -> void:
 	_edge_planting(min_v, max_v)
 	_flower_beds(min_v, max_v)
 	_benches(min_v, max_v, promenade, along_x)
+	_formal_quarter(min_v, max_v)
 
 
 func compose_pocket(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -411,20 +418,45 @@ func _benches(
 		if x < min_v.x + 3 or z < min_v.z + 3 or x >= max_v.x - 4 or z >= max_v.z - 4:
 			i += step
 			continue
-		if along_x:
-			if _area_is_lawn(x, z, 1, 3):
-				brush.fill_box(
-					Vector3i(x, ground_y + 1, z),
-					Vector3i(x + 1, ground_y + 2, z + 3),
-					VoxelMaterial.PLANTER
-				)
-		elif _area_is_lawn(x, z, 3, 1):
-			brush.fill_box(
-				Vector3i(x, ground_y + 1, z),
-				Vector3i(x + 3, ground_y + 2, z + 1),
-				VoxelMaterial.PLANTER
-			)
+		## A promenade bench is a real seat now, turned to face the path it stands beside.
+		var stem := "benchStone_z" if along_x else "benchStone"
+		var size := RoomPropCatalog.size_of_stem(stem)
+		if _area_is_lawn(x, z, size.x, size.z):
+			RoomPropKit.stamp_brush(brush, Vector3i(x, ground_y + 1, z), stem)
 		i += step
+
+
+## One corner of a big park is laid out formally — the same parterre the castle gets, so
+## the walk through a park ends somewhere composed instead of in more scattered lawn.
+func _formal_quarter(min_v: Vector3i, max_v: Vector3i) -> void:
+	var side := mini(
+		FORMAL_SIDE_MAX,
+		mini(max_v.x - min_v.x, max_v.z - min_v.z) / 2 - FORMAL_INSET
+	)
+	if side < FORMAL_SIDE_MIN:
+		return
+	## Try each corner: the pond and the promenade have already claimed their ground, and
+	## turfing over either would undo them.
+	var corners: Array[Vector2i] = [
+		Vector2i(min_v.x + FORMAL_INSET, min_v.z + FORMAL_INSET),
+		Vector2i(max_v.x - FORMAL_INSET - side, min_v.z + FORMAL_INSET),
+		Vector2i(min_v.x + FORMAL_INSET, max_v.z - FORMAL_INSET - side),
+		Vector2i(max_v.x - FORMAL_INSET - side, max_v.z - FORMAL_INSET - side),
+	]
+	var first := rng.randi() % corners.size()
+	for i in range(corners.size()):
+		var at: Vector2i = corners[(first + i) % corners.size()]
+		if not _area_is_lawn(at.x, at.y, side, side):
+			continue
+		if garden == null:
+			garden = GardenComposer.new()
+			garden.brush = brush
+			garden.rng = rng
+			garden.stamper = _stamper()
+		garden.compose(
+			Rect2i(at.x, at.y, side, side), ground_y, GardenComposer.Style.PARTERRE
+		)
+		return
 
 
 func _is_plantable(x: int, z: int) -> bool:
