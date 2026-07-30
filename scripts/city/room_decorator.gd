@@ -359,22 +359,62 @@ func _apply_step(
 
 	_shuffle(slots)
 	var placed := 0
-	var y := volume.ceiling_prop_y() if role == Role.CEILING else volume.prop_y()
-	for slot in slots:
-		if placed >= count:
-			break
-		if reserved.has(slot):
-			continue
+	var guard := maxi(count * 12, slots.size())
+	while placed < count and guard > 0 and not slots.is_empty():
+		guard -= 1
 		var stem := stems[rng.randi() % stems.size()]
-		var at := Vector3i(slot.x, y, slot.y)
-		if brush.get_vox(at) != VoxelMaterial.AIR:
+		var size := RoomPropKit.size_of(stem)
+		var y := volume.prop_y()
+		if role == Role.CEILING:
+			## Hang multi-cell-tall lamps down from the ceiling course.
+			y = volume.ceiling_prop_y() - size.y + 1
+			y = maxi(y, volume.prop_y())
+		var slot_i := _find_fitting_slot(volume, slots, size, y, stem, reserved)
+		if slot_i < 0:
 			continue
+		var slot: Vector2i = slots[slot_i]
+		var at := Vector3i(slot.x, y, slot.y)
 		if not RoomPropKit.stamp_brush(brush, at, stem, false):
 			continue
 		if role != Role.CEILING:
-			occupied[slot] = true
+			_mark_footprint(occupied, slot, size)
 		placed += 1
 	return placed
+
+
+func _find_fitting_slot(
+	volume: RoomVolume,
+	slots: Array[Vector2i],
+	size: Vector3i,
+	y: int,
+	stem: String,
+	reserved: Dictionary
+) -> int:
+	for i in range(slots.size()):
+		var slot: Vector2i = slots[i]
+		if not _footprint_xz_free(volume, slot, size, reserved):
+			continue
+		var at := Vector3i(slot.x, y, slot.y)
+		if RoomPropKit.can_stamp_brush(brush, volume, at, stem, false):
+			return i
+	return -1
+
+
+func _footprint_xz_free(
+	volume: RoomVolume, origin: Vector2i, size: Vector3i, reserved: Dictionary
+) -> bool:
+	for z in range(size.z):
+		for x in range(size.x):
+			var p := origin + Vector2i(x, z)
+			if reserved.has(p) or volume.is_cleared(p) or not volume.contains_xz(p):
+				return false
+	return true
+
+
+func _mark_footprint(occupied: Dictionary, origin: Vector2i, size: Vector3i) -> void:
+	for z in range(size.z):
+		for x in range(size.x):
+			occupied[origin + Vector2i(x, z)] = true
 
 
 func _merged(a: Dictionary, b: Dictionary) -> Dictionary:

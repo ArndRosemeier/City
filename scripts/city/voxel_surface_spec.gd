@@ -54,6 +54,12 @@ static func has_bespoke_shader(id: int) -> bool:
 
 
 static func for_id(id: int) -> VoxelSurfaceSpec:
+	if id == VoxelMaterial.PROP_FOOTPRINT:
+		## Never drawn (empty mesh); keep a cheap stub for library material lookups.
+		var fp := VoxelSurfaceSpec.new()
+		fp.albedo_file = "wood.jpg"
+		fp.tint = Color(0.4, 0.3, 0.2, 1.0)
+		return fp
 	if VoxelMaterial.is_room_prop(id):
 		return _spec_for_room_prop(id)
 	var s := VoxelSurfaceSpec.new()

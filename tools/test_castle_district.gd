@@ -798,10 +798,10 @@ func _check_dungeon_plan(layout: CastleLayout) -> void:
 				var solid := id != VoxelMaterial.AIR
 				if not solid:
 					air += 1
-				elif VoxelMaterial.is_room_prop(id):
+				elif VoxelMaterial.is_prop_furniture(id):
 					props += 1
 				## Furniture is allowed in carved chambers; leftover masonry is not.
-				if code == WANT_AIR and solid and not VoxelMaterial.is_room_prop(id):
+				if code == WANT_AIR and solid and not VoxelMaterial.is_prop_furniture(id):
 					uncut += 1
 					uncut_at = Vector3i(x, y, z)
 				elif code == WANT_SOLID and not solid:
@@ -995,8 +995,8 @@ func _check_dungeon_tall(layout: CastleLayout) -> void:
 		var probe := _vault_probe(v)
 		for y in range(v.floor_y + 1, v.top_y() + 1):
 			var id := _vox(probe.x, y, probe.y)
-			## Room props are allowed; hanging slab / partition stone is not.
-			if id != VoxelMaterial.AIR and not VoxelMaterial.is_room_prop(id):
+			## Room props / footprint fillers are allowed; hanging slab stone is not.
+			if id != VoxelMaterial.AIR and not VoxelMaterial.is_prop_furniture(id):
 				_fail(
 					"FAIL %s has masonry at Y=%d over %s — a slab fragment is hanging in it"
 					% [v.describe(), y, probe]

@@ -103,11 +103,13 @@ const FRACTAL_INTERIOR := 74
 const PROP_FIRST := 75
 const PROP_LAST := 179
 const PROP_COUNT := 105
+## Invisible solid filler for multi-cell prop footprints (nav / occupancy).
+const PROP_FOOTPRINT := 180
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
-const COUNT := 180
+const COUNT := 181
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -231,6 +233,11 @@ static func is_vegetation(id: int) -> bool:
 ## Indoor / room furniture stamps (custom meshes in the block library).
 static func is_room_prop(id: int) -> bool:
 	return id >= PROP_FIRST and id <= PROP_LAST
+
+
+## Visible prop mesh or its invisible multi-cell footprint filler.
+static func is_prop_furniture(id: int) -> bool:
+	return is_room_prop(id) or id == PROP_FOOTPRINT
 
 
 static func is_destructible(id: int) -> bool:

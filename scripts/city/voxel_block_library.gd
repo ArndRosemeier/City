@@ -82,6 +82,8 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 				id, _mesh_slope_45(VoxelMaterial.SLOPE_HIGH_NEG_Z), VoxelMaterial.SLOPE_HIGH_NEG_Z
 			)
 		_:
+			if id == VoxelMaterial.PROP_FOOTPRINT:
+				return _make_prop_footprint_model()
 			if VoxelMaterial.is_room_prop(id):
 				return _make_room_prop_model(id)
 			return _make_cube(id)
@@ -95,6 +97,16 @@ static func _make_room_prop_model(id: int) -> VoxelBlockyModelMesh:
 	var size: Vector3 = e.get("aabb_size", Vector3.ONE)
 	var box := AABB(origin, size)
 	return _mesh_model_prop(id, _mesh_prop(stem), box, walk)
+
+
+## Sibling cell of a multi-cell prop: solid for nav, no mesh (origin draws the whole piece).
+static func _make_prop_footprint_model() -> VoxelBlockyModelMesh:
+	var model := VoxelBlockyModelMesh.new()
+	model.mesh = ArrayMesh.new()
+	model.set_mesh_collision_enabled(0, false)
+	model.culls_neighbors = false
+	model.collision_aabbs = [AABB(Vector3.ZERO, Vector3.ONE)]
+	return model
 
 
 static func _make_cube(id: int) -> VoxelBlockyModelCube:
@@ -604,8 +616,8 @@ static func block_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
-	## Room props are small authored meshes — grain follows the prop, not the street.
-	if VoxelMaterial.is_room_prop(id):
+	## Room props are authored meshes — grain follows the prop, not the street.
+	if VoxelMaterial.is_room_prop(id) or id == VoxelMaterial.PROP_FOOTPRINT:
 		return surface_material(id, true)
 	return surface_material(id, false)
 

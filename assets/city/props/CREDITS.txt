@@ -1,8 +1,11 @@
-Room prop meshes (unit cell 0..1) — 105 pieces
+Room prop meshes (multi-cell voxel footprints) — 105 pieces
+
+Scale: Kenney chair height → 1.0 m; city voxels are 0.5 m.
+A single bed is several cells long — not crushed into one voxel.
 
 Sources
 - Kenney Furniture Kit (CC0 1.0) — https://kenney.nl/assets/furniture-kit
-  OpenGameArt mirror; blockified by tools/gen_room_prop_catalog.py
+  OpenGameArt mirror; scaled by tools/gen_room_prop_catalog.py
 - barrel.obj — project-authored lathed cylinder
 
 Regenerate: python tools/gen_room_prop_catalog.py

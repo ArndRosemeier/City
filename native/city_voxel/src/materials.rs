@@ -42,7 +42,9 @@ pub const FRACTAL_INTERIOR: i32 = 74;
 pub const PROP_FIRST: i32 = 75;
 #[allow(dead_code)]
 pub const PROP_LAST: i32 = 179;
-pub const COUNT: i32 = 180;
+#[allow(dead_code)]
+pub const PROP_FOOTPRINT: i32 = 180;
+pub const COUNT: i32 = 181;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR

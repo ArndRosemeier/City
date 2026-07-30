@@ -6,6 +6,8 @@ extends SceneTree
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const RoomVolumeScript := preload("res://scripts/city/room_volume.gd")
 const RoomDecoratorScript := preload("res://scripts/city/room_decorator.gd")
+const RoomPropKitScript := preload("res://scripts/city/room_prop_kit.gd")
+const RoomPropCatalogScript := preload("res://scripts/city/room_prop_catalog.gd")
 const CastleFloorScript := preload("res://scripts/city/castle_floor.gd")
 const CastleVaultScript := preload("res://scripts/city/castle_vault.gd")
 
@@ -17,6 +19,7 @@ func _initialize() -> void:
 
 	failed = _check_factories(failed)
 	failed = _check_purpose_names(failed)
+	failed = _check_bed_footprint(failed)
 
 	var purposes: Array[int] = [
 		RoomDecoratorScript.Purpose.LIVING_ROOM,
@@ -71,6 +74,7 @@ func _shell_room(brush: CityBrush, volume: RoomVolume) -> void:
 	brush.fill_box(volume.air_min(), volume.air_max(), VoxelMaterial.AIR)
 
 
+## Count origin mesh voxels only (not PROP_FOOTPRINT fillers).
 func _count_props(brush: CityBrush, volume: RoomVolume) -> int:
 	var n := 0
 	var a := volume.air_min()
@@ -81,6 +85,36 @@ func _count_props(brush: CityBrush, volume: RoomVolume) -> int:
 				if VoxelMaterial.is_room_prop(brush.get_vox(Vector3i(x, y, z))):
 					n += 1
 	return n
+
+
+func _check_bed_footprint(failed: bool) -> bool:
+	var bed: Vector3i = RoomPropCatalogScript.size_of_stem("bedSingle")
+	if bed.x < 2 or bed.z < 3:
+		push_error("FAIL bedSingle footprint too small: %s (expected multi-cell)" % bed)
+		failed = true
+	var brush: CityBrush = CityBrushScript.new()
+	brush.use_offline_volume()
+	var volume: RoomVolume = RoomVolumeScript.make(Rect2i(0, 0, 16, 16), 0, 6)
+	_shell_room(brush, volume)
+	var origin := Vector3i(2, volume.prop_y(), 2)
+	if not RoomPropKitScript.stamp_brush(brush, origin, "bedSingle", false):
+		push_error("FAIL bedSingle stamp failed")
+		return true
+	if brush.get_vox(origin) != RoomPropCatalogScript.id_for_stem("bedSingle"):
+		push_error("FAIL bedSingle origin is not the mesh id")
+		failed = true
+	var cells := 0
+	for off in RoomPropKitScript.recipe_cells("bedSingle"):
+		var id := brush.get_vox(origin + off)
+		if not VoxelMaterial.is_prop_furniture(id):
+			push_error("FAIL bed footprint cell empty at %s" % (origin + off))
+			failed = true
+		cells += 1
+	if cells != bed.x * bed.y * bed.z:
+		push_error("FAIL bed cell count %d != %d" % [cells, bed.x * bed.y * bed.z])
+		failed = true
+	print("  bedSingle footprint: %s (%d cells)" % [bed, cells])
+	return failed
 
 
 func _check_factories(failed: bool) -> bool:
@@ -150,7 +184,7 @@ func _check_keep_clear(rng: RandomNumberGenerator, failed: bool) -> bool:
 	for z in range(0, 3):
 		for x in range(4, 6):
 			var id := dec.brush.get_vox(Vector3i(x, volume.prop_y(), z))
-			if VoxelMaterial.is_room_prop(id):
+			if VoxelMaterial.is_prop_furniture(id):
 				push_error("FAIL keep_clear: prop at door apron (%d,%d)" % [x, z])
 				failed = true
 	return failed
@@ -179,7 +213,7 @@ func _check_preserves_stairs(rng: RandomNumberGenerator, failed: bool) -> bool:
 		var col := Vector2i(1 + i, 1)
 		for y in range(volume.prop_y(), volume.floor_y + volume.air_h + 1):
 			var id := dec.brush.get_vox(Vector3i(col.x, y, col.y))
-			if VoxelMaterial.is_room_prop(id):
+			if VoxelMaterial.is_prop_furniture(id):
 				push_error("FAIL preserves_stairs: prop in stair column %s y=%d" % [col, y])
 				failed = true
 	return failed

@@ -2632,7 +2632,9 @@ func _clears_for_room(room: Rect2i, level: int, keep: bool) -> Array[Rect2i]:
 	for d: CastleDoorway in _doorways_on(level, keep):
 		_append_intersection(out, room, _doorway_apron_rect(d))
 	for st: CastleStair in _stairs_on(level, keep):
-		_append_intersection(out, room, st.footprint())
+		## Include the approach / exit apron — same margin the plan keeps clear of
+		## partitions — so a multi-cell bed cannot smother the foot landing.
+		_append_intersection(out, room, st.footprint().grow(LANE_MARGIN))
 	return out
 
 

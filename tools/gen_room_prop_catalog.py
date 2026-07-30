@@ -2,12 +2,14 @@
 """Build the full room-prop kit from Kenney Furniture (CC0) + authored barrel.
 
 Writes:
-  assets/city/props/<stem>.obj     — unit-cell meshes
+  assets/city/props/<stem>.obj     — meshes in voxel units (may span many cells)
   assets/city/props/CREDITS.txt
-  scripts/city/room_prop_catalog.gd — ID table, families, collision AABBs
-  patches COUNT in voxel_material.gd + materials.rs (PROP_FIRST..PROP_LAST)
+  scripts/city/room_prop_catalog.gd — ID table, families, sizes, collision AABBs
+  patches COUNT in voxel_material.gd + materials.rs (PROP_FIRST..PROP_FOOTPRINT)
 
 Skips Kenney architectural fillers (walls/floors/doorways) — those are city voxels.
+
+Scale: Kenney chair height → 1.0 m, voxels are 0.5 m. A single bed lands ~3×2×5 cells.
 """
 
 from __future__ import annotations
@@ -28,6 +30,12 @@ MATERIALS_RS = ROOT / "native" / "city_voxel" / "src" / "materials.rs"
 KENNEY_URL = "https://opengameart.org/sites/default/files/kenney_furniturePack.zip"
 
 PROP_FIRST = 75
+VOXEL_M = 0.5
+## Map Kenney's chair overall height to this many metres (≈ two voxels).
+CHAIR_HEIGHT_M = 1.0
+## Cap so a dining table cannot claim half a keep room.
+MAX_AXIS_VOX = 6
+MARGIN_VOX = 0.04
 
 # Kenney stems to skip — building fabric, not furniture.
 SKIP_PREFIXES = (
@@ -122,37 +130,77 @@ def load_obj(path: Path) -> tuple[list[list[float]], list[list[int]]]:
 	return verts, faces
 
 
-def fit_unit_cell(verts: list[list[float]], margin: float = 0.05) -> list[list[float]]:
+def bounds(verts: list[list[float]]) -> tuple[list[float], list[float], list[float]]:
 	lo = [min(v[i] for v in verts) for i in range(3)]
 	hi = [max(v[i] for v in verts) for i in range(3)]
 	size = [max(hi[i] - lo[i], 1e-6) for i in range(3)]
-	span = max(size)
-	inner = 1.0 - 2.0 * margin
-	scale = inner / span
+	return lo, hi, size
+
+
+def chair_meters_per_unit(models: Path) -> float:
+	path = models / "chair.obj"
+	verts, _ = load_obj(path)
+	_lo, _hi, size = bounds(verts)
+	return CHAIR_HEIGHT_M / size[1]
+
+
+def fit_voxel_footprint(
+	verts: list[list[float]], m_per_u: float
+) -> tuple[list[list[float]], tuple[int, int, int]]:
+	"""Uniform Kenney→voxel scale; integer footprint is the ceil of the scaled AABB."""
+	lo, _hi, size_k = bounds(verts)
+	scale = m_per_u / VOXEL_M
+	size_v = [size_k[i] * scale for i in range(3)]
+	nx = max(1, min(MAX_AXIS_VOX, int(math.ceil(size_v[0] - 1e-4))))
+	ny = max(1, min(MAX_AXIS_VOX, int(math.ceil(size_v[1] - 1e-4))))
+	nz = max(1, min(MAX_AXIS_VOX, int(math.ceil(size_v[2] - 1e-4))))
+	## If ceil hit the cap, shrink uniformly so the mesh still fits the box.
+	fit = min(
+		(nx - 2.0 * MARGIN_VOX) / size_v[0],
+		(ny - 2.0 * MARGIN_VOX) / size_v[1],
+		(nz - 2.0 * MARGIN_VOX) / size_v[2],
+		1.0,
+	)
+	scale *= fit
+	size_v = [size_k[i] * scale for i in range(3)]
+	ox = (nx - size_v[0]) * 0.5
+	oy = MARGIN_VOX
+	oz = (nz - size_v[2]) * 0.5
 	out: list[list[float]] = []
 	for v in verts:
-		x = (v[0] - lo[0]) * scale + margin + (inner - size[0] * scale) * 0.5
-		y = (v[1] - lo[1]) * scale + margin
-		z = (v[2] - lo[2]) * scale + margin + (inner - size[2] * scale) * 0.5
-		out.append([x, y, z])
-	return out
+		out.append(
+			[
+				(v[0] - lo[0]) * scale + ox,
+				(v[1] - lo[1]) * scale + oy,
+				(v[2] - lo[2]) * scale + oz,
+			]
+		)
+	return out, (nx, ny, nz)
 
 
-def aabb_of(verts: list[list[float]], pad: float = 0.02) -> tuple[float, float, float, float, float, float]:
+def aabb_of(
+	verts: list[list[float]], size_vox: tuple[int, int, int], pad: float = 0.02
+) -> tuple[float, float, float, float, float, float]:
 	lo = [min(v[i] for v in verts) for i in range(3)]
 	hi = [max(v[i] for v in verts) for i in range(3)]
-	# Clamp into cell, expand slightly for gameplay collision.
+	nx, ny, nz = size_vox
 	ox = max(0.0, lo[0] - pad)
 	oy = max(0.0, lo[1])
 	oz = max(0.0, lo[2] - pad)
-	sx = min(1.0, hi[0] + pad) - ox
-	sy = min(1.0, hi[1] + pad) - oy
-	sz = min(1.0, hi[2] + pad) - oz
+	sx = min(float(nx), hi[0] + pad) - ox
+	sy = min(float(ny), hi[1] + pad) - oy
+	sz = min(float(nz), hi[2] + pad) - oz
 	return (ox, oy, oz, max(sx, 0.05), max(sy, 0.05), max(sz, 0.05))
 
 
-def write_obj(path: Path, verts: list[list[float]], faces: list[list[int]]) -> None:
-	lines = ["# City room prop — unit cell 0..1", f"o {path.stem}"]
+def write_obj(
+	path: Path, verts: list[list[float]], faces: list[list[int]], size_vox: tuple[int, int, int]
+) -> None:
+	nx, ny, nz = size_vox
+	lines = [
+		f"# City room prop — voxel footprint {nx}x{ny}x{nz} (0.5 m cells)",
+		f"o {path.stem}",
+	]
 	for v in verts:
 		lines.append(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}")
 	for f in faces:
@@ -160,12 +208,14 @@ def write_obj(path: Path, verts: list[list[float]], faces: list[list[int]]) -> N
 	path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def make_barrel(segments: int = 16) -> tuple[list[list[float]], list[list[int]]]:
+def make_barrel(segments: int = 16) -> tuple[list[list[float]], list[list[int]], tuple[int, int, int]]:
+	"""~0.7 m drum in a 2×2×2 voxel box."""
 	verts: list[list[float]] = []
 	faces: list[list[int]] = []
-	cx = cz = 0.5
-	y0, y1 = 0.04, 0.92
-	r_mid, r_end = 0.34, 0.28
+	size = (2, 2, 2)
+	cx = cz = 1.0
+	y0, y1 = 0.06, 1.85
+	r_mid, r_end = 0.72, 0.60
 
 	def ring(y: float, r: float) -> list[int]:
 		ids: list[int] = []
@@ -175,8 +225,8 @@ def make_barrel(segments: int = 16) -> tuple[list[list[float]], list[list[int]]]
 			ids.append(len(verts) - 1)
 		return ids
 
-	ys = [y0, 0.22, 0.5, 0.78, y1]
-	rs = [r_end, r_mid, r_mid + 0.02, r_mid, r_end]
+	ys = [y0, 0.4, 0.95, 1.5, y1]
+	rs = [r_end, r_mid, r_mid + 0.04, r_mid, r_end]
 	rings = [ring(y, r) for y, r in zip(ys, rs)]
 	for ri in range(len(rings) - 1):
 		a, b = rings[ri], rings[ri + 1]
@@ -192,8 +242,7 @@ def make_barrel(segments: int = 16) -> tuple[list[list[float]], list[list[int]]]
 		j = (i + 1) % segments
 		faces.append([top_c, rings[-1][j], rings[-1][i]])
 		faces.append([bot_c, rings[0][i], rings[0][j]])
-	return verts, faces
-
+	return verts, faces, size
 
 def select_stems(models: Path) -> list[str]:
 	stems: list[str] = []
@@ -226,16 +275,18 @@ def write_catalog_gd(entries: list[dict]) -> None:
 		f"const PROP_COUNT := {len(entries)}",
 		f"const PROP_LAST := {PROP_FIRST + len(entries) - 1}",
 		"",
-		"## stem, family, walk_through, aabb(x,y,z,sx,sy,sz)",
+		"## stem, family, walk_through, size (voxel cells), aabb(x,y,z,sx,sy,sz) in voxel units",
 		"const ENTRIES: Array[Dictionary] = [",
 	]
 	for e in entries:
 		aabb = e["aabb"]
+		sx, sy, sz = e["size"]
 		lines.append(
 			"\t{"
 			f"\"stem\": \"{e['stem']}\", "
 			f"\"family\": \"{e['family']}\", "
 			f"\"walk_through\": {str(e['walk_through']).lower()}, "
+			f"\"size\": Vector3i({sx}, {sy}, {sz}), "
 			f"\"aabb\": Vector3({aabb[0]:.4f}, {aabb[1]:.4f}, {aabb[2]:.4f}), "
 			f"\"aabb_size\": Vector3({aabb[3]:.4f}, {aabb[4]:.4f}, {aabb[5]:.4f})"
 			"},"
@@ -268,6 +319,18 @@ static func stem_of(id: int) -> String:
 static func family_of(id: int) -> String:
 	var e := entry(id)
 	return String(e.get("family", "wood"))
+
+
+static func size_of_id(id: int) -> Vector3i:
+	var e := entry(id)
+	return e.get("size", Vector3i.ONE) as Vector3i
+
+
+static func size_of_stem(stem: String) -> Vector3i:
+	var id := find_stem(stem)
+	if id < PROP_FIRST:
+		return Vector3i.ONE
+	return size_of_id(id)
 
 
 static func mesh_path(id: int) -> String:
@@ -307,16 +370,20 @@ def patch_voxel_material(count: int, last: int) -> None:
 		r"## Room prop kit.*?const COUNT := \d+",
 		re.DOTALL,
 	)
+	footprint = last + 1
+	total = footprint + 1
 	replacement = (
 		"## Room prop kit — see RoomPropCatalog / tools/gen_room_prop_catalog.py.\n"
 		f"const PROP_FIRST := {PROP_FIRST}\n"
 		f"const PROP_LAST := {last}\n"
 		f"const PROP_COUNT := {count}\n"
+		"## Invisible solid filler for multi-cell prop footprints (nav / occupancy).\n"
+		f"const PROP_FOOTPRINT := {footprint}\n"
 		"## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.\n"
 		"const PROP_CRATE := PROP_FIRST\n"
 		"const PROP_BARREL := PROP_FIRST + 1\n"
 		"const PROP_CHAIR := PROP_FIRST + 2\n"
-		f"const COUNT := {PROP_FIRST + count}"
+		f"const COUNT := {total}"
 	)
 	if pattern.search(text):
 		text = pattern.sub(replacement, text)
@@ -334,48 +401,56 @@ def patch_voxel_material(count: int, last: int) -> None:
 		"static func is_room_prop(id: int) -> bool:\n\treturn id >= PROP_FIRST and id <= PROP_LAST",
 		text,
 	)
+	# Ensure is_room_prop / is_prop_furniture helpers exist.
+	if "static func is_prop_furniture" not in text:
+		text = text.replace(
+			"static func is_room_prop(id: int) -> bool:\n\treturn id >= PROP_FIRST and id <= PROP_LAST\n",
+			(
+				"static func is_room_prop(id: int) -> bool:\n"
+				"\treturn id >= PROP_FIRST and id <= PROP_LAST\n"
+				"\n"
+				"\n"
+				"## Visible prop mesh or its invisible multi-cell footprint filler.\n"
+				"static func is_prop_furniture(id: int) -> bool:\n"
+				"\treturn is_room_prop(id) or id == PROP_FOOTPRINT\n"
+			),
+		)
 	VOXEL_MAT_GD.write_text(text, encoding="utf-8")
-	print(f"Patched {VOXEL_MAT_GD} COUNT={PROP_FIRST + count}")
+	print(f"Patched {VOXEL_MAT_GD} COUNT={footprint + 1} FOOTPRINT={footprint}")
 
 
 def patch_materials_rs(count: int, last: int) -> None:
+	footprint = last + 1
+	total = footprint + 1
 	text = MATERIALS_RS.read_text(encoding="utf-8")
 	text = re.sub(
-		r"pub const PROP_CRATE: i32 = \d+;.*?pub const COUNT: i32 = \d+;",
+		r"pub const PROP_FIRST: i32 = \d+;.*?pub const COUNT: i32 = \d+;",
 		(
 			f"pub const PROP_FIRST: i32 = {PROP_FIRST};\n"
 			f"#[allow(dead_code)]\n"
 			f"pub const PROP_LAST: i32 = {last};\n"
-			f"pub const COUNT: i32 = {PROP_FIRST + count};"
+			f"#[allow(dead_code)]\n"
+			f"pub const PROP_FOOTPRINT: i32 = {footprint};\n"
+			f"pub const COUNT: i32 = {total};"
 		),
 		text,
 		flags=re.DOTALL,
 	)
-	# If old PROP_BARREL etc remain, clean — the regex above should replace from PROP_CRATE through COUNT.
-	if "PROP_CRATE" in text and "PROP_FIRST" not in text:
-		text = re.sub(
-			r"pub const COUNT: i32 = \d+;",
-			(
-				f"pub const PROP_FIRST: i32 = {PROP_FIRST};\n"
-				f"#[allow(dead_code)]\n"
-				f"pub const PROP_LAST: i32 = {last};\n"
-				f"pub const COUNT: i32 = {PROP_FIRST + count};"
-			),
-			text,
-			count=1,
-		)
 	MATERIALS_RS.write_text(text, encoding="utf-8")
-	print(f"Patched {MATERIALS_RS}")
+	print(f"Patched {MATERIALS_RS} COUNT={total}")
 
 
 def write_credits(n: int) -> None:
 	OUT_PROPS.mkdir(parents=True, exist_ok=True)
 	(OUT_PROPS / "CREDITS.txt").write_text(
-		f"""Room prop meshes (unit cell 0..1) — {n} pieces
+		f"""Room prop meshes (multi-cell voxel footprints) — {n} pieces
+
+Scale: Kenney chair height → {CHAIR_HEIGHT_M} m; city voxels are {VOXEL_M} m.
+A single bed is several cells long — not crushed into one voxel.
 
 Sources
 - Kenney Furniture Kit (CC0 1.0) — https://kenney.nl/assets/furniture-kit
-  OpenGameArt mirror; blockified by tools/gen_room_prop_catalog.py
+  OpenGameArt mirror; scaled by tools/gen_room_prop_catalog.py
 - barrel.obj — project-authored lathed cylinder
 
 Regenerate: python tools/gen_room_prop_catalog.py
@@ -391,6 +466,8 @@ def main() -> int:
 		old.unlink()
 
 	models = ensure_kenney()
+	m_per_u = chair_meters_per_unit(models)
+	print(f"Kenney scale: {m_per_u:.4f} m/unit (chair -> {CHAIR_HEIGHT_M} m)")
 	kenney_stems = select_stems(models)
 	entries: list[dict] = []
 
@@ -419,7 +496,7 @@ def main() -> int:
 
 	for file_stem, src_stem in ordered:
 		if src_stem is None:
-			verts, faces = make_barrel()
+			verts, faces, size_vox = make_barrel()
 			family = "wood"
 		else:
 			src_path = models / f"{src_stem}.obj"
@@ -431,25 +508,30 @@ def main() -> int:
 					continue
 				src_path = alt[0]
 			verts, faces = load_obj(src_path)
-			verts = fit_unit_cell(verts)
+			verts, size_vox = fit_voxel_footprint(verts, m_per_u)
 			family = family_for(src_stem)
-		aabb = aabb_of(verts)
-		write_obj(OUT_PROPS / f"{file_stem}.obj", verts, faces)
+		aabb = aabb_of(verts, size_vox)
+		write_obj(OUT_PROPS / f"{file_stem}.obj", verts, faces, size_vox)
 		entries.append(
 			{
 				"stem": file_stem,
 				"family": family,
 				"walk_through": walk_through(file_stem, family),
+				"size": size_vox,
 				"aabb": aabb,
 			}
 		)
+		print(f"  {file_stem}: {size_vox[0]}x{size_vox[1]}x{size_vox[2]} vox")
 
 	write_catalog_gd(entries)
 	last = PROP_FIRST + len(entries) - 1
 	patch_voxel_material(len(entries), last)
 	patch_materials_rs(len(entries), last)
 	write_credits(len(entries))
-	print(f"DONE {len(entries)} props  ids {PROP_FIRST}..{last}  COUNT={PROP_FIRST + len(entries)}")
+	print(
+		f"DONE {len(entries)} props  ids {PROP_FIRST}..{last}  "
+		f"FOOTPRINT={last + 1} COUNT={last + 2}"
+	)
 	return 0
 
 
