@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 godot = { version = "0.5.3", features = ["api-4-6", "experimental-threads"] }
+dashu-float = "0.4"
 
 [profile.release]
 lto = true

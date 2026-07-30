@@ -524,12 +524,13 @@ const LOT_METERS := 14.0
 static var _surface_mat_cache: Dictionary = {}  # id * 2 + object_space → ShaderMaterial
 static var _infection_mat_cache: Dictionary = {}  # bool is_lead → ShaderMaterial
 static var _gem_mat_cache: Dictionary = {}  # gem id → ShaderMaterial
+static var _fractal_glow_mat: ShaderMaterial = null
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
 
 
 ## Terrain block material. Everything except infection / meteor rock / Game Boy / gems
-## uses the shared world-projected surface shaders.
+## / fractal glow uses the shared world-projected surface shaders.
 static func block_material_for(id: int) -> Material:
 	if id == VoxelMaterial.INFECTION or id == VoxelMaterial.INFECTION_LEAD:
 		return infection_material(id == VoxelMaterial.INFECTION_LEAD)
@@ -539,6 +540,8 @@ static func block_material_for(id: int) -> Material:
 		return gameboy_material()
 	if VoxelMaterial.is_gem(id):
 		return gem_material(id)
+	if id == VoxelMaterial.FRACTAL_GLOW:
+		return fractal_glow_material()
 	return surface_material(id, false)
 
 
@@ -553,6 +556,8 @@ static func debris_material_for(id: int) -> Material:
 		return gameboy_material()
 	if VoxelMaterial.is_gem(id):
 		return gem_material(id)
+	if id == VoxelMaterial.FRACTAL_GLOW:
+		return fractal_glow_material()
 	return surface_material(id, true)
 
 
@@ -695,6 +700,25 @@ static func meteor_rock_material() -> ShaderMaterial:
 	_meteor_rock_mat = mat
 	return mat
 
+
+
+## Fractal plaza uni-cubes — same gem shader as ore, sapphire-cyan pulse, but not a GEM_*.
+static func fractal_glow_material() -> ShaderMaterial:
+	if _fractal_glow_mat != null:
+		return _fractal_glow_mat
+	var shader: Shader = load("res://assets/city/shaders/voxel_gem.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", VoxelMaterial.color(VoxelMaterial.FRACTAL_GLOW))
+	mat.set_shader_parameter("emission_color", Color(0.25, 0.55, 1.0))
+	mat.set_shader_parameter("emission_base", 1.6)
+	mat.set_shader_parameter("emission_peak", 4.4)
+	mat.set_shader_parameter("pulse_hz", 0.9)
+	mat.set_shader_parameter("sparkle_scale", 4.0)
+	mat.set_shader_parameter("metallic_base", 0.2)
+	mat.set_shader_parameter("roughness_base", 0.18)
+	_fractal_glow_mat = mat
+	return mat
 
 
 ## Glowing gem ore — one shared shader, per-id colors / emission strength.

@@ -1410,6 +1410,7 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		spawn = inst.generator.find_spawn_world(_tool)
 	walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	walker.velocity = Vector3.ZERO
+	_apply_spawn_yaw(walker, inst.generator)
 	if _loading_splash != null:
 		_loading_splash.call("set_status", "Waiting for ground collisions…")
 	var floor_y := await _wait_floor_collision_ms(spawn, 60_000)
@@ -1418,6 +1419,7 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		return
 	walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
 	walker.velocity = Vector3.ZERO
+	_apply_spawn_yaw(walker, inst.generator)
 	walker.set_physics_process(true)
 	if _streamer != null and _streamer.has_method("clear_priority_district"):
 		_streamer.call("clear_priority_district")
@@ -1661,6 +1663,7 @@ func _on_spawn_district_ready(inst: Node) -> void:
 
 	_walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
 	_walker.velocity = Vector3.ZERO
+	_apply_spawn_yaw(_walker, gen)
 	_walker.set_physics_process(true)
 	await get_tree().physics_frame
 	if is_instance_valid(_walker) and not _walker.is_on_floor():
@@ -1670,10 +1673,11 @@ func _on_spawn_district_ready(inst: Node) -> void:
 	if is_instance_valid(spawn_viewer):
 		spawn_viewer.queue_free()
 
-	var look: Vector3 = inst.call("world_aabb_center") - _walker.global_position
-	look.y = 0.0
-	if look.length_squared() > 0.01:
-		_walker.set_yaw(atan2(-look.x, -look.z))
+	if not is_finite(float(gen.last_spawn_yaw)):
+		var look: Vector3 = inst.call("world_aabb_center") - _walker.global_position
+		look.y = 0.0
+		if look.length_squared() > 0.01:
+			_walker.set_yaw(atan2(-look.x, -look.z))
 
 	_booting = false
 	_set_hud_enabled(true)
@@ -1836,6 +1840,18 @@ func _warm_visual_pipelines() -> void:
 		await get_tree().process_frame
 	holder.queue_free()
 	print("CityRoot: warmed %d outfit scenes + %d cars" % [_warm_scenes.size(), cars])
+
+
+func _apply_spawn_yaw(walker: Node3D, gen: Object) -> void:
+	if walker == null or gen == null:
+		return
+	var yaw := float(gen.get("last_spawn_yaw"))
+	if not is_finite(yaw):
+		return
+	if walker.has_method("set_yaw"):
+		walker.call("set_yaw", yaw)
+	else:
+		walker.rotation.y = yaw
 
 
 func _has_solid_ground_at(world: Vector3) -> bool:

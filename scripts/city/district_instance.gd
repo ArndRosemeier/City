@@ -10,6 +10,7 @@ const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
 const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
+const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -34,6 +35,8 @@ var street_props: StreetPropPlacer
 var scale_pads: Node
 ## Mesh doors hung in the castle's openings. Null on every tile that is not a Castle.
 var castle_doors: CastleDoorPlacer
+## Glowing plane + Mandelbrot panels. Null on every tile that is not Fractal.
+var mandelbrot_arena: Node3D
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -447,6 +450,11 @@ func _stamp_detail_async() -> void:
 	CityProfiler.end("stream_castle_doors")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_fractal_ui")
+	_spawn_mandelbrot_arena(generator)
+	CityProfiler.end("stream_fractal_ui")
+	await get_tree().process_frame
+
 	CityProfiler.begin("stream_impostors")
 	building_lod = BuildingImpostorLodScript.new()
 	building_lod.name = "BuildingImpostors"
@@ -468,6 +476,25 @@ func _stamp_detail_async() -> void:
 	CityProfiler.set_counter("stream_phase", 0)
 	ready_to_play.emit(self)
 	print("DistrictInstance ready %s seed=%d" % [str(coord), _dseed])
+
+
+func _spawn_mandelbrot_arena(gen: DistrictGenerator) -> void:
+	if gen == null:
+		return
+	var bounds: Dictionary = gen.get_fractal_world_bounds()
+	if bounds.is_empty():
+		return
+	if mandelbrot_arena != null and is_instance_valid(mandelbrot_arena):
+		mandelbrot_arena.queue_free()
+	mandelbrot_arena = MandelbrotArenaScript.new() as Node3D
+	mandelbrot_arena.name = "MandelbrotArena"
+	add_child(mandelbrot_arena)
+	mandelbrot_arena.call(
+		"setup",
+		bounds["min"] as Vector3,
+		bounds["max"] as Vector3,
+		float(bounds.get("ground_y_m", 0.0))
+	)
 
 
 func _bake_on_worker() -> Dictionary:

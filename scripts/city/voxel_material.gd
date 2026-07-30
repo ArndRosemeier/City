@@ -77,8 +77,11 @@ const GEM_DIAMOND := 54
 ## a breach into the curtain is meant to work.
 const CASTLE_BLOCK := 55
 const CASTLE_BLOCK_MOSSY := 56
+## Fractal plaza deck — solid uni cubes with gem-like emission. Destructible and
+## not collectible (unlike GEM_*); painted by FractalComposer only.
+const FRACTAL_GLOW := 57
 
-const COUNT := 57
+const COUNT := 58
 
 ## Rarity weights for pick_gem (sum = 100).
 const GEM_WEIGHT_QUARTZ := 48
@@ -134,6 +137,7 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == CAVE_FLOOR
 		or id == GRAVE_PATH
 		or id == GRAVE_SOIL
+		or id == FRACTAL_GLOW
 	)
 
 
@@ -141,7 +145,7 @@ static func is_ground_surface(id: int) -> bool:
 	## Outdoor ground / road deck — meteor auto-spawns land here, never on buildings.
 	## Diggable STONE substrate under the deck is not a landing / ped surface.
 	match id:
-		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL:
+		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL, FRACTAL_GLOW:
 			return true
 		_:
 			return false
@@ -156,7 +160,7 @@ static func is_diggable_substrate(id: int) -> bool:
 ## collapsing column. Stone and cave fabric cascade like built structure.
 static func is_self_supporting_terrain(id: int) -> bool:
 	match id:
-		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH:
+		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW:
 			return true
 		_:
 			return false
@@ -165,7 +169,7 @@ static func is_self_supporting_terrain(id: int) -> bool:
 static func is_building_fabric(id: int) -> bool:
 	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground, road, or diggable stone.
 	match id:
-		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH:
+		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW:
 			return false
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
@@ -363,5 +367,8 @@ static func color(id: int) -> Color:
 			return Color(0.52, 0.5, 0.46)
 		CASTLE_BLOCK_MOSSY:
 			return Color(0.4, 0.44, 0.34)
+		FRACTAL_GLOW:
+			## Sapphire-leaning cyan — gem look without GEM_* collect/immune rules.
+			return Color(0.18, 0.48, 0.95)
 		_:
 			return Color(1, 0, 1)

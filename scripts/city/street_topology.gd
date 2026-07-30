@@ -61,7 +61,7 @@ static func _theme_is_fragmented(planner: DistrictPlanner) -> bool:
 	if planner.theme == null:
 		return false
 	match planner.theme.id:
-		DistrictTheme.HILL, DistrictTheme.GRAVEYARD, DistrictTheme.LAKE, DistrictTheme.CASTLE:
+		DistrictTheme.HILL, DistrictTheme.GRAVEYARD, DistrictTheme.LAKE, DistrictTheme.CASTLE, DistrictTheme.FRACTAL:
 			return true
 		_:
 			return false

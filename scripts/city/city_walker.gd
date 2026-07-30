@@ -3454,8 +3454,8 @@ func _is_beam_held() -> bool:
 func _fire_blaster_bolt() -> void:
 	if _camera == null:
 		return
-	## Aim panels swallow the beam: paint a marker, never spawn a bolt or spend energy.
-	if _try_mark_aim_panel():
+	## World Ui3D surfaces swallow the beam: never spawn a bolt or spend energy.
+	if _try_press_ui_3d():
 		return
 	if not try_spend_energy(energy_cost_blaster):
 		return
@@ -3494,8 +3494,8 @@ func _fire_blaster_bolt() -> void:
 	bolt.call("fire", origin, aim_point, blaster_speed_mps, _effective_body_scale())
 
 
-## If the blaster aim ray hits an AimPanel, place its marker and consume the shot.
-func _try_mark_aim_panel() -> bool:
+## If the blaster aim ray hits a Ui3D surface, deliver the press and consume the shot.
+func _try_press_ui_3d() -> bool:
 	var shot := _blaster_shot_endpoints()
 	var origin: Vector3 = shot["origin"] as Vector3
 	var aim_point: Vector3 = shot["aim_point"] as Vector3
@@ -3510,17 +3510,24 @@ func _try_mark_aim_panel() -> bool:
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
 		return false
-	var panel := _aim_panel_from_collider(hit.get("collider"))
+	var panel := _ui_3d_from_collider(hit.get("collider"))
 	if panel == null:
 		return false
-	return bool(panel.call("mark_at_world", hit["position"] as Vector3))
+	if panel.has_method("press_at_world"):
+		return bool(panel.call("press_at_world", hit["position"] as Vector3))
+	if panel.has_method("mark_at_world"):
+		return bool(panel.call("mark_at_world", hit["position"] as Vector3))
+	return false
 
 
-func _aim_panel_from_collider(collider: Variant) -> Node:
+func _ui_3d_from_collider(collider: Variant) -> Node:
 	var node := collider as Node
 	while node != null:
-		if node.has_method("mark_at_world") and (
-			node.is_in_group("aim_panel") or bool(node.has_meta("aim_panel"))
+		if node.has_method("press_at_world") and (
+			node.is_in_group("ui_3d")
+			or bool(node.has_meta("ui_3d"))
+			or node.is_in_group("aim_panel")
+			or bool(node.has_meta("aim_panel"))
 		):
 			return node
 		node = node.get_parent()
