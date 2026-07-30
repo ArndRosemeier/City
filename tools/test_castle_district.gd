@@ -789,23 +789,37 @@ func _check_dungeon_plan(layout: CastleLayout) -> void:
 	var stray := 0
 	var stray_at := Vector3i.ZERO
 	var air := 0
+	var props := 0
 	for y in range(y0, y1 + 1):
 		for z in range(r.position.y, r.end.y):
 			for x in range(r.position.x, r.end.x):
 				var code := int(want[_want_index(r, y0, x, y, z)])
-				var solid := _vox(x, y, z) != VoxelMaterial.AIR
+				var id := _vox(x, y, z)
+				var solid := id != VoxelMaterial.AIR
 				if not solid:
 					air += 1
-				if code == WANT_AIR and solid:
+				elif VoxelMaterial.is_prop_furniture(id):
+					props += 1
+				## Furniture is allowed in carved chambers; leftover masonry is not.
+				if code == WANT_AIR and solid and not VoxelMaterial.is_prop_furniture(id):
 					uncut += 1
 					uncut_at = Vector3i(x, y, z)
 				elif code == WANT_SOLID and not solid:
 					stray += 1
 					stray_at = Vector3i(x, y, z)
 	print(
-		"dungeon: %d voxels of air in the band over %d columns, %d chambers, %d openings, %d flights"
-		% [air, r.size.x * r.size.y, layout.dungeon_vaults.size(), layout.dungeon_doorways.size(),
-			flights.size()]
+		(
+			"dungeon: %d voxels of air (+%d props) in the band over %d columns, %d chambers,"
+			+ " %d openings, %d flights"
+		)
+		% [
+			air,
+			props,
+			r.size.x * r.size.y,
+			layout.dungeon_vaults.size(),
+			layout.dungeon_doorways.size(),
+			flights.size(),
+		]
 	)
 	if uncut > 0:
 		_fail(
@@ -980,7 +994,9 @@ func _check_dungeon_tall(layout: CastleLayout) -> void:
 			return
 		var probe := _vault_probe(v)
 		for y in range(v.floor_y + 1, v.top_y() + 1):
-			if _vox(probe.x, y, probe.y) != VoxelMaterial.AIR:
+			var id := _vox(probe.x, y, probe.y)
+			## Room props / footprint fillers are allowed; hanging slab stone is not.
+			if id != VoxelMaterial.AIR and not VoxelMaterial.is_prop_furniture(id):
 				_fail(
 					"FAIL %s has masonry at Y=%d over %s — a slab fragment is hanging in it"
 					% [v.describe(), y, probe]

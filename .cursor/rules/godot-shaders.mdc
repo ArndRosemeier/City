@@ -1,0 +1,38 @@
+---
+description: Godot .gdshader syntax and pre-runtime compile checks
+globs: "**/*.{gdshader,gdshaderinc}"
+alwaysApply: false
+---
+
+# Godot shaders
+
+## Comments
+
+Godot shading language is **not** GDScript:
+
+- Use `//`, `///`, or `/* */` for comments
+- `#include` / `#ifdef` preprocessor lines are fine
+- Never use `#` or `##` as comments — that is GDScript; the tokenizer fails with `Unknown character '#'`
+
+```glsl
+// ✅ GOOD
+uniform vec2 view_center = vec2(-0.5, 0.0);
+
+## ❌ BAD — GDScript comment style; breaks shader compile
+uniform vec2 view_center = vec2(-0.5, 0.0);
+```
+
+## Before calling a shader done
+
+1. Run the headless compile sweep (catches `#` comments and load failures):
+
+```powershell
+powershell -File tools\run_test.ps1 test_shaders_compile
+```
+
+2. Prefer a headed smoke if the shader is spatial/canvas and uses UV/samplers — headless still validates parse/load, not every visual path.
+
+## New shaders
+
+- Prefer `assets/city/shaders/` for world materials; script-local shaders next to their owner are fine when private (e.g. `scripts/city/mandelbrot.gdshader`)
+- After adding or editing a `.gdshader`, run `test_shaders_compile` — do not wait for a live district/spawn to discover tokenizer errors

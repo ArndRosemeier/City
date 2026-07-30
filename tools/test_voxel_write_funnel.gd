@@ -89,6 +89,13 @@ func _check_batch_coalesces(brush: CityBrush) -> void:
 	if events[0] != want:
 		_fail("FAIL batch aabb %s, expected %s" % [events[0], want])
 		return
+	## Batched set_vox flushes via copy/paste per 16³ block — must actually land.
+	if int(_tool.get_voxel(ORIGIN)) != VoxelMaterial.AIR:
+		_fail("FAIL batch did not clear ORIGIN")
+		return
+	if int(_tool.get_voxel(ORIGIN + Vector3i(3, 2, 1))) != VoxelMaterial.BRICK:
+		_fail("FAIL batch did not write brick via block paste")
+		return
 	print("OK batched edit %s" % events[0])
 
 

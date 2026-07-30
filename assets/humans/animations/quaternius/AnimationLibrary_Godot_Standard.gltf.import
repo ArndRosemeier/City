@@ -47,6 +47,7 @@ _subresources={
 "retarget/remove_tracks/unmapped_bones": true,
 "retarget/rest_fixer/apply_node_transforms": true,
 "retarget/rest_fixer/fix_silhouette/enable": false,
+"retarget/rest_fixer/keep_global_rest_on_leftovers": true,
 "retarget/rest_fixer/normalize_position_tracks": true,
 "retarget/rest_fixer/reset_all_bone_poses_after_import": true,
 "retarget/rest_fixer/retarget_method": 1

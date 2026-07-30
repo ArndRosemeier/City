@@ -1,0 +1,43 @@
+---
+description: Headless GDScript compile and feature tests before relying on a live game run
+globs: "**/*.{gd,tscn}"
+alwaysApply: false
+---
+
+# Godot scripts — test before play
+
+Do **not** wait for a live game session / ErrorOverlay to discover parse or compile failures (`Could not find type …`, bad `new()`, silent bake failures). Use the headless harness.
+
+## After editing any `.gd` under `scripts/` or `tools/`
+
+1. **Compile sweep** (loads every project script; catches type/signature breaks the editor may miss):
+
+```powershell
+powershell -File tools\run_test.ps1 test_scripts_compile
+```
+
+2. **Feature test** when one exists for the area you touched — prefer the named scene over only the compile sweep:
+
+| Touched area | Run |
+|---|---|
+| Ui3D / AimPanel / Mandelbrot | `test_aim_panel`, `test_mandelbrot_panel` |
+| Shaders (`.gdshader`) | `test_shaders_compile` (see `godot-shaders` rule) |
+| District themes / planners / composers | matching `test_*_district` / `test_district_themes` |
+| Nav | matching `test_nav_*` |
+| Otherwise | `test_scripts_compile` at minimum |
+
+```powershell
+powershell -File tools\run_test.ps1 test_scripts_compile test_mandelbrot_panel
+```
+
+Expect `RESULT: OK`. Do not call the change done while these fail.
+
+## Writing / extending tests
+
+- Prefer `tools/test_<feature>.gd` + `.tscn`, run via `tools\run_test.ps1` (not bare `-s`; scene mode loads autoloads like `CityProfiler`)
+- Print `RESULT: OK` or `RESULT: FAILED` and `get_tree().quit(0|1)`
+- Avoid relying on `class_name` in parse-sensitive call sites when a new script may not be in the global class cache yet — use `const FooScript := preload("res://…")` and untyped/`RefCounted`/`Node3D` fields (see FractalComposer wiring)
+
+## New `class_name` scripts
+
+If another script types a variable as the new class (`var x: MyNewClass`), headless/editor may fail with `Could not find type "MyNewClass"` until the class cache refreshes. Prefer preload + `RefCounted`/`Node` typing for brand-new types, or run `test_scripts_compile` immediately after adding them.

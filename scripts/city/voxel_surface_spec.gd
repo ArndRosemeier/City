@@ -54,6 +54,14 @@ static func has_bespoke_shader(id: int) -> bool:
 
 
 static func for_id(id: int) -> VoxelSurfaceSpec:
+	if id == VoxelMaterial.PROP_FOOTPRINT:
+		## Never drawn (empty mesh); keep a cheap stub for library material lookups.
+		var fp := VoxelSurfaceSpec.new()
+		fp.albedo_file = "wood.jpg"
+		fp.tint = Color(0.4, 0.3, 0.2, 1.0)
+		return fp
+	if VoxelMaterial.is_room_prop(id):
+		return _spec_for_room_prop(id)
 	var s := VoxelSurfaceSpec.new()
 	match id:
 		VoxelMaterial.BEDROCK:
@@ -136,14 +144,16 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.grime = 0.8
 			s.streaks = 0.55
 		VoxelMaterial.STONE:
+			## Fine-grained Rock020 face (2K). Square tile — no ashlar courses in the map.
 			s.albedo_file = "stone.jpg"
 			s.normal_file = "stone_normal.jpg"
-			s.tile_meters = Vector2(2.5, 2.5)
+			s.tile_meters = Vector2(1.25, 1.25)
 			s.roughness = 0.88
-			s.tint_variation = 0.35
-			s.weathering = 0.5
-			s.grime = 0.65
-			s.streaks = 0.3
+			s.normal_strength = 1.15
+			s.tint_variation = 0.3
+			s.weathering = 0.45
+			s.grime = 0.55
+			s.streaks = 0.25
 		VoxelMaterial.PLAZA:
 			s.albedo_file = "plaza.jpg"
 			s.normal_file = "plaza_normal.jpg"
@@ -294,22 +304,21 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.roughness = 0.85
 			s.weathering = 0.55
 		VoxelMaterial.GLASS:
-			## One mullion bay per metre, matching the shader's window_meters, so the
-			## frames line up with the panes that light at night. The old repeat put a
-			## mullion every 0.19 m and drew a fan of diagonal scratches with them.
+			## Mullion art is a faint overlay in the shader; tint.a is face-on opacity
+			## (shader scales it down further). Keep tile large so frames stay sparse.
 			s.kind = Kind.GLASS
 			s.albedo_file = "glass.jpg"
 			s.tile_meters = Vector2(4.0, 4.0)
-			s.tint = Color(0.72, 0.86, 1.0, 0.38)
-			s.roughness = 0.08
-			s.metallic = 0.2
+			s.tint = Color(0.78, 0.9, 1.0, 0.32)
+			s.roughness = 0.06
+			s.metallic = 0.08
 		VoxelMaterial.GLASS_LIT:
 			s.kind = Kind.GLASS
 			s.albedo_file = "glass.jpg"
 			s.tile_meters = Vector2(4.0, 4.0)
-			s.tint = Color(0.8, 0.88, 1.0, 0.4)
-			s.roughness = 0.12
-			s.metallic = 0.15
+			s.tint = Color(0.82, 0.9, 1.0, 0.34)
+			s.roughness = 0.08
+			s.metallic = 0.06
 			s.lit_ratio = 0.62
 		VoxelMaterial.WATER:
 			s.kind = Kind.WATER
@@ -423,34 +432,42 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.roughness = 0.92
 			s.tint_variation = 0.3
 		VoxelMaterial.CASTLE_BLOCK:
-			## Dressed ashlar: tile at roughly one course per metre so a curtain wall reads
-			## as coursed blocks rather than one smeared cliff of rock.
+			## Fine-grained rock face (Rock020 2K). 1.25 m repeat ≈ 1640 texels/m.
 			s.albedo_file = "stone.jpg"
 			s.normal_file = "stone_normal.jpg"
-			s.tile_meters = Vector2(1.5, 1.0)
-			s.tint = Color(0.62, 0.6, 0.55, 1.0)
+			s.tile_meters = Vector2(1.25, 1.25)
+			s.tint = Color(0.92, 0.9, 0.86, 1.0)
 			s.roughness = 0.9
-			s.normal_strength = 1.1
-			s.tint_variation = 0.22
-			s.weathering = 0.55
-			s.grime = 0.7
+			s.normal_strength = 1.25
+			s.tint_variation = 0.16
+			s.weathering = 0.4
+			s.grime = 0.5
 			## Tall walls: the wash has to run much further down than a two-storey facade.
 			s.grime_height = 8.0
-			s.streaks = 0.5
+			s.streaks = 0.35
 		VoxelMaterial.CASTLE_BLOCK_MOSSY:
-			## Same ashlar, greened. Used for lower courses and weathered patches, so it has
-			## to read as the *same* wall at a different age, not as a second material.
+			## Same rock face, greened. Lower courses / weathered patches — same wall, older.
 			s.albedo_file = "stone.jpg"
 			s.normal_file = "stone_normal.jpg"
-			s.tile_meters = Vector2(1.5, 1.0)
-			s.tint = Color(0.42, 0.47, 0.36, 1.0)
+			s.tile_meters = Vector2(1.25, 1.25)
+			s.tint = Color(0.58, 0.66, 0.5, 1.0)
 			s.roughness = 0.95
-			s.normal_strength = 1.1
-			s.tint_variation = 0.28
-			s.weathering = 0.75
-			s.grime = 0.85
+			s.normal_strength = 1.25
+			s.tint_variation = 0.22
+			s.weathering = 0.65
+			s.grime = 0.75
 			s.grime_height = 8.0
-			s.streaks = 0.65
+			s.streaks = 0.5
+		VoxelMaterial.DOOR:
+			## Closed doorway plug — timber, not masonry.
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tile_meters = Vector2(1.0, 1.0)
+			s.tint = Color(0.40, 0.26, 0.14, 1.0)
+			s.roughness = 0.85
+			s.normal_strength = 0.9
+			s.tint_variation = 0.1
+			s.weathering = 0.25
 		_:
 			push_error(
 				"VoxelSurfaceSpec.for_id: no surface spec for voxel material %d — showing magenta"
@@ -458,4 +475,43 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			)
 			s.albedo_file = "plaster.jpg"
 			s.tint = Color(1, 0, 1, 1)
+	return s
+
+
+## Family tints for RoomPropCatalog meshes. Avoid metal.jpg — its authored tile pitch
+## is curtain-panel scale and fails tools/test_texture_scale.gd.
+static func _spec_for_room_prop(id: int) -> VoxelSurfaceSpec:
+	var s := VoxelSurfaceSpec.new()
+	var family := RoomPropCatalog.family_of(id)
+	s.tile_meters = Vector2(1.0, 1.0)
+	s.tint_variation = 0.12
+	s.weathering = 0.2
+	match family:
+		"fabric":
+			s.albedo_file = "plaster.jpg"
+			s.normal_file = "plaster_normal.jpg"
+			s.tint = Color(0.72, 0.62, 0.55, 1.0)
+			s.roughness = 0.9
+		"metal":
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tint = Color(0.55, 0.58, 0.62, 1.0)
+			s.roughness = 0.55
+			s.metallic = 0.25
+		"ceramic":
+			s.albedo_file = "plaster.jpg"
+			s.normal_file = "plaster_normal.jpg"
+			s.tint = Color(0.88, 0.9, 0.92, 1.0)
+			s.roughness = 0.35
+		"foliage":
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tint = Color(0.28, 0.48, 0.26, 1.0)
+			s.roughness = 0.85
+		_:
+			s.albedo_file = "wood.jpg"
+			s.normal_file = "wood_normal.jpg"
+			s.tint = Color(0.55, 0.4, 0.26, 1.0)
+			s.roughness = 0.82
+			s.normal_strength = 0.9
 	return s

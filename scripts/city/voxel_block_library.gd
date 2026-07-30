@@ -50,12 +50,12 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			water.collision_mask = 2
 			return water
 		VoxelMaterial.GLASS:
-			## Visual stays inset, but collision fills the cell. An inset box left
-			## 0.1–0.12 voxel seams between neighbouring panes — the capsule could
-			## worm through those gaps into the hollow building instead of climbing.
-			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3.ZERO, Vector3.ONE))
+			## Engine cube geometry — custom full-cell meshes were wound such that
+			## cull_back dropped every face (windows read as air holes). Opaque cube
+			## + glass shader = solid pane that sorts with brick.
+			return _make_glass_cube(id)
 		VoxelMaterial.GLASS_LIT:
-			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3.ZERO, Vector3.ONE))
+			return _make_glass_cube(id)
 		VoxelMaterial.CURB:
 			## Low curb lip (~0.2 m world) so CharacterBody can step/jump it.
 			return _mesh_model(id, _mesh_curb(), false, true, AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.4, 1.0)))
@@ -83,16 +83,72 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 				id, _mesh_slope_45(VoxelMaterial.SLOPE_HIGH_NEG_Z), VoxelMaterial.SLOPE_HIGH_NEG_Z
 			)
 		_:
+			if id == VoxelMaterial.PROP_FOOTPRINT:
+				return _make_prop_footprint_model()
+			if id == VoxelMaterial.DOOR:
+				## Full-cell solid — motion/nav block; leaf meshes are visual only.
+				return _make_cube(id)
+			if VoxelMaterial.is_room_prop(id):
+				return _make_room_prop_model(id)
 			return _make_cube(id)
+
+
+static func _make_room_prop_model(id: int) -> VoxelBlockyModelMesh:
+	var e := RoomPropCatalog.entry(id)
+	var stem := String(e.get("stem", ""))
+	var walk := bool(e.get("walk_through", false))
+	var origin: Vector3 = e.get("aabb", Vector3.ZERO)
+	var size: Vector3 = e.get("aabb_size", Vector3.ONE)
+	var box := AABB(origin, size)
+	return _mesh_model_prop(id, _mesh_prop(stem), box, walk)
+
+
+## Sibling cell of a multi-cell prop: solid for nav, no mesh (origin draws the whole piece).
+static func _make_prop_footprint_model() -> VoxelBlockyModelMesh:
+	var model := VoxelBlockyModelMesh.new()
+	model.mesh = ArrayMesh.new()
+	model.set_mesh_collision_enabled(0, false)
+	model.culls_neighbors = false
+	model.collision_aabbs = [AABB(Vector3.ZERO, Vector3.ONE)]
+	return model
 
 
 static func _make_cube(id: int) -> VoxelBlockyModelCube:
 	var cube := VoxelBlockyModelCube.new()
 	cube.color = Color(1, 1, 1, 1)
 	cube.set_material_override(0, block_material_for(id))
-	if id == VoxelMaterial.GLASS or id == VoxelMaterial.GLASS_LIT or id == VoxelMaterial.WATER:
+	if id == VoxelMaterial.WATER:
 		cube.transparency_index = 1
 	return cube
+
+
+static func _make_glass_cube(id: int) -> VoxelBlockyModelCube:
+	var cube := VoxelBlockyModelCube.new()
+	cube.color = Color(1, 1, 1, 1)
+	cube.set_material_override(0, block_material_for(id))
+	## Stay on the opaque mesher path (no transparency_index).
+	return cube
+
+
+## Room furniture: visual only + collision AABBs. Never attach a full-cell discard
+## mesh (egg-crate cull) — props are partial fills with culls_neighbors off.
+static func _mesh_model_prop(
+	id: int, visual: ArrayMesh, collision_aabb: AABB, walk_through: bool = false
+) -> VoxelBlockyModelMesh:
+	var model := VoxelBlockyModelMesh.new()
+	var mat := block_material_for(id)
+	model.mesh = visual
+	model.set_material_override(0, mat)
+	model.set_mesh_collision_enabled(0, false)
+	model.culls_neighbors = false
+	if walk_through or collision_aabb.size == Vector3.ZERO:
+		model.collision_aabbs = []
+		model.collision_mask = 0
+	else:
+		## Full cell so blasts / rays hit the furniture volume (catalog AABB is only a
+		## subset of the multi-cell mesh; footprint siblings use PROP_FOOTPRINT boxes).
+		model.collision_aabbs = [AABB(Vector3.ZERO, Vector3.ONE)]
+	return model
 
 
 ## Visual mesh (surface 0) + optional collision mesh (surface 1).
@@ -464,9 +520,9 @@ static func _mesh_water() -> ArrayMesh:
 	return _box_mesh(Vector3.ZERO, Vector3.ONE)
 
 
-## Inset window pane.
+## Full-cell glass volume (same idea as water — continuous sheet, not inset panes).
 static func _mesh_glass() -> ArrayMesh:
-	return _box_mesh(Vector3(0.12, 0.1, 0.12), Vector3(0.88, 0.9, 0.88))
+	return _box_mesh(Vector3.ZERO, Vector3.ONE)
 
 
 ## Low curb lip — visual matches the short collision box (~0.2 m world).
@@ -500,6 +556,32 @@ static func _mesh_flower() -> ArrayMesh:
 	return st.commit()
 
 
+static var _prop_mesh_cache: Dictionary = {}  # stem → ArrayMesh
+
+
+## Unit-cell prop OBJ from tools/gen_room_prop_catalog.py (0..1).
+static func _mesh_prop(stem: String) -> ArrayMesh:
+	var cached: Variant = _prop_mesh_cache.get(stem)
+	if cached is ArrayMesh:
+		return cached
+	var path := RoomPropCatalog.PROP_MESH_DIR + stem + ".obj"
+	var loaded: Resource = load(path)
+	var mesh: ArrayMesh = null
+	if loaded is ArrayMesh:
+		mesh = loaded
+	elif loaded is Mesh:
+		## Importer may yield Mesh; copy surfaces into ArrayMesh for the library.
+		var src := loaded as Mesh
+		mesh = ArrayMesh.new()
+		for s in range(src.get_surface_count()):
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, src.surface_get_arrays(s))
+	if mesh == null or mesh.get_surface_count() == 0:
+		push_error("VoxelBlockLibrary._mesh_prop: missing/empty %s — using planter stub" % path)
+		mesh = _mesh_planter()
+	_prop_mesh_cache[stem] = mesh
+	return mesh
+
+
 static func _emit_box(st: SurfaceTool, bmin: Vector3, bmax: Vector3) -> void:
 	_add_quad(st, Vector3(bmin.x, bmin.y, bmax.z), Vector3(bmax.x, bmin.y, bmax.z), Vector3(bmax.x, bmax.y, bmax.z), Vector3(bmin.x, bmax.y, bmax.z), Vector3(0, 0, 1))
 	_add_quad(st, Vector3(bmax.x, bmin.y, bmin.z), Vector3(bmin.x, bmin.y, bmin.z), Vector3(bmin.x, bmax.y, bmin.z), Vector3(bmax.x, bmax.y, bmin.z), Vector3(0, 0, -1))
@@ -524,12 +606,15 @@ const LOT_METERS := 14.0
 static var _surface_mat_cache: Dictionary = {}  # id * 2 + object_space → ShaderMaterial
 static var _infection_mat_cache: Dictionary = {}  # bool is_lead → ShaderMaterial
 static var _gem_mat_cache: Dictionary = {}  # gem id → ShaderMaterial
+static var _fractal_glow_mat: ShaderMaterial = null
+static var _fractal_band_mat_cache: Dictionary = {}  # band id → ShaderMaterial
+static var _fractal_interior_mat: ShaderMaterial = null
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
 
 
 ## Terrain block material. Everything except infection / meteor rock / Game Boy / gems
-## uses the shared world-projected surface shaders.
+## / fractal glow uses the shared world-projected surface shaders.
 static func block_material_for(id: int) -> Material:
 	if id == VoxelMaterial.INFECTION or id == VoxelMaterial.INFECTION_LEAD:
 		return infection_material(id == VoxelMaterial.INFECTION_LEAD)
@@ -539,6 +624,15 @@ static func block_material_for(id: int) -> Material:
 		return gameboy_material()
 	if VoxelMaterial.is_gem(id):
 		return gem_material(id)
+	if id == VoxelMaterial.FRACTAL_GLOW:
+		return fractal_glow_material()
+	if id == VoxelMaterial.FRACTAL_INTERIOR:
+		return fractal_interior_material()
+	if VoxelMaterial.is_fractal_band(id):
+		return fractal_band_material(id)
+	## Room props are authored meshes — grain follows the prop, not the street.
+	if VoxelMaterial.is_room_prop(id) or id == VoxelMaterial.PROP_FOOTPRINT:
+		return surface_material(id, true)
 	return surface_material(id, false)
 
 
@@ -553,6 +647,12 @@ static func debris_material_for(id: int) -> Material:
 		return gameboy_material()
 	if VoxelMaterial.is_gem(id):
 		return gem_material(id)
+	if id == VoxelMaterial.FRACTAL_GLOW:
+		return fractal_glow_material()
+	if id == VoxelMaterial.FRACTAL_INTERIOR:
+		return fractal_interior_material()
+	if VoxelMaterial.is_fractal_band(id):
+		return fractal_band_material(id)
 	return surface_material(id, true)
 
 
@@ -580,8 +680,8 @@ static func _build_surface_material(id: int, object_space: bool) -> ShaderMateri
 			mat.set_shader_parameter("lit_energy", 1.8)
 			## One lit/dark draw per 1 m of facade — roughly one punched window.
 			mat.set_shader_parameter("window_meters", 1.0)
-			mat.set_shader_parameter("fresnel_strength", 0.55)
-			mat.set_shader_parameter("day_sky_tint", 0.35)
+			mat.set_shader_parameter("fresnel_strength", 0.85)
+			mat.set_shader_parameter("day_sky_tint", 0.4)
 		VoxelSurfaceSpec.Kind.WATER:
 			mat.shader = _load_shader(WATER_SHADER)
 			mat.set_shader_parameter("deep_tint", Color(0.07, 0.19, 0.28, 1.0))
@@ -695,6 +795,65 @@ static func meteor_rock_material() -> ShaderMaterial:
 	_meteor_rock_mat = mat
 	return mat
 
+
+
+## Fractal plaza uni-cubes — same gem shader as ore, sapphire-cyan pulse, but not a GEM_*.
+static func fractal_glow_material() -> ShaderMaterial:
+	if _fractal_glow_mat != null:
+		return _fractal_glow_mat
+	var shader: Shader = load("res://assets/city/shaders/voxel_gem.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", VoxelMaterial.color(VoxelMaterial.FRACTAL_GLOW))
+	mat.set_shader_parameter("emission_color", Color(0.25, 0.55, 1.0))
+	mat.set_shader_parameter("emission_base", 1.6)
+	mat.set_shader_parameter("emission_peak", 4.4)
+	mat.set_shader_parameter("pulse_hz", 0.9)
+	mat.set_shader_parameter("sparkle_scale", 4.0)
+	mat.set_shader_parameter("metallic_base", 0.2)
+	mat.set_shader_parameter("roughness_base", 0.18)
+	_fractal_glow_mat = mat
+	return mat
+
+
+## Mandelbrot set body — dark, no glow (contrasts with FRACTAL_GLOW plaza).
+static func fractal_interior_material() -> ShaderMaterial:
+	if _fractal_interior_mat != null:
+		return _fractal_interior_mat
+	var shader: Shader = load("res://assets/city/shaders/voxel_fractal_band.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var albedo := VoxelMaterial.color(VoxelMaterial.FRACTAL_INTERIOR)
+	mat.set_shader_parameter("base_color", albedo)
+	mat.set_shader_parameter("emission_color", albedo)
+	mat.set_shader_parameter("emission_strength", 0.0)
+	mat.set_shader_parameter("pulse_hz", 0.0)
+	mat.set_shader_parameter("metallic_base", 0.05)
+	mat.set_shader_parameter("roughness_base", 0.55)
+	_fractal_interior_mat = mat
+	return mat
+
+
+## Mandelbrot sculpture bands — albedo-first palette shader (not gem ore wash).
+static func fractal_band_material(id: int) -> ShaderMaterial:
+	if not VoxelMaterial.is_fractal_band(id):
+		push_error("VoxelBlockLibrary.fractal_band_material: not a band id %d" % id)
+		return fractal_glow_material()
+	var cached: Variant = _fractal_band_mat_cache.get(id)
+	if cached is ShaderMaterial:
+		return cached
+	var albedo := VoxelMaterial.color(id)
+	var shader: Shader = load("res://assets/city/shaders/voxel_fractal_band.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", albedo)
+	mat.set_shader_parameter("emission_color", albedo)
+	mat.set_shader_parameter("emission_strength", 0.22)
+	mat.set_shader_parameter("pulse_hz", 0.2)
+	mat.set_shader_parameter("metallic_base", 0.1)
+	mat.set_shader_parameter("roughness_base", 0.38)
+	_fractal_band_mat_cache[id] = mat
+	return mat
 
 
 ## Glowing gem ore — one shared shader, per-id colors / emission strength.

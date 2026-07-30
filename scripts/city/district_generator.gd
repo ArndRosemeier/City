@@ -10,8 +10,11 @@ const HillComposerScript := preload("res://scripts/city/hill_composer.gd")
 const GraveyardComposerScript := preload("res://scripts/city/graveyard_composer.gd")
 const LakeComposerScript := preload("res://scripts/city/lake_composer.gd")
 const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
+const FractalComposerScript := preload("res://scripts/city/fractal_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
+const CastleDoorwayScript := preload("res://scripts/city/castle_doorway.gd")
+const ElevatorShaftScript := preload("res://scripts/city/elevator_shaft.gd")
 
 @export var city_seed: int = 42
 ## Rectangular district in voxels (0.5 m each). Default 784×560 → 392×280 m.
@@ -46,9 +49,20 @@ var _hill: HillComposer
 var _graveyard: GraveyardComposer
 var _lake: LakeComposer
 var _castle: CastleComposer
+## Typed as RefCounted so parse does not depend on the global class_name cache
+## (new scripts are often missing from it until the editor rescans).
+var _fractal: RefCounted
+## Survives end_generate so DistrictInstance can spawn MandelbrotArena.
+var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
 ## World-space building massing for far LOD: {shape, center, size, yaw, color, custom}.
 var building_impostors: Array = []
+## Ground-floor interiors for JIT RoomDecorator (InteriorRoom, world voxel coords).
+var interior_rooms: Array = []
+## City lot street doors (CastleDoorway, world voxel coords).
+var lot_doorways: Array = []
+## Multi-storey lot elevator cabins (ElevatorShaft, world voxel coords).
+var elevator_shafts: Array = []
 ## Hill gem ore (world voxel coords + material ids) collected during compose.
 var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
@@ -82,6 +96,9 @@ func begin_generate(
 	size_xz = maxi(size_x, size_z)
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
+	interior_rooms.clear()
+	lot_doorways.clear()
+	elevator_shafts.clear()
 	_brush = CityBrushScript.new(tool, origin_vox)
 	_setup_composers()
 
@@ -99,6 +116,9 @@ func begin_generate_offline(
 	size_xz = maxi(size_x, size_z)
 	ground_thickness = bedrock_thickness + stone_depth
 	building_impostors.clear()
+	interior_rooms.clear()
+	lot_doorways.clear()
+	elevator_shafts.clear()
 	_brush = CityBrushScript.new(null, Vector3i.ZERO)
 	_brush.use_offline_volume()
 	_setup_composers()
@@ -183,6 +203,13 @@ func _setup_composers() -> void:
 	_castle.planner = _planner
 	_castle.cell_size = cell_size
 	_castle_layout = null
+
+	_fractal = FractalComposerScript.new()
+	_fractal.brush = _brush
+	_fractal.rng = _rng
+	_fractal.ground_y = ground_thickness
+	_fractal.planner = _planner
+	_fractal.cell_size = cell_size
 
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
@@ -295,6 +322,9 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			## Lake tiles start as meadow; LakeComposer carves the basin into it. Castle
 			## tiles keep the meadow as the open field the fortress stands in.
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
+		LandUse.FRACTAL:
+			## Meadow verge; FractalComposer stamps the centered glowing square.
+			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		LandUse.GRAVEYARD:
 			## Consecrated ground is turned earth, never lawn — park green under the
 			## composer's mound leaks through every verge it does not overwrite.
@@ -318,7 +348,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -332,7 +362,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL:
 			return
 		_:
 			pass
@@ -380,7 +410,20 @@ func decorate_open_spaces() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
+		or _fractal == null
 	):
+		return
+	var lf := _planner.large_fractal
+	if lf.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 7)
+		var fmin := Vector3i(
+			lf.position.x * cell_size, ground_thickness, lf.position.y * cell_size
+		)
+		var fmax := Vector3i(
+			lf.end.x * cell_size, ground_thickness + 1, lf.end.y * cell_size
+		)
+		_fractal.compose(fmin, fmax)
+		_fractal_world_bounds = _compute_fractal_glow_world_bounds()
 		return
 	var lc := _planner.large_castle
 	if lc.size.x > 0:
@@ -460,7 +503,20 @@ func decorate_open_spaces_far() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
+		or _fractal == null
 	):
+		return
+	var lf := _planner.large_fractal
+	if lf.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 37)
+		var fmin := Vector3i(
+			lf.position.x * cell_size, ground_thickness, lf.position.y * cell_size
+		)
+		var fmax := Vector3i(
+			lf.end.x * cell_size, ground_thickness + 1, lf.end.y * cell_size
+		)
+		_fractal.compose_far_sparse(fmin, fmax)
+		_fractal_world_bounds = _compute_fractal_glow_world_bounds()
 		return
 	var lc := _planner.large_castle
 	if lc.size.x > 0:
@@ -543,6 +599,15 @@ func open_space_bounds() -> Array[AABB]:
 	var yh := 12.0
 	var ox := float(origin_vox.x)
 	var oz := float(origin_vox.z)
+	var lf := _planner.large_fractal
+	if lf.size.x > 0:
+		out.append(
+			AABB(
+				Vector3(ox + lf.position.x * cell_size, y0, oz + lf.position.y * cell_size),
+				Vector3(lf.size.x * cell_size, 20.0, lf.size.y * cell_size)
+			)
+		)
+		return out
 	var lc := _planner.large_castle
 	if lc.size.x > 0:
 		## Plinth, curtain, towers and keep — the causeway stays inside the same reserve, so
@@ -620,6 +685,34 @@ func open_space_bounds() -> Array[AABB]:
 	return out
 
 
+## World-space glow-square AABB for MandelbrotArena (empty if not a Fractal tile).
+func get_fractal_world_bounds() -> Dictionary:
+	return _fractal_world_bounds.duplicate()
+
+
+func _compute_fractal_glow_world_bounds() -> Dictionary:
+	if _fractal == null:
+		return {}
+	var gmin: Vector3i = _fractal.last_glow_min as Vector3i
+	var gmax: Vector3i = _fractal.last_glow_max as Vector3i
+	if gmax.x <= gmin.x or gmax.z <= gmin.z:
+		return {}
+	var vs := voxel_size
+	## Walkable top of the one-voxel glow deck.
+	var ground_y_m := float(ground_thickness + 1) * vs
+	var min_w := Vector3(
+		(float(origin_vox.x) + float(gmin.x)) * vs,
+		ground_y_m,
+		(float(origin_vox.z) + float(gmin.z)) * vs
+	)
+	var max_w := Vector3(
+		(float(origin_vox.x) + float(gmax.x)) * vs,
+		ground_y_m,
+		(float(origin_vox.z) + float(gmax.z)) * vs
+	)
+	return {"min": min_w, "max": max_w, "ground_y_m": ground_y_m}
+
+
 func end_generate() -> void:
 	_brush = null
 	_plaza = null
@@ -628,6 +721,7 @@ func end_generate() -> void:
 	_graveyard = null
 	_lake = null
 	_castle = null
+	_fractal = null
 	_grammar = null
 
 
@@ -645,6 +739,8 @@ func _paint_cell(cx: int, cz: int) -> void:
 		LandUse.PARK:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
 		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE:
+			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
+		LandUse.FRACTAL:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		LandUse.GRAVEYARD:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.GRAVE_SOIL)
@@ -669,15 +765,25 @@ func build_street_topology() -> StreetTopology:
 	return topology
 
 
+## Yaw applied after the last successful find_spawn_world (NaN = leave walker default).
+var last_spawn_yaw: float = NAN
+
+
 func find_spawn_world(tool: VoxelTool) -> Vector3:
 	## Feet slightly above the top of the ground voxel so we don't clip/tunnel.
 	## Headroom must clear the walker crown (~2.65 m ≈ 6 voxels at 0.5 m); the old
 	## 3-voxel check let hill-cave spawns start in crawl space.
 	const HEADROOM_VOX := 6
+	last_spawn_yaw = NAN
 	_brush = CityBrushScript.new(tool, origin_vox)
 	var vs := voxel_size
 	var floor_top_y := float(ground_thickness + 1) * vs
 	var spawn_y := floor_top_y + 0.85
+	if theme != null and theme.id == DistrictTheme.FRACTAL:
+		var panel_spawn := _find_fractal_panel_spawn(spawn_y, HEADROOM_VOX)
+		if is_finite(panel_spawn.x):
+			_brush = null
+			return panel_spawn
 	var cx := size_x / 2
 	var cz := size_z / 2
 	for radius in range(0, maxi(size_x, size_z) / 2, 2):
@@ -706,6 +812,49 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 		spawn_y,
 		(float(origin_vox.z + cz) + 0.5) * vs
 	)
+
+
+## Stand outside the south Mandelbrot panel (facing it / plaza behind the glass).
+func _find_fractal_panel_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
+	if _fractal_world_bounds.is_empty():
+		return Vector3(INF, INF, INF)
+	var min_w: Vector3 = _fractal_world_bounds["min"] as Vector3
+	var max_w: Vector3 = _fractal_world_bounds["max"] as Vector3
+	var side := minf(max_w.x - min_w.x, max_w.z - min_w.z)
+	if side < 20.0:
+		return Vector3(INF, INF, INF)
+	var center_x := (min_w.x + max_w.x) * 0.5
+	var center_z := (min_w.z + max_w.z) * 0.5
+	## Must match MandelbrotArena.EDGE_INSET_M — panel sits on the south glow edge.
+	const EDGE_INSET_M := 0.5
+	const STAND_OFF_M := 3.5
+	var half := side * 0.5 - EDGE_INSET_M
+	var target := Vector3(center_x, spawn_y, center_z - half - STAND_OFF_M)
+	var vs := voxel_size
+	var lx := int(floor((target.x / vs) - float(origin_vox.x)))
+	var lz := int(floor((target.z / vs) - float(origin_vox.z)))
+	for radius in range(0, 24):
+		for dz in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dz)) != radius and radius > 0:
+					continue
+				var x := lx + dx
+				var z := lz + dz
+				if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
+					continue
+				var mat := _brush.get_vox(Vector3i(x, ground_thickness, z))
+				if not VoxelMaterial.is_walkable_surface(mat):
+					continue
+				if not _has_spawn_headroom(x, z, headroom_vox):
+					continue
+				## Walker forward is −Z at yaw 0; face +Z toward the south panel.
+				last_spawn_yaw = PI
+				return Vector3(
+					(float(origin_vox.x + x) + 0.5) * vs,
+					spawn_y,
+					(float(origin_vox.z + z) + 0.5) * vs
+				)
+	return Vector3(INF, INF, INF)
 
 
 func _has_spawn_headroom(x: int, z: int, air_voxels: int) -> bool:
@@ -946,7 +1095,142 @@ func _paint_lot(
 			% [zone, cx, cz]
 		)
 	_record_building_impostor(grammar.impostor_parts, zone)
+	var room := _record_interior_room(bmin, bmax, zone, grammar)
+	_record_lot_doorways(grammar)
+	_record_elevator_shaft(bmin, bmax, grammar, room)
 	grammar.max_height = saved
+
+
+## One ground-floor room per lot shell (world voxels). Walls are 1 cell thick; ground
+## fill raises the walking surface one voxel above the deck (see BuildingGrammar._fill_shell).
+func _record_interior_room(
+	bmin: Vector3i, bmax: Vector3i, zone: int, grammar: BuildingGrammar
+) -> InteriorRoom:
+	var inner := Rect2i(
+		bmin.x + 1,
+		bmin.z + 1,
+		maxi(bmax.x - bmin.x - 2, 0),
+		maxi(bmax.z - bmin.z - 2, 0)
+	)
+	if inner.size.x < 3 or inner.size.y < 3:
+		return null
+	var local_floor_y := bmin.y + 1
+	var fh := grammar.ground_floor_height
+	## Clear band under the ceiling slab at y0+fh-1.
+	var air_h := maxi(fh - 3, 2)
+	var world_rect := Rect2i(
+		inner.position.x + origin_vox.x,
+		inner.position.y + origin_vox.z,
+		inner.size.x,
+		inner.size.y
+	)
+	var room := InteriorRoom.make(
+		world_rect,
+		local_floor_y + origin_vox.y,
+		air_h,
+		_interior_purpose_for_zone(zone, world_rect)
+	)
+	interior_rooms.append(room)
+	return room
+
+
+## Multi-storey lots: 3×3 cabin in the corner opposite the street door.
+## Adds the cabin rect to the ground InteriorRoom keep_clear when present.
+func _record_elevator_shaft(
+	bmin: Vector3i, bmax: Vector3i, grammar: BuildingGrammar, room: InteriorRoom
+) -> void:
+	var floors := grammar.last_floors
+	if floors < 2:
+		return
+	var clear := Rect2i(
+		bmin.x + 1,
+		bmin.z + 1,
+		maxi(bmax.x - bmin.x - 2, 0),
+		maxi(bmax.z - bmin.z - 2, 0)
+	)
+	const CABIN := 3
+	## Need cabin + 1-cell inset on each side so walls stay outside the pad.
+	if clear.size.x < CABIN + 2 or clear.size.y < CABIN + 2:
+		return
+	var local_rect := _elevator_cabin_rect(clear, grammar.last_facing, CABIN)
+	var floor_ys := PackedInt32Array()
+	for f in range(floors):
+		floor_ys.append(grammar.landing_y(bmin.y, f) + origin_vox.y)
+	var world_rect := Rect2i(
+		local_rect.position.x + origin_vox.x,
+		local_rect.position.y + origin_vox.z,
+		local_rect.size.x,
+		local_rect.size.y
+	)
+	var shaft: RefCounted = ElevatorShaftScript.make(world_rect, floor_ys) as RefCounted
+	elevator_shafts.append(shaft)
+	if room != null:
+		room.keep_clear.append(world_rect)
+
+
+## Cabin footprint inside `clear` (district-local XZ), opposite street `facing`.
+## facing: 0=+Z, 1=-Z, 2=+X, 3=-X (DistrictPlanner.street_facing).
+func _elevator_cabin_rect(clear: Rect2i, facing: int, cabin: int) -> Rect2i:
+	var x_lo := clear.position.x + 1
+	var z_lo := clear.position.y + 1
+	var x_hi := clear.position.x + clear.size.x - cabin - 1
+	var z_hi := clear.position.y + clear.size.y - cabin - 1
+	match facing:
+		0: ## Street +Z → back at −Z.
+			return Rect2i(x_hi, z_lo, cabin, cabin)
+		1: ## Street −Z → back at +Z.
+			return Rect2i(x_hi, z_hi, cabin, cabin)
+		2: ## Street +X → back at −X.
+			return Rect2i(x_lo, z_hi, cabin, cabin)
+		_: ## Street −X → back at +X.
+			return Rect2i(x_hi, z_hi, cabin, cabin)
+
+
+## Promote grammar-local door punches to world-space CastleDoorway records.
+func _record_lot_doorways(grammar: BuildingGrammar) -> void:
+	for item in grammar.lot_doorways:
+		var local_d: CastleDoorway = item as CastleDoorway
+		if local_d == null:
+			continue
+		var world_d: CastleDoorway = CastleDoorwayScript.new() as CastleDoorway
+		world_d.center = Vector2i(
+			local_d.center.x + origin_vox.x, local_d.center.y + origin_vox.z
+		)
+		world_d.axis = local_d.axis
+		world_d.width = local_d.width
+		world_d.depth = local_d.depth
+		world_d.storey = local_d.storey
+		world_d.floor_y = local_d.floor_y + origin_vox.y
+		world_d.height = local_d.height
+		world_d.leaf = local_d.leaf
+		world_d.link = local_d.link
+		world_d.arch_courses = local_d.arch_courses
+		lot_doorways.append(world_d)
+
+
+func _interior_purpose_for_zone(zone: int, rect: Rect2i) -> int:
+	var h := absi(rect.position.x * 73856093 ^ rect.position.y * 19349663 ^ zone * 83492791)
+	match zone:
+		LandUse.CORE_LOT, LandUse.CIVIC_LOT:
+			return RoomDecorator.Purpose.OFFICE
+		LandUse.MID_LOT:
+			var mid: Array[int] = [
+				RoomDecorator.Purpose.OFFICE,
+				RoomDecorator.Purpose.LIVING_ROOM,
+				RoomDecorator.Purpose.DINING_ROOM,
+			]
+			return mid[h % mid.size()]
+		LandUse.COURTYARD_LOT:
+			return RoomDecorator.Purpose.LIVING_ROOM
+		_:
+			## Town / generic lots — domestic mix.
+			var home: Array[int] = [
+				RoomDecorator.Purpose.LIVING_ROOM,
+				RoomDecorator.Purpose.BEDROOM,
+				RoomDecorator.Purpose.KITCHEN,
+				RoomDecorator.Purpose.DINING_ROOM,
+			]
+			return home[h % home.size()]
 
 
 func _height_cap_for(cx: int, cz: int, zone_ceiling: int) -> int:

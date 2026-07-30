@@ -159,6 +159,23 @@ func _test_profile_costs() -> void:
 		"pedestrian costs: pavement %.2f crossing %.2f road %.2f asphalt %.2f"
 		% [pavement, crosswalk, road, asphalt]
 	)
+	## Fractal plaza / sculpture: cars stay on edge roads, never cut the glow square.
+	var car := NavProfile.car()
+	var asphalt_car := car.surface_cost[VoxelMaterial.ASPHALT]
+	var glow_car := car.surface_cost[VoxelMaterial.FRACTAL_GLOW]
+	var band_car := car.surface_cost[VoxelMaterial.FRACTAL_BAND_0]
+	if glow_car < 16.0 or band_car < 16.0:
+		_fail(
+			"FAIL car fractal costs too low (glow=%.1f band0=%.1f); plaza would be a cut-through"
+			% [glow_car, band_car]
+		)
+		return
+	if glow_car <= asphalt_car * 4.0:
+		_fail(
+			"FAIL car glow cost %.1f is not dear vs asphalt %.1f"
+			% [glow_car, asphalt_car]
+		)
+		return
 
 
 ## What one corridor across the street actually looks like, which is the whole of the pavement

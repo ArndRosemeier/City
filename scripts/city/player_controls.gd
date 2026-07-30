@@ -27,9 +27,11 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "monster_summon", "label": "Summon monster (N)", "group": "World"},
 	{"id": "meteor", "label": "Spawn meteor (M)", "group": "World"},
 	{"id": "tetris", "label": "Spawn Tetris", "group": "World"},
+	{"id": "aim_panel", "label": "Spawn aim panel (Z)", "group": "World"},
 	{"id": "pedestrian", "label": "Spawn pedestrian", "group": "World"},
 	{"id": "undead_radar", "label": "Undead radar", "group": "World"},
 	{"id": "day_night", "label": "Day / night (Y)", "group": "World"},
+	{"id": "interact", "label": "Interact", "group": "World"},
 	{"id": "build_1", "label": "Build slot 1", "group": "Build"},
 	{"id": "build_2", "label": "Build slot 2", "group": "Build"},
 	{"id": "build_3", "label": "Build slot 3", "group": "Build"},
@@ -115,12 +117,16 @@ static func default_binding(action_id: String) -> Dictionary:
 			return _key(KEY_M)
 		"tetris":
 			return _key(KEY_T)
+		"aim_panel":
+			return _key(KEY_Z)
 		"pedestrian":
 			return _key(KEY_P)
 		"undead_radar":
 			return _key(KEY_U)
 		"day_night":
 			return _key(KEY_Y)
+		"interact":
+			return _key(KEY_E)
 		"build_1":
 			return _key(KEY_F1)
 		"build_2":

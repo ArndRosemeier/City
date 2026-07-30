@@ -185,7 +185,9 @@ static func car() -> _Self:
 	## could neither drive down nor take a link for, and would sit on the ledge forever.
 	p.max_drop = 2.0
 	p.max_wade = 0
-	p.surface_cost = _surface_costs({
+	## Fractal glow / sculpture bands are a hard no-go for traffic (edge roads only).
+	## Cost must beat a short cut across the plaza vs driving around the stubs.
+	var car_costs := {
 		VoxelMaterial.SIDEWALK: 4.0,
 		VoxelMaterial.CURB: 2.0,
 		VoxelMaterial.PLAZA: 4.0,
@@ -198,7 +200,12 @@ static func car() -> _Self:
 		VoxelMaterial.CAVE_FLOOR: 6.0,
 		VoxelMaterial.ROOF: 8.0,
 		VoxelMaterial.ROOF_CLAY: 8.0,
-	})
+		VoxelMaterial.FRACTAL_GLOW: 16.0,
+		VoxelMaterial.FRACTAL_INTERIOR: 16.0,
+	}
+	for band_i in range(VoxelMaterial.FRACTAL_BAND_COUNT):
+		car_costs[VoxelMaterial.fractal_band(band_i)] = 16.0
+	p.surface_cost = _surface_costs(car_costs)
 	return p
 
 

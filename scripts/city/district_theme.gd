@@ -23,7 +23,9 @@ const GRAVEYARD := 6
 const LAKE := 7
 ## Outer-ring fortress: edge stubs only, walled castle on a plinth reached by a causeway.
 const CASTLE := 8
-const COUNT := 9
+## Outer-ring fractal plaza: edge stubs only, glowing plane + Mandelbrot UI walls.
+const FRACTAL := 9
+const COUNT := 10
 
 ## Districts within this many tiles of the world origin are always the high-rise core.
 const CORE_RING := 0
@@ -78,12 +80,12 @@ static func for_district(world_seed: int, coord: Vector2i) -> DistrictTheme:
 	elif ring == 2:
 		choices = PackedInt32Array([
 			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL,
-			GRAVEYARD, LAKE, CASTLE
+			GRAVEYARD, LAKE, CASTLE, FRACTAL
 		])
 	else:
 		choices = PackedInt32Array([
 			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GRAVEYARD,
-			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE,
+			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE, FRACTAL,
 		])
 	return make(choices[pick % choices.size()])
 
@@ -145,6 +147,9 @@ static func parse_theme_id(raw: String) -> int:
 		"fortress": CASTLE,
 		"keep": CASTLE,
 		"citadel": CASTLE,
+		"fractal": FRACTAL,
+		"mandelbrot": FRACTAL,
+		"mandelbrotplaza": FRACTAL,
 	}
 	if aliases.has(key):
 		return int(aliases[key])
@@ -441,6 +446,34 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.wild_chance = 0.0
 			t.park_count = 0
 			## No interior streets — planner stamps short edge stubs only.
+			t.road_density = 0.0
+			t.median_planting = false
+		FRACTAL:
+			t.display_name = "Fractal"
+			t.blurb = "A glowing plaza with Mandelbrot walls — roads only at the edges."
+			t.wall_mats = PackedInt32Array([
+				VoxelMaterial.METAL, VoxelMaterial.GLASS_LIT, VoxelMaterial.CONCRETE
+			])
+			t.townhouse_mats = PackedInt32Array([VoxelMaterial.METAL, VoxelMaterial.CONCRETE])
+			t.roof_mats = PackedInt32Array([VoxelMaterial.METAL_PLATE])
+			t.base_mat = VoxelMaterial.METAL
+			t.tower_shaft_mat = VoxelMaterial.GLASS_LIT
+			t.accent_mat = VoxelMaterial.PAINT
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.GLASS_LIT, VoxelMaterial.METAL, VoxelMaterial.PAINT
+			])
+			t.sidewalk_mat = VoxelMaterial.SIDEWALK
+			t.plaza_mat = VoxelMaterial.GLASS_LIT
+			t.plaza_inner_mat = VoxelMaterial.METAL_PLATE
+			t.intensity_bias = -0.5
+			t.height_scale = 0.0
+			t.tower_chance = 0.0
+			t.modern_chance = 0.0
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.0
+			t.cylinder_chance = 0.0
+			t.wild_chance = 0.0
+			t.park_count = 0
 			t.road_density = 0.0
 			t.median_planting = false
 		_:

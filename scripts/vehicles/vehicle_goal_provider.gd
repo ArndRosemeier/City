@@ -188,13 +188,44 @@ func _goal_for_next_leg(car: VehicleAgent) -> NavGoal:
 ## The goal a frightened driver wants. Public because VehicleDirector pushes one in through
 ## `NavAgent.set_goal` the moment destruction happens, instead of waiting to be asked.
 ##
-## Lane discipline is off while fleeing, deliberately: the car takes whatever the span field
-## offers away from the threat, which is what flooring it away from a collapsing building
-## looks like. The car rejoins the lanes on its next ordinary drive.
+## Prefer a far open lane point so cars stay on carriageways (fractal plazas and other
+## open reserves are not for traffic). Fall back to an open-field flee only when the
+## lane graph has nothing usable.
 func flee_goal(car: VehicleAgent) -> NavGoal:
 	car.clear_route()
 	var run := _rng.randf_range(flee_run_min_m, flee_run_max_m)
+	var lane_goal := _flee_via_lanes(car, run)
+	if lane_goal != null:
+		return lane_goal
 	var goal := NavGoalScript.flee_point(car.flee_from, run)
+	goal.tag = TAG_FLEE
+	_issued += 1
+	return goal
+
+
+func _flee_via_lanes(car: VehicleAgent, min_clear_m: float) -> NavGoal:
+	if _lanes == null or _lanes.is_empty() or _nav == null:
+		return null
+	var best := -1
+	var best_d := -1.0
+	for _i in range(16):
+		var node := _lanes.random_node(_rng)
+		if node < 0 or not _lanes.is_open(node):
+			continue
+		var at: Vector3 = _lanes.positions[node]
+		var d := at.distance_to(car.flee_from)
+		if d < min_clear_m * 0.5:
+			continue
+		if d > best_d:
+			best_d = d
+			best = node
+	if best < 0:
+		return null
+	var hit := _nav.nearest_surface(_profile_id, _lanes.positions[best], snap_radius_m)
+	if not hit.found:
+		return null
+	car.lane_node = best
+	var goal := NavGoalScript.go_to_point(hit.position, arrive_radius_m)
 	goal.tag = TAG_FLEE
 	_issued += 1
 	return goal

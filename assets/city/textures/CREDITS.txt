@@ -1,37 +1,37 @@
 Textures from ambientCG (https://ambientcg.com/)
 License: CC0 1.0 Universal (public domain dedication)
 
-Asset IDs used (1K-JPG Color/albedo maps):
-- asphalt.jpg <- Asphalt031
-- bark.jpg <- Bark014
-- brick.jpg <- Bricks075A
-- brick_dark.jpg <- Bricks097
-- concrete.jpg <- Concrete034
-- dirt.jpg <- Ground054
-- grass.jpg <- Grass001
-- gravel.jpg <- Gravel023
-- plaster.jpg <- Plaster001
-- plaza.jpg <- PavingStones070
-- rock.jpg <- Rock050
-- sidewalk.jpg <- PavingStones037
-- stone.jpg <- PavingStones128
-- wood.jpg <- Wood051
+Asset IDs used (Color/albedo maps):
+- asphalt.jpg <- Asphalt031 (1K-JPG)
+- bark.jpg <- Bark014 (1K-JPG)
+- brick.jpg <- Bricks075A (1K-JPG)
+- brick_dark.jpg <- Bricks097 (1K-JPG)
+- concrete.jpg <- Concrete034 (1K-JPG)
+- dirt.jpg <- Ground054 (1K-JPG)
+- grass.jpg <- Grass001 (1K-JPG)
+- gravel.jpg <- Gravel023 (1K-JPG)
+- plaster.jpg <- Plaster001 (1K-JPG)
+- plaza.jpg <- PavingStones070 (1K-JPG)
+- rock.jpg <- Rock050 (1K-JPG)
+- sidewalk.jpg <- PavingStones037 (1K-JPG)
+- stone.jpg <- Rock020 (2K-JPG)
+- wood.jpg <- Wood051 (1K-JPG)
 
-Normal maps (1K-JPG NormalGL):
-- asphalt_normal.jpg <- Asphalt031
-- bark_normal.jpg <- Bark014
-- brick_dark_normal.jpg <- Bricks097
-- brick_normal.jpg <- Bricks075A
-- concrete_normal.jpg <- Concrete034
-- dirt_normal.jpg <- Ground054
-- grass_normal.jpg <- Grass001
-- gravel_normal.jpg <- Gravel023
-- plaster_normal.jpg <- Plaster001
-- plaza_normal.jpg <- PavingStones070
-- rock_normal.jpg <- Rock050
-- sidewalk_normal.jpg <- PavingStones037
-- stone_normal.jpg <- PavingStones128
-- wood_normal.jpg <- Wood051
+Normal maps (NormalGL):
+- asphalt_normal.jpg <- Asphalt031 (1K-JPG)
+- bark_normal.jpg <- Bark014 (1K-JPG)
+- brick_dark_normal.jpg <- Bricks097 (1K-JPG)
+- brick_normal.jpg <- Bricks075A (1K-JPG)
+- concrete_normal.jpg <- Concrete034 (1K-JPG)
+- dirt_normal.jpg <- Ground054 (1K-JPG)
+- grass_normal.jpg <- Grass001 (1K-JPG)
+- gravel_normal.jpg <- Gravel023 (1K-JPG)
+- plaster_normal.jpg <- Plaster001 (1K-JPG)
+- plaza_normal.jpg <- PavingStones070 (1K-JPG)
+- rock_normal.jpg <- Rock050 (1K-JPG)
+- sidewalk_normal.jpg <- PavingStones037 (1K-JPG)
+- stone_normal.jpg <- Rock020 (2K-JPG)
+- wood_normal.jpg <- Wood051 (1K-JPG)
 
 Project-authored (see generate_city_textures.py):
 - road_line.jpg, crosswalk.jpg — street markings

@@ -56,7 +56,10 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 ## Physics frames between ticks of a far-tier ped. Past 80 m its motion is a lerp along a
 ## corridor nobody can see, so stepping it every frame buys nothing; the skipped time is owed
 ## and paid on the next tick, so the walking speed is unchanged.
-@export var far_tick_stride: int = 4
+@export var far_tick_stride: int = 7
+## Soft µs budget for `_simulate_agents` per physics frame. Surplus agents keep owed_delta
+## and a rotating cursor spreads ticks so late indices are not starved when the street is dense.
+@export var sim_budget_ms: float = 5.0
 ## How far outside the near band a ped is given its capsule. The motor needs the collider
 ## before NavLod switches it to the near tier, not in the same frame.
 @export var collider_margin_m: float = 8.0
@@ -102,6 +105,8 @@ var _pending_visuals: Array[int] = []
 var _visual_drain_frame: int = -1
 var _threat_pos_cache: Vector3 = Vector3.ZERO
 var _threat_pos_frame: int = -1
+## Rotating start index for the soft sim budget — keeps late agents from starving.
+var _sim_cursor: int = 0
 
 
 func setup(pavement: SidewalkMap, camera: Camera3D, seed_value: int = -1) -> void:
@@ -624,7 +629,12 @@ func _simulate_agents(delta: float) -> void:
 	var frame := Engine.get_physics_frames()
 	var stride := maxi(far_tick_stride, 1)
 	_apply_separation()
-	for i in range(_agents.size()):
+	var n := _agents.size()
+	if n == 0:
+		return
+	## Always accumulate owed time / flee / colliders for everyone; only the nav.tick
+	## work is soft-budgeted so a dense street cannot blow past ~sim_budget_ms.
+	for i in range(n):
 		var ped := _agents[i]
 		if ped == null or ped.dead:
 			continue
@@ -632,12 +642,26 @@ func _simulate_agents(delta: float) -> void:
 		_sync_speed(ped)
 		_ensure_collider(ped, observer)
 		ped.owed_delta += delta
+	var budget_us := int(maxf(sim_budget_ms, 0.5) * 1000.0)
+	var deadline := Time.get_ticks_usec() + budget_us
+	var start := _sim_cursor % n
+	var ticked := 0
+	for k in range(n):
+		var i := (start + k) % n
+		var ped := _agents[i]
+		if ped == null or ped.dead:
+			continue
 		if ped.nav.tier() == NavLod.Tier.FAR and (frame + i) % stride != 0:
 			continue
 		var owed := ped.owed_delta
 		ped.owed_delta = 0.0
 		ped.nav.tick(owed, observer)
 		_after_tick(ped)
+		ticked += 1
+		if Time.get_ticks_usec() >= deadline and ticked > 0:
+			_sim_cursor = (i + 1) % n
+			return
+	_sim_cursor = (start + 1) % n
 
 
 ## What the LOD tiers are measured from. Without a camera the crowd keeps walking, at the

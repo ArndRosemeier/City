@@ -9,9 +9,11 @@ const DEBRIS_CLASS := "NativeCascadeDebris"
 const NAV_BAKE_CLASS := "NativeNavBake"
 ## Main-thread navigation registry every agent queries.
 const NAV_WORLD_CLASS := "NativeNavWorld"
+## Deep Mandelbrot (HP reference + perturbation bake).
+const MANDELBROT_CLASS := "NativeMandelbrot"
 
 const REQUIRED_CLASSES: Array[String] = [
-	VOLUME_CLASS, DEBRIS_CLASS, NAV_BAKE_CLASS, NAV_WORLD_CLASS
+	VOLUME_CLASS, DEBRIS_CLASS, NAV_BAKE_CLASS, NAV_WORLD_CLASS, MANDELBROT_CLASS
 ]
 
 
@@ -89,3 +91,12 @@ static func make_nav_world() -> NativeNavWorld:
 		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % NAV_WORLD_CLASS)
 		assert(false, "NativeNavWorld instantiate failed")
 	return world
+
+
+static func make_mandelbrot() -> Object:
+	require_loaded()
+	var eng: Object = ClassDB.instantiate(MANDELBROT_CLASS)
+	if eng == null:
+		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % MANDELBROT_CLASS)
+		assert(false, "NativeMandelbrot instantiate failed")
+	return eng

@@ -10,6 +10,7 @@ const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
 const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
+const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -34,6 +35,8 @@ var street_props: StreetPropPlacer
 var scale_pads: ScalePadPlacer
 ## Mesh doors hung in the castle's openings. Null on every tile that is not a Castle.
 var castle_doors: CastleDoorPlacer
+## Glowing plane + Mandelbrot panels. Null on every tile that is not Fractal.
+var mandelbrot_arena: Node3D
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -54,14 +57,37 @@ var _dseed: int = 0
 var _terrain_ref: VoxelTerrain
 var _tool_ref: VoxelTool
 var _camera_ref: Camera3D
+## Live CityBrush from CityRoot — Mandelbrot Create morph must write through this.
+var _live_brush: CityBrush = null
 ## Worker bake result held between ground commit and detail commit.
 var _bake_blocks: Dictionary = {}
 var _bake_block_keys: Array[Vector3i] = []
 var _bake_key_index: int = 0
 var _bake_impostors: Array = []
+## JIT furniture targets (InteriorRoom). Empty on far / non-lot tiles.
+var interior_rooms: Array = []
+## City lot street doors (CastleDoorway, world voxel coords). Hung with castle doors.
+var lot_doorways: Array = []
+## Multi-storey elevators (ElevatorShaft, world voxel coords).
+var elevator_shafts: Array = []
 ## Hill gem ore in world voxel coords (empty outside Hill districts).
 var hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var hill_gem_mats: PackedInt32Array = PackedInt32Array()
+
+
+func bind_live_brush(brush: CityBrush) -> void:
+	_live_brush = brush
+
+
+func live_brush() -> CityBrush:
+	return _live_brush
+
+
+## False on Fractal — plaza stays empty of pedestrians, cars, lamps, and pads.
+func allows_auto_actors() -> bool:
+	if generator == null or generator.theme == null:
+		return true
+	return generator.theme.id != DistrictTheme.FRACTAL
 
 
 func configure(
@@ -167,6 +193,9 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_bake_block_keys.clear()
 	_bake_key_index = 0
 	_bake_impostors.clear()
+	interior_rooms.clear()
+	lot_doorways.clear()
+	elevator_shafts.clear()
 	hill_gem_positions = PackedVector3Array()
 	hill_gem_mats = PackedInt32Array()
 	if building_lod != null and is_instance_valid(building_lod):
@@ -269,6 +298,9 @@ func _stamp_ground_async() -> void:
 	_dseed = int(payload.get("seed", 0))
 	_ground_thickness = int(payload.get("ground_thickness", 6))
 	_bake_impostors = payload.get("impostors", [])
+	interior_rooms = payload.get("interior_rooms", [])
+	lot_doorways = payload.get("lot_doorways", [])
+	elevator_shafts = payload.get("elevator_shafts", [])
 	_bake_blocks = payload.get("blocks", {})
 	hill_gem_positions = payload.get("hill_gem_positions", PackedVector3Array()) as PackedVector3Array
 	hill_gem_mats = payload.get("hill_gem_mats", PackedInt32Array()) as PackedInt32Array
@@ -382,69 +414,78 @@ func _stamp_detail_async() -> void:
 
 	await get_tree().process_frame
 
-	CityProfiler.begin("stream_crowd")
-	crowd = CrowdDirectorScript.new()
-	crowd.name = "Crowd"
-	crowd.pedestrian_count = _crowd_count
-	add_child(crowd)
-	crowd.setup(_topology.sidewalks, camera, _dseed)
-	CityProfiler.end("stream_crowd")
-	await get_tree().process_frame
-
-	CityProfiler.begin("stream_vehicles")
-	vehicles = VehicleDirectorScript.new()
-	vehicles.name = "Traffic"
-	vehicles.vehicle_count = _vehicle_count
-	add_child(vehicles)
-	vehicles.setup(_topology, camera, _dseed)
-	vehicles.bind_crowd(crowd)
-	CityProfiler.end("stream_vehicles")
-	await get_tree().process_frame
-
-	CityProfiler.begin("stream_props")
-	street_props = StreetPropPlacerScript.new()
-	street_props.name = "StreetProps"
-	add_child(street_props)
-	street_props.place_from_planner(
-		generator.get_planner(),
-		generator.cell_size,
-		_voxel_size,
-		generator.ground_thickness,
-		camera,
-		origin_vox
-	)
+	## Fractal is a quiet plaza: edge roads exist for world continuity, but no crowd,
+	## traffic, lamps, or scale pads spawn on this tile.
 	var day_night := get_tree().get_first_node_in_group(&"day_night")
-	if day_night != null and day_night.has_method("get_night_factor"):
-		street_props.set_night_factor(float(day_night.call("get_night_factor")))
-	CityProfiler.end("stream_props")
-	await get_tree().process_frame
+	if allows_auto_actors():
+		CityProfiler.begin("stream_crowd")
+		crowd = CrowdDirectorScript.new()
+		crowd.name = "Crowd"
+		crowd.pedestrian_count = _crowd_count
+		add_child(crowd)
+		crowd.setup(_topology.sidewalks, camera, _dseed)
+		CityProfiler.end("stream_crowd")
+		await get_tree().process_frame
 
-	CityProfiler.begin("stream_pads")
-	scale_pads = ScalePadPlacerScript.new()
-	scale_pads.name = "ScalePads"
-	add_child(scale_pads)
-	scale_pads.place_from_planner(
-		generator.get_planner(),
-		generator.cell_size,
-		_voxel_size,
-		generator.ground_thickness,
-		origin_vox,
-		_dseed
-	)
-	CityProfiler.end("stream_pads")
-	await get_tree().process_frame
+		CityProfiler.begin("stream_vehicles")
+		vehicles = VehicleDirectorScript.new()
+		vehicles.name = "Traffic"
+		vehicles.vehicle_count = _vehicle_count
+		add_child(vehicles)
+		vehicles.setup(_topology, camera, _dseed)
+		vehicles.bind_crowd(crowd)
+		CityProfiler.end("stream_vehicles")
+		await get_tree().process_frame
 
-	## Mesh doors for the fortress openings. `get_castle_layout()` is null on every other
-	## district, and the placer treats that as "no doors" rather than an error, so this stays a
-	## single unconditional step in the detail stream.
+		CityProfiler.begin("stream_props")
+		street_props = StreetPropPlacerScript.new()
+		street_props.name = "StreetProps"
+		add_child(street_props)
+		street_props.place_from_planner(
+			generator.get_planner(),
+			generator.cell_size,
+			_voxel_size,
+			generator.ground_thickness,
+			camera,
+			origin_vox
+		)
+		if day_night != null and day_night.has_method("get_night_factor"):
+			street_props.set_night_factor(float(day_night.call("get_night_factor")))
+		CityProfiler.end("stream_props")
+		await get_tree().process_frame
+
+		CityProfiler.begin("stream_pads")
+		scale_pads = ScalePadPlacerScript.new()
+		scale_pads.name = "ScalePads"
+		add_child(scale_pads)
+		scale_pads.place_from_planner(
+			generator.get_planner(),
+			generator.cell_size,
+			_voxel_size,
+			generator.ground_thickness,
+			origin_vox,
+			_dseed
+		)
+		CityProfiler.end("stream_pads")
+		await get_tree().process_frame
+
+	## Mesh doors + DOOR voxel barriers (castle layout and/or city lot façades).
 	CityProfiler.begin("stream_castle_doors")
 	castle_doors = CastleDoorPlacerScript.new()
 	castle_doors.name = "CastleDoors"
 	add_child(castle_doors)
+	var door_brush: CityBrush = live_brush()
 	castle_doors.place_from_layout(
-		generator.get_castle_layout(), _voxel_size, origin_vox, camera
+		generator.get_castle_layout(), _voxel_size, origin_vox, camera, door_brush
 	)
+	if not lot_doorways.is_empty():
+		castle_doors.hang_lot_doorways(lot_doorways, _voxel_size, camera, door_brush)
 	CityProfiler.end("stream_castle_doors")
+	await get_tree().process_frame
+
+	CityProfiler.begin("stream_fractal_ui")
+	_spawn_mandelbrot_arena(generator)
+	CityProfiler.end("stream_fractal_ui")
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_impostors")
@@ -468,6 +509,27 @@ func _stamp_detail_async() -> void:
 	CityProfiler.set_counter("stream_phase", 0)
 	ready_to_play.emit(self)
 	print("DistrictInstance ready %s seed=%d" % [str(coord), _dseed])
+
+
+func _spawn_mandelbrot_arena(gen: DistrictGenerator) -> void:
+	if gen == null:
+		return
+	var bounds: Dictionary = gen.get_fractal_world_bounds()
+	if bounds.is_empty():
+		return
+	if mandelbrot_arena != null and is_instance_valid(mandelbrot_arena):
+		mandelbrot_arena.queue_free()
+	mandelbrot_arena = MandelbrotArenaScript.new() as Node3D
+	mandelbrot_arena.name = "MandelbrotArena"
+	add_child(mandelbrot_arena)
+	mandelbrot_arena.call(
+		"setup",
+		bounds["min"] as Vector3,
+		bounds["max"] as Vector3,
+		float(bounds.get("ground_y_m", 0.0)),
+		Callable(self, "live_brush"),
+		_voxel_size
+	)
 
 
 func _bake_on_worker() -> Dictionary:
@@ -563,18 +625,34 @@ func _notification(what: int) -> void:
 
 func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 	## Time-budgeted commits. Keys must already be nearest-first for this phase.
+	## Remesh backpressure: do not outrun VoxelTools — feeding more blocks while
+	## remaining_main_thread_blocks is high produces 600ms+ unaccounted gaps.
 	const BUDGET_MSEC := 3
+	const BUDGET_MSEC_SOFT := 1
 	var terrain := _terrain_ref
 	while true:
 		if not is_instance_valid(self):
 			OfflineVolumeCommitterScript.release_commit(coord)
 			return false
+		## Hard pressure: release the lock so another district is not stuck waiting,
+		## then idle until the remesher drains.
+		var pressure := CityProfiler.remesh_pressure()
+		if pressure >= 2:
+			OfflineVolumeCommitterScript.release_commit(coord)
+			CityProfiler.set_counter("remesh_backpressure", 2)
+			CityProfiler.set_counter(
+				"stream_blocks_left", maxi(_bake_block_keys.size() - _bake_key_index, 0)
+			)
+			await get_tree().process_frame
+			continue
 		if not OfflineVolumeCommitterScript.try_acquire_commit(coord):
 			await get_tree().process_frame
 			continue
 		if _bake_key_index >= _bake_block_keys.size():
 			break
 
+		var budget_ms := BUDGET_MSEC_SOFT if pressure >= 1 else BUDGET_MSEC
+		CityProfiler.set_counter("remesh_backpressure", pressure)
 		var t0 := Time.get_ticks_msec()
 		var t0_us := Time.get_ticks_usec()
 		var committed := 0
@@ -594,7 +672,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 				return false
 			_bake_key_index += 1
 			committed += 1
-			if Time.get_ticks_msec() - t0 >= BUDGET_MSEC:
+			if Time.get_ticks_msec() - t0 >= budget_ms:
 				break
 		CityProfiler.scope_us(scope_name, Time.get_ticks_usec() - t0_us)
 		CityProfiler.set_counter(
@@ -605,6 +683,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 		await get_tree().process_frame
 
 	OfflineVolumeCommitterScript.release_commit(coord)
+	CityProfiler.set_counter("remesh_backpressure", 0)
 	return true
 
 

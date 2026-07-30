@@ -20,6 +20,8 @@ const GRAVEYARD := 11
 const LAKE := 12
 ## Fortress reserve — no housing; built by CastleComposer.
 const CASTLE := 13
+## Fractal plaza — no housing; glowing deck + Mandelbrot UI panels.
+const FRACTAL := 14
 
 
 static func is_road(tag: int) -> bool:
@@ -44,4 +46,5 @@ static func is_open_nature(tag: int) -> bool:
 		or tag == GRAVEYARD
 		or tag == LAKE
 		or tag == CASTLE
+		or tag == FRACTAL
 	)

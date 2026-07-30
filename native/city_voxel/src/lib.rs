@@ -2,6 +2,8 @@ use godot::prelude::*;
 use std::collections::HashMap;
 
 mod cascade_debris;
+mod mandelbrot;
+mod mandelbrot_api;
 mod materials;
 mod nav;
 mod nav_api;

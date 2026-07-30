@@ -1,4 +1,4 @@
-## Assert window glass fills its cell for collision (no seam gaps into hollow interiors).
+## Assert window glass is an opaque full-cell model (no transparent-pass air holes).
 extends SceneTree
 
 
@@ -11,23 +11,18 @@ func _initialize() -> void:
 			push_error("FAIL no model for id %d" % id)
 			failed = true
 			continue
-		var mesh_model := model as VoxelBlockyModelMesh
-		if mesh_model == null:
-			push_error("FAIL glass id %d is not a mesh model" % id)
+		## Engine cubes are the reliable solid pane; custom meshes were culled invisible.
+		var cube := model as VoxelBlockyModelCube
+		if cube == null:
+			push_error("FAIL glass id %d is not VoxelBlockyModelCube (got %s)" % [id, model.get_class()])
 			failed = true
 			continue
-		var boxes: Array = mesh_model.collision_aabbs
-		if boxes.is_empty():
-			push_error("FAIL glass id %d has no collision aabbs" % id)
-			failed = true
-			continue
-		var box: AABB = boxes[0]
-		if not box.position.is_equal_approx(Vector3.ZERO) or not box.size.is_equal_approx(Vector3.ONE):
+		if int(model.transparency_index) != 0:
 			push_error(
-				"FAIL glass id %d collision aabb is %s — expected full cell [0,1]^3"
-				% [id, box]
+				"FAIL glass id %d transparency_index=%d — must stay opaque"
+				% [id, model.transparency_index]
 			)
 			failed = true
 			continue
-		print("OK glass id %d collision fills cell" % id)
+		print("OK glass id %d opaque cube" % id)
 	quit(1 if failed else 0)

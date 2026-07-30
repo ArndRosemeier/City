@@ -22,6 +22,8 @@ signal health_depleted(source: DamageSource.Id)
 signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
 ## T-key: summon a Game Boy Tetris machine at aim hit_point.
 signal tetris_requested(hit_point: Vector3, hit_normal: Vector3)
+## Z-key: summon a vertical aim panel for world-space click targeting.
+signal aim_panel_requested(hit_point: Vector3, hit_normal: Vector3)
 ## P-key: spawn a pedestrian at aim hit_point (plays nearby Tetris if present).
 signal pedestrian_requested(hit_point: Vector3, hit_normal: Vector3)
 
@@ -297,6 +299,11 @@ var _swim_exit_boost_left: float = 0.0
 var _swim_exit_immune_left: float = 0.0
 var _swim_exit_dir: Vector3 = Vector3.ZERO
 var _climb_mode: ClimbMode = ClimbMode.NONE
+## Scripted elevator ride: locks voxel motion while lerping feet between landings.
+var _elevator_ride_t: float = -1.0
+var _elevator_ride_duration: float = 0.85
+var _elevator_ride_from: Vector3 = Vector3.ZERO
+var _elevator_ride_to: Vector3 = Vector3.ZERO
 ## Outward wall normal (flattened) while climbing.
 var _climb_wall_n: Vector3 = Vector3.ZERO
 ## After starting climb-down, ignore ground so the roof lip doesn't cancel the hang.
@@ -1336,6 +1343,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				_request_tetris_machine()
 				get_viewport().set_input_as_handled()
 				return
+			if ctl.matches_key_pressed(ek, "aim_panel"):
+				_request_aim_panel()
+				get_viewport().set_input_as_handled()
+				return
 			if ctl.matches_key_pressed(ek, "pedestrian"):
 				_request_pedestrian()
 				get_viewport().set_input_as_handled()
@@ -1506,9 +1517,44 @@ func _process(_delta: float) -> void:
 	CityProfiler.end("walker_underground")
 
 
+## True while a scripted elevator ride owns the body (bypass VoxelBoxMover).
+func is_elevator_riding() -> bool:
+	return _elevator_ride_t >= 0.0
+
+
+## Lerp feet from the current position to `to_world` over `duration_sec`.
+## Ignores a new ride while one is already running.
+func begin_elevator_ride(to_world: Vector3, duration_sec: float = 0.85) -> void:
+	if is_elevator_riding():
+		return
+	_elevator_ride_from = global_position
+	_elevator_ride_to = to_world
+	_elevator_ride_duration = maxf(duration_sec, 0.05)
+	_elevator_ride_t = 0.0
+	velocity = Vector3.ZERO
+	_end_jump_rise()
+	_climb_mode = ClimbMode.NONE
+
+
+func _physics_elevator_ride(delta: float) -> void:
+	_elevator_ride_t += delta
+	var u := clampf(_elevator_ride_t / _elevator_ride_duration, 0.0, 1.0)
+	## Smoothstep so the cabin eases in/out.
+	u = u * u * (3.0 - 2.0 * u)
+	global_position = _elevator_ride_from.lerp(_elevator_ride_to, u)
+	velocity = Vector3.ZERO
+	if u >= 1.0:
+		global_position = _elevator_ride_to
+		_elevator_ride_t = -1.0
+	_apply_camera_angles()
+
+
 func _physics_process(delta: float) -> void:
 	_regen_energy(delta)
 	_regen_health(delta)
+	if is_elevator_riding():
+		_physics_elevator_ride(delta)
+		return
 	if is_blocking_ui_open():
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -3236,6 +3282,11 @@ func _request_tetris_machine() -> void:
 	tetris_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
 
 
+func _request_aim_panel() -> void:
+	var aim := _aim_ray_at_cursor()
+	aim_panel_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
+
+
 func _request_pedestrian() -> void:
 	var aim := _aim_ray_at_cursor()
 	pedestrian_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
@@ -3443,6 +3494,9 @@ func _is_beam_held() -> bool:
 func _fire_blaster_bolt() -> void:
 	if _camera == null:
 		return
+	## World Ui3D surfaces swallow the beam: never spawn a bolt or spend energy.
+	if _try_press_ui_3d():
+		return
 	if not try_spend_energy(energy_cost_blaster):
 		return
 	## Same shoot flick as charged blast release — hand casts each bolt.
@@ -3478,6 +3532,46 @@ func _fire_blaster_bolt() -> void:
 	if bolt.has_signal("impact"):
 		bolt.connect("impact", _on_blaster_impact)
 	bolt.call("fire", origin, aim_point, blaster_speed_mps, _effective_body_scale())
+
+
+## If the blaster aim ray hits a Ui3D surface, deliver the press and consume the shot.
+func _try_press_ui_3d() -> bool:
+	var shot := _blaster_shot_endpoints()
+	var origin: Vector3 = shot["origin"] as Vector3
+	var aim_point: Vector3 = shot["aim_point"] as Vector3
+	var dir := aim_point - origin
+	if dir.length_squared() < 0.000001:
+		return false
+	dir = dir.normalized()
+	var to := origin + dir * laser_range_m
+	var query := PhysicsRayQueryParameters3D.create(origin, to)
+	query.collision_mask = 1
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return false
+	var panel := _ui_3d_from_collider(hit.get("collider"))
+	if panel == null:
+		return false
+	if panel.has_method("press_at_world"):
+		return bool(panel.call("press_at_world", hit["position"] as Vector3))
+	if panel.has_method("mark_at_world"):
+		return bool(panel.call("mark_at_world", hit["position"] as Vector3))
+	return false
+
+
+func _ui_3d_from_collider(collider: Variant) -> Node:
+	var node := collider as Node
+	while node != null:
+		if node.has_method("press_at_world") and (
+			node.is_in_group("ui_3d")
+			or bool(node.has_meta("ui_3d"))
+			or node.is_in_group("aim_panel")
+			or bool(node.has_meta("aim_panel"))
+		):
+			return node
+		node = node.get_parent()
+	return null
 
 
 func _on_blaster_impact(hit_point: Vector3, direction: Vector3, shot_origin: Vector3) -> void:

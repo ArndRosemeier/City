@@ -27,6 +27,13 @@ const VOXEL_STAGES: Array[String] = [
 	"time_request_blocks_to_update",
 	"time_process_update_responses",
 ]
+## Streamer/commit backpressure: pause feeding VoxelTools when the remesh queue grows.
+## Soft → serialize cooperative workers to 1. Hard → pause new jobs and commit slices.
+const REMESH_BACKLOG_SOFT := 8
+const REMESH_BACKLOG_HARD := 16
+## Mesh-response stage time (µs) from the previous VoxelTerrain stats sample.
+const REMESH_MESH_RESP_SOFT_US := 8000
+const REMESH_MESH_RESP_HARD_US := 16000
 
 var _enabled: bool = false
 var _panel: PanelContainer
@@ -196,7 +203,27 @@ func _bracket_end(label: String) -> void:
 
 
 func _mon_voxel_main_blocks() -> float:
-	return float(int(_voxel_stats.get("remaining_main_thread_blocks", 0)))
+	return float(voxel_main_thread_blocks())
+
+
+## Blocks VoxelTools still wants to apply on the main thread (mesh/collision).
+func voxel_main_thread_blocks() -> int:
+	return int(_voxel_stats.get("remaining_main_thread_blocks", 0))
+
+
+func voxel_mesh_resp_us() -> int:
+	return int(_voxel_stats.get("time_process_update_responses", 0))
+
+
+## 0 = clear, 1 = soft (serialize stream workers), 2 = hard (pause commits + new jobs).
+func remesh_pressure() -> int:
+	var blocks := voxel_main_thread_blocks()
+	var mesh_us := voxel_mesh_resp_us()
+	if blocks >= REMESH_BACKLOG_HARD or mesh_us >= REMESH_MESH_RESP_HARD_US:
+		return 2
+	if blocks >= REMESH_BACKLOG_SOFT or mesh_us >= REMESH_MESH_RESP_SOFT_US:
+		return 1
+	return 0
 
 
 func _mon_frame_ms() -> float:
@@ -481,7 +508,8 @@ func _record_hitch(frame_ms: float) -> void:
 	var jobs := int(_counters.get("streamer_jobs", 0))
 	var phase := int(_counters.get("stream_phase", 0))
 	var blocks_left := int(_counters.get("stream_blocks_left", 0))
-	if (jobs > 0 or phase > 0) and unaccounted_ms >= 40.0:
+	var backpressure := int(_counters.get("remesh_backpressure", 0))
+	if (jobs > 0 or phase > 0 or backpressure > 0) and unaccounted_ms >= 40.0:
 		var phase_names: Dictionary = {
 			0: "idle",
 			1: "ground_bake",
@@ -491,8 +519,11 @@ func _record_hitch(frame_ms: float) -> void:
 		}
 		var phase_name: String = str(phase_names.get(phase, str(phase)))
 		_emit(
-			"  CityProfiler HITCH context: streamer_jobs=%d phase=%s blocks_left=%d (commit/remesh likely)"
-			% [jobs, phase_name, blocks_left]
+			(
+				"  CityProfiler HITCH context: streamer_jobs=%d phase=%s blocks_left=%d"
+				+ " remesh_backpressure=%d voxel_main_blocks=%d (commit/remesh likely)"
+			)
+			% [jobs, phase_name, blocks_left, backpressure, voxel_main_thread_blocks()]
 		)
 
 
@@ -692,7 +723,10 @@ func _refresh_label() -> void:
 		% [_frame_ms_smooth, _physics_ms_smooth, _hitch_count, _worst_hitch_ms]
 	)
 	lines.append(
-		"debris live %d · pending %d · crowd %d · vehicles %d · streamer jobs %d · stream phase %d · blocks left %d"
+		(
+			"debris live %d · pending %d · crowd %d · vehicles %d · streamer jobs %d"
+			+ " · stream phase %d · blocks left %d · remesh bp %d · voxel main %d"
+		)
 		% [
 			int(_counters.get("debris_live", 0)),
 			int(_counters.get("debris_pending", 0)),
@@ -701,6 +735,8 @@ func _refresh_label() -> void:
 			int(_counters.get("streamer_jobs", 0)),
 			int(_counters.get("stream_phase", 0)),
 			int(_counters.get("stream_blocks_left", 0)),
+			int(_counters.get("remesh_backpressure", 0)),
+			voxel_main_thread_blocks(),
 		]
 	)
 	if _hitch_log.size() > 0:

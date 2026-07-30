@@ -29,6 +29,7 @@ var player_view_m: float = 90.0
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
+var _brush: CityBrush = null
 var _camera: Camera3D
 var _player: Node3D
 var _districts: Dictionary = {}  # Vector2i -> DistrictInstance
@@ -57,16 +58,26 @@ func setup(
 	tool: VoxelTool,
 	p_world_seed: int,
 	p_voxel_size: float,
-	p_player_view_m: float
+	p_player_view_m: float,
+	brush: CityBrush = null
 ) -> void:
 	_terrain = terrain
 	_tool = tool
+	_brush = brush
 	world_seed = p_world_seed
 	voxel_size = p_voxel_size
 	player_view_m = p_player_view_m
 	_districts.clear()
 	_active_jobs.clear()
 	_booted = false
+
+
+func bind_live_brush(brush: CityBrush) -> void:
+	_brush = brush
+	for key: Variant in _districts.keys():
+		var inst: DistrictInstance = _districts[key]
+		if inst != null and is_instance_valid(inst):
+			inst.bind_live_brush(brush)
 
 
 func bind_player(player: Node3D, camera: Camera3D) -> void:
@@ -108,6 +119,12 @@ func prioritize_district(coord: Vector2i) -> DistrictInstance:
 
 func clear_priority_district() -> void:
 	_has_priority = false
+
+
+## Drop a loaded tile and bake it again (fractal Clear). Returns the new instance.
+func reload_district(coord: Vector2i) -> DistrictInstance:
+	_unload_district(coord)
+	return prioritize_district(coord)
 
 
 func for_each_district(cb: Callable) -> void:
@@ -184,8 +201,11 @@ func debug_snapshot() -> Dictionary:
 		)
 	var pending_total := pending_ground + pending_detail
 	var active_n := _active_jobs.size()
+	var slots := _effective_max_workers()
 	var worker := "idle"
-	if active_n > 0 and pending_total > 0 and active_n < max_workers:
+	if CityProfiler.remesh_pressure() >= 2 and pending_total > 0:
+		worker = "remesh_wait"  ## paused so VoxelTools can drain
+	elif active_n > 0 and pending_total > 0 and active_n < slots:
 		worker = "underfilled"  ## slots free while queue still has work
 	elif active_n > 0:
 		worker = "working"
@@ -229,7 +249,9 @@ func debug_snapshot() -> Dictionary:
 		"pending_detail": pending_detail,
 		"in_works": busy_count + pending_total,
 		"worker": worker,
-		"workers_max": max_workers,
+		"workers_max": _effective_max_workers(),
+		"workers_cap": max_workers,
+		"remesh_pressure": CityProfiler.remesh_pressure(),
 		"workers_active": active_n,
 		"active_jobs": active_list,
 		"worker_busy_flag": active_n > 0,
@@ -328,6 +350,8 @@ func _request_district(coord: Vector2i, is_boot: bool) -> void:
 	CityProfiler.begin("stream_spawn")
 	var inst: DistrictInstance = DistrictInstanceScript.new()
 	inst.configure(coord, voxel_size, world_seed, crowd_per_district, vehicles_per_district, player_view_m)
+	if _brush != null:
+		inst.bind_live_brush(_brush)
 	add_child(inst)
 	_districts[coord] = inst
 	inst.ensure_prefetch()
@@ -377,9 +401,24 @@ func _on_stamp_progress(cells: int) -> void:
 	note_cells_stamped(cells)
 
 
+func _effective_max_workers() -> int:
+	## Soft remesh pressure: one cooperative slot so bake/commit cannot double-feed
+	## VoxelTools. Hard pressure is handled in _kick_next_job (no new jobs at all).
+	if CityProfiler.remesh_pressure() >= 1:
+		return 1
+	return maxi(max_workers, 1)
+
+
 func _kick_next_job() -> void:
 	## Fill free cooperative slots (OS bake threads + main-thread commits).
-	while _active_jobs.size() < maxi(max_workers, 1):
+	## Hard remesh backlog: stop starting districts until VoxelTools drains — commits
+	## already in flight pause themselves via DistrictInstance._commit_blocks_until.
+	var pressure := CityProfiler.remesh_pressure()
+	CityProfiler.set_counter("remesh_backpressure", pressure)
+	if pressure >= 2:
+		return
+	var slots := _effective_max_workers()
+	while _active_jobs.size() < slots:
 		if not _try_start_one_job():
 			break
 
