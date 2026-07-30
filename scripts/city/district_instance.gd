@@ -563,18 +563,34 @@ func _notification(what: int) -> void:
 
 func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 	## Time-budgeted commits. Keys must already be nearest-first for this phase.
+	## Remesh backpressure: do not outrun VoxelTools — feeding more blocks while
+	## remaining_main_thread_blocks is high produces 600ms+ unaccounted gaps.
 	const BUDGET_MSEC := 3
+	const BUDGET_MSEC_SOFT := 1
 	var terrain := _terrain_ref
 	while true:
 		if not is_instance_valid(self):
 			OfflineVolumeCommitterScript.release_commit(coord)
 			return false
+		## Hard pressure: release the lock so another district is not stuck waiting,
+		## then idle until the remesher drains.
+		var pressure := CityProfiler.remesh_pressure()
+		if pressure >= 2:
+			OfflineVolumeCommitterScript.release_commit(coord)
+			CityProfiler.set_counter("remesh_backpressure", 2)
+			CityProfiler.set_counter(
+				"stream_blocks_left", maxi(_bake_block_keys.size() - _bake_key_index, 0)
+			)
+			await get_tree().process_frame
+			continue
 		if not OfflineVolumeCommitterScript.try_acquire_commit(coord):
 			await get_tree().process_frame
 			continue
 		if _bake_key_index >= _bake_block_keys.size():
 			break
 
+		var budget_ms := BUDGET_MSEC_SOFT if pressure >= 1 else BUDGET_MSEC
+		CityProfiler.set_counter("remesh_backpressure", pressure)
 		var t0 := Time.get_ticks_msec()
 		var t0_us := Time.get_ticks_usec()
 		var committed := 0
@@ -594,7 +610,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 				return false
 			_bake_key_index += 1
 			committed += 1
-			if Time.get_ticks_msec() - t0 >= BUDGET_MSEC:
+			if Time.get_ticks_msec() - t0 >= budget_ms:
 				break
 		CityProfiler.scope_us(scope_name, Time.get_ticks_usec() - t0_us)
 		CityProfiler.set_counter(
@@ -605,6 +621,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 		await get_tree().process_frame
 
 	OfflineVolumeCommitterScript.release_commit(coord)
+	CityProfiler.set_counter("remesh_backpressure", 0)
 	return true
 
 

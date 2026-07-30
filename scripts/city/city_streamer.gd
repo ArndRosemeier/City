@@ -184,8 +184,11 @@ func debug_snapshot() -> Dictionary:
 		)
 	var pending_total := pending_ground + pending_detail
 	var active_n := _active_jobs.size()
+	var slots := _effective_max_workers()
 	var worker := "idle"
-	if active_n > 0 and pending_total > 0 and active_n < max_workers:
+	if CityProfiler.remesh_pressure() >= 2 and pending_total > 0:
+		worker = "remesh_wait"  ## paused so VoxelTools can drain
+	elif active_n > 0 and pending_total > 0 and active_n < slots:
 		worker = "underfilled"  ## slots free while queue still has work
 	elif active_n > 0:
 		worker = "working"
@@ -229,7 +232,9 @@ func debug_snapshot() -> Dictionary:
 		"pending_detail": pending_detail,
 		"in_works": busy_count + pending_total,
 		"worker": worker,
-		"workers_max": max_workers,
+		"workers_max": _effective_max_workers(),
+		"workers_cap": max_workers,
+		"remesh_pressure": CityProfiler.remesh_pressure(),
 		"workers_active": active_n,
 		"active_jobs": active_list,
 		"worker_busy_flag": active_n > 0,
@@ -377,9 +382,24 @@ func _on_stamp_progress(cells: int) -> void:
 	note_cells_stamped(cells)
 
 
+func _effective_max_workers() -> int:
+	## Soft remesh pressure: one cooperative slot so bake/commit cannot double-feed
+	## VoxelTools. Hard pressure is handled in _kick_next_job (no new jobs at all).
+	if CityProfiler.remesh_pressure() >= 1:
+		return 1
+	return maxi(max_workers, 1)
+
+
 func _kick_next_job() -> void:
 	## Fill free cooperative slots (OS bake threads + main-thread commits).
-	while _active_jobs.size() < maxi(max_workers, 1):
+	## Hard remesh backlog: stop starting districts until VoxelTools drains — commits
+	## already in flight pause themselves via DistrictInstance._commit_blocks_until.
+	var pressure := CityProfiler.remesh_pressure()
+	CityProfiler.set_counter("remesh_backpressure", pressure)
+	if pressure >= 2:
+		return
+	var slots := _effective_max_workers()
+	while _active_jobs.size() < slots:
 		if not _try_start_one_job():
 			break
 
