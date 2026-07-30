@@ -32,6 +32,9 @@ var civic_lot: Vector2i = Vector2i(-1, -1)
 ## Multi-cell CORE tower parcels (planner cells). `position` is the anchor corner;
 ## every cell in the rect stays `CORE_LOT`, but only the anchor paints a building.
 var tower_parcels: Array[Rect2i] = []
+## Cell → index into `tower_parcels`, or -1. Downtown now merges every CORE block that
+## fits, so the old linear scan per lookup turned into cells × parcels work per bake.
+var _parcel_index: PackedInt32Array = PackedInt32Array()
 ## World-space tips for street lights (cell centers along avenues).
 var avenue_light_cells: Array[Vector2i] = []
 
@@ -58,7 +61,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	pocket_parks.clear()
 	avenue_light_cells.clear()
 	civic_lot = Vector2i(-1, -1)
-	tower_parcels.clear()
+	_reset_tower_parcels()
 	grand_plaza = Rect2i()
 	large_park = Rect2i()
 	large_hill = Rect2i()
@@ -286,6 +289,12 @@ func street_facing(cx: int, cz: int) -> int:
 		return 2
 	if cx - 1 >= 0 and LandUse.is_road(tag_at(cx - 1, cz)):
 		return 3
+	## No street: face whatever open space there is. A random side would put the front door
+	## into a party wall now that lot-to-lot sides build flush against the neighbour.
+	var rect := Rect2i(cx, cz, 1, 1)
+	for side in range(4):
+		if rect_side_open(rect, side):
+			return side
 	return _rng.randi() % 4
 
 
@@ -572,14 +581,35 @@ func _place_civic() -> void:
 	grid[civic_lot.y][civic_lot.x] = LandUse.CIVIC_LOT
 
 
-## Merge contiguous CORE_LOT cells into 3×3 / 4×4 tower parcels (~42–56 m).
+## Parcel shapes in cells, biggest plate first. Rectangles matter: square-only packing
+## stranded 40% of downtown as lone 14 m cells, and real amalgamated plots are irregular
+## anyway — Manhattan's standard plot is 8×30 m and the tall ones are merged runs of those.
+const PARCEL_SIZES: Array[Vector2i] = [
+	Vector2i(4, 4),
+	Vector2i(4, 3),
+	Vector2i(3, 4),
+	Vector2i(3, 3),
+	Vector2i(4, 2),
+	Vector2i(2, 4),
+	Vector2i(3, 2),
+	Vector2i(2, 3),
+	Vector2i(2, 2),
+]
+
+
+## Merge contiguous CORE_LOT cells into 2×2 … 4×4 tower parcels (~26–56 m).
 ## Streets stay one cell wide; only the building footprint grows.
+##
+## Amalgamation is the rule downtown, not the exception: a single 14 m cell cannot carry a
+## tower, and real cities got their tall buildings by merging plots for exactly that reason
+## — Manhattan's average plot grew from 257 m² to 805 m², Melbourne's from 455 to 914, and
+## its business blocks now average 7,500 m² plots built at only 40% land coverage.
 func _place_tower_parcels() -> void:
-	tower_parcels.clear()
+	_reset_tower_parcels()
 	if theme == null or theme.tower_chance <= 0.0:
 		return
 	var cap := _tower_parcel_cap()
-	if cap <= 0:
+	if cap == 0:
 		return
 	var occupied := PackedByteArray()
 	occupied.resize(cells_x * cells_z)
@@ -590,12 +620,13 @@ func _place_tower_parcels() -> void:
 				continue
 			if civic_lot.x == x and civic_lot.y == z:
 				continue
-			for size in [4, 3]:
-				var rect := Rect2i(x, z, size, size)
+			for size in PARCEL_SIZES:
+				var rect := Rect2i(Vector2i(x, z), size)
 				if not _tower_parcel_cells_ok(rect):
 					continue
-				var score := _tower_parcel_score(rect, size)
-				candidates.append({"rect": rect, "score": score, "x": x, "z": z, "size": size})
+				candidates.append({
+					"rect": rect, "score": _tower_parcel_score(rect), "x": x, "z": z,
+				})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var sa := float(a["score"])
 		var sb := float(b["score"])
@@ -603,28 +634,40 @@ func _place_tower_parcels() -> void:
 			return sa > sb
 		if int(a["z"]) != int(b["z"]):
 			return int(a["z"]) < int(b["z"])
-		if int(a["x"]) != int(b["x"]):
-			return int(a["x"]) < int(b["x"])
-		return int(a["size"]) > int(b["size"])
+		return int(a["x"]) < int(b["x"])
 	)
 	for c in candidates:
-		if tower_parcels.size() >= cap:
+		if cap > 0 and tower_parcels.size() >= cap:
 			break
 		var rect: Rect2i = c["rect"]
 		if _tower_parcel_overlaps_occupied(rect, occupied):
 			continue
+		var idx := tower_parcels.size()
 		tower_parcels.append(rect)
 		for zz in range(rect.position.y, rect.end.y):
 			for xx in range(rect.position.x, rect.end.x):
 				occupied[zz * cells_x + xx] = 1
+				_parcel_index[zz * cells_x + xx] = idx
+
+
+func _reset_tower_parcels() -> void:
+	tower_parcels.clear()
+	_parcel_index.resize(cells_x * cells_z)
+	_parcel_index.fill(-1)
+
+
+## Maximum parcels to merge, or UNLIMITED_PARCELS to amalgamate every CORE block that fits.
+const UNLIMITED_PARCELS := -1
 
 
 func _tower_parcel_cap() -> int:
 	match theme.id:
 		DistrictTheme.CORE_HIGHRISE:
-			return 10
+			## A downtown is made of amalgamated plots end to end; capping it left most
+			## CORE cells as lone 14 m lots, which is where the needles came from.
+			return UNLIMITED_PARCELS
 		DistrictTheme.CIVIC_QUARTER:
-			return 3
+			return UNLIMITED_PARCELS
 		DistrictTheme.WATERFRONT_INDUSTRIAL:
 			return 2
 		_:
@@ -637,6 +680,10 @@ func _tower_parcel_cells_ok(rect: Rect2i) -> bool:
 		return false
 	if rect.end.x > cells_x or rect.end.y > cells_z:
 		return false
+	## An amalgamated plot has to front a street — a landlocked parcel is block courtyard
+	## and gets no building, which would leave a hole the size of the whole parcel.
+	if not _rect_touches_road(rect):
+		return false
 	for z in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			if tag_at(x, z) != LandUse.CORE_LOT:
@@ -646,15 +693,14 @@ func _tower_parcel_cells_ok(rect: Rect2i) -> bool:
 	return true
 
 
-func _tower_parcel_score(rect: Rect2i, size: int) -> float:
+## Intensity summed over the cells: it favours the denser spots and, because it grows with
+## cell count, the bigger plate wherever one fits.
+func _tower_parcel_score(rect: Rect2i) -> float:
 	var sum := 0.0
 	for z in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			sum += intensity_at(x, z)
-	## Prefer larger plates and parcels that actually touch a street.
-	var street_bonus := 0.35 if _rect_touches_road(rect) else 0.0
-	var size_bonus := 0.5 if size >= 4 else 0.0
-	return sum + street_bonus + size_bonus
+	return sum
 
 
 func _tower_parcel_overlaps_occupied(rect: Rect2i, occupied: PackedByteArray) -> bool:
@@ -684,18 +730,17 @@ func _cell_touches_road(cx: int, cz: int) -> bool:
 
 ## Parcel covering (cx, cz), or empty Rect2i if the cell is not in a tower parcel.
 func tower_parcel_at(cx: int, cz: int) -> Rect2i:
-	var p := Vector2i(cx, cz)
-	for rect in tower_parcels:
-		if rect.has_point(p):
-			return rect
-	return Rect2i()
+	if cx < 0 or cz < 0 or cx >= cells_x or cz >= cells_z:
+		return Rect2i()
+	var idx := _parcel_index[cz * cells_x + cx]
+	return Rect2i() if idx < 0 else tower_parcels[idx]
 
 
 func is_tower_parcel_anchor(cx: int, cz: int) -> bool:
-	for rect in tower_parcels:
-		if rect.position.x == cx and rect.position.y == cz:
-			return true
-	return false
+	var rect := tower_parcel_at(cx, cz)
+	if rect.size.x <= 0:
+		return false
+	return rect.position.x == cx and rect.position.y == cz
 
 
 func is_tower_parcel_secondary(cx: int, cz: int) -> bool:
@@ -726,6 +771,10 @@ func street_facing_rect(rect: Rect2i) -> int:
 			best = i
 	if scores[best] > 0:
 		return best
+	## Same rule as the single-cell case: an open side, never a party wall.
+	for side in range(4):
+		if rect_side_open(rect, side):
+			return side
 	return street_facing(rect.position.x, rect.position.y)
 
 
@@ -762,6 +811,43 @@ func faces_park_rect(rect: Rect2i) -> bool:
 			if faces_park(x, z):
 				return true
 	return false
+
+
+## True when this side of `rect` faces anything other than more buildable lot — a street,
+## a plaza, a park or the district edge. Open sides carry the sidewalk setback; lot-to-lot
+## sides do not, so neighbours meet in a party wall and the block reads as one mass.
+## Sides are the `street_facing` convention: 0=+Z, 1=-Z, 2=+X, 3=-X.
+func rect_side_open(rect: Rect2i, side: int) -> bool:
+	match side:
+		0:
+			for x in range(rect.position.x, rect.end.x):
+				if not LandUse.is_lot(tag_at(x, rect.end.y)):
+					return true
+		1:
+			for x in range(rect.position.x, rect.end.x):
+				if not LandUse.is_lot(tag_at(x, rect.position.y - 1)):
+					return true
+		2:
+			for z in range(rect.position.y, rect.end.y):
+				if not LandUse.is_lot(tag_at(rect.end.x, z)):
+					return true
+		3:
+			for z in range(rect.position.y, rect.end.y):
+				if not LandUse.is_lot(tag_at(rect.position.x - 1, z)):
+					return true
+		_:
+			push_error("DistrictPlanner.rect_side_open: side %d out of range" % side)
+	return false
+
+
+## Lot with no street, plaza or park on any side. Real perimeter blocks leave these as
+## courtyard: there is no frontage to put a door on, and `street_facing` would fall back
+## to a random direction and hang the front door against a neighbour's blank wall.
+func rect_is_landlocked(rect: Rect2i) -> bool:
+	for side in range(4):
+		if rect_side_open(rect, side):
+			return false
+	return true
 
 
 func intensity_max_in_rect(rect: Rect2i) -> float:

@@ -33,8 +33,26 @@ const ElevatorShaftScript := preload("res://scripts/city/elevator_shaft.gd")
 ## Typical residential floor-to-floor ≈ 3.0 m.
 @export var floor_height_vox: int = 6
 @export var voxel_size: float = 0.5
-## Planner cell ≈ 14 m — street ROW / single lot. CORE towers merge 3×3–4×4 cells.
+## Planner cell ≈ 14 m — street ROW / single lot. CORE towers merge 2×2–4×4 cells.
 @export var cell_size: int = 28
+
+## Real massing limits, from how actual cities size tall buildings.
+##
+## Floor plate: an occupiable tower runs 500–700 m² (economy residential) up to
+## 1,500–2,500 m² (prime office). Core-to-glass is capped at 12–15 m for daylight, so
+## a tower needs ~24 m across before a core plus usable depth fits at all — below that
+## the core alone (20–28% of the plate) eats the floor. A single 12 m lot is 144 m²:
+## row-house scale, never a tower.
+const MIN_TOWER_PLATE_M2 := 600.0
+const MIN_TOWER_SIDE_M := 24.0
+## Slenderness λ = height ÷ shortest base side. Structural optimum is 5–7; both original
+## WTC towers sat at 7 and needed 20,000 dampers to stay comfortable. λ ≥ 10 is the
+## super-slender luxury outlier (432 Park is 15, Steinway Tower 24). The grammar insets
+## tower shafts to ~80% of the lot, so a lot-relative 5 keeps the built shaft inside 7.
+const MAX_SLENDERNESS := 5.0
+## Lots too small for a tower become perimeter-block fabric: Barcelona's Eixample caps
+## block height at 22 m over 140–450 m² plots.
+const FABRIC_HEIGHT_M := 26.0
 
 ## District personality. DistrictBakeJob sets it from the world seed + coord; the
 ## one-shot generate() path derives it in _setup_composers().
@@ -216,6 +234,8 @@ func _setup_composers() -> void:
 	_grammar.floor_height = maxi(floor_height_vox, 6)
 	_grammar.ground_floor_height = 8  # ~4.0 m retail / lobby
 	_grammar.max_height = max_building_height_vox
+	_grammar.min_tower_side_vox = int(round(MIN_TOWER_SIDE_M / voxel_size))
+	_grammar.min_tower_plate_vox2 = int(round(MIN_TOWER_PLATE_M2 / (voxel_size * voxel_size)))
 	_grammar.park = _park
 
 
@@ -371,12 +391,12 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 			return
 		_:
 			pass
+	if _planner.rect_is_landlocked(_lot_rect(cx, cz)):
+		return
 	var bounds := _lot_paint_bounds(cx, cz)
-	var smin: Vector3i = bounds[0]
-	var smax: Vector3i = bounds[1]
-	var ring := 1 if cell_size < 20 else 2
-	var bmin := smin + Vector3i(ring, 0, ring)
-	var bmax := smax - Vector3i(ring, 0, ring)
+	var inner := _buildable_bounds(bounds[0], bounds[1], cx, cz)
+	var bmin: Vector3i = inner[0]
+	var bmax: Vector3i = inner[1]
 	if bmax.x - bmin.x < 6 or bmax.z - bmin.z < 6:
 		return
 	var mass_h := 48
@@ -393,6 +413,8 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 			mass_h = 40
 		_:
 			mass_h = 48
+	## Same ground-area limit the near grammar obeys, or the far skyline keeps the needles.
+	mass_h = mini(mass_h, _footprint_height_cap(bmin, bmax))
 	## Far tiles deliberately skip the grammar, so there is no real massing to describe —
 	## one coarse block per lot (or one block per multi-cell tower parcel).
 	_record_building_impostor(
@@ -421,6 +443,33 @@ func _lot_paint_bounds(cx: int, cz: int) -> Array[Vector3i]:
 	return [
 		Vector3i(cx * cell_size, ground_thickness, cz * cell_size),
 		Vector3i((cx + 1) * cell_size, ground_thickness + 1, (cz + 1) * cell_size),
+	] as Array[Vector3i]
+
+
+## The planner cell or parcel a lot cell builds on.
+func _lot_rect(cx: int, cz: int) -> Rect2i:
+	var parcel := _planner.tower_parcel_at(cx, cz)
+	return parcel if parcel.size.x > 0 else Rect2i(cx, cz, 1, 1)
+
+
+## Buildable AABB inside a painted lot: sidewalk setback only on sides that face a street,
+## plaza or park. Lot-to-lot sides build to the cell edge so neighbours share a party wall.
+func _buildable_bounds(min_v: Vector3i, max_v: Vector3i, cx: int, cz: int) -> Array[Vector3i]:
+	var ring := 1 if cell_size < 20 else 2
+	var rect := _lot_rect(cx, cz)
+	return [
+		min_v
+		+ Vector3i(
+			ring if _planner.rect_side_open(rect, 3) else 0,
+			0,
+			ring if _planner.rect_side_open(rect, 1) else 0
+		),
+		max_v
+		- Vector3i(
+			ring if _planner.rect_side_open(rect, 2) else 0,
+			0,
+			ring if _planner.rect_side_open(rect, 0) else 0
+		),
 	] as Array[Vector3i]
 
 
@@ -1076,10 +1125,13 @@ func _paint_lot(
 	grammar: BuildingGrammar
 ) -> void:
 	_brush.fill_box(min_v, max_v, theme.sidewalk_mat)
-	## Setback ~1 m. Single lots stay ~12 m; multi-cell CORE parcels reach ~40–54 m.
-	var ring := 1 if cell_size < 20 else 2
-	var bmin := min_v + Vector3i(ring, 0, ring)
-	var bmax := max_v - Vector3i(ring, 0, ring)
+	## Landlocked lots stay the block's courtyard — see DistrictPlanner.rect_is_landlocked.
+	if _planner.rect_is_landlocked(_lot_rect(cx, cz)):
+		_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
+		return
+	var bounds := _buildable_bounds(min_v, max_v, cx, cz)
+	var bmin: Vector3i = bounds[0]
+	var bmax: Vector3i = bounds[1]
 	if bmax.x - bmin.x < 6 or bmax.z - bmin.z < 6:
 		return
 	## The zone is a ceiling; the planner intensity field decides the actual height, so
@@ -1103,7 +1155,9 @@ func _paint_lot(
 		if parcel.size.x > 0
 		else _planner.intensity_at(cx, cz)
 	)
-	grammar.max_height = _height_cap_for_intensity(intensity, ceiling)
+	grammar.max_height = mini(
+		_height_cap_for_intensity(intensity, ceiling), _footprint_height_cap(bmin, bmax)
+	)
 	var facing: int
 	var corner: bool
 	var on_plaza: bool
@@ -1428,6 +1482,16 @@ func _height_cap_for_intensity(intensity: float, zone_ceiling: int) -> int:
 	var scaled := float(max_building_height_vox) * theme.height_scale * lerpf(0.14, 1.0, shaped)
 	## 12 vox ≈ 6 m: never below a two-storey house.
 	return clampi(int(round(scaled)), 12, zone_ceiling)
+
+
+## Ground area decides how tall a lot may build. Without this the intensity field alone
+## granted 100 m to a 12 m lot — a 10:1 needle on a 100 m² plate.
+func _footprint_height_cap(bmin: Vector3i, bmax: Vector3i) -> int:
+	var short_m := float(mini(bmax.x - bmin.x, bmax.z - bmin.z)) * voxel_size
+	var area_m2 := float(bmax.x - bmin.x) * float(bmax.z - bmin.z) * voxel_size * voxel_size
+	if area_m2 < MIN_TOWER_PLATE_M2 or short_m < MIN_TOWER_SIDE_M:
+		return int(round(FABRIC_HEIGHT_M / voxel_size))
+	return int(round(short_m * MAX_SLENDERNESS / voxel_size))
 
 
 ## Turn the grammar's massing description into far-LOD shells. The grammar knows whether

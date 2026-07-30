@@ -13,6 +13,12 @@ var theme: DistrictTheme
 var floor_height: int = 6
 var ground_floor_height: int = 8
 var max_height: int = 200
+## Smallest ground area that can carry a tower shaft, in voxels — DistrictGenerator sets
+## both from its MIN_TOWER_SIDE_M / MIN_TOWER_PLATE_M2 (24 m short side, 600 m² plate).
+## Anything below builds perimeter-block fabric instead: a 12 m lot has no room for a
+## core plus usable floor depth, so a tower on one is a needle by construction.
+var min_tower_side_vox: int = 48
+var min_tower_plate_vox2: int = 2400
 var park: ParkComposer
 ## Primitive an impostor part is drawn with. Round buildings used to get box shells,
 ## so a cylindrical landmark turned back into a plain block as soon as it was far away.
@@ -77,12 +83,12 @@ func build_for_zone(
 		return
 	match zone:
 		LandUse.CIVIC_LOT:
-			if rng.randf() < theme.spiral_chance:
+			if _can_host_tower(bmin, bmax) and rng.randf() < theme.spiral_chance:
 				spiral_tower(bmin, bmax, facing, true)
 			else:
 				civic_landmark(bmin, bmax, facing)
 		LandUse.CORE_LOT:
-			if corner or rng.randf() < theme.tower_chance:
+			if _can_host_tower(bmin, bmax) and (corner or rng.randf() < theme.tower_chance):
 				## Spirals are corner landmarks — don't replace the fat podium towers
 				## that carry the skyline. Non-corner lots almost always stay tower_podium.
 				var spiral := rng.randf() < theme.spiral_chance and (
@@ -214,8 +220,9 @@ func midrise_modern(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool)
 
 func tower_podium(bmin: Vector3i, bmax: Vector3i, facing: int, on_plaza: bool) -> void:
 	var podium_floors := 2 + rng.randi() % 2
-	## Never collapse to a podium-only "house" — core towers need a real shaft.
-	var shaft_floors := maxi(8, max_height / floor_height - podium_floors)
+	## Never collapse to a podium-only "house" — core towers need a real shaft. The floor
+	## stays low so a modest plate keeps its height cap instead of overshooting it.
+	var shaft_floors := maxi(3, max_height / floor_height - podium_floors)
 	# Podium fills lot
 	_box_floors(bmin, bmax, podium_floors, VoxelMaterial.STONE if on_plaza else theme.base_mat, facing, true, true)
 	_retail_storefront(bmin, bmax, facing)
@@ -383,7 +390,7 @@ func spiral_tower(bmin: Vector3i, bmax: Vector3i, facing: int, campanile: bool =
 		shaft_h = rng.randi_range(floor_height * 6, floor_height * 11)
 	else:
 		## Same height budget as tower_podium shafts (floors × floor_height).
-		var shaft_floors := maxi(12, max_height / floor_height - podium_floors)
+		var shaft_floors := maxi(4, max_height / floor_height - podium_floors)
 		shaft_h = shaft_floors * floor_height
 	var wall_thick := 2 if radius >= 6 else 1
 	## Deck under shaft, hollow shell.
@@ -916,6 +923,15 @@ func landing_y(base_y: int, floor_index: int) -> int:
 
 func _footprint_wide_enough(bmin: Vector3i, bmax: Vector3i, min_w: int, min_d: int) -> bool:
 	return (bmax.x - bmin.x) >= min_w and (bmax.z - bmin.z) >= min_d
+
+
+## Whether this lot has the ground area for a tower shaft rather than block fabric.
+func _can_host_tower(bmin: Vector3i, bmax: Vector3i) -> bool:
+	var w := bmax.x - bmin.x
+	var d := bmax.z - bmin.z
+	if not _footprint_wide_enough(bmin, bmax, min_tower_side_vox, min_tower_side_vox):
+		return false
+	return w * d >= min_tower_plate_vox2
 
 
 ## Record the tallest voxel an archetype reached so the far-LOD shell matches it.
