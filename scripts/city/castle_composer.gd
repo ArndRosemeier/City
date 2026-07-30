@@ -257,6 +257,7 @@ var _clearance: PackedFloat32Array = PackedFloat32Array()
 var _detail: bool = true
 var _plinth_voxels: int = 0
 var _dungeon_voxels: int = 0
+var _room_props: int = 0
 ## Footprints the room subdivision must not cut through: the keep entrance approach and
 ## every stair lane with its parapet.
 var _keep_reserved: Array[Rect2i] = []
@@ -342,6 +343,7 @@ func _begin(min_v: Vector3i, max_v: Vector3i) -> bool:
 	_clearance.resize(_w * _d)
 	_plinth_voxels = 0
 	_dungeon_voxels = 0
+	_room_props = 0
 	_keep_reserved.clear()
 	_keep_storeys = 0
 	_courtyard_claims.clear()
@@ -2128,10 +2130,8 @@ func _pave_approach() -> void:
 # Keep
 # ---------------------------------------------------------------------------
 
-## Only the masonry is written: the room air is voxels nobody ever touches, so a keep
-## costs its shell, its slabs and its partitions and nothing else. The four carves that
-## follow are the only AIR the keep writes, and every one of them is bounded to the
-## opening it cuts.
+## Masonry first, then openings, then (near bake only) furniture. Room air stays empty
+## until `_decorate_keep_rooms` stamps props; stairs and doorway aprons stay clear.
 func _build_keep() -> void:
 	_build_keep_shell()
 	for f: CastleFloor in layout.keep_floors:
@@ -2145,6 +2145,7 @@ func _build_keep() -> void:
 		_carve_doorway(d)
 	if _detail:
 		_carve_keep_windows()
+		_decorate_keep_rooms()
 
 
 func _build_keep_shell() -> void:
@@ -2395,6 +2396,7 @@ func _build_dungeon() -> void:
 	if _detail:
 		for v2: CastleVault in layout.dungeon_vaults:
 			_dress_vault(v2)
+		_decorate_dungeon_vaults()
 
 
 func _carve_vault(v: CastleVault) -> void:
@@ -2559,9 +2561,128 @@ func _moss_here(x: int, z: int, bias: float) -> bool:
 
 func _report() -> void:
 	print(
-		"CastleComposer: %s plinth=%d vox dungeon=%d vox"
-		% [layout.describe(), _plinth_voxels, _dungeon_voxels]
+		"CastleComposer: %s plinth=%d vox dungeon=%d vox props=%d"
+		% [layout.describe(), _plinth_voxels, _dungeon_voxels, _room_props]
 	)
+
+
+# ---------------------------------------------------------------------------
+# Interior furniture
+# ---------------------------------------------------------------------------
+
+func _decorate_keep_rooms() -> void:
+	var dec := RoomDecorator.new()
+	dec.brush = brush
+	dec.rng = rng
+	for f: CastleFloor in layout.keep_floors:
+		## Open volume above the great hall — no slab, no rooms of its own.
+		if not f.has_slab:
+			continue
+		for i in range(f.rooms.size()):
+			var room: Rect2i = f.rooms[i]
+			var hall := i == f.hall_index
+			var vol := RoomVolume.from_keep_room(f, room, hall)
+			vol.keep_clear = _clears_for_room(room, f.storey, true)
+			_room_props += dec.decorate(vol, _keep_room_purpose(f, room, hall))
+
+
+func _decorate_dungeon_vaults() -> void:
+	var dec := RoomDecorator.new()
+	dec.brush = brush
+	dec.rng = rng
+	for v: CastleVault in layout.dungeon_vaults:
+		var vol := RoomVolume.from_vault(v)
+		vol.keep_clear = _clears_for_room(v.rect, v.level, false)
+		var purpose := (
+			RoomDecorator.Purpose.DUNGEON_CELL
+			if v.is_small()
+			else RoomDecorator.Purpose.DUNGEON_CHAMBER
+		)
+		_room_props += dec.decorate(vol, purpose)
+
+
+func _keep_room_purpose(f: CastleFloor, room: Rect2i, hall: bool) -> RoomDecorator.Purpose:
+	if hall:
+		return RoomDecorator.Purpose.THRONE_HALL
+	## Stable per-room pick so a re-bake with the same seed dresses the same way even if
+	## decorate's internal shuffle advances the RNG differently between rooms.
+	var choices: Array[RoomDecorator.Purpose] = [
+		RoomDecorator.Purpose.BEDROOM,
+		RoomDecorator.Purpose.OFFICE,
+		RoomDecorator.Purpose.LIBRARY,
+		RoomDecorator.Purpose.ARMORY,
+		RoomDecorator.Purpose.STORAGE,
+		RoomDecorator.Purpose.WORKSHOP,
+		RoomDecorator.Purpose.DINING_ROOM,
+		RoomDecorator.Purpose.LIVING_ROOM,
+	]
+	var h := absi(
+		room.position.x * 73856093
+		^ room.position.y * 19349663
+		^ f.storey * 83492791
+		^ int(rng.seed)
+	)
+	return choices[h % choices.size()]
+
+
+## Door-swing aprons and stair footprints that intersect `room`, so furniture never
+## lands in a leaf's arc or on a flight (voxel seeding also blocks solid stair columns).
+func _clears_for_room(room: Rect2i, level: int, keep: bool) -> Array[Rect2i]:
+	var out: Array[Rect2i] = []
+	for d: CastleDoorway in _doorways_on(level, keep):
+		_append_intersection(out, room, _doorway_apron_rect(d))
+	for st: CastleStair in _stairs_on(level, keep):
+		_append_intersection(out, room, st.footprint())
+	return out
+
+
+func _doorways_on(level: int, keep: bool) -> Array[CastleDoorway]:
+	var out: Array[CastleDoorway] = []
+	if keep:
+		if layout.keep_entrance != null and layout.keep_entrance.storey == level:
+			out.append(layout.keep_entrance)
+		out.append_array(layout.keep_doorways_on(level))
+	else:
+		out.append_array(layout.dungeon_doorways_on(level))
+	return out
+
+
+func _stairs_on(level: int, keep: bool) -> Array[CastleStair]:
+	var out: Array[CastleStair] = []
+	if keep:
+		for st: CastleStair in layout.keep_stairs:
+			if st.from_storey == level or st.to_storey == level:
+				out.append(st)
+	else:
+		for st: CastleStair in layout.dungeon_stairs:
+			if st.from_storey == level or st.to_storey == level:
+				out.append(st)
+		for e: CastleDungeonEntry in layout.dungeon_entries:
+			if e.stair == null:
+				continue
+			if e.stair.from_storey == level or e.stair.to_storey == level:
+				out.append(e.stair)
+	return out
+
+
+func _doorway_apron_rect(d: CastleDoorway) -> Rect2i:
+	var s := d.side()
+	var half := d.width / 2
+	var reach := CastleDoorway.SWING_REACH
+	var lo := d.center
+	var hi := d.center
+	for along in range(-reach, d.depth + reach):
+		for t in range(-half, half + 1):
+			var p := d.center + d.axis * along + s * t
+			lo = Vector2i(mini(lo.x, p.x), mini(lo.y, p.y))
+			hi = Vector2i(maxi(hi.x, p.x), maxi(hi.y, p.y))
+	return Rect2i(lo, hi - lo + Vector2i.ONE)
+
+
+func _append_intersection(out: Array[Rect2i], room: Rect2i, other: Rect2i) -> void:
+	var hit := room.intersection(other)
+	if hit.size.x > 0 and hit.size.y > 0:
+		out.append(hit)
 
 
 # ---------------------------------------------------------------------------
