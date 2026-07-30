@@ -50,12 +50,11 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			water.collision_mask = 2
 			return water
 		VoxelMaterial.GLASS:
-			## Visual stays inset, but collision fills the cell. An inset box left
-			## 0.1–0.12 voxel seams between neighbouring panes — the capsule could
-			## worm through those gaps into the hollow building instead of climbing.
-			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3.ZERO, Vector3.ONE))
+			## Full-cell visual + neighbor cull so a deck/curtain reads as one volume,
+			## not a grate of inset panes. Collision fills the cell (walk / no worming).
+			return _mesh_model(id, _mesh_glass(), true, true, AABB(Vector3.ZERO, Vector3.ONE))
 		VoxelMaterial.GLASS_LIT:
-			return _mesh_model(id, _mesh_glass(), true, false, AABB(Vector3.ZERO, Vector3.ONE))
+			return _mesh_model(id, _mesh_glass(), true, true, AABB(Vector3.ZERO, Vector3.ONE))
 		VoxelMaterial.CURB:
 			## Low curb lip (~0.2 m world) so CharacterBody can step/jump it.
 			return _mesh_model(id, _mesh_curb(), false, true, AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.4, 1.0)))
@@ -464,9 +463,9 @@ static func _mesh_water() -> ArrayMesh:
 	return _box_mesh(Vector3.ZERO, Vector3.ONE)
 
 
-## Inset window pane.
+## Full-cell glass volume (same idea as water — continuous sheet, not inset panes).
 static func _mesh_glass() -> ArrayMesh:
-	return _box_mesh(Vector3(0.12, 0.1, 0.12), Vector3(0.88, 0.9, 0.88))
+	return _box_mesh(Vector3.ZERO, Vector3.ONE)
 
 
 ## Low curb lip — visual matches the short collision box (~0.2 m world).
@@ -525,6 +524,8 @@ static var _surface_mat_cache: Dictionary = {}  # id * 2 + object_space → Shad
 static var _infection_mat_cache: Dictionary = {}  # bool is_lead → ShaderMaterial
 static var _gem_mat_cache: Dictionary = {}  # gem id → ShaderMaterial
 static var _fractal_glow_mat: ShaderMaterial = null
+static var _fractal_band_mat_cache: Dictionary = {}  # band id → ShaderMaterial
+static var _fractal_interior_mat: ShaderMaterial = null
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
 
@@ -542,6 +543,10 @@ static func block_material_for(id: int) -> Material:
 		return gem_material(id)
 	if id == VoxelMaterial.FRACTAL_GLOW:
 		return fractal_glow_material()
+	if id == VoxelMaterial.FRACTAL_INTERIOR:
+		return fractal_interior_material()
+	if VoxelMaterial.is_fractal_band(id):
+		return fractal_band_material(id)
 	return surface_material(id, false)
 
 
@@ -558,6 +563,10 @@ static func debris_material_for(id: int) -> Material:
 		return gem_material(id)
 	if id == VoxelMaterial.FRACTAL_GLOW:
 		return fractal_glow_material()
+	if id == VoxelMaterial.FRACTAL_INTERIOR:
+		return fractal_interior_material()
+	if VoxelMaterial.is_fractal_band(id):
+		return fractal_band_material(id)
 	return surface_material(id, true)
 
 
@@ -585,8 +594,8 @@ static func _build_surface_material(id: int, object_space: bool) -> ShaderMateri
 			mat.set_shader_parameter("lit_energy", 1.8)
 			## One lit/dark draw per 1 m of facade — roughly one punched window.
 			mat.set_shader_parameter("window_meters", 1.0)
-			mat.set_shader_parameter("fresnel_strength", 0.55)
-			mat.set_shader_parameter("day_sky_tint", 0.35)
+			mat.set_shader_parameter("fresnel_strength", 0.85)
+			mat.set_shader_parameter("day_sky_tint", 0.4)
 		VoxelSurfaceSpec.Kind.WATER:
 			mat.shader = _load_shader(WATER_SHADER)
 			mat.set_shader_parameter("deep_tint", Color(0.07, 0.19, 0.28, 1.0))
@@ -718,6 +727,46 @@ static func fractal_glow_material() -> ShaderMaterial:
 	mat.set_shader_parameter("metallic_base", 0.2)
 	mat.set_shader_parameter("roughness_base", 0.18)
 	_fractal_glow_mat = mat
+	return mat
+
+
+## Mandelbrot set body — dark, no glow (contrasts with FRACTAL_GLOW plaza).
+static func fractal_interior_material() -> ShaderMaterial:
+	if _fractal_interior_mat != null:
+		return _fractal_interior_mat
+	var shader: Shader = load("res://assets/city/shaders/voxel_fractal_band.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var albedo := VoxelMaterial.color(VoxelMaterial.FRACTAL_INTERIOR)
+	mat.set_shader_parameter("base_color", albedo)
+	mat.set_shader_parameter("emission_color", albedo)
+	mat.set_shader_parameter("emission_strength", 0.0)
+	mat.set_shader_parameter("pulse_hz", 0.0)
+	mat.set_shader_parameter("metallic_base", 0.05)
+	mat.set_shader_parameter("roughness_base", 0.55)
+	_fractal_interior_mat = mat
+	return mat
+
+
+## Mandelbrot sculpture bands — albedo-first palette shader (not gem ore wash).
+static func fractal_band_material(id: int) -> ShaderMaterial:
+	if not VoxelMaterial.is_fractal_band(id):
+		push_error("VoxelBlockLibrary.fractal_band_material: not a band id %d" % id)
+		return fractal_glow_material()
+	var cached: Variant = _fractal_band_mat_cache.get(id)
+	if cached is ShaderMaterial:
+		return cached
+	var albedo := VoxelMaterial.color(id)
+	var shader: Shader = load("res://assets/city/shaders/voxel_fractal_band.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", albedo)
+	mat.set_shader_parameter("emission_color", albedo)
+	mat.set_shader_parameter("emission_strength", 0.22)
+	mat.set_shader_parameter("pulse_hz", 0.2)
+	mat.set_shader_parameter("metallic_base", 0.1)
+	mat.set_shader_parameter("roughness_base", 0.38)
+	_fractal_band_mat_cache[id] = mat
 	return mat
 
 

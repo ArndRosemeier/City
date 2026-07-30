@@ -96,6 +96,31 @@ func clear_buttons() -> void:
 	_rebuild_button_meshes()
 
 
+## Live update of the face colour (e.g. Mandelbrot UI strip feedback).
+func set_surface_color(color: Color) -> void:
+	set_surface_glow(color, 0.0)
+
+
+## Face colour plus emission strength. `emission_energy` > 0 makes the strip glow.
+func set_surface_glow(color: Color, emission_energy: float) -> void:
+	surface_color = color
+	if _surface == null or not is_instance_valid(_surface):
+		return
+	var mat := _surface.material_override as StandardMaterial3D
+	if mat == null:
+		return
+	var energy := maxf(emission_energy, 0.0)
+	## Punch comes from emission; albedo stays a slightly darker base when glowing.
+	mat.albedo_color = color.darkened(0.18) if energy > 0.01 else color
+	mat.transparency = (
+		BaseMaterial3D.TRANSPARENCY_ALPHA if color.a < 0.999
+		else BaseMaterial3D.TRANSPARENCY_DISABLED
+	)
+	mat.emission_enabled = energy > 0.01
+	mat.emission = Color(color.r, color.g, color.b)
+	mat.emission_energy_multiplier = energy
+
+
 func button_at_uv(uv: Vector2) -> StringName:
 	for btn in _buttons:
 		var rect: Rect2 = btn["uv_rect"]
@@ -272,10 +297,12 @@ func _rebuild_button_meshes() -> void:
 		var local := _uv_to_local(center_uv)
 		mesh_inst.position = Vector3(local.x, local.y, BUTTON_Z)
 		_button_root.add_child(mesh_inst)
-		## Simple + / − label as a second tiny overlay for the common zoom buttons.
 		var label := str(btn.get("label", ""))
 		if label == "+" or label == "-":
+			## Geometric glyphs stay sharper than tiny font strokes for ±.
 			_add_button_glyph(mesh_inst, label, btn["color"] as Color)
+		elif not label.is_empty():
+			_add_button_label(mesh_inst, label, btn["color"] as Color)
 		_buttons[i]["mesh"] = mesh_inst
 
 
@@ -302,6 +329,28 @@ func _add_button_glyph(parent: MeshInstance3D, label: String, base: Color) -> vo
 		vert.material_override = mat
 		vert.position = Vector3(0.0, 0.0, -BUTTON_DEPTH)
 		parent.add_child(vert)
+
+
+## World-space text for ordinary button captions (e.g. "Create"). Faces the panel −Z.
+func _add_button_label(parent: MeshInstance3D, label: String, base: Color) -> void:
+	var lbl := Label3D.new()
+	lbl.name = "Label"
+	lbl.text = label
+	lbl.font_size = 64
+	var btn_h: float = (parent.mesh as QuadMesh).size.y
+	lbl.pixel_size = (btn_h * 0.52) / 64.0
+	lbl.modulate = Color(1.0, 1.0, 1.0, 1.0).lerp(base.lightened(0.65), 0.35)
+	lbl.outline_size = 16
+	lbl.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	lbl.double_sided = true
+	lbl.no_depth_test = false
+	## QuadMesh faces −Z; Label3D faces +Z by default — flip to match the panel face.
+	lbl.position = Vector3(0.0, 0.0, -BUTTON_DEPTH)
+	lbl.rotation.y = PI
+	parent.add_child(lbl)
 
 
 func _place_marker(local: Vector3) -> void:

@@ -29,6 +29,7 @@ var player_view_m: float = 90.0
 
 var _terrain: VoxelTerrain
 var _tool: VoxelTool
+var _brush: CityBrush = null
 var _camera: Camera3D
 var _player: Node3D
 var _districts: Dictionary = {}  # Vector2i -> DistrictInstance
@@ -57,16 +58,26 @@ func setup(
 	tool: VoxelTool,
 	p_world_seed: int,
 	p_voxel_size: float,
-	p_player_view_m: float
+	p_player_view_m: float,
+	brush: CityBrush = null
 ) -> void:
 	_terrain = terrain
 	_tool = tool
+	_brush = brush
 	world_seed = p_world_seed
 	voxel_size = p_voxel_size
 	player_view_m = p_player_view_m
 	_districts.clear()
 	_active_jobs.clear()
 	_booted = false
+
+
+func bind_live_brush(brush: CityBrush) -> void:
+	_brush = brush
+	for key: Variant in _districts.keys():
+		var inst: DistrictInstance = _districts[key]
+		if inst != null and is_instance_valid(inst):
+			inst.bind_live_brush(brush)
 
 
 func bind_player(player: Node3D, camera: Camera3D) -> void:
@@ -108,6 +119,12 @@ func prioritize_district(coord: Vector2i) -> DistrictInstance:
 
 func clear_priority_district() -> void:
 	_has_priority = false
+
+
+## Drop a loaded tile and bake it again (fractal Clear). Returns the new instance.
+func reload_district(coord: Vector2i) -> DistrictInstance:
+	_unload_district(coord)
+	return prioritize_district(coord)
 
 
 func for_each_district(cb: Callable) -> void:
@@ -333,6 +350,8 @@ func _request_district(coord: Vector2i, is_boot: bool) -> void:
 	CityProfiler.begin("stream_spawn")
 	var inst: DistrictInstance = DistrictInstanceScript.new()
 	inst.configure(coord, voxel_size, world_seed, crowd_per_district, vehicles_per_district, player_view_m)
+	if _brush != null:
+		inst.bind_live_brush(_brush)
 	add_child(inst)
 	_districts[coord] = inst
 	inst.ensure_prefetch()

@@ -1,11 +1,10 @@
 shader_type spatial;
-render_mode blend_mix, depth_draw_opaque, cull_disabled, diffuse_burley, specular_schlick_ggx;
+render_mode blend_mix, depth_draw_opaque, shadows_disabled, ambient_light_disabled, diffuse_burley, specular_schlick_ggx;
 
 #include "res://assets/city/shaders/voxel_projection.gdshaderinc"
 
-/// Window glass. Same world-axis projection as the opaque surface so pane divisions
-/// line up across a facade, plus a per-window hash: at night some windows light warm,
-/// some cool, some stay dark, instead of every punched window glowing identically.
+/// Window / structural glass. Ambient is disabled so transparent lit albedo does not
+/// wash into milky plastic. Texture is a faint mullion/variation pass over clear tint.
 
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec2 tile_meters = vec2(1.0, 1.0);
@@ -51,35 +50,38 @@ void fragment() {
 	uv /= max(tile_meters, vec2(0.01, 0.01));
 
 	vec3 pane = texture(albedo_tex, uv).rgb;
-	vec3 albedo = pane * tint.rgb;
+	float mullion = clamp(1.0 - dot(pane, vec3(0.299, 0.587, 0.114)) * 1.35, 0.0, 1.0);
 
-	// Grazing angles reflect more: keeps facades from looking like flat blue paint.
-	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), VIEW), 0.0, 1.0), 4.0);
-	float alpha = clamp(tint.a + fres * fresnel_strength, 0.0, 1.0);
+	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), VIEW), 0.0, 1.0), 2.5);
+	float rim = clamp(fres * fresnel_strength, 0.0, 1.0);
 
-	vec3 emission = vec3(0.0);
+	// Mostly clear tint; texture only a faint cool drift + thin frames.
+	vec3 albedo = tint.rgb * 0.14;
+	albedo = mix(albedo, pane * tint.rgb * 0.1, 0.35);
+	albedo = mix(albedo, albedo * 0.4, mullion * 0.6);
+	vec3 sky = vec3(0.5, 0.65, 0.85) * day_sky_tint * (1.0 - night_factor);
+	albedo += sky * rim * 1.1;
+
+	float alpha = clamp(tint.a * 0.38 + rim * 0.85 + mullion * 0.1, 0.07, 0.8);
+
+	vec3 emission = sky * rim * 0.55 + vec3(1.0) * pow(fres, 6.0) * 0.4;
 	if (lit_ratio > 0.0) {
-		// One hash per window block: which windows can light, and in what colour.
 		vec3 cell = floor(v_world / max(window_meters, 0.05));
 		float pick = vx_hash13(cell);
 		float on = step(1.0 - lit_ratio, pick);
 		float warm_mix = vx_hash13(cell + 41.7);
 		vec3 lamp = mix(lit_cool.rgb, lit_warm.rgb, smoothstep(0.25, 0.75, warm_mix));
-		// Slight per-window brightness spread so a facade is not a uniform grid.
 		float power = smoothstep(0.15, 0.7, night_factor) * (0.65 + 0.35 * fract(pick * 31.7));
-		emission = lamp * lit_energy * power * on;
+		emission += lamp * lit_energy * power * on;
 		albedo = mix(albedo, lamp * 0.8, power * on * 0.6);
 		alpha = clamp(alpha + power * on * 0.35, 0.0, 1.0);
 	}
 
-	// Daylight sky bounce so unlit glass is not a dark hole.
-	albedo += vec3(0.35, 0.5, 0.65) * day_sky_tint * (1.0 - night_factor) * fres;
-
 	ALBEDO = albedo;
 	/// MultiMesh debris fades via instance COLOR.a; terrain meshes leave it at 1.
 	ALPHA = alpha * COLOR.a;
-	ROUGHNESS = roughness_base;
-	METALLIC = metallic_base;
-	SPECULAR = 0.85;
+	ROUGHNESS = mix(roughness_base, 0.02, fres);
+	METALLIC = metallic_base * 0.3;
+	SPECULAR = 1.0;
 	EMISSION = emission;
 }

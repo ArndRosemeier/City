@@ -32,7 +32,13 @@ pub const CASTLE_BLOCK_MOSSY: i32 = 56;
 /// Fractal plaza glow cubes. Ordinary destructible ground as far as native is concerned.
 #[allow(dead_code)]
 pub const FRACTAL_GLOW: i32 = 57;
-pub const COUNT: i32 = 58;
+#[allow(dead_code)]
+pub const FRACTAL_BAND_0: i32 = 58;
+#[allow(dead_code)]
+pub const FRACTAL_BAND_15: i32 = 73;
+#[allow(dead_code)]
+pub const FRACTAL_INTERIOR: i32 = 74;
+pub const COUNT: i32 = 75;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR
@@ -55,7 +61,11 @@ pub fn is_destructible(id: i32) -> bool {
 /// Soft soil and turf carry their own weight — a blast leaves a crater, never a
 /// collapsing column. Stone and cave fabric cascade like built structure.
 pub fn is_self_supporting_terrain(id: i32) -> bool {
-    matches!(id, DIRT | GRAVEL | PARK | GRAVE_SOIL | GRAVE_PATH | FRACTAL_GLOW)
+    matches!(
+        id,
+        DIRT | GRAVEL | PARK | GRAVE_SOIL | GRAVE_PATH | FRACTAL_GLOW
+    ) || (id >= FRACTAL_BAND_0 && id <= FRACTAL_BAND_15)
+        || id == FRACTAL_INTERIOR
 }
 
 /// Destructible voxels cascade unless they are soft self-supporting terrain.

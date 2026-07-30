@@ -1296,6 +1296,151 @@ func request_district_hop() -> bool:
 	return true
 
 
+## Run Instant Mandelbrot Create under a wait splash showing the selected fractal.
+## `work` must be an async Callable (awaited). Returns false if a splash already owns the screen.
+func request_fractal_create_wait(art: Texture2D, work: Callable) -> bool:
+	if _game_over or _booting or _district_hopping:
+		return false
+	if _loading_splash == null:
+		push_error("CityRoot: fractal create wait needs LoadingSplash")
+		return false
+	if not work.is_valid():
+		push_error("CityRoot: fractal create wait needs a work Callable")
+		return false
+	_district_hopping = true
+	_fractal_create_wait_async(art, work)
+	return true
+
+
+func _fractal_create_wait_async(art: Texture2D, work: Callable) -> void:
+	_set_hud_enabled(false)
+	var walker := _walker
+	if walker != null and is_instance_valid(walker):
+		walker.set_physics_process(false)
+		walker.velocity = Vector3.ZERO
+	_loading_splash.call("show_splash", "Creating fractal…", art)
+	await work.call()
+	if walker != null and is_instance_valid(walker):
+		walker.set_physics_process(true)
+	_district_hopping = false
+	if not _booting:
+		_set_hud_enabled(true)
+	if _loading_splash != null:
+		_loading_splash.call("hide_splash")
+	print("CityRoot: fractal create wait finished")
+
+
+## Unload + rebake one tile under a wait splash (Mandelbrot Clear). Player stays put.
+func request_district_reload(coord: Vector2i) -> bool:
+	if _game_over or _booting or _district_hopping:
+		return false
+	if _walker == null or not is_instance_valid(_walker):
+		return false
+	if _streamer == null or not is_instance_valid(_streamer):
+		return false
+	if _loading_splash == null:
+		push_error("CityRoot: district reload needs LoadingSplash")
+		return false
+	_district_hopping = true
+	_district_reload_async(coord)
+	return true
+
+
+func _district_reload_async(coord: Vector2i) -> void:
+	var walker := _walker
+	if walker == null or not is_instance_valid(walker):
+		_district_hopping = false
+		return
+	var origin_pos := walker.global_position
+	var stay_xz := Vector3(origin_pos.x, 0.0, origin_pos.z)
+	var theme := DistrictTheme.for_district(city_seed, coord)
+	print("CityRoot: district reload %s (%s)" % [coord, theme.display_name])
+	_set_hud_enabled(false)
+	_loading_splash.call(
+		"show_splash",
+		"Clearing %s %s…" % [theme.display_name, coord]
+	)
+	walker.set_physics_process(false)
+	walker.velocity = Vector3.ZERO
+	## Hover so unload does not drop the body through empty space.
+	walker.global_position = stay_xz + Vector3(0.0, 40.0, 0.0)
+	var inst: DistrictInstance = _streamer.call("reload_district", coord) as DistrictInstance
+	if inst == null:
+		await _finish_district_hop_fail("missing district instance after reload", origin_pos)
+		return
+	const RELOAD_WAIT_MS := 180_000
+	const RELOAD_EARLY_GROUND_MS := 4_000
+	const RELOAD_STATUS_EVERY_MS := 500
+	var started := Time.get_ticks_msec()
+	var deadline := started + RELOAD_WAIT_MS
+	var last_status_ms := 0
+	while not inst.is_ready and Time.get_ticks_msec() < deadline:
+		if not is_instance_valid(inst):
+			await _finish_district_hop_fail("district unloaded while reloading", origin_pos)
+			return
+		var elapsed_ms := Time.get_ticks_msec() - started
+		if elapsed_ms - last_status_ms >= RELOAD_STATUS_EVERY_MS:
+			last_status_ms = elapsed_ms
+			var phase := "ground" if not inst.is_ground_ready else "detail"
+			if inst.is_busy:
+				phase += ", baking"
+			_loading_splash.call(
+				"set_status",
+				"Rebuilding %s %s (%s, %ds)…"
+				% [theme.display_name, coord, phase, elapsed_ms / 1000]
+			)
+		if (
+			inst.is_ground_ready
+			and inst.generator != null
+			and not inst.is_busy
+			and elapsed_ms >= RELOAD_EARLY_GROUND_MS
+		):
+			break
+		await get_tree().process_frame
+	if not is_instance_valid(inst) or inst.generator == null:
+		await _finish_district_hop_fail(
+			"district never became ready after %ds"
+			% [(Time.get_ticks_msec() - started) / 1000],
+			origin_pos
+		)
+		return
+	if not inst.is_ready and not inst.is_ground_ready:
+		await _finish_district_hop_fail(
+			"district still empty after %ds"
+			% [(Time.get_ticks_msec() - started) / 1000],
+			origin_pos
+		)
+		return
+	_loading_splash.call("set_status", "Finding ground…")
+	var spawn := stay_xz
+	if inst.generator != null and inst.generator.has_method("find_spawn_world"):
+		## Prefer a street spawn near the plaza if the old feet are over void.
+		var candidate: Vector3 = inst.generator.find_spawn_world(_tool)
+		spawn = Vector3(stay_xz.x, candidate.y, stay_xz.z)
+	walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
+	walker.velocity = Vector3.ZERO
+	_loading_splash.call("set_status", "Waiting for ground collisions…")
+	var floor_y := await _wait_floor_collision_ms(spawn, 60_000)
+	if is_nan(floor_y):
+		## Fall back to district spawn if the old XZ never remeshed solid.
+		if inst.generator != null and inst.generator.has_method("find_spawn_world"):
+			spawn = inst.generator.find_spawn_world(_tool)
+			walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
+			floor_y = await _wait_floor_collision_ms(spawn, 60_000)
+	if is_nan(floor_y):
+		await _finish_district_hop_fail("no ground collision after reload", origin_pos)
+		return
+	walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
+	walker.velocity = Vector3.ZERO
+	walker.set_physics_process(true)
+	if _streamer != null and _streamer.has_method("clear_priority_district"):
+		_streamer.call("clear_priority_district")
+	_district_hopping = false
+	_set_hud_enabled(true)
+	_loading_splash.call("hide_splash")
+	print("CityRoot: district reload landed at y=%.2f" % floor_y)
+
+
 func _district_hop_pick_async() -> void:
 	var walker := _walker
 	if walker == null or not is_instance_valid(walker):
@@ -1572,7 +1717,8 @@ func _regenerate() -> void:
 		_tool,
 		city_seed,
 		VOXEL_SIZE,
-		float(_voxel_view_vox) * VOXEL_SIZE
+		float(_voxel_view_vox) * VOXEL_SIZE,
+		_brush
 	)
 	_streamer.status_message.connect(_on_streamer_status)
 	_streamer.spawn_district_ready.connect(_on_spawn_district_ready)

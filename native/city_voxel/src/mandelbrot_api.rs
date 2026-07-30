@@ -114,4 +114,88 @@ impl NativeMandelbrot {
             }
         }
     }
+
+    /// Bake escape iterations as little-endian u16 bytes (row-major, top-left).
+    /// Interior cells store `max_iters`. Size is `width * height * 2`.
+    #[func]
+    fn render_iters_u16(
+        cx: GString,
+        cy: GString,
+        scale: GString,
+        width: i32,
+        height: i32,
+        max_iters: i32,
+    ) -> PackedByteArray {
+        match mandelbrot::render_iters_u16(
+            &cx.to_string(),
+            &cy.to_string(),
+            &scale.to_string(),
+            width,
+            height,
+            max_iters,
+        ) {
+            Ok(iters) => {
+                let mut packed = PackedByteArray::new();
+                packed.resize(iters.len() * 2);
+                for (i, n) in iters.iter().enumerate() {
+                    let lo = (*n & 0xff) as u8;
+                    let hi = ((*n >> 8) & 0xff) as u8;
+                    packed[i * 2] = lo;
+                    packed[i * 2 + 1] = hi;
+                }
+                packed
+            }
+            Err(e) => {
+                godot_error!("NativeMandelbrot.render_iters_u16: {e}");
+                PackedByteArray::new()
+            }
+        }
+    }
+
+    /// Interior sentinel for `render_smooth_mu_u16` packed values.
+    #[func]
+    fn mu_interior_u16() -> i32 {
+        mandelbrot::MU_INTERIOR_U16 as i32
+    }
+
+    /// Decode scale: `mu = packed_u16 / mu_u16_scale()` (exterior only).
+    #[func]
+    fn mu_u16_scale() -> f64 {
+        mandelbrot::MU_U16_SCALE
+    }
+
+    /// Bake smooth escape μ as little-endian u16 bytes (row-major, top-left).
+    /// Interior = `mu_interior_u16()`; exterior = round(μ × `mu_u16_scale()`).
+    #[func]
+    fn render_smooth_mu_u16(
+        cx: GString,
+        cy: GString,
+        scale: GString,
+        width: i32,
+        height: i32,
+        max_iters: i32,
+    ) -> PackedByteArray {
+        match mandelbrot::render_smooth_mu_u16(
+            &cx.to_string(),
+            &cy.to_string(),
+            &scale.to_string(),
+            width,
+            height,
+            max_iters,
+        ) {
+            Ok(vals) => {
+                let mut packed = PackedByteArray::new();
+                packed.resize(vals.len() * 2);
+                for (i, n) in vals.iter().enumerate() {
+                    packed[i * 2] = (*n & 0xff) as u8;
+                    packed[i * 2 + 1] = ((*n >> 8) & 0xff) as u8;
+                }
+                packed
+            }
+            Err(e) => {
+                godot_error!("NativeMandelbrot.render_smooth_mu_u16: {e}");
+                PackedByteArray::new()
+            }
+        }
+    }
 }

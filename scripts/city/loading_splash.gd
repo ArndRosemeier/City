@@ -21,6 +21,7 @@ const PICKER_MARGIN := 24
 
 var _root: Control
 var _status: Label
+var _title_art: TextureRect
 var _picker: Control
 var _picker_title: Label
 var _picker_subtitle: Label
@@ -48,14 +49,14 @@ func _ready() -> void:
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(bg)
 
-	var art := TextureRect.new()
-	art.name = "TitleArt"
-	art.texture = TITLE_TEX
-	art.set_anchors_preset(Control.PRESET_FULL_RECT)
-	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(art)
+	_title_art = TextureRect.new()
+	_title_art.name = "TitleArt"
+	_title_art.texture = TITLE_TEX
+	_title_art.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_title_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_title_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_title_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(_title_art)
 
 	## Soft bottom scrim so status text stays readable over busy skyline.
 	var scrim := ColorRect.new()
@@ -93,8 +94,9 @@ func set_status(text: String) -> void:
 		_status.text = text
 
 
-func show_splash(status: String = "Loading EccentriCity…") -> void:
+func show_splash(status: String = "Loading EccentriCity…", art: Texture2D = null) -> void:
 	_fading = false
+	_set_art(art)
 	set_status(status)
 	visible = true
 	if _root != null:
@@ -118,9 +120,16 @@ func hide_splash() -> void:
 	tw.tween_callback(func() -> void:
 		visible = false
 		_fading = false
+		_set_art(null)
 		if _root != null:
 			_root.modulate = Color.WHITE
 	)
+
+
+func _set_art(art: Texture2D) -> void:
+	if _title_art == null:
+		return
+	_title_art.texture = art if art != null else TITLE_TEX
 
 
 ## True while the splash is actually holding the screen, which is what every gameplay input

@@ -182,11 +182,15 @@ fn palette(t: f32) -> [u8; 4] {
     ]
 }
 
-/// Smooth escape colouring — same mapping for direct and perturbation paths so
-/// zooms do not jump when the solver switches.
-fn color_escape(n: usize, max_iters: usize, zr: f64, zi: f64) -> [u8; 4] {
+/// Interior sentinel for `render_smooth_mu_u16` (never a valid encoded μ).
+pub const MU_INTERIOR_U16: u16 = 0xFFFF;
+/// Fixed-point scale: packed = round(mu * MU_U16_SCALE), max 0xFFFE.
+pub const MU_U16_SCALE: f64 = 64.0;
+
+/// Smooth escape μ (fractional iterate). Interior returns None.
+fn smooth_mu(n: usize, max_iters: usize, zr: f64, zi: f64) -> Option<f64> {
     if n >= max_iters {
-        return INTERIOR_RGBA;
+        return None;
     }
     let zn2 = zr * zr + zi * zi;
     let mut mu = n as f64;
@@ -197,6 +201,22 @@ fn color_escape(n: usize, max_iters: usize, zr: f64, zi: f64) -> [u8; 4] {
             mu = (n as f64 + 1.0 - nu).max(0.0);
         }
     }
+    Some(mu)
+}
+
+fn encode_smooth_mu_u16(n: usize, max_iters: usize, zr: f64, zi: f64) -> u16 {
+    match smooth_mu(n, max_iters, zr, zi) {
+        None => MU_INTERIOR_U16,
+        Some(mu) => (mu * MU_U16_SCALE).round().clamp(0.0, 65534.0) as u16,
+    }
+}
+
+/// Smooth escape colouring — same mapping for direct and perturbation paths so
+/// zooms do not jump when the solver switches.
+fn color_escape(n: usize, max_iters: usize, zr: f64, zi: f64) -> [u8; 4] {
+    let Some(mu) = smooth_mu(n, max_iters, zr, zi) else {
+        return INTERIOR_RGBA;
+    };
     // Normalise against a stable exterior band so raising max_iters with depth
     // does not re-stretch the whole palette.
     let band = (max_iters as f64).min(512.0).max(64.0);
@@ -244,6 +264,27 @@ pub fn approx_f64(s: &str) -> Result<f64, String> {
     Ok(hp_to_f64(&parse_hp(s)?))
 }
 
+/// Shared view parse for RGBA / iters bakers.
+fn prepare_view(
+    cx: &str,
+    cy: &str,
+    scale: &str,
+    width: i32,
+    height: i32,
+    max_iters: i32,
+) -> Result<(DBig, DBig, f64, f64, f64, usize, usize, usize), String> {
+    let w = width.clamp(16, MAX_TEX_DIM) as usize;
+    let h = height.clamp(16, MAX_TEX_DIM) as usize;
+    let max_iters = max_iters.clamp(16, 8000) as usize;
+    let cx_hp = parse_hp(cx)?;
+    let cy_hp = parse_hp(cy)?;
+    let scale_hp = parse_hp(scale)?;
+    let scale_f = hp_to_f64(&scale_hp).abs().max(MIN_SCALE);
+    let cx_f = hp_to_f64(&cx_hp);
+    let cy_f = hp_to_f64(&cy_hp);
+    Ok((cx_hp, cy_hp, cx_f, cy_f, scale_f, w, h, max_iters))
+}
+
 /// RGBA8 packed image, **top-left origin** (Godot `Image` order).
 pub fn render_rgba8(
     cx: &str,
@@ -253,21 +294,47 @@ pub fn render_rgba8(
     height: i32,
     max_iters: i32,
 ) -> Result<Vec<u8>, String> {
-    let w = width.clamp(16, MAX_TEX_DIM) as usize;
-    let h = height.clamp(16, MAX_TEX_DIM) as usize;
-    let max_iters = max_iters.clamp(16, 8000) as usize;
-
-    let cx_hp = parse_hp(cx)?;
-    let cy_hp = parse_hp(cy)?;
-    let scale_hp = parse_hp(scale)?;
-    let scale_f = hp_to_f64(&scale_hp).abs().max(MIN_SCALE);
-    let cx_f = hp_to_f64(&cx_hp);
-    let cy_f = hp_to_f64(&cy_hp);
-
+    let (cx_hp, cy_hp, cx_f, cy_f, scale_f, w, h, max_iters) =
+        prepare_view(cx, cy, scale, width, height, max_iters)?;
     if scale_f > DIRECT_F64_SCALE_THRESHOLD {
         return Ok(render_direct_f64(cx_f, cy_f, scale_f, w, h, max_iters));
     }
     render_perturbation(&cx_hp, &cy_hp, scale_f, w, h, max_iters)
+}
+
+/// Row-major top-left. Per pixel: u16 escape `n` (interior = `max_iters`).
+pub fn render_iters_u16(
+    cx: &str,
+    cy: &str,
+    scale: &str,
+    width: i32,
+    height: i32,
+    max_iters: i32,
+) -> Result<Vec<u16>, String> {
+    let (cx_hp, cy_hp, cx_f, cy_f, scale_f, w, h, max_iters) =
+        prepare_view(cx, cy, scale, width, height, max_iters)?;
+    if scale_f > DIRECT_F64_SCALE_THRESHOLD {
+        return Ok(render_iters_direct_f64(cx_f, cy_f, scale_f, w, h, max_iters));
+    }
+    render_iters_perturbation(&cx_hp, &cy_hp, scale_f, w, h, max_iters)
+}
+
+/// Row-major top-left. Per pixel: LE-friendly u16 smooth μ × [`MU_U16_SCALE`].
+/// Interior cells are [`MU_INTERIOR_U16`].
+pub fn render_smooth_mu_u16(
+    cx: &str,
+    cy: &str,
+    scale: &str,
+    width: i32,
+    height: i32,
+    max_iters: i32,
+) -> Result<Vec<u16>, String> {
+    let (cx_hp, cy_hp, cx_f, cy_f, scale_f, w, h, max_iters) =
+        prepare_view(cx, cy, scale, width, height, max_iters)?;
+    if scale_f > DIRECT_F64_SCALE_THRESHOLD {
+        return Ok(render_mu_direct_f64(cx_f, cy_f, scale_f, w, h, max_iters));
+    }
+    render_mu_perturbation(&cx_hp, &cy_hp, scale_f, w, h, max_iters)
 }
 
 fn render_direct_f64(
@@ -299,6 +366,74 @@ fn render_direct_f64(
                         let rgba = color_escape(n, max_iters, zr, zi);
                         let o = (ly * w + x) * 4;
                         row_slice[o..o + 4].copy_from_slice(&rgba);
+                    }
+                }
+            });
+        }
+    });
+    out
+}
+
+fn render_iters_direct_f64(
+    cx: f64,
+    cy: f64,
+    scale: f64,
+    w: usize,
+    h: usize,
+    max_iters: usize,
+) -> Vec<u16> {
+    let mut out = vec![0u16; w * h];
+    let inv_w = 1.0 / w as f64;
+    let inv_h = 1.0 / h as f64;
+    let chunk = ((h + 3) / 4).max(1);
+    std::thread::scope(|scope| {
+        for (chunk_idx, row_slice) in out.chunks_mut(chunk * w).enumerate() {
+            let y0 = chunk_idx * chunk;
+            scope.spawn(move || {
+                let rows = row_slice.len() / w;
+                for ly in 0..rows {
+                    let y = y0 + ly;
+                    let v = 1.0 - (y as f64 + 0.5) * inv_h;
+                    for x in 0..w {
+                        let u = (x as f64 + 0.5) * inv_w;
+                        let cre = cx + (u - 0.5) * 2.0 * scale;
+                        let cim = cy + (v - 0.5) * 2.0 * scale;
+                        let (n, _zr, _zi) = escape_f64(cre, cim, max_iters);
+                        row_slice[ly * w + x] = n as u16;
+                    }
+                }
+            });
+        }
+    });
+    out
+}
+
+fn render_mu_direct_f64(
+    cx: f64,
+    cy: f64,
+    scale: f64,
+    w: usize,
+    h: usize,
+    max_iters: usize,
+) -> Vec<u16> {
+    let mut out = vec![0u16; w * h];
+    let inv_w = 1.0 / w as f64;
+    let inv_h = 1.0 / h as f64;
+    let chunk = ((h + 3) / 4).max(1);
+    std::thread::scope(|scope| {
+        for (chunk_idx, row_slice) in out.chunks_mut(chunk * w).enumerate() {
+            let y0 = chunk_idx * chunk;
+            scope.spawn(move || {
+                let rows = row_slice.len() / w;
+                for ly in 0..rows {
+                    let y = y0 + ly;
+                    let v = 1.0 - (y as f64 + 0.5) * inv_h;
+                    for x in 0..w {
+                        let u = (x as f64 + 0.5) * inv_w;
+                        let cre = cx + (u - 0.5) * 2.0 * scale;
+                        let cim = cy + (v - 0.5) * 2.0 * scale;
+                        let (n, zr, zi) = escape_f64(cre, cim, max_iters);
+                        row_slice[ly * w + x] = encode_smooth_mu_u16(n, max_iters, zr, zi);
                     }
                 }
             });
@@ -379,6 +514,132 @@ fn render_perturbation(
                         let rgba = color_escape(n, max_iters, zr, zi);
                         let o = (ly * w + x) * 4;
                         row_slice[o..o + 4].copy_from_slice(&rgba);
+                    }
+                }
+            });
+        }
+    });
+    Ok(out)
+}
+
+fn render_iters_perturbation(
+    cx_hp: &DBig,
+    cy_hp: &DBig,
+    scale_f: f64,
+    w: usize,
+    h: usize,
+    max_iters: usize,
+) -> Result<Vec<u16>, String> {
+    let mut z_re = DBig::from(0).with_precision(HP_DIGITS).value();
+    let mut z_im = DBig::from(0).with_precision(HP_DIGITS).value();
+    let mut ref_z: Vec<CDd> = Vec::with_capacity(max_iters);
+    let mut ref_escaped = max_iters;
+    for n in 0..max_iters {
+        let zr = hp_to_dd(&z_re);
+        let zi = hp_to_dd(&z_im);
+        ref_z.push(CDd { re: zr, im: zi });
+        let r = zr.to_f64();
+        let i = zi.to_f64();
+        if r * r + i * i > 4.0 {
+            ref_escaped = n;
+            break;
+        }
+        let zr2 = (z_re.clone() * z_re.clone()).with_precision(HP_DIGITS).value();
+        let zi2 = (z_im.clone() * z_im.clone()).with_precision(HP_DIGITS).value();
+        let two_zr_zi = (DBig::from(2) * z_re.clone() * z_im.clone())
+            .with_precision(HP_DIGITS)
+            .value();
+        z_re = (zr2 - zi2 + cx_hp.clone())
+            .with_precision(HP_DIGITS)
+            .value();
+        z_im = (two_zr_zi + cy_hp.clone())
+            .with_precision(HP_DIGITS)
+            .value();
+    }
+
+    let mut out = vec![0u16; w * h];
+    let inv_w = 1.0 / w as f64;
+    let inv_h = 1.0 / h as f64;
+    let chunk = ((h + 3) / 4).max(1);
+    std::thread::scope(|scope| {
+        for (chunk_idx, row_slice) in out.chunks_mut(chunk * w).enumerate() {
+            let y0 = chunk_idx * chunk;
+            let ref_z = &ref_z;
+            scope.spawn(move || {
+                let rows = row_slice.len() / w;
+                for ly in 0..rows {
+                    let y = y0 + ly;
+                    let v = 1.0 - (y as f64 + 0.5) * inv_h;
+                    for x in 0..w {
+                        let u = (x as f64 + 0.5) * inv_w;
+                        let du = (u - 0.5) * 2.0 * scale_f;
+                        let dv = (v - 0.5) * 2.0 * scale_f;
+                        let c_delta = CDd::from_f64s(du, dv);
+                        let (n, _zr, _zi) = perturb_escape(ref_z, ref_escaped, c_delta, max_iters);
+                        row_slice[ly * w + x] = n as u16;
+                    }
+                }
+            });
+        }
+    });
+    Ok(out)
+}
+
+fn render_mu_perturbation(
+    cx_hp: &DBig,
+    cy_hp: &DBig,
+    scale_f: f64,
+    w: usize,
+    h: usize,
+    max_iters: usize,
+) -> Result<Vec<u16>, String> {
+    let mut z_re = DBig::from(0).with_precision(HP_DIGITS).value();
+    let mut z_im = DBig::from(0).with_precision(HP_DIGITS).value();
+    let mut ref_z: Vec<CDd> = Vec::with_capacity(max_iters);
+    let mut ref_escaped = max_iters;
+    for n in 0..max_iters {
+        let zr = hp_to_dd(&z_re);
+        let zi = hp_to_dd(&z_im);
+        ref_z.push(CDd { re: zr, im: zi });
+        let r = zr.to_f64();
+        let i = zi.to_f64();
+        if r * r + i * i > 4.0 {
+            ref_escaped = n;
+            break;
+        }
+        let zr2 = (z_re.clone() * z_re.clone()).with_precision(HP_DIGITS).value();
+        let zi2 = (z_im.clone() * z_im.clone()).with_precision(HP_DIGITS).value();
+        let two_zr_zi = (DBig::from(2) * z_re.clone() * z_im.clone())
+            .with_precision(HP_DIGITS)
+            .value();
+        z_re = (zr2 - zi2 + cx_hp.clone())
+            .with_precision(HP_DIGITS)
+            .value();
+        z_im = (two_zr_zi + cy_hp.clone())
+            .with_precision(HP_DIGITS)
+            .value();
+    }
+
+    let mut out = vec![0u16; w * h];
+    let inv_w = 1.0 / w as f64;
+    let inv_h = 1.0 / h as f64;
+    let chunk = ((h + 3) / 4).max(1);
+    std::thread::scope(|scope| {
+        for (chunk_idx, row_slice) in out.chunks_mut(chunk * w).enumerate() {
+            let y0 = chunk_idx * chunk;
+            let ref_z = &ref_z;
+            scope.spawn(move || {
+                let rows = row_slice.len() / w;
+                for ly in 0..rows {
+                    let y = y0 + ly;
+                    let v = 1.0 - (y as f64 + 0.5) * inv_h;
+                    for x in 0..w {
+                        let u = (x as f64 + 0.5) * inv_w;
+                        let du = (u - 0.5) * 2.0 * scale_f;
+                        let dv = (v - 0.5) * 2.0 * scale_f;
+                        let c_delta = CDd::from_f64s(du, dv);
+                        let (n, zr, zi) = perturb_escape(ref_z, ref_escaped, c_delta, max_iters);
+                        row_slice[ly * w + x] = encode_smooth_mu_u16(n, max_iters, zr, zi);
                     }
                 }
             });

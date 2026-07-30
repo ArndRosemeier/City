@@ -1,7 +1,14 @@
-## 5×7 m Ui3D: top 5×5 shows a Mandelbrot set; bottom strip has zoom + / − buttons.
+## 9×5 m Ui3D: 5×5 Mandelbrot + 4 m control column.
+##
+## Ui3D quads face +Z while the readable side is −Z, which mirrors X for the
+## viewer — so the control column is authored on the high-UV (+X) side and
+## appears on the viewer's left, with the fractal on their right.
 ##
 ## Fire on the fractal to place a target marker, then fire "+" to zoom into that
 ## point. "−" zooms out around the current view centre (no target required).
+## "Create" asks the arena to morph the glow plaza into the current zoom.
+## "Instant" runs Create behind a wait splash at full speed.
+## "Clear" rebuilds the district (wait splash) so the plaza is pristine again.
 ##
 ## Always baked at TEX_RES² via NativeMandelbrot on WorkerThreadPool; the main
 ## thread only applies the finished ImageTexture (stale jobs are dropped).
@@ -9,19 +16,28 @@ class_name MandelbrotPanel
 extends "res://scripts/city/ui_3d.gd"
 
 signal bake_finished(success: bool)
+signal create_requested(cx_hp: String, cy_hp: String, scale_hp: String)
+signal clear_requested()
+signal instant_changed(enabled: bool)
 
-const PANEL_W := 5.0
-const PANEL_H := 7.0
+const PANEL_W := 9.0
+const PANEL_H := 5.0
+const FRACTAL_W := 5.0
 const FRACTAL_H := 5.0
-const UI_H := 2.0
+const UI_W := 4.0
 const TEX_RES := 1000
 const ZOOM_IN := 0.5
 const ZOOM_OUT := 2.0
 const MAX_SCALE := 3.0
 const BTN_ZOOM_IN := &"zoom_in"
 const BTN_ZOOM_OUT := &"zoom_out"
+const BTN_CREATE := &"create"
+const BTN_CLEAR := &"clear"
+const BTN_INSTANT := &"instant"
 const TEX_SHADER_PATH := "res://scripts/city/mandelbrot_tex.gdshader"
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+const INSTANT_OFF_COLOR := Color(0.28, 0.28, 0.32, 1.0)
+const INSTANT_ON_COLOR := Color(0.16, 0.52, 0.42, 1.0)
 
 ## High-precision view state (decimal strings). Float mirrors are approx only.
 var view_cx_hp: String = "-0.5"
@@ -43,6 +59,8 @@ var _native: Object = null
 ## Bumped on every rebuild; worker results with an older gen are discarded.
 var _bake_gen: int = 0
 var _baking: bool = false
+var _instant: bool = false
+var _instant_rect: Rect2 = Rect2()
 
 
 func begin(origin: Vector3, face_yaw: float) -> void:
@@ -52,18 +70,43 @@ func begin(origin: Vector3, face_yaw: float) -> void:
 	surface_color = Color(0.08, 0.08, 0.10, 1.0)
 	marker_color = Color(1.0, 0.92, 0.2, 1.0)
 	clear_buttons()
-	var ui_v := UI_H / PANEL_H
+	## Control column on +X (high UV) → viewer's left after the +Z/−Z mirror.
+	var col0 := FRACTAL_W / PANEL_W
+	var pad := 0.02
+	var col_w := (1.0 - col0) - 2.0 * pad
+	var half_w := (col_w - pad) * 0.5
+	var x0 := col0 + pad
+	## Top → bottom: Instant, −/+, Create, Clear (Create/Clear full width — no label clash).
+	_instant_rect = Rect2(x0, 0.78, col_w, 0.16)
+	add_button(
+		BTN_INSTANT,
+		_instant_rect,
+		_instant_label(),
+		_instant_color()
+	)
 	add_button(
 		BTN_ZOOM_OUT,
-		Rect2(0.08, 0.06, 0.38, ui_v - 0.10),
+		Rect2(x0, 0.56, half_w, 0.16),
 		"-",
 		Color(0.55, 0.18, 0.18, 1.0)
 	)
 	add_button(
 		BTN_ZOOM_IN,
-		Rect2(0.54, 0.06, 0.38, ui_v - 0.10),
+		Rect2(x0 + half_w + pad, 0.56, half_w, 0.16),
 		"+",
 		Color(0.18, 0.55, 0.28, 1.0)
+	)
+	add_button(
+		BTN_CREATE,
+		Rect2(x0, 0.32, col_w, 0.18),
+		"Create",
+		Color(0.18, 0.38, 0.72, 1.0)
+	)
+	add_button(
+		BTN_CLEAR,
+		Rect2(x0, 0.08, col_w, 0.18),
+		"Clear",
+		Color(0.55, 0.22, 0.18, 1.0)
 	)
 	super.begin(origin, face_yaw)
 	if not button_pressed.is_connected(_on_button_pressed):
@@ -97,8 +140,24 @@ func bake_texture_size() -> Vector2i:
 	return Vector2i(_bake_tex.get_width(), _bake_tex.get_height())
 
 
+func bake_texture() -> Texture2D:
+	return _bake_tex
+
+
 func is_baking() -> bool:
 	return _baking
+
+
+func instant_mode() -> bool:
+	return _instant
+
+
+func set_instant_mode(enabled: bool) -> void:
+	if _instant == enabled:
+		return
+	_instant = enabled
+	_refresh_instant_button()
+	instant_changed.emit(_instant)
 
 
 ## Await until the latest bake finishes (or timeout). For tests / tools.
@@ -141,6 +200,8 @@ func complex_at_uv(uv: Vector2) -> Vector2:
 
 func _on_button_pressed(button_id: StringName, _uv: Vector2) -> void:
 	match button_id:
+		BTN_INSTANT:
+			set_instant_mode(not _instant)
 		BTN_ZOOM_IN:
 			if not zoom_in_at_target():
 				target_cx_hp = view_cx_hp
@@ -150,6 +211,10 @@ func _on_button_pressed(button_id: StringName, _uv: Vector2) -> void:
 				zoom_in_at_target()
 		BTN_ZOOM_OUT:
 			zoom_out()
+		BTN_CREATE:
+			create_requested.emit(view_cx_hp, view_cy_hp, view_scale_hp)
+		BTN_CLEAR:
+			clear_requested.emit()
 
 
 func _on_surface_pressed(uv: Vector2, local_point: Vector3, _world: Vector3) -> void:
@@ -164,13 +229,13 @@ func _on_surface_pressed(uv: Vector2, local_point: Vector3, _world: Vector3) -> 
 
 
 func _uv_in_fractal(uv: Vector2) -> bool:
-	return uv.y >= UI_H / PANEL_H
+	return uv.x < FRACTAL_W / PANEL_W
 
 
 func _fractal_uv(uv: Vector2) -> Vector2:
-	var v0 := UI_H / PANEL_H
-	var fy := (uv.y - v0) / maxf(1.0 - v0, 0.001)
-	return Vector2(clampf(uv.x, 0.0, 1.0), clampf(fy, 0.0, 1.0))
+	var u1 := FRACTAL_W / PANEL_W
+	var fx := uv.x / maxf(u1, 0.001)
+	return Vector2(clampf(fx, 0.0, 1.0), clampf(uv.y, 0.0, 1.0))
 
 
 func _complex_hp_pair(fuv: Vector2) -> PackedStringArray:
@@ -193,8 +258,8 @@ func _complex_hp_pair(fuv: Vector2) -> PackedStringArray:
 
 
 func _fractal_uv_to_local(fuv: Vector2) -> Vector3:
-	var v0 := UI_H / PANEL_H
-	var uv := Vector2(fuv.x, v0 + fuv.y * (1.0 - v0))
+	var u1 := FRACTAL_W / PANEL_W
+	var uv := Vector2(fuv.x * u1, fuv.y)
 	return _uv_to_local(uv)
 
 
@@ -204,7 +269,7 @@ func _build_fractal_view() -> void:
 	_fractal_mesh = MeshInstance3D.new()
 	_fractal_mesh.name = "FractalView"
 	var quad := QuadMesh.new()
-	quad.size = Vector2(PANEL_W, FRACTAL_H)
+	quad.size = Vector2(FRACTAL_W, FRACTAL_H)
 	_fractal_mesh.mesh = quad
 	var tex_shader := load(TEX_SHADER_PATH) as Shader
 	_bake_mat = ShaderMaterial.new()
@@ -212,9 +277,24 @@ func _build_fractal_view() -> void:
 	_bake_tex = ImageTexture.new()
 	_fractal_mesh.material_override = _bake_mat
 	var half := _half_extents()
-	var fractal_center_y := -half.y + UI_H + FRACTAL_H * 0.5
-	_fractal_mesh.position = Vector3(0.0, fractal_center_y, -0.01)
+	## Fractal on −X (low UV) → viewer's right after the +Z/−Z mirror.
+	var fractal_center_x := -half.x + FRACTAL_W * 0.5
+	_fractal_mesh.position = Vector3(fractal_center_x, 0.0, -0.01)
 	add_child(_fractal_mesh)
+
+
+func _instant_label() -> String:
+	return "Instant [x]" if _instant else "Instant [ ]"
+
+
+func _instant_color() -> Color:
+	return INSTANT_ON_COLOR if _instant else INSTANT_OFF_COLOR
+
+
+func _refresh_instant_button() -> void:
+	if _instant_rect.size == Vector2.ZERO:
+		return
+	add_button(BTN_INSTANT, _instant_rect, _instant_label(), _instant_color())
 
 
 func _start_bake_job() -> void:

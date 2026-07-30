@@ -80,8 +80,30 @@ const CASTLE_BLOCK_MOSSY := 56
 ## Fractal plaza deck — solid uni cubes with gem-like emission. Destructible and
 ## not collectible (unlike GEM_*); painted by FractalComposer only.
 const FRACTAL_GLOW := 57
+## Mandelbrot sculpture bands — carveable palette stops, not GEM_* collectibles.
+const FRACTAL_BAND_0 := 58
+const FRACTAL_BAND_1 := 59
+const FRACTAL_BAND_2 := 60
+const FRACTAL_BAND_3 := 61
+const FRACTAL_BAND_4 := 62
+const FRACTAL_BAND_5 := 63
+const FRACTAL_BAND_6 := 64
+const FRACTAL_BAND_7 := 65
+const FRACTAL_BAND_8 := 66
+const FRACTAL_BAND_9 := 67
+const FRACTAL_BAND_10 := 68
+const FRACTAL_BAND_11 := 69
+const FRACTAL_BAND_12 := 70
+const FRACTAL_BAND_13 := 71
+const FRACTAL_BAND_14 := 72
+const FRACTAL_BAND_15 := 73
+## Mandelbrot set body (interior) — dark deck, not the glowing plaza.
+const FRACTAL_INTERIOR := 74
 
-const COUNT := 58
+const COUNT := 75
+const FRACTAL_BAND_COUNT := 16
+const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
+const FRACTAL_BAND_LAST := FRACTAL_BAND_15
 
 ## Rarity weights for pick_gem (sum = 100).
 const GEM_WEIGHT_QUARTZ := 48
@@ -138,6 +160,10 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == GRAVE_PATH
 		or id == GRAVE_SOIL
 		or id == FRACTAL_GLOW
+		or id == FRACTAL_INTERIOR
+		or id == GLASS
+		or id == GLASS_LIT
+		or is_fractal_band(id)
 	)
 
 
@@ -145,7 +171,7 @@ static func is_ground_surface(id: int) -> bool:
 	## Outdoor ground / road deck — meteor auto-spawns land here, never on buildings.
 	## Diggable STONE substrate under the deck is not a landing / ped surface.
 	match id:
-		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL, FRACTAL_GLOW:
+		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL, FRACTAL_GLOW, FRACTAL_INTERIOR:
 			return true
 		_:
 			return false
@@ -160,20 +186,22 @@ static func is_diggable_substrate(id: int) -> bool:
 ## collapsing column. Stone and cave fabric cascade like built structure.
 static func is_self_supporting_terrain(id: int) -> bool:
 	match id:
-		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW:
+		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR:
 			return true
 		_:
-			return false
+			return is_fractal_band(id)
 
 
 static func is_building_fabric(id: int) -> bool:
 	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground, road, or diggable stone.
 	match id:
-		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW:
+		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR:
 			return false
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
 		_:
+			if is_fractal_band(id):
+				return false
 			return id > AIR and id < COUNT
 
 
@@ -217,6 +245,14 @@ static func is_player_carve_immune(id: int) -> bool:
 
 static func is_infection(id: int) -> bool:
 	return id == INFECTION or id == INFECTION_LEAD
+
+
+static func is_fractal_band(id: int) -> bool:
+	return id >= FRACTAL_BAND_FIRST and id <= FRACTAL_BAND_LAST
+
+
+static func fractal_band(index: int) -> int:
+	return FRACTAL_BAND_FIRST + clampi(index, 0, FRACTAL_BAND_COUNT - 1)
 
 
 static func is_gem(id: int) -> bool:
@@ -370,5 +406,18 @@ static func color(id: int) -> Color:
 		FRACTAL_GLOW:
 			## Sapphire-leaning cyan — gem look without GEM_* collect/immune rules.
 			return Color(0.18, 0.48, 0.95)
+		FRACTAL_INTERIOR:
+			## Mandelbrot set body — near-black, not the glowing deck.
+			return Color(0.04, 0.04, 0.06)
 		_:
+			if is_fractal_band(id):
+				return fractal_band_color(id - FRACTAL_BAND_FIRST)
 			return Color(1, 0, 1)
+
+
+## Sculpture exterior colours — full hue wheel so neighbouring bands read as
+## distinct hues (the panel's blue→cyan→yellow ramp looked mono when quantized).
+static func fractal_band_color(band_index: int) -> Color:
+	var i := clampi(band_index, 0, FRACTAL_BAND_COUNT - 1)
+	var h := float(i) / float(FRACTAL_BAND_COUNT)
+	return Color.from_hsv(h, 0.88, 0.95)

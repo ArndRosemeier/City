@@ -1,17 +1,47 @@
 ## Scene content for a Fractal district: four MandelbrotPanels on the glow-square edges.
 ## Panels face *away* from the district centre so a player reading a panel has the plaza
-## behind it.
+## behind it. Create on any panel restarts the plaza terrain morph for that zoom.
+## Instant Create runs behind a fractal wait splash; Clear reloads the district.
 class_name MandelbrotArena
 extends Node3D
 
 const MandelbrotPanelScript := preload("res://scripts/city/mandelbrot_panel.gd")
+const FractalTerrainMorphScript := preload("res://scripts/city/fractal_terrain_morph.gd")
 
 ## Pull panels slightly onto the square so they sit on glowing voxels, not the grass verge.
 const EDGE_INSET_M := 0.5
+const UI_IDLE := Color(0.08, 0.08, 0.10, 1.0)
+const UI_DISSOLVE := Color(0.85, 0.14, 0.12, 1.0)
+const UI_BUILD := Color(0.14, 0.85, 0.28, 1.0)
+const UI_PULSE_HZ := 1.6
+const UI_GLOW_MIN := 1.1
+const UI_GLOW_MAX := 4.2
+
+var _morph: FractalTerrainMorph = null
+var _brush_getter: Callable = Callable()
+var _glow_min: Vector3 = Vector3.ZERO
+var _glow_max: Vector3 = Vector3.ZERO
+var _ground_y_m: float = 0.0
+var _voxel_size: float = 0.5
+var _ui_phase: StringName = &"idle"
+var _ui_pulse_t: float = 0.0
+## Shared Instant checkbox across all four panels.
+var _instant: bool = false
 
 
-func setup(world_min: Vector3, world_max: Vector3, ground_y_m: float) -> void:
+func setup(
+	world_min: Vector3,
+	world_max: Vector3,
+	ground_y_m: float,
+	brush_getter: Callable = Callable(),
+	voxel_size: float = 0.5
+) -> void:
 	name = "MandelbrotArena"
+	_brush_getter = brush_getter
+	_voxel_size = voxel_size
+	_glow_min = world_min
+	_glow_max = world_max
+	_ground_y_m = ground_y_m
 	var min_xz := Vector2(world_min.x, world_min.z)
 	var max_xz := Vector2(world_max.x, world_max.z)
 	var size := Vector2(max_xz.x - min_xz.x, max_xz.y - min_xz.y)
@@ -33,6 +63,7 @@ func setup(world_min: Vector3, world_max: Vector3, ground_y_m: float) -> void:
 	_spawn_panel(Vector3(center.x, panel_y, center.z + half), PI) ## north → +Z
 	_spawn_panel(Vector3(center.x - half, panel_y, center.z), PI * 0.5) ## west → −X
 	_spawn_panel(Vector3(center.x + half, panel_y, center.z), -PI * 0.5) ## east → +X
+	_ensure_morph()
 
 
 func panel_count() -> int:
@@ -43,7 +74,150 @@ func panel_count() -> int:
 	return n
 
 
+func morph_node() -> FractalTerrainMorph:
+	return _morph
+
+
+func instant_mode() -> bool:
+	return _instant
+
+
+func _ensure_morph() -> void:
+	if _morph != null and is_instance_valid(_morph):
+		_morph.configure(_glow_min, _glow_max, _ground_y_m, _voxel_size, _brush_getter)
+	else:
+		_morph = FractalTerrainMorphScript.new() as FractalTerrainMorph
+		_morph.name = "FractalTerrainMorph"
+		add_child(_morph)
+		_morph.configure(_glow_min, _glow_max, _ground_y_m, _voxel_size, _brush_getter)
+	if not _morph.phase_changed.is_connected(_on_morph_phase_changed):
+		_morph.phase_changed.connect(_on_morph_phase_changed)
+
+
+func _on_morph_phase_changed(phase: StringName) -> void:
+	_ui_phase = phase
+	_ui_pulse_t = 0.0
+	if phase == FractalTerrainMorphScript.PHASE_IDLE:
+		set_process(false)
+		_apply_ui_glow(UI_IDLE, 0.0)
+	else:
+		set_process(true)
+		_process(0.0)
+
+
+func _process(delta: float) -> void:
+	if (
+		_ui_phase != FractalTerrainMorphScript.PHASE_DISSOLVE
+		and _ui_phase != FractalTerrainMorphScript.PHASE_BUILD
+	):
+		return
+	_ui_pulse_t += delta
+	var wave := 0.5 + 0.5 * sin(_ui_pulse_t * TAU * UI_PULSE_HZ)
+	## Slightly sharper peaks so the throb reads as glow, not a dim blink.
+	wave = wave * wave
+	var energy := lerpf(UI_GLOW_MIN, UI_GLOW_MAX, wave)
+	var color := (
+		UI_DISSOLVE if _ui_phase == FractalTerrainMorphScript.PHASE_DISSOLVE else UI_BUILD
+	)
+	_apply_ui_glow(color, energy)
+
+
+func _apply_ui_glow(color: Color, emission_energy: float) -> void:
+	for child in get_children():
+		if child.has_method("set_surface_glow"):
+			child.call("set_surface_glow", color, emission_energy)
+		elif child.has_method("set_surface_color"):
+			child.call("set_surface_color", color)
+
+
 func _spawn_panel(origin: Vector3, face_yaw: float) -> void:
 	var panel: Node3D = MandelbrotPanelScript.new() as Node3D
 	add_child(panel)
 	panel.call("begin", origin, face_yaw)
+	if panel.has_method("set_instant_mode"):
+		panel.call("set_instant_mode", _instant)
+	if panel.has_signal("instant_changed"):
+		panel.connect(
+			"instant_changed",
+			func(enabled: bool) -> void:
+				_on_panel_instant_changed(enabled)
+		)
+	if panel.has_signal("create_requested"):
+		panel.connect(
+			"create_requested",
+			func(cx_hp: String, cy_hp: String, scale_hp: String) -> void:
+				_on_create_requested(cx_hp, cy_hp, scale_hp, panel)
+		)
+	if panel.has_signal("clear_requested"):
+		panel.connect("clear_requested", _on_clear_requested)
+
+
+func _on_panel_instant_changed(enabled: bool) -> void:
+	if _instant == enabled:
+		return
+	_instant = enabled
+	for child in get_children():
+		if child.has_method("set_instant_mode"):
+			child.call("set_instant_mode", enabled)
+
+
+func _on_create_requested(
+	cx_hp: String, cy_hp: String, scale_hp: String, panel: Node3D
+) -> void:
+	_ensure_morph()
+	var edge := _edge_for_panel(panel)
+	var instant := _instant
+	if panel.has_method("instant_mode"):
+		instant = bool(panel.call("instant_mode"))
+	if instant:
+		_start_instant_create(cx_hp, cy_hp, scale_hp, edge, panel)
+		return
+	## Restart — Create always means “use this zoom”, growing from this panel's edge.
+	_morph.start(cx_hp, cy_hp, scale_hp, edge, false)
+
+
+func _start_instant_create(
+	cx_hp: String, cy_hp: String, scale_hp: String, edge: StringName, panel: Node3D
+) -> void:
+	var art: Texture2D = null
+	if panel.has_method("bake_texture"):
+		art = panel.call("bake_texture") as Texture2D
+	var root := get_tree().get_first_node_in_group(&"city_root")
+	if root != null and root.has_method("request_fractal_create_wait"):
+		var work := func() -> void:
+			await _morph.start(cx_hp, cy_hp, scale_hp, edge, true)
+		var accepted: bool = bool(root.call("request_fractal_create_wait", art, work))
+		if accepted:
+			return
+		push_error("MandelbrotArena: Instant Create wait rejected — falling back to realtime")
+	## No CityRoot (tests) or splash busy: still run instant morph without splash.
+	_morph.start(cx_hp, cy_hp, scale_hp, edge, true)
+
+
+func _on_clear_requested() -> void:
+	if _morph != null and is_instance_valid(_morph):
+		_morph.abort()
+	var dist := get_parent() as DistrictInstance
+	if dist == null:
+		push_error("MandelbrotArena: Clear needs a DistrictInstance parent")
+		return
+	var root := get_tree().get_first_node_in_group(&"city_root")
+	if root == null or not root.has_method("request_district_reload"):
+		push_error("MandelbrotArena: Clear needs CityRoot.request_district_reload")
+		return
+	root.call("request_district_reload", dist.coord)
+
+
+## Which morph edge is nearest the panel (player stands outside, plaza toward centre).
+func _edge_for_panel(panel: Node3D) -> StringName:
+	var center := Vector3(
+		(_glow_min.x + _glow_max.x) * 0.5,
+		0.0,
+		(_glow_min.z + _glow_max.z) * 0.5
+	)
+	var p := panel.global_position
+	var dx := p.x - center.x
+	var dz := p.z - center.z
+	if absf(dz) >= absf(dx):
+		return FractalTerrainMorphScript.EDGE_SOUTH if dz < 0.0 else FractalTerrainMorphScript.EDGE_NORTH
+	return FractalTerrainMorphScript.EDGE_WEST if dx < 0.0 else FractalTerrainMorphScript.EDGE_EAST

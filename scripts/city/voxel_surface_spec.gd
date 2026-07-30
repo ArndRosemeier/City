@@ -294,22 +294,21 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.roughness = 0.85
 			s.weathering = 0.55
 		VoxelMaterial.GLASS:
-			## One mullion bay per metre, matching the shader's window_meters, so the
-			## frames line up with the panes that light at night. The old repeat put a
-			## mullion every 0.19 m and drew a fan of diagonal scratches with them.
+			## Mullion art is a faint overlay in the shader; tint.a is face-on opacity
+			## (shader scales it down further). Keep tile large so frames stay sparse.
 			s.kind = Kind.GLASS
 			s.albedo_file = "glass.jpg"
 			s.tile_meters = Vector2(4.0, 4.0)
-			s.tint = Color(0.72, 0.86, 1.0, 0.38)
-			s.roughness = 0.08
-			s.metallic = 0.2
+			s.tint = Color(0.78, 0.9, 1.0, 0.32)
+			s.roughness = 0.06
+			s.metallic = 0.08
 		VoxelMaterial.GLASS_LIT:
 			s.kind = Kind.GLASS
 			s.albedo_file = "glass.jpg"
 			s.tile_meters = Vector2(4.0, 4.0)
-			s.tint = Color(0.8, 0.88, 1.0, 0.4)
-			s.roughness = 0.12
-			s.metallic = 0.15
+			s.tint = Color(0.82, 0.9, 1.0, 0.34)
+			s.roughness = 0.08
+			s.metallic = 0.06
 			s.lit_ratio = 0.62
 		VoxelMaterial.WATER:
 			s.kind = Kind.WATER

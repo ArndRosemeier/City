@@ -57,6 +57,8 @@ var _dseed: int = 0
 var _terrain_ref: VoxelTerrain
 var _tool_ref: VoxelTool
 var _camera_ref: Camera3D
+## Live CityBrush from CityRoot — Mandelbrot Create morph must write through this.
+var _live_brush: CityBrush = null
 ## Worker bake result held between ground commit and detail commit.
 var _bake_blocks: Dictionary = {}
 var _bake_block_keys: Array[Vector3i] = []
@@ -65,6 +67,21 @@ var _bake_impostors: Array = []
 ## Hill gem ore in world voxel coords (empty outside Hill districts).
 var hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var hill_gem_mats: PackedInt32Array = PackedInt32Array()
+
+
+func bind_live_brush(brush: CityBrush) -> void:
+	_live_brush = brush
+
+
+func live_brush() -> CityBrush:
+	return _live_brush
+
+
+## False on Fractal — plaza stays empty of pedestrians, cars, lamps, and pads.
+func allows_auto_actors() -> bool:
+	if generator == null or generator.theme == null:
+		return true
+	return generator.theme.id != DistrictTheme.FRACTAL
 
 
 func configure(
@@ -385,57 +402,60 @@ func _stamp_detail_async() -> void:
 
 	await get_tree().process_frame
 
-	CityProfiler.begin("stream_crowd")
-	crowd = CrowdDirectorScript.new()
-	crowd.name = "Crowd"
-	crowd.pedestrian_count = _crowd_count
-	add_child(crowd)
-	crowd.setup(_topology.sidewalks, camera, _dseed)
-	CityProfiler.end("stream_crowd")
-	await get_tree().process_frame
-
-	CityProfiler.begin("stream_vehicles")
-	vehicles = VehicleDirectorScript.new()
-	vehicles.name = "Traffic"
-	vehicles.vehicle_count = _vehicle_count
-	add_child(vehicles)
-	vehicles.setup(_topology, camera, _dseed)
-	vehicles.bind_crowd(crowd)
-	CityProfiler.end("stream_vehicles")
-	await get_tree().process_frame
-
-	CityProfiler.begin("stream_props")
-	street_props = StreetPropPlacerScript.new()
-	street_props.name = "StreetProps"
-	add_child(street_props)
-	street_props.place_from_planner(
-		generator.get_planner(),
-		generator.cell_size,
-		_voxel_size,
-		generator.ground_thickness,
-		camera,
-		origin_vox
-	)
+	## Fractal is a quiet plaza: edge roads exist for world continuity, but no crowd,
+	## traffic, lamps, or scale pads spawn on this tile.
 	var day_night := get_tree().get_first_node_in_group(&"day_night")
-	if day_night != null and day_night.has_method("get_night_factor"):
-		street_props.set_night_factor(float(day_night.call("get_night_factor")))
-	CityProfiler.end("stream_props")
-	await get_tree().process_frame
+	if allows_auto_actors():
+		CityProfiler.begin("stream_crowd")
+		crowd = CrowdDirectorScript.new()
+		crowd.name = "Crowd"
+		crowd.pedestrian_count = _crowd_count
+		add_child(crowd)
+		crowd.setup(_topology.sidewalks, camera, _dseed)
+		CityProfiler.end("stream_crowd")
+		await get_tree().process_frame
 
-	CityProfiler.begin("stream_pads")
-	scale_pads = ScalePadPlacerScript.new()
-	scale_pads.name = "ScalePads"
-	add_child(scale_pads)
-	scale_pads.place_from_planner(
-		generator.get_planner(),
-		generator.cell_size,
-		_voxel_size,
-		generator.ground_thickness,
-		origin_vox,
-		_dseed
-	)
-	CityProfiler.end("stream_pads")
-	await get_tree().process_frame
+		CityProfiler.begin("stream_vehicles")
+		vehicles = VehicleDirectorScript.new()
+		vehicles.name = "Traffic"
+		vehicles.vehicle_count = _vehicle_count
+		add_child(vehicles)
+		vehicles.setup(_topology, camera, _dseed)
+		vehicles.bind_crowd(crowd)
+		CityProfiler.end("stream_vehicles")
+		await get_tree().process_frame
+
+		CityProfiler.begin("stream_props")
+		street_props = StreetPropPlacerScript.new()
+		street_props.name = "StreetProps"
+		add_child(street_props)
+		street_props.place_from_planner(
+			generator.get_planner(),
+			generator.cell_size,
+			_voxel_size,
+			generator.ground_thickness,
+			camera,
+			origin_vox
+		)
+		if day_night != null and day_night.has_method("get_night_factor"):
+			street_props.set_night_factor(float(day_night.call("get_night_factor")))
+		CityProfiler.end("stream_props")
+		await get_tree().process_frame
+
+		CityProfiler.begin("stream_pads")
+		scale_pads = ScalePadPlacerScript.new()
+		scale_pads.name = "ScalePads"
+		add_child(scale_pads)
+		scale_pads.place_from_planner(
+			generator.get_planner(),
+			generator.cell_size,
+			_voxel_size,
+			generator.ground_thickness,
+			origin_vox,
+			_dseed
+		)
+		CityProfiler.end("stream_pads")
+		await get_tree().process_frame
 
 	## Mesh doors for the fortress openings. `get_castle_layout()` is null on every other
 	## district, and the placer treats that as "no doors" rather than an error, so this stays a
@@ -493,7 +513,9 @@ func _spawn_mandelbrot_arena(gen: DistrictGenerator) -> void:
 		"setup",
 		bounds["min"] as Vector3,
 		bounds["max"] as Vector3,
-		float(bounds.get("ground_y_m", 0.0))
+		float(bounds.get("ground_y_m", 0.0)),
+		Callable(self, "live_brush"),
+		_voxel_size
 	)
 
 
