@@ -1,4 +1,5 @@
-## Subdivides and furnishes city interiors as the walker enters them.
+## Subdivides and furnishes city interiors as the walker enters them, or when a door into
+## an undecorated storey is opened (`prime_at`).
 ##
 ## Call `tick` from the main thread with the live CityBrush. One action per call: paint a
 ## slice of partitions, or furnish one room. Districts own the BuildingInterior records
@@ -20,12 +21,25 @@ var _painting: InteriorRoom = null
 var _painting_plan: FloorPlan = null
 ## District of the storey being subdivided or furnished.
 var _hit_coord: Vector2i = Vector2i.ZERO
+## Door-open probe: while set, `tick` uses this voxel instead of the walker's feet so
+## partitions (and the room beyond the door) can finish while the player is still outside.
+var _prime_vox: Vector3i = Vector3i.ZERO
+var _has_prime: bool = false
 
 
-## Advance the interior of whatever storey the foot is on. Returns true when work was done.
-## `districts` entries must expose `is_ready`, `bake_quality`, `coord`, `origin_vox`,
-## `interior_cell_size` and `interior_buildings` (DistrictInstance does). Typed loosely so
-## headless -s tests need no CityProfiler.
+## Ask the next ticks to work the storey under `world` — used when a street door opens
+## into an undecorated interior. Cleared once that storey is subdivided and the room under
+## the probe is furnished (or the probe hits no building at all).
+func prime_at(world: Vector3) -> void:
+	_prime_vox = _world_to_vox(world)
+	_has_prime = true
+	_note("interior: PRIME at %s (world=%.1f,%.1f,%.1f)" % [_prime_vox, world.x, world.y, world.z])
+
+
+## Advance the interior of whatever storey the foot (or a door prime) is on. Returns true
+## when work was done. `districts` entries must expose `is_ready`, `bake_quality`, `coord`,
+## `origin_vox`, `interior_cell_size` and `interior_buildings` (DistrictInstance does).
+## Typed loosely so headless -s tests need no CityProfiler.
 func tick(foot_world: Vector3, districts: Array) -> bool:
 	if brush == null:
 		_note("interior: brush null — tick skipped")
@@ -33,7 +47,7 @@ func tick(foot_world: Vector3, districts: Array) -> bool:
 	if _painter != null:
 		_advance_paint()
 		return true
-	var foot := _world_to_vox(foot_world)
+	var foot := _prime_vox if _has_prime else _world_to_vox(foot_world)
 	var ready_n := 0
 	var building_n := 0
 	var hit_room: InteriorRoom = null
@@ -56,6 +70,9 @@ func tick(foot_world: Vector3, districts: Array) -> bool:
 		break
 
 	if hit_room == null:
+		if _has_prime:
+			_note("interior: prime cleared, no room at %s" % foot)
+			_has_prime = false
 		if _last_enter_key != "":
 			_note(
 				"interior: left room (foot=%s ready=%d buildings=%d)"
@@ -75,6 +92,8 @@ func tick(foot_world: Vector3, districts: Array) -> bool:
 	if not hit_room.subdivided:
 		_begin_subdivision(hit_room)
 		return true
+	if _has_prime:
+		return _furnish_prime(hit_room, foot)
 	return _furnish_next(hit_room, foot)
 
 
@@ -209,6 +228,31 @@ func _is_opening(wall_vox: Vector3i) -> bool:
 
 
 # ------------------------------------------------------------------- furnishing
+
+
+## Door-open path: furnish only the room the probe stands in, then drop the prime so the
+## rest of the floor waits for a real enter. Opening a door should dress what you see, not
+## the whole plate behind the player's back.
+func _furnish_prime(storey: InteriorRoom, foot: Vector3i) -> bool:
+	var target: InteriorRoom = storey
+	if not storey.sub_rooms.is_empty():
+		target = storey.sub_room_at(foot)
+	if target == null or target.decorated:
+		_has_prime = false
+		_note("interior: prime cleared, room under %s already done" % foot)
+		return false
+	var placed := _decorate(target)
+	_has_prime = false
+	_note(
+		"interior: DECORATED (door) purpose=%s placed=%d rect=%s storey=%d"
+		% [
+			RoomDecorator.purpose_name(target.purpose as RoomDecorator.Purpose),
+			placed,
+			target.rect,
+			target.storey,
+		]
+	)
+	return true
 
 
 ## Furnish the room under the foot first, then fill the rest of the floor in behind it.

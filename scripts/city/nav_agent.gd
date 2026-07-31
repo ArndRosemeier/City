@@ -16,9 +16,13 @@
 ## 5. GOAL_UNREACHABLE — nothing routes there; abandon the goal and ask the provider for
 ##                       another.
 ## 6. TRAPPED          — entombed. can_break profiles are asked to dig; everyone else moves to
-##                       the nearest span. Counted through CityProfiler and emitted, so the
-##                       last-resort escape is loud rather than hidden the way
-##                       `_unstuck_horizontal()` in undead_unit.gd is.
+##                       the nearest span on a *different* column. Counted through CityProfiler
+##                       and emitted, so the last-resort escape is loud rather than hidden the
+##                       way `_unstuck_horizontal()` in undead_unit.gd was.
+##
+## Separate from the ladder: NEAR bodies that thrash in place (high path length, tiny net
+## displacement) hop to the nearest free span within `NEARBY_UNSTUCK_VOXELS`, never the column
+## they are already on. Also counted and warned.
 ##
 ## Repathing is lazy: a nav_version bump marks the corridor stale, and the agent only repaths
 ## after its tier's grace period — and only when `dirty_probe` says the change actually landed
@@ -49,6 +53,14 @@ const WANDER_SNAP_M := 6.0
 ## Nearest fraction of the wander radius a pick may land at, so wandering means going
 ## somewhere.
 const WANDER_MIN_FRACTION := 0.35
+## Short horizontal unstuck: search at most this many voxels from the feet (Chebyshev).
+const NEARBY_UNSTUCK_VOXELS := 2
+## Seconds of thrashing averaged before a nearby hop is considered.
+const WIGGLE_WINDOW_SEC := 0.45
+## Horizontal path length inside the window that counts as thrashing.
+const WIGGLE_PATH_M := 0.28
+## Net XZ displacement below which that path length is a wiggle, not travel.
+const WIGGLE_NET_M := 0.07
 
 signal goal_changed(goal: NavGoal)
 signal ladder_changed(state: NavLadder.State)
@@ -65,6 +77,7 @@ signal dig_out_requested(world_pos: Vector3)
 static var _trapped_events: int = 0
 static var _dig_out_events: int = 0
 static var _teleport_events: int = 0
+static var _nearby_unstuck_events: int = 0
 static var _lost_events: int = 0
 static var _blocked_columns: int = 0
 static var _goal_failure_events: int = 0
@@ -95,6 +108,8 @@ var footing_tolerance_m: float = 1.5
 var escape_radius_m: float = 12.0
 ## Quiet time after a TRAPPED report before a new goal is requested.
 var trapped_cooldown_sec: float = 1.0
+## Quiet time after a nearby wiggle-hop before another is allowed.
+var nearby_unstuck_cooldown_sec: float = 0.85
 ## Retry delay after the provider had nothing to offer.
 var idle_retry_sec: float = 0.5
 ## `func(points: PackedVector3Array, since_version: int) -> bool`, answering whether the
@@ -140,6 +155,12 @@ var _failed_state: NavLadder.State = NavLadder.State.PATH_OK
 var _failed_at: float = -1.0
 var _failures: int = 0
 var _rng := RandomNumberGenerator.new()
+## Wiggle window: thrashing path length vs net displacement while the motor wants to move.
+var _wiggle_origin: Vector3 = Vector3.ZERO
+var _wiggle_path_m: float = 0.0
+var _wiggle_elapsed: float = 0.0
+var _wiggle_wanted_m: float = 0.0
+var _nearby_unstuck_ready_at: float = -1.0
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +321,11 @@ static func teleport_events() -> int:
 	return _teleport_events
 
 
+## Bodies that hopped off a thrashing column to a neighbour span (not a TRAPPED escape).
+static func nearby_unstuck_events() -> int:
+	return _nearby_unstuck_events
+
+
 ## TRAPPED bodies that had no span to escape to. Always an error as well.
 static func lost_events() -> int:
 	return _lost_events
@@ -331,6 +357,7 @@ static func reset_events() -> void:
 	_trapped_events = 0
 	_dig_out_events = 0
 	_teleport_events = 0
+	_nearby_unstuck_events = 0
 	_lost_events = 0
 	_blocked_columns = 0
 	_goal_failure_events = 0
@@ -591,6 +618,8 @@ func _drive(delta: float) -> void:
 		_progress_expected += step.expected_m
 		_progress_actual += gained
 		_progress_elapsed += delta
+		if _note_wiggle(step, delta):
+			return
 	if step.arrived:
 		_on_corridor_end()
 		return
@@ -744,10 +773,18 @@ func _report_trapped() -> void:
 
 
 func _escape_to_nearest_span(from: Vector3) -> NavLadder.Escape:
-	var hit := _nav.nearest_surface(_profile_id, from, escape_radius_m)
-	if not hit.found:
-		hit = _nav.nearest_surface(_profile_id, from, escape_radius_m * 3.0)
-	if not hit.found:
+	## Prefer a neighbour column first — the span under the feet is what pinned the body.
+	var spot := _find_free_span_excluding_column(from, NEARBY_UNSTUCK_VOXELS)
+	if spot == Vector3.INF:
+		spot = _find_escape_span(from, escape_radius_m)
+	if spot == Vector3.INF:
+		spot = _find_escape_span(from, escape_radius_m * 3.0)
+	if spot == Vector3.INF:
+		## Last resort: any span in range, even the current column (better than LOST).
+		var hit := _nav.nearest_surface(_profile_id, from, escape_radius_m * 3.0)
+		if hit.found:
+			spot = hit.position
+	if spot == Vector3.INF:
 		_lost_events += 1
 		push_error(
 			"NavAgent %d: entombed at %.1f,%.1f,%.1f with no %s span within %.1f m"
@@ -761,9 +798,154 @@ func _escape_to_nearest_span(from: Vector3) -> NavLadder.Escape:
 			]
 		)
 		return NavLadder.Escape.LOST
-	_body.global_position = hit.position
+	_body.global_position = spot
+	if _body is CharacterBody3D:
+		(_body as CharacterBody3D).velocity = Vector3.ZERO
 	_teleport_events += 1
 	return NavLadder.Escape.TELEPORTED
+
+
+## Wider than the 2-voxel hop: nearest span on another column, Y unrestricted (entombment).
+func _find_escape_span(from: Vector3, radius_m: float) -> Vector3:
+	var origin_col := _nav.column_of(from)
+	var hit := _nav.nearest_surface(_profile_id, from, radius_m)
+	if hit.found and _nav.column_of(hit.position) != origin_col:
+		return hit.position
+	var vs := _nav.voxel_size()
+	if vs <= 0.0:
+		return Vector3.INF
+	var max_v := maxi(1, ceili(radius_m / vs))
+	var best := Vector3.INF
+	var best_d := INF
+	for dist in range(1, max_v + 1):
+		var steps := mini(16, 4 * dist)
+		for i in range(steps):
+			var ang := TAU * float(i) / float(steps)
+			var probe := from + Vector3(sin(ang) * float(dist) * vs, 0.0, cos(ang) * float(dist) * vs)
+			var h := _nav.nearest_surface(_profile_id, probe, vs * 0.8)
+			if not h.found:
+				continue
+			if _nav.column_of(h.position) == origin_col:
+				continue
+			var d := from.distance_to(h.position)
+			if d < best_d:
+				best_d = d
+				best = h.position
+		if best != Vector3.INF:
+			return best
+	return best
+
+
+## High path length + tiny net displacement while the motor still wants to walk: hop off the
+## column. A motor that freezes the body (zero `moved`) does not trip this — that stays on the
+## ladder so BLOCKED / TRAPPED keep their meaning.
+func _note_wiggle(step: NavMotor.Step, delta: float) -> bool:
+	var path_step := Vector2(step.moved.x, step.moved.z).length()
+	if _wiggle_elapsed <= 0.0:
+		_wiggle_origin = _body.global_position - step.moved
+		_wiggle_path_m = 0.0
+		_wiggle_wanted_m = 0.0
+	_wiggle_path_m += path_step
+	_wiggle_wanted_m += maxf(step.expected_m, 0.0)
+	_wiggle_elapsed += delta
+	if _wiggle_elapsed < WIGGLE_WINDOW_SEC:
+		return false
+	var net := Vector2(
+		_body.global_position.x - _wiggle_origin.x,
+		_body.global_position.z - _wiggle_origin.z
+	).length()
+	var thrashing := (
+		_wiggle_wanted_m > 0.05
+		and _wiggle_path_m >= WIGGLE_PATH_M
+		and net <= WIGGLE_NET_M
+	)
+	_reset_wiggle()
+	if not thrashing:
+		return false
+	return _try_nearby_unstuck()
+
+
+func _try_nearby_unstuck() -> bool:
+	if _time < _nearby_unstuck_ready_at:
+		return false
+	var from := _body.global_position
+	var spot := _find_free_span_excluding_column(from, NEARBY_UNSTUCK_VOXELS)
+	if spot == Vector3.INF:
+		return false
+	var before := from
+	_body.global_position = spot
+	if _body is CharacterBody3D:
+		(_body as CharacterBody3D).velocity = Vector3.ZERO
+	_nearby_unstuck_events += 1
+	_teleport_events += 1
+	CityProfiler.add_counter("nav_nearby_unstuck")
+	_nearby_unstuck_ready_at = _time + nearby_unstuck_cooldown_sec
+	push_warning(
+		(
+			"NavAgent %d (%s) nearby unstuck %.1f,%.1f,%.1f -> %.1f,%.1f,%.1f (≤%d voxels)"
+			% [
+				_agent_id,
+				_profile.display_name,
+				before.x,
+				before.y,
+				before.z,
+				spot.x,
+				spot.y,
+				spot.z,
+				NEARBY_UNSTUCK_VOXELS,
+			]
+		)
+	)
+	_reset_progress()
+	_reset_wiggle()
+	_local_repaths = 0
+	_motor.clear_path()
+	_request_path(_destination)
+	_enter_state(NavLadder.State.NO_PROGRESS)
+	return true
+
+
+## Nearest profile-valid span within `max_voxels` Chebyshev of `from`, never the column the
+## body is already standing on. Horizontal preference: reject climbs/drops past max_step.
+func _find_free_span_excluding_column(from: Vector3, max_voxels: int) -> Vector3:
+	if max_voxels < 1:
+		return Vector3.INF
+	var vs := _nav.voxel_size()
+	if vs <= 0.0:
+		return Vector3.INF
+	var origin_col := _nav.column_of(from)
+	var best := Vector3.INF
+	var best_d := INF
+	var max_dy := vs * maxf(_profile.max_step, 1.0)
+	var max_flat := vs * float(max_voxels) + vs * 0.51
+	for dz in range(-max_voxels, max_voxels + 1):
+		for dx in range(-max_voxels, max_voxels + 1):
+			if dx == 0 and dz == 0:
+				continue
+			if maxi(absi(dx), absi(dz)) > max_voxels:
+				continue
+			var probe := Vector3(from.x + float(dx) * vs, from.y, from.z + float(dz) * vs)
+			var hit := _nav.nearest_surface(_profile_id, probe, vs * 0.65)
+			if not hit.found:
+				continue
+			if _nav.column_of(hit.position) == origin_col:
+				continue
+			if absf(hit.position.y - from.y) > max_dy:
+				continue
+			var flat := Vector2(hit.position.x - from.x, hit.position.z - from.z).length()
+			if flat > max_flat:
+				continue
+			if flat < best_d:
+				best_d = flat
+				best = hit.position
+	return best
+
+
+func _reset_wiggle() -> void:
+	_wiggle_elapsed = 0.0
+	_wiggle_path_m = 0.0
+	_wiggle_wanted_m = 0.0
+	_wiggle_origin = Vector3.ZERO
 
 
 # ---------------------------------------------------------------------------
@@ -835,6 +1017,7 @@ func _reset_progress() -> void:
 
 func _reset_ladder() -> void:
 	_reset_progress()
+	_reset_wiggle()
 	_progress_total = 0.0
 	_local_repaths = 0
 	_blocks_written = 0

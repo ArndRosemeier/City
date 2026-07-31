@@ -110,5 +110,11 @@ func _physics_process(delta: float) -> void:
 
 
 func _die() -> void:
+	if _alive:
+		var tree := get_tree()
+		if tree != null:
+			var audio := tree.get_first_node_in_group(&"city_audio")
+			if audio != null and audio.has_method("play_orb_impact"):
+				audio.call("play_orb_impact", global_position, 1.0)
 	_alive = false
 	queue_free()

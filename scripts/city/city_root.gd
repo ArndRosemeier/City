@@ -69,7 +69,8 @@ var _terrain: VoxelTerrain
 var _tool: VoxelTool
 ## Single funnel for every live voxel write; publishes voxels_changed(aabb_vox).
 var _brush: CityBrush
-## JIT furniture when the walker steps into an undecorated InteriorRoom.
+## JIT furniture when the walker steps into an undecorated InteriorRoom, or opens a
+## door that leads into one.
 var _interior_decorator: InteriorDecorator
 ## Outfit scenes kept referenced for the session so gameplay loads hit the resource cache.
 var _warm_scenes: Array[PackedScene] = []
@@ -3993,7 +3994,15 @@ func _try_interact_nearest() -> bool:
 			var door: CastleDoorPlacer.Hung = target.get("door") as CastleDoorPlacer.Hung
 			if placer == null or door == null:
 				return false
-			return placer.toggle_door(door)
+			var opening := door.closed
+			if not placer.toggle_door(door):
+				return false
+			## Opening onto an undecorated interior starts the JIT pipeline while the
+			## walker is still on the street — partitions (and the room beyond) finish
+			## before the first step inside.
+			if opening and not door.closed:
+				_prime_interior_beyond_door(door)
+			return true
 		"elevator":
 			if _walker == null:
 				return false
@@ -4002,6 +4011,23 @@ func _try_interact_nearest() -> bool:
 			return true
 		_:
 			return false
+
+
+## Probe one cell past the inner face of the opening and ask InteriorDecorator to work
+## that storey. Castle doors and doors with no city interior simply miss and clear.
+func _prime_interior_beyond_door(door: CastleDoorPlacer.Hung) -> void:
+	if _interior_decorator == null or door == null or door.doorway == null:
+		return
+	var d: CastleDoorway = door.doorway
+	var step := maxi(d.depth, 1)
+	var col: Vector2i = d.center + d.axis * step
+	var world_vox := Vector3i(col.x, d.floor_y + 1, col.y) + door.origin_vox
+	var world := Vector3(
+		(float(world_vox.x) + 0.5) * VOXEL_SIZE,
+		(float(world_vox.y) + 0.5) * VOXEL_SIZE,
+		(float(world_vox.z) + 0.5) * VOXEL_SIZE
+	)
+	_interior_decorator.prime_at(world)
 
 
 func _unhandled_input(event: InputEvent) -> void:

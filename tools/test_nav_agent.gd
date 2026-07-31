@@ -104,6 +104,10 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	await _test_nearby_unstuck_on_wiggle()
+	if _failed:
+		_quit()
+		return
 	await _test_trapped_teleport()
 	if _failed:
 		_quit()
@@ -690,6 +694,80 @@ func _test_no_progress_and_blocked() -> void:
 	print(
 		"pinned body escalated to TRAPPED after %d ticks, escape %s"
 		% [frames, NavLadder.escape_name(_escapes[0] as NavLadder.Escape)]
+	)
+	agent.dispose()
+	body.queue_free()
+
+
+# ---------------------------------------------------------------------------
+# Wiggle hop: thrashing in place hops to a neighbour column
+# ---------------------------------------------------------------------------
+
+## A motor that keeps asking for corridor metres while the body oscillates on the spot — the
+## signature of a NEAR capsule wedged in a voxel corner. Path length grows; net does not.
+class WigglingMotor:
+	extends NavMotor
+	var active: bool = false
+	var _phase: int = 0
+
+	func advance(delta: float) -> NavMotor.Step:
+		if not active:
+			return super.advance(delta)
+		var step := super.advance(delta)
+		var amp := 0.04
+		var kick := amp if (_phase % 2) == 0 else -amp
+		_phase += 1
+		var held := body().global_position
+		## Undo whatever follow did, then apply the thrash so NavAgent sees real `moved`.
+		body().global_position = held - step.moved + Vector3(kick, 0.0, 0.0)
+		step.moved = Vector3(kick, 0.0, 0.0)
+		step.advanced_m = 0.0
+		step.expected_m = maxf(step.expected_m, speed_mps * delta)
+		return step
+
+
+func _test_nearby_unstuck_on_wiggle() -> void:
+	var start := _w(Vector3i(20, 1, 70))
+	var goal_at := _w(Vector3i(100, 1, 70))
+	var body := _make_body("Wiggler", start)
+	var motor := WigglingMotor.new()
+	var queue := NavGoalQueue.new()
+	queue.add(NavGoal.go_to_point(goal_at, 1.5))
+	var agent := _make_agent(body, NavProfile.Id.PEDESTRIAN, motor, queue)
+	NavAgent.reset_events()
+	var origin_col := _nav.column_of(start)
+	var hop_from := start
+	var frames := 0
+	while frames < MAX_FRAMES:
+		await get_tree().process_frame
+		frames += 1
+		if agent.has_corridor() and not motor.active:
+			motor.active = true
+			hop_from = body.global_position
+			origin_col = _nav.column_of(hop_from)
+		agent.tick(SIM_DT, body.global_position + Vector3(0.0, 0.0, 8.0))
+		if NavAgent.nearby_unstuck_events() > 0:
+			break
+	if NavAgent.nearby_unstuck_events() < 1:
+		_fail(
+			"FAIL a thrashing body never nearby-unstuck in %d ticks (pos %.2f,%.2f state %s)"
+			% [frames, body.global_position.x, body.global_position.z, agent.state_name()]
+		)
+		return
+	var landed_col := _nav.column_of(body.global_position)
+	if landed_col == origin_col:
+		_fail("FAIL nearby unstuck left the body on the same column %s" % str(origin_col))
+		return
+	var flat := Vector2(
+		body.global_position.x - hop_from.x, body.global_position.z - hop_from.z
+	).length()
+	var max_m := VOXEL_SIZE * float(NavAgent.NEARBY_UNSTUCK_VOXELS) + VOXEL_SIZE
+	if flat > max_m:
+		_fail("FAIL nearby unstuck hopped %.2f m, cap is %.2f m" % [flat, max_m])
+		return
+	print(
+		"nearby unstuck: column %s -> %s (%.2f m) after %d ticks"
+		% [str(origin_col), str(landed_col), flat, frames]
 	)
 	agent.dispose()
 	body.queue_free()

@@ -220,6 +220,14 @@ func _begin_attack(attack_id: String, prey: Vector3) -> bool:
 		_windup_attack = attack_id
 		_windup_prey = prey
 		_unit.call("play_combat_windup", attack_id)
+		## Charged blast holds the same charge ramp the player hears while winding up.
+		if attack_id == "charged_blast":
+			_sfx(
+				"play_charged_blast_charge",
+				_unit.global_position,
+				_scale(),
+				windup
+			)
 		return true
 	return _execute_attack(attack_id, prey)
 
@@ -230,13 +238,16 @@ func _finish_windup() -> void:
 	_windup_attack = ""
 	_windup_prey = Vector3.INF
 	if attack_id.is_empty() or prey == Vector3.INF:
+		_stop_charged_sfx()
 		return
 	## Re-check range after the telegraph — prey may have walked out.
 	var reach := CombatTableScript.monster_attack_range_m(attack_id)
 	if _flat_distance(_unit.global_position, prey) > reach * 1.15:
+		_stop_charged_sfx()
 		return
 	## Voxel LOS can close during windup (door, corner, glass lip).
 	if _is_ranged_attack(attack_id) and not _has_voxel_los_to(prey):
+		_stop_charged_sfx()
 		return
 	_execute_attack(attack_id, prey)
 
@@ -297,6 +308,10 @@ func _execute_attack(attack_id: String, prey: Vector3) -> bool:
 func _execute_melee(prey: Vector3) -> bool:
 	_unit.call("play_combat_strike", "melee")
 	_set_cooldown("melee")
+	var scale := _scale()
+	var at: Vector3 = _unit.global_position
+	_sfx("play_melee_swing", at, scale)
+	_sfx("play_melee_hit", prey, scale)
 	if _is_player_prey(prey):
 		_hurt_player(DamageSourceScript.Id.MONSTER_MELEE)
 		return true
@@ -314,6 +329,8 @@ func _execute_melee(prey: Vector3) -> bool:
 func _execute_orb(prey: Vector3) -> bool:
 	_unit.call("play_combat_strike", "orb_convert")
 	_set_cooldown("orb_convert")
+	var muzzle: Vector3 = _unit.call("muzzle_world") as Vector3
+	_sfx("play_orb_cast", muzzle, _scale())
 	_unit.call("fire_convert_orb", prey)
 	return true
 
@@ -333,12 +350,14 @@ func _execute_eye_laser(prey: Vector3) -> bool:
 	bolt.connect("impact", _on_eye_laser_impact)
 	## Prey is already an aim-height point from LOS selection.
 	bolt.call("fire", muzzle, prey, speed, scale)
+	_sfx("play_laser_fire", muzzle, scale)
 	return true
 
 
 func _on_eye_laser_impact(hit_point: Vector3, direction: Vector3) -> void:
 	if _unit == null or not bool(_unit.call("is_alive")):
 		return
+	_sfx("play_laser_impact", hit_point, _scale())
 	if _player_near_los(hit_point, 2.8):
 		_hurt_player(DamageSourceScript.Id.MONSTER_LASER)
 		return
@@ -374,6 +393,7 @@ func _fire_blaster_bolt(prey: Vector3) -> void:
 	bolt.connect("impact", _on_blaster_impact)
 	## Prey is already an aim-height point from LOS selection.
 	bolt.call("fire", muzzle, prey, speed, scale)
+	_sfx("play_laser_fire", muzzle, scale)
 	if _blaster_burst_left > 0:
 		_blaster_burst_left -= 1
 		_blaster_burst_cd = interval
@@ -391,6 +411,7 @@ func _vfx_parent() -> Node:
 func _on_blaster_impact(hit_point: Vector3, direction: Vector3, _shot_origin: Vector3) -> void:
 	if _unit == null or not bool(_unit.call("is_alive")):
 		return
+	_sfx("play_laser_impact", hit_point, _scale())
 	if _player_near_los(hit_point, 2.8):
 		_hurt_player(DamageSourceScript.Id.MONSTER_BLASTER)
 		return
@@ -426,6 +447,7 @@ func _execute_stomp(prey: Vector3) -> bool:
 	var row := CombatTableScript.attack_def("stomp")
 	var scale: float = float(_unit.get("character_scale"))
 	var radius := float(row.get("radius_m", 2.52)) * maxf(scale, 0.05)
+	_sfx("play_stomp", _unit.global_position, scale)
 	if _is_player_prey(prey) and _flat_distance(_unit.global_position, prey) <= radius:
 		_hurt_player(DamageSourceScript.Id.MONSTER_STOMP)
 	var mob := _hostile_monster_near(prey, radius)
@@ -439,6 +461,10 @@ func _execute_charged_blast(prey: Vector3) -> bool:
 	_set_cooldown("charged_blast")
 	var row := CombatTableScript.attack_def("charged_blast")
 	var radius := float(row.get("radius_m", 2.52))
+	var scale := _scale()
+	var at: Vector3 = _unit.global_position
+	_sfx("play_charged_blast_throw", at, scale)
+	_sfx("play_charged_blast_impact", prey, scale)
 	## Vertical slice: telegraphed hit on the player / hostile if still near the aim point.
 	if _is_player_prey(prey):
 		var city: Node = _unit.call("city") as Node
@@ -450,6 +476,34 @@ func _execute_charged_blast(prey: Vector3) -> bool:
 	if mob != null and prey.distance_to(mob.global_position) <= radius + 1.2:
 		_hurt_monster(mob, "charged_blast")
 	return true
+
+
+func _scale() -> float:
+	return maxf(float(_unit.get("character_scale")), 0.05)
+
+
+func _city_audio() -> Node:
+	var tree := _unit.get_tree() if _unit != null else null
+	if tree == null:
+		return null
+	return tree.get_first_node_in_group(&"city_audio")
+
+
+## Optional fourth arg for charge_sec on play_charged_blast_charge.
+func _sfx(method: String, world_pos: Vector3, character_scale: float, extra: float = -1.0) -> void:
+	var audio := _city_audio()
+	if audio == null or not audio.has_method(method):
+		return
+	if extra >= 0.0:
+		audio.call(method, world_pos, character_scale, extra)
+	else:
+		audio.call(method, world_pos, character_scale)
+
+
+func _stop_charged_sfx() -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("stop_charged_blast_charge"):
+		audio.call("stop_charged_blast_charge")
 
 
 func _hurt_player(source: DamageSource.Id) -> void:

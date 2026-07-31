@@ -6,9 +6,9 @@
 ## and is now what happens when the last of that runs out rather than what happens on contact.
 ##
 ## Movement is NavAgent + NavMotor over the baked span field. An UndeadGoalProvider says what
-## this body wants and the six-rung ladder says what happens when it cannot get there, so
-## there is deliberately no local unstick code here: TRAPPED is the only escape hatch, and it
-## is counted, warned about and emitted rather than quietly relocating the body.
+## this body wants and the six-rung ladder says what happens when it cannot get there. Escape
+## hops live on NavAgent (wiggle → ≤2-voxel neighbour span; TRAPPED → nearest other column),
+## counted and warned — never a silent `_unstuck_horizontal` on this script.
 class_name UndeadUnit
 extends CharacterBody3D
 
@@ -1045,6 +1045,7 @@ func _tick_nibble() -> void:
 		return
 	if _city.undead_nibble_building_near(global_position, MINION_NIBBLE_REACH_M + 1.2):
 		_nibble_cd = MINION_NIBBLE_INTERVAL_SEC
+		_play_sfx("play_nibble", global_position)
 		return
 	## Nothing left within reach: the provider picks the next piece of fabric.
 	_facade_target = Vector3.INF
@@ -1101,6 +1102,7 @@ func _tick_scrape() -> void:
 	var contact := global_position + inward * GIANT_SCRAPE_DIST_M
 	contact.y = global_position.y + 1.2
 	if _city.undead_giant_scrape_at(contact, inward, along) > 0:
+		_play_sfx("play_debris", contact)
 		return
 	_facade_target = Vector3.INF
 	state = State.STOMP
@@ -1237,6 +1239,20 @@ func _play_hit_reaction() -> void:
 	_current_anim = clip
 	_anim.play(clip)
 	_anim.seek(0.0, true)
+
+
+func _play_sfx(method: String, world_pos: Vector3) -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+	var audio := tree.get_first_node_in_group(&"city_audio")
+	if audio == null or not audio.has_method(method):
+		return
+	## Debris is unscaled; everything else pitches with body size.
+	if method == "play_debris":
+		audio.call(method, world_pos)
+	else:
+		audio.call(method, world_pos, character_scale)
 
 
 func _play_action(action: CreatureClips.Action) -> void:

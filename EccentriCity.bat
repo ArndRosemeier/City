@@ -52,6 +52,33 @@ if not exist "%ROOT%\addons\city_voxel\bin\city_voxel.dll" (
     exit /b 1
 )
 
+REM Smart App Control (Windows 11) blocks unsigned city_voxel.dll when set to On.
+if not exist "%ROOT%\tools\open_smart_app_control.ps1" goto after_sac_check
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\open_smart_app_control.ps1" -CheckOnly >nul
+if errorlevel 2 goto sac_warn
+goto after_sac_check
+
+:sac_warn
+echo.
+echo WARNING: Windows Smart App Control is On.
+echo.
+echo Eccentri City needs city_voxel.dll ^(unsigned native code^). With Smart App
+echo Control set to On, Windows often blocks that DLL and the game will not run
+echo ^(missing native types / black screen / instant script errors^).
+echo.
+echo You can turn Smart App Control Off in Windows Security. Microsoft usually
+echo will not let you turn it back On without resetting the PC.
+echo.
+choice /C YN /N /M "Open Smart App Control settings now? [Y/N] "
+if errorlevel 2 goto after_sac_check
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\open_smart_app_control.ps1" -Force
+echo.
+echo Set Smart App Control to Off, then press any key to continue launching...
+pause >nul
+echo.
+
+:after_sac_check
+
 REM Do not use cmd if-exist/dir on paths containing a .godot segment.
 if not exist "%ROOT%\tools\check_godot_import_artifacts.ps1" goto do_import
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\check_godot_import_artifacts.ps1" -InstallDir "%ROOT%" -Attempts 1 -DelayMs 0 >nul
@@ -80,4 +107,4 @@ echo.
 start "Eccentri City" /MAX "%GODOT_EXE%" --path "%ROOT%" res://scenes/city_poc.tscn --maximized
 endlocal
 exit /b 0
-
+

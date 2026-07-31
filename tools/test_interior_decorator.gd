@@ -1,5 +1,6 @@
 ## The JIT interior pipeline: bake emits a room per storey, entering one subdivides it,
-## and each room is furnished exactly once.
+## and each room is furnished exactly once. Opening a door into an undecorated storey
+## primes the same path from outside.
 ##
 ## Run: powershell -File tools\run_test.ps1 test_interior_decorator
 extends Node
@@ -31,6 +32,7 @@ func _ready() -> void:
 	failed = _check_foot_on_floor_slab(failed)
 	failed = _check_bake_storeys(failed)
 	failed = _check_decorate_once(failed)
+	failed = _check_prime_from_outside(failed)
 	failed = _check_subdivides_big_floor(failed)
 	print("RESULT: %s" % ("OK" if not failed else "FAILED"))
 	get_tree().quit(1 if failed else 0)
@@ -269,6 +271,51 @@ func _check_decorate_once(failed: bool) -> bool:
 		push_error("FAIL prop count changed after the room was finished")
 		failed = true
 	print("  decorate-once props=%d" % props)
+	return failed
+
+
+## A door-open prime works the storey under the probe even while the walker stands outside,
+## then stops after that room is dressed — it must not keep furnishing the rest of the floor.
+func _check_prime_from_outside(failed: bool) -> bool:
+	var brush: CityBrush = CityBrushScript.new()
+	brush.use_offline_volume()
+	var volume: RoomVolume = RoomVolumeScript.make(Rect2i(4, 4, 12, 12), 10, 5)
+	_shell_room(brush, volume)
+
+	var room: InteriorRoom = InteriorRoomScript.make(
+		volume.rect, volume.floor_y, volume.air_h, RoomDecoratorScript.Purpose.LIVING_ROOM
+	)
+	var inst := _fake_district(_building_of(room))
+	var dec: InteriorDecorator = InteriorDecoratorScript.new() as InteriorDecorator
+	dec.brush = brush
+	dec.voxel_size = 0.5
+
+	var inside := _foot_in(volume.rect, volume.floor_y, Vector2i(2, 2))
+	## Street side — well clear of the plate, so a bare tick would miss.
+	var outside := Vector3(-5.0, (volume.floor_y + 1) * 0.5 + 0.1, -5.0)
+	if dec.tick(outside, [inst]):
+		push_error("FAIL a street-side tick worked without a prime")
+		return true
+	dec.prime_at(inside)
+	var ticks := 0
+	while dec.tick(outside, [inst]) and ticks < 40:
+		ticks += 1
+	if ticks >= 40:
+		push_error("FAIL primed storey never finished")
+		return true
+	if not room.subdivided or not room.decorated:
+		push_error(
+			"FAIL prime left subdivided=%s decorated=%s after %d ticks"
+			% [room.subdivided, room.decorated, ticks]
+		)
+		failed = true
+	if _count_props(brush, volume) <= 0:
+		push_error("FAIL primed room got no props")
+		failed = true
+	if dec.tick(outside, [inst]):
+		push_error("FAIL work continued from outside after the prime cleared")
+		failed = true
+	print("  prime-from-outside: %d ticks, props=%d" % [ticks, _count_props(brush, volume)])
 	return failed
 
 

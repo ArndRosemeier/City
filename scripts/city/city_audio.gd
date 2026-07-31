@@ -31,6 +31,14 @@ var _meteor_crash_stream: AudioStream
 var _tendril_drone_stream: AudioStream
 var _tendril_tick_stream: AudioStream
 var _gem_pickup_stream: AudioStream
+## Monster / fist melee — no Kenney pack for this mood, so always procedural.
+var _melee_swing_streams: Array[AudioStream] = []
+var _melee_hit_streams: Array[AudioStream] = []
+## Purple conversion orb cast + impact.
+var _orb_cast_streams: Array[AudioStream] = []
+var _orb_impact_streams: Array[AudioStream] = []
+## Soft building-nibble clicks.
+var _nibble_streams: Array[AudioStream] = []
 
 var _pool: Array[AudioStreamPlayer3D] = []
 var _pool_i: int = 0
@@ -254,6 +262,93 @@ func play_charged_blast_impact(world_pos: Vector3, character_scale: float = 1.0)
 		_blast_impact_player.play()
 
 
+## Whoosh of a claw / fist swing. Scale drops the pitch for giants.
+func play_melee_swing(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_melee_swing_streams)
+	if stream == null:
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.05 / sqrt(maxf(character_scale, 0.25)), 0.5, 1.45)
+	p.pitch_scale *= _rng.randf_range(0.92, 1.08)
+	p.volume_db = -7.0 + clampf((character_scale - 1.0) * 1.5, -3.0, 4.0)
+	p.play()
+
+
+## Flesh / bone thump when a melee connects (or stomps the ground).
+func play_melee_hit(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_melee_hit_streams)
+	if stream == null:
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.5, 1.35)
+	p.pitch_scale *= _rng.randf_range(0.9, 1.1)
+	p.volume_db = -4.0 + clampf((character_scale - 1.0) * 2.0, -2.0, 5.0)
+	p.play()
+
+
+## Stomp reuses the melee thump at a heavier pitch — same contact, bigger body.
+func play_stomp(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	play_melee_hit(world_pos, maxf(character_scale, 1.0) * 1.35)
+	## Layer a crunch so giants read as crushing pavement, not just a punch.
+	play_laser_impact(world_pos, character_scale)
+
+
+## Purple conversion orb leaving the caster's hand.
+func play_orb_cast(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_orb_cast_streams)
+	if stream == null:
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.6, 1.4)
+	p.pitch_scale *= _rng.randf_range(0.95, 1.08)
+	p.volume_db = -5.5
+	p.play()
+
+
+## Orb hits a body, a wall, or burns out at range.
+func play_orb_impact(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_orb_impact_streams)
+	if stream == null:
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.6, 1.35)
+	p.pitch_scale *= _rng.randf_range(0.93, 1.1)
+	p.volume_db = -4.0
+	p.play()
+
+
+## Soft chew when a minion nibbles a building face.
+func play_nibble(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_nibble_streams)
+	if stream == null:
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.15 / sqrt(maxf(character_scale, 0.25)), 0.7, 1.5)
+	p.pitch_scale *= _rng.randf_range(0.9, 1.15)
+	p.volume_db = -9.0
+	p.play()
+
+
 ## Falling meteor scream — follows the body until impact / stop.
 func play_meteor_whine(follow: Node3D) -> void:
 	if not enabled or follow == null:
@@ -430,6 +525,12 @@ func _load_banks() -> void:
 	_tendril_drone_stream = _build_tendril_drone()
 	_tendril_tick_stream = _build_tendril_tick()
 	_gem_pickup_stream = _build_gem_pickup()
+	## Melee / orb / nibble — same: no pack for the mood, so synthesize a few variants.
+	_melee_swing_streams = [_build_melee_swing(0), _build_melee_swing(1), _build_melee_swing(2)]
+	_melee_hit_streams = [_build_melee_hit(0), _build_melee_hit(1), _build_melee_hit(2)]
+	_orb_cast_streams = [_build_orb_cast(0), _build_orb_cast(1)]
+	_orb_impact_streams = [_build_orb_impact(0), _build_orb_impact(1)]
+	_nibble_streams = [_build_nibble(0), _build_nibble(1), _build_nibble(2)]
 
 
 func _load_dir(dir_path: String, prefixes: Array[String]) -> Array[AudioStream]:
@@ -617,6 +718,70 @@ func _build_gem_pickup() -> AudioStreamWAV:
 		var octave := sin(TAU * 1760.0 * t) * 0.45
 		var shimmer := sin(TAU * 2340.0 * t + sin(TAU * 40.0 * t) * 0.4) * 0.28 * exp(-t * 20.0)
 		return (ping * 0.85 + root * 0.55 + fifth + octave + shimmer) * env * 0.7
+	)
+
+
+func _build_melee_swing(variant: int) -> AudioStreamWAV:
+	## Cloth / claw whoosh — band of noise with a quick rising then falling centre.
+	var bias := 1.0 + float(variant) * 0.12
+	return _synthesize(0.16, func(t: float, _i: int) -> float:
+		var env := smoothstep(0.0, 0.02, t) * (1.0 - smoothstep(0.08, 0.16, t))
+		var centre := lerpf(180.0, 520.0, clampf(t / 0.07, 0.0, 1.0)) * bias
+		var tone := sin(TAU * centre * t) * 0.35
+		var air := (_rng.randf() * 2.0 - 1.0) * 0.75 * env
+		var flutter := sin(TAU * 40.0 * t) * 0.2
+		return (tone + air + flutter) * env * 0.85
+	)
+
+
+func _build_melee_hit(variant: int) -> AudioStreamWAV:
+	## Meat / bone thud with a short crack. Variant shifts the body tone.
+	var body_hz := 70.0 + float(variant) * 18.0
+	return _synthesize(0.2, func(t: float, _i: int) -> float:
+		var env := exp(-t * 16.0) * smoothstep(0.0, 0.008, t)
+		var thud := sin(TAU * body_hz * t) * 0.8 + sin(TAU * (body_hz * 1.7) * t) * 0.35
+		var crack := sin(TAU * 780.0 * t) * exp(-t * 42.0)
+		var slap := (_rng.randf() * 2.0 - 1.0) * 0.55 * exp(-t * 28.0)
+		return (thud + crack * 0.7 + slap) * env
+	)
+
+
+func _build_orb_cast(variant: int) -> AudioStreamWAV:
+	## Rising magical spit — dissonant pair that climbs as it leaves the hand.
+	var start := 220.0 + float(variant) * 40.0
+	return _synthesize(0.32, func(t: float, _i: int) -> float:
+		var env := smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.22, 0.32, t))
+		var prog := clampf(t / 0.32, 0.0, 1.0)
+		var hz := lerpf(start, start * 2.4, prog * prog)
+		var a := sin(TAU * hz * t)
+		var b := sin(TAU * hz * 1.37 * t + 0.6) * 0.55
+		var swirl := sin(TAU * 9.0 * t) * 0.25
+		var hiss := (_rng.randf() * 2.0 - 1.0) * 0.2 * env
+		return (a * 0.55 + b + swirl + hiss) * env * 0.8
+	)
+
+
+func _build_orb_impact(variant: int) -> AudioStreamWAV:
+	## Wet purple pop — low boom under a bright conversion spark.
+	var spark := 640.0 + float(variant) * 90.0
+	return _synthesize(0.24, func(t: float, _i: int) -> float:
+		var env := exp(-t * 12.0) * smoothstep(0.0, 0.01, t)
+		var boom := sin(TAU * 55.0 * t) * 0.65 + sin(TAU * 88.0 * t) * 0.35
+		var zap := sin(TAU * spark * t) * exp(-t * 30.0)
+		var fizz := (_rng.randf() * 2.0 - 1.0) * 0.45 * exp(-t * 16.0)
+		return (boom + zap * 0.8 + fizz) * env
+	)
+
+
+func _build_nibble(variant: int) -> AudioStreamWAV:
+	## Soft stone-chew click — quieter and shorter than a debris cascade.
+	var click_hz := 380.0 + float(variant) * 55.0
+	return _synthesize(0.1, func(t: float, _i: int) -> float:
+		var env := exp(-t * 32.0) * smoothstep(0.0, 0.006, t)
+		var click := sin(TAU * click_hz * t) * exp(-t * 50.0)
+		var grit := (_rng.randf() * 2.0 - 1.0) * 0.4 * exp(-t * 22.0)
+		var body := sin(TAU * 120.0 * t) * 0.3 * env
+		return (click * 0.75 + grit + body) * env
 	)
 
 

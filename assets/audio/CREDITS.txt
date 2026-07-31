@@ -11,3 +11,7 @@ Charged blast (Freesound, Creative Commons 0)
 - blast_impact_close.wav — Close-up Impact by d_yonqui
   https://freesound.org/people/d_yonqui/sounds/862817/
 Original downloads kept under assets/audio/blast/source/ (converted to mono WAV for Godot).
+
+Procedural (CityAudio._synthesize) — no external pack:
+- meteor / tendril / gem pickup
+- monster melee swing+hit, conversion orb cast+impact, building nibble
