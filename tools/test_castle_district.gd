@@ -2421,19 +2421,27 @@ func _moat_floor_y(at: Vector2i, l: CastleLayout) -> int:
 
 ## Gardens, as planted rather than as planned: walks, hedges or planters where the plot says
 ## there are some, props standing in them, and nothing laid out on top of the fortress.
+## Also: meadow plots must cover a real share of the open reserve, and leftover turf gets trees.
 func _check_gardens(what: String, res: Dictionary, l: CastleLayout) -> void:
 	if l.gardens.is_empty():
 		_fail("FAIL %s laid out no garden at all — even a tight reserve has a bailey" % what)
 		return
 	var keep := _volume
 	_volume = (res["generator"] as DistrictGenerator).get_offline_volume()
+	var meadow_area := 0
+	var meadow_plots := 0
 	for g: CastleGarden in l.gardens:
 		if g.kind != CastleGarden.KIND_PRIVY and g.rect.intersects(l.plinth_rect):
 			_fail("FAIL %s put the %s garden %s on the fortress" % [what, g.kind_name(), g.rect])
-			break
+			_volume = keep
+			return
 		if l.has_moat and g.kind != CastleGarden.KIND_PRIVY and g.rect.intersects(l.moat_rect):
 			_fail("FAIL %s put the %s garden %s in the ditch" % [what, g.kind_name(), g.rect])
-			break
+			_volume = keep
+			return
+		if g.kind != CastleGarden.KIND_PRIVY:
+			meadow_area += g.rect.get_area()
+			meadow_plots += 1
 		var counts := _garden_counts(g)
 		_garden_props += int(counts["props"])
 		if int(counts["props"]) < 4:
@@ -2441,13 +2449,15 @@ func _check_gardens(what: String, res: Dictionary, l: CastleLayout) -> void:
 				"FAIL %s: the %s garden %s got %d props stamped into it"
 				% [what, g.kind_name(), g.rect, counts["props"]]
 			)
-			break
+			_volume = keep
+			return
 		if int(counts["ground"]) < g.rect.size.x:
 			_fail(
 				"FAIL %s: the %s garden %s has %d voxels of walk, bed or planter"
 				% [what, g.kind_name(), g.rect, counts["ground"]]
 			)
-			break
+			_volume = keep
+			return
 		## An orchard is its trees, and it lays its lanes over the same ground it plants —
 		## so it is exactly the plot that can come out as a fenced lawn with gravel stripes
 		## and nothing growing on it, while still passing every count above.
@@ -2456,11 +2466,65 @@ func _check_gardens(what: String, res: Dictionary, l: CastleLayout) -> void:
 				"FAIL %s: the orchard %s grew %d trees"
 				% [what, g.rect, counts["trunks"]]
 			)
-			break
+			_volume = keep
+			return
 		if g.style == GardenComposer.Style.PARTERRE and int(counts["hedge"]) == 0:
 			_fail("FAIL %s: the parterre %s has no clipped hedge" % [what, g.rect])
-			break
+			_volume = keep
+			return
+	var planner: DistrictPlanner = res["planner"]
+	var cell := int(res["cell_size"])
+	var lc: Rect2i = planner.large_castle
+	var reserve_area := lc.get_area() * cell * cell
+	var fortress: Rect2i = l.moat_rect if l.has_moat else l.plinth_rect
+	var free_area := maxi(reserve_area - fortress.get_area(), 1)
+	var share := float(meadow_area) / float(free_area)
+	print(
+		"%s gardens: %d meadow plots covering %.1f%% of open reserve (%d / %d)"
+		% [what, meadow_plots, share * 100.0, meadow_area, free_area]
+	)
+	if share < 0.25:
+		_fail(
+			"FAIL %s: meadow gardens cover only %.1f%% of the open reserve (want ≥25%%)"
+			% [what, share * 100.0]
+		)
+		_volume = keep
+		return
+	var gy := int(res["ground_thickness"])
+	var outside_trunks := _count_meadow_trees_outside_gardens(l, gy)
+	print("%s meadow dress trees outside formal plots: %d" % [what, outside_trunks])
+	if outside_trunks < 3:
+		_fail(
+			"FAIL %s: leftover meadow has only %d trees outside formal gardens"
+			% [what, outside_trunks]
+		)
+		_volume = keep
+		return
 	_volume = keep
+
+
+## Bark trunks on the meadow that do not sit inside any planned garden footprint.
+func _count_meadow_trees_outside_gardens(l: CastleLayout, ground_y: int) -> int:
+	var fortress: Rect2i = l.moat_rect if l.has_moat else l.plinth_rect
+	var trunks := 0
+	const STRIDE := 4
+	var z := 2
+	while z < DistrictCoord.SIZE_Z_VOX - 2:
+		var x := 2
+		while x < DistrictCoord.SIZE_X_VOX - 2:
+			if fortress.has_point(Vector2i(x, z)):
+				x += STRIDE
+				continue
+			var inside := false
+			for g: CastleGarden in l.gardens:
+				if g.rect.has_point(Vector2i(x, z)):
+					inside = true
+					break
+			if not inside and _vox(x, ground_y + 1, z) == VoxelMaterial.BARK:
+				trunks += 1
+			x += STRIDE
+		z += STRIDE
+	return trunks
 
 
 ## Props and made ground inside one plot. Gravel and soil are the parterre's walks and beds,

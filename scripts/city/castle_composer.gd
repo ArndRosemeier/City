@@ -129,18 +129,30 @@ const WINCH_H := 5
 
 ## ── Gardens ───────────────────────────────────────────────────────────────
 ## Side of a meadow parterre and of the orchard, and the margin kept between a plot and
-## anything it must not touch (the ditch, the approach track, a road stub).
+## anything it must not touch (the ditch, the approach track, a road stub). Caps are high
+## so a band can fill most of its depth; GardenComposer.fits still enforces the floor.
 const GARDEN_SIDE_MIN := GardenComposer.PARTERRE_MIN
-const GARDEN_SIDE_MAX := 34
+const GARDEN_SIDE_MAX := 72
 const ORCHARD_SIDE_MIN := GardenComposer.ORCHARD_MIN
-const ORCHARD_SIDE_MAX := 44
+const ORCHARD_SIDE_MAX := 72
 const GARDEN_MARGIN := 3
 ## Stride the meadow is scanned on for a free plot. Finer than this only moves a garden a
 ## voxel or two and costs a whole extra sweep of the reserve.
 const GARDEN_STRIDE := 4
+## Coarser stride when packing leftover pockets across the whole reserve.
+const GARDEN_PACK_STRIDE := 8
+## Safety stop so a pathological open meadow cannot plan forever.
+const GARDEN_PACK_MAX := 20
+## Extra space between packed plots so leftover lanes stay wide enough for trees.
+const GARDEN_PACK_GAP := 14
 ## Side of the bailey's privy garden, and the lane kept clear from the gate to the keep.
 const PRIVY_SIDE_MAX := 30
 const PRIVY_LANE_HW := 6
+## Meadow dress: leftover turf outside formal plots.
+const MEADOW_GROVE_AREA := 2200
+const MEADOW_GROVE_MIN := 6
+const MEADOW_GROVE_MAX := 22
+const MEADOW_PROP_TRIES := 64
 
 ## ── Keep ──────────────────────────────────────────────────────────────────
 const KEEP_W_MIN := 44
@@ -341,6 +353,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_crown_ramp()
 	_build_dungeon()
 	_build_gardens()
+	_dress_meadow()
 	_report()
 
 
@@ -1937,10 +1950,9 @@ func _plan_causeway(out: CastleLayout) -> void:
 # Garden planning
 # ---------------------------------------------------------------------------
 
-## Where the gardens go, decided with the rest of the plan. Parterres on the flanks of the
-## fortress and an orchard behind it, all outside any ditch, plus one privy garden inside
-## the bailey. Nothing here is guaranteed: a reserve with no room for a plot gets no
-## garden, which is a tight site rather than a broken bake.
+## Where the gardens go, decided with the rest of the plan. Large parterres on the flanks,
+## an orchard behind, whatever else fits on the front band and leftover meadow pockets —
+## all outside any ditch — plus one privy garden inside the bailey.
 func _plan_gardens(out: CastleLayout) -> void:
 	var base := out.moat_rect if out.has_moat else out.plinth_rect
 	var avoid := _garden_avoid(out, base)
@@ -1959,7 +1971,68 @@ func _plan_gardens(out: CastleLayout) -> void:
 		out.gardens.append(
 			_garden(back, ground_y, GardenComposer.Style.ORCHARD, CastleGarden.KIND_ORCHARD)
 		)
+	## Front band: causeway is already in avoid, so this usually lands a corner plot.
+	var front := _meadow_plot(base, out.gate_dir, avoid, GARDEN_SIDE_MIN, GARDEN_SIDE_MAX)
+	if front.size.x > 0:
+		avoid.append(front.grow(GARDEN_MARGIN))
+		out.gardens.append(
+			_garden(front, ground_y, GardenComposer.Style.PARTERRE, CastleGarden.KIND_MEADOW)
+		)
+	_pack_extra_gardens(out, avoid)
 	_plan_privy_garden(out)
+
+
+## Fill leftover meadow with more formal plots until a full sweep finds nothing.
+func _pack_extra_gardens(out: CastleLayout, avoid: Array[Rect2i]) -> void:
+	var orchard_next := true
+	for _i in range(GARDEN_PACK_MAX):
+		var style := (
+			GardenComposer.Style.ORCHARD if orchard_next else GardenComposer.Style.PARTERRE
+		)
+		var kind := CastleGarden.KIND_ORCHARD if orchard_next else CastleGarden.KIND_MEADOW
+		var side_min := GardenComposer.min_side(style)
+		var side_max := ORCHARD_SIDE_MAX if orchard_next else GARDEN_SIDE_MAX
+		var plot := _find_meadow_pocket(avoid, side_min, side_max)
+		if plot.size.x <= 0:
+			## One retry with the other style before giving up.
+			orchard_next = not orchard_next
+			style = (
+				GardenComposer.Style.ORCHARD if orchard_next else GardenComposer.Style.PARTERRE
+			)
+			kind = CastleGarden.KIND_ORCHARD if orchard_next else CastleGarden.KIND_MEADOW
+			side_min = GardenComposer.min_side(style)
+			side_max = ORCHARD_SIDE_MAX if orchard_next else GARDEN_SIDE_MAX
+			plot = _find_meadow_pocket(avoid, side_min, side_max)
+			if plot.size.x <= 0:
+				return
+		avoid.append(plot.grow(GARDEN_PACK_GAP))
+		out.gardens.append(_garden(plot, ground_y, style, kind))
+		orchard_next = not orchard_next
+
+
+## First open pocket large enough for `side_min`, preferring bigger rects.
+func _find_meadow_pocket(avoid: Array[Rect2i], side_min: int, side_max: int) -> Rect2i:
+	var side := side_max
+	while side >= side_min:
+		var dims: Array[Vector2i] = [
+			Vector2i(side, side),
+			Vector2i(side, mini(side_max, side + 20)),
+			Vector2i(mini(side_max, side + 20), side),
+		]
+		for dim: Vector2i in dims:
+			if dim.x < side_min or dim.y < side_min:
+				continue
+			var z := _z0 + 2
+			while z + dim.y <= _z1 - 2:
+				var x := _x0 + 2
+				while x + dim.x <= _x1 - 2:
+					var plot := Rect2i(x, z, dim.x, dim.y)
+					if not _rects_block(avoid, plot) and _plot_is_open(plot):
+						return plot
+					x += GARDEN_PACK_STRIDE
+				z += GARDEN_PACK_STRIDE
+		side -= 6
+	return Rect2i()
 
 
 ## Everything on the meadow a garden must keep off: the fortress and its ditch, the ramp,
@@ -1982,9 +2055,9 @@ func _garden_avoid(out: CastleLayout, base: Rect2i) -> Array[Rect2i]:
 	return avoid
 
 
-## Best plot in the band between one face of `base` and the edge of the reserve. Tries the
-## middle of the face first, then either end, so a garden reads as placed against the
-## fortress rather than dropped wherever it happened to fit.
+## Best plot in the band between one face of `base` and the edge of the reserve. Fills as
+## much of the band depth × face stretch as the caps allow (rectangles, not only squares).
+## Tries the middle of the face first, then either end.
 func _meadow_plot(
 	base: Rect2i, d: Vector2i, avoid: Array[Rect2i], side_min: int, side_max: int
 ) -> Rect2i:
@@ -1992,20 +2065,29 @@ func _meadow_plot(
 	if depth < side_min:
 		return Rect2i()
 	var along := base.size.y if d.x != 0 else base.size.x
-	var s := mini(side_max, mini(depth, along))
-	if s < side_min:
+	var depth_s := mini(side_max, depth)
+	var along_s := mini(side_max, along)
+	if depth_s < side_min or along_s < side_min:
 		return Rect2i()
-	for f: float in [0.5, 0.2, 0.8]:
-		var plot := _band_plot(base, d, s, f)
-		if not _in_region(plot.position.x, plot.position.y):
+	var along_tries: Array[int] = [along_s, (along_s * 3) / 4, along_s / 2, side_min]
+	var depth_tries: Array[int] = [depth_s, (depth_s * 3) / 4, side_min]
+	for try_along: int in along_tries:
+		if try_along < side_min:
 			continue
-		if not _in_region(plot.end.x - 1, plot.end.y - 1):
-			continue
-		if _rects_block(avoid, plot):
-			continue
-		if not _plot_is_open(plot):
-			continue
-		return plot
+		for try_depth: int in depth_tries:
+			if try_depth < side_min:
+				continue
+			for f: float in [0.5, 0.22, 0.78]:
+				var plot := _band_plot(base, d, try_depth, try_along, f)
+				if not _in_region(plot.position.x, plot.position.y):
+					continue
+				if not _in_region(plot.end.x - 1, plot.end.y - 1):
+					continue
+				if _rects_block(avoid, plot):
+					continue
+				if not _plot_is_open(plot):
+					continue
+				return plot
 	return Rect2i()
 
 
@@ -2021,19 +2103,24 @@ func _band_depth(base: Rect2i, d: Vector2i) -> int:
 	return (base.position.y - GARDEN_MARGIN) - (_z0 + 2)
 
 
-## Square plot of side `s` in the band off face `d`, `f` of the way along that face.
-func _band_plot(base: Rect2i, d: Vector2i, s: int, f: float) -> Rect2i:
+## Rectangular plot in the band off face `d`: `depth_s` away from the fortress,
+## `along_s` along the face, centred at fraction `f` of that face.
+func _band_plot(base: Rect2i, d: Vector2i, depth_s: int, along_s: int, f: float) -> Rect2i:
 	if d.x != 0:
 		var x := (
-			base.end.x + GARDEN_MARGIN if d.x > 0 else base.position.x - GARDEN_MARGIN - s
+			base.end.x + GARDEN_MARGIN
+			if d.x > 0
+			else base.position.x - GARDEN_MARGIN - depth_s
 		)
-		var z := base.position.y + int(float(base.size.y) * f) - s / 2
-		return Rect2i(x, z, s, s)
+		var z := base.position.y + int(float(base.size.y) * f) - along_s / 2
+		return Rect2i(x, z, depth_s, along_s)
 	var z2 := (
-		base.end.y + GARDEN_MARGIN if d.y > 0 else base.position.y - GARDEN_MARGIN - s
+		base.end.y + GARDEN_MARGIN
+		if d.y > 0
+		else base.position.y - GARDEN_MARGIN - depth_s
 	)
-	var x2 := base.position.x + int(float(base.size.x) * f) - s / 2
-	return Rect2i(x2, z2, s, s)
+	var x2 := base.position.x + int(float(base.size.x) * f) - along_s / 2
+	return Rect2i(x2, z2, along_s, depth_s)
 
 
 ## No road stub under the plot. The clearance field is a distance transform seeded from the
@@ -2624,9 +2711,144 @@ func _build_gardens() -> void:
 	var gc := GardenComposer.new()
 	gc.brush = brush
 	gc.rng = rng
+	gc.stamper = _tree_stamper()
 	for g: CastleGarden in layout.gardens:
 		gc.compose(g.rect, g.surface_y, g.style)
 	_garden_props = gc.props_placed
+
+
+## Trees and sparse outdoor props on leftover meadow turf outside formal plots / the ditch.
+func _dress_meadow() -> void:
+	if not _detail or layout == null:
+		return
+	var clear := _meadow_dress_clear()
+	var free_cols := _count_meadow_dress_columns(clear)
+	if free_cols < 80:
+		return
+	var stamper := _tree_stamper()
+	var clusters := clampi(free_cols / MEADOW_GROVE_AREA, MEADOW_GROVE_MIN, MEADOW_GROVE_MAX)
+	for _c in range(clusters):
+		var gx := rng.randi_range(_x0 + 4, _x1 - 5)
+		var gz := rng.randi_range(_z0 + 4, _z1 - 5)
+		var tries := 0
+		while not _meadow_dress_ok(gx, gz, clear) and tries < 24:
+			gx = rng.randi_range(_x0 + 4, _x1 - 5)
+			gz = rng.randi_range(_z0 + 4, _z1 - 5)
+			tries += 1
+		if not _meadow_dress_ok(gx, gz, clear):
+			continue
+		var spread := rng.randi_range(3, 7)
+		for z in range(gz - spread / 2, gz + spread / 2 + 1):
+			for x in range(gx - spread / 2, gx + spread / 2 + 1):
+				if not _meadow_dress_ok(x, z, clear):
+					continue
+				if rng.randf() < 0.3:
+					brush.set_vox(Vector3i(x, ground_y, z), VoxelMaterial.DIRT)
+		var trees := rng.randi_range(2, 5)
+		for _t in range(trees):
+			var tx := gx + rng.randi_range(-spread, spread)
+			var tz := gz + rng.randi_range(-spread, spread)
+			if not _meadow_dress_ok(tx, tz, clear):
+				continue
+			if brush.get_vox(Vector3i(tx, ground_y + 1, tz)) != VoxelMaterial.AIR:
+				continue
+			stamper.plant_random(tx, ground_y, tz)
+	## Lattice singles so every leftover pocket gets trunks, not only lucky random hits.
+	var z_lat := _z0 + 6
+	while z_lat < _z1 - 6:
+		var x_lat := _x0 + 6
+		while x_lat < _x1 - 6:
+			if _meadow_dress_ok(x_lat, z_lat, clear):
+				if (
+					brush.get_vox(Vector3i(x_lat, ground_y + 1, z_lat)) == VoxelMaterial.AIR
+					and rng.randf() < 0.55
+				):
+					stamper.plant_random(x_lat, ground_y, z_lat)
+			x_lat += 14
+		z_lat += 14
+	var stems: Array[String] = [
+		"flower_purpleA",
+		"flower_redA",
+		"flower_yellowA",
+		"flower_purpleB",
+		"grass",
+		"grass_large",
+		"rock_smallA",
+		"rock_smallB",
+		"mushroom_red",
+		"plant_bushSmall",
+		"benchStone",
+		"lightpostSingle",
+	]
+	for _p in range(MEADOW_PROP_TRIES):
+		var x := rng.randi_range(_x0 + 3, _x1 - 4)
+		var z := rng.randi_range(_z0 + 3, _z1 - 4)
+		if not _meadow_dress_ok(x, z, clear):
+			continue
+		var stem: String = stems[rng.randi() % stems.size()]
+		## Benches / lanterns are rarer accents.
+		if (stem == "benchStone" or stem == "lightpostSingle") and rng.randf() > 0.25:
+			continue
+		_meadow_place_prop(stem, x, z)
+
+
+func _tree_stamper() -> TreeStamper:
+	var t := TreeStamper.new()
+	t.brush = brush
+	t.rng = rng
+	return t
+
+
+func _meadow_dress_clear() -> Array[Rect2i]:
+	var base := layout.moat_rect if layout.has_moat else layout.plinth_rect
+	var clear := _garden_avoid(layout, base)
+	for g: CastleGarden in layout.gardens:
+		clear.append(g.rect.grow(2))
+	return clear
+
+
+func _count_meadow_dress_columns(clear: Array[Rect2i]) -> int:
+	var n := 0
+	var z := _z0 + 4
+	while z < _z1 - 4:
+		var x := _x0 + 4
+		while x < _x1 - 4:
+			if _meadow_dress_ok(x, z, clear):
+				n += 1
+			x += GARDEN_PACK_STRIDE
+		z += GARDEN_PACK_STRIDE
+	## Scale lattice count up to approximate full-column coverage.
+	return n * GARDEN_PACK_STRIDE * GARDEN_PACK_STRIDE
+
+
+func _meadow_dress_ok(x: int, z: int, clear: Array[Rect2i]) -> bool:
+	if not _in_region(x, z):
+		return false
+	if _room_at(x, z) < float(GARDEN_MARGIN):
+		return false
+	if _rects_block(clear, Rect2i(x, z, 1, 1)):
+		return false
+	var surface := brush.get_vox(Vector3i(x, ground_y, z))
+	return surface == VoxelMaterial.PARK or surface == VoxelMaterial.DIRT
+
+
+func _meadow_place_prop(stem: String, x: int, z: int) -> void:
+	var size := RoomPropCatalog.size_of_stem(stem)
+	var ox := x - size.x / 2
+	var oz := z - size.z / 2
+	for dz in range(size.z):
+		for dx in range(size.x):
+			var px := ox + dx
+			var pz := oz + dz
+			if not _in_region(px, pz):
+				return
+			if not VoxelMaterial.is_solid(brush.get_vox(Vector3i(px, ground_y, pz))):
+				return
+			for dy in range(size.y):
+				if brush.get_vox(Vector3i(px, ground_y + 1 + dy, pz)) != VoxelMaterial.AIR:
+					return
+	if RoomPropKit.stamp_brush(brush, Vector3i(ox, ground_y + 1, oz), stem):
+		_garden_props += 1
 
 
 # ---------------------------------------------------------------------------

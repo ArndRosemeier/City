@@ -187,9 +187,10 @@ beds inside clipped yew hedges planted in a figure (a bloom border, a saltire of
 bloom, a bush at the crossing), a basin or a statue at the centre, topiary, seats, lanterns
 and an iron railing with a gate. `ORCHARD` plants tree rows on lawn and mows its gravel lanes
 *between* them. `RAISED` is the same geometry for paved ground: the beds become planter boxes
-on the flags instead of dug soil. The castle gets two parterres flanking the fortress, an
-orchard behind it — all outside any ditch — and one privy garden on the bailey flags;
-`ParkComposer.compose_large` puts a formal quarter in a big city park.
+on the flags instead of dug soil. The castle packs the meadow with large flank/back gardens
+plus extra parterres and orchards in leftover pockets — all outside any ditch — dresses the
+remaining turf with tree groves and sparse outdoor props, and keeps one privy garden on the
+bailey flags; `ParkComposer.compose_large` puts a formal quarter in a big city park.
 
 Checks: `tools/test_castle_district.tscn`, which bakes several seeds and reads the voxels
 back: the bed never reaches bedrock, the counterscarp rises in single steps, the scarp is
