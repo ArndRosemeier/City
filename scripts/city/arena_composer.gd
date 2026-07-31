@@ -3,9 +3,11 @@
 ## for outward summon Ui3Ds, and under-pit lift pads.
 ##
 ## District-local voxel coords. Road stubs stay as planner roads; this stamps a centered
-## footprint inside the open reserve (meadow remains around it).
+## footprint, then subdivides the leftover meadow into gravel-road squares with light forest.
 class_name ArenaComposer
 extends RefCounted
+
+const ForestComposerScript := preload("res://scripts/city/forest_composer.gd")
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
@@ -40,6 +42,18 @@ const LIFT_HALF := 3
 const WALL_T := 3
 ## Invisible walk-through LOS veil on the tribune lip (blocks shots, not bodies).
 const LOS_VEIL_H := 8
+## Leftover meadow: sparse gravel aisle lattice + large forest plots (voxels @ 0.5 m).
+## Pitch ≈ 3× the first draft so roads are ~1/3 as dense in each axis (~84 m squares).
+const LEFTOVER_PLOT_PITCH := 168
+const LEFTOVER_ROAD_HW := 1
+## Keep roads/trees off the colosseum shell and gate mouths.
+const LEFTOVER_ARENA_CLEAR := 8
+## Light canopy — open woodland, not a wall of pines.
+const LEFTOVER_FOREST_DENSITY := 0.28
+const LEFTOVER_FOREST_MIN_M := 10.0
+const LEFTOVER_FOREST_MAX_M := 20.0
+## ForestComposer needs roughly this much clear XZ to plant at all.
+const LEFTOVER_PLOT_MIN := 40
 
 
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -59,6 +73,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_board_walls()
 	_build_lift_shafts()
 	_scatter_spectators()
+	_dress_leftover_woods(false)
 	print("ArenaComposer: %s" % layout.describe())
 
 
@@ -74,6 +89,7 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	_carve_gates()
 	_build_tribune_los_veil()
 	_build_board_walls()
+	_dress_leftover_woods(true)
 
 
 func _begin(_min_v: Vector3i, _max_v: Vector3i) -> bool:
@@ -457,3 +473,125 @@ func _scatter_spectators() -> void:
 		var stem: String = stems[rng.randi() % stems.size()]
 		if RoomPropKit.stamp_brush(brush, Vector3i(x, seat_y + 1, z), stem):
 			made += 1
+
+
+## Subdivide the open meadow around the colosseum into gravel-road squares and plant
+## a light landmark forest in each square that clears the arena apron.
+func _dress_leftover_woods(far: bool) -> void:
+	var la: Rect2i = planner.large_arena
+	var rx0 := la.position.x * cell_size
+	var rz0 := la.position.y * cell_size
+	var rx1 := la.end.x * cell_size
+	var rz1 := la.end.y * cell_size
+	var avoid := layout.outer_rect.grow(LEFTOVER_ARENA_CLEAR)
+	var cx := layout.outer_rect.position.x + layout.outer_rect.size.x / 2
+	var cz := layout.outer_rect.position.y + layout.outer_rect.size.y / 2
+	var lines_x := _leftover_lattice_lines(cx, rx0, rx1)
+	var lines_z := _leftover_lattice_lines(cz, rz0, rz1)
+	_paint_leftover_roads(lines_x, lines_z, rx0, rz0, rx1, rz1, avoid)
+	var plots := _leftover_forest_plots(lines_x, lines_z, rx0, rz0, rx1, rz1, avoid)
+	layout.forest_plots = plots
+	if plots.is_empty():
+		return
+	var forest := ForestComposerScript.new()
+	forest.brush = brush
+	forest.rng = rng
+	forest.ground_y = ground_y
+	forest.density = LEFTOVER_FOREST_DENSITY
+	forest.min_height_m = LEFTOVER_FOREST_MIN_M
+	forest.max_height_m = LEFTOVER_FOREST_MAX_M
+	for plot: Rect2i in plots:
+		var min_v := Vector3i(plot.position.x, ground_y, plot.position.y)
+		var max_v := Vector3i(plot.end.x, ground_y + 1, plot.end.y)
+		if far:
+			forest.compose_far_sparse(min_v, max_v)
+		else:
+			forest.compose(min_v, max_v)
+	print(
+		"ArenaComposer: leftover woods %d plots (far=%s) density=%.2f height=%.0f..%.0fm"
+		% [plots.size(), str(far), LEFTOVER_FOREST_DENSITY, LEFTOVER_FOREST_MIN_M, LEFTOVER_FOREST_MAX_M]
+	)
+
+
+func _leftover_lattice_lines(center: int, lo: int, hi: int) -> PackedInt32Array:
+	var first := center
+	while first > lo - LEFTOVER_PLOT_PITCH:
+		first -= LEFTOVER_PLOT_PITCH
+	var lines := PackedInt32Array()
+	var v := first
+	while v < hi + LEFTOVER_PLOT_PITCH:
+		lines.append(v)
+		v += LEFTOVER_PLOT_PITCH
+	return lines
+
+
+func _paint_leftover_roads(
+	lines_x: PackedInt32Array,
+	lines_z: PackedInt32Array,
+	rx0: int,
+	rz0: int,
+	rx1: int,
+	rz1: int,
+	avoid: Rect2i
+) -> void:
+	for lx: int in lines_x:
+		for z in range(rz0, rz1):
+			for dx in range(-LEFTOVER_ROAD_HW, LEFTOVER_ROAD_HW + 1):
+				var x := lx + dx
+				if x < rx0 or x >= rx1:
+					continue
+				if _leftover_blocked(x, z, avoid):
+					continue
+				brush.set_vox(Vector3i(x, ground_y, z), VoxelMaterial.GRAVEL)
+	for lz: int in lines_z:
+		for x in range(rx0, rx1):
+			for dz in range(-LEFTOVER_ROAD_HW, LEFTOVER_ROAD_HW + 1):
+				var z := lz + dz
+				if z < rz0 or z >= rz1:
+					continue
+				if _leftover_blocked(x, z, avoid):
+					continue
+				brush.set_vox(Vector3i(x, ground_y, z), VoxelMaterial.GRAVEL)
+
+
+func _leftover_forest_plots(
+	lines_x: PackedInt32Array,
+	lines_z: PackedInt32Array,
+	rx0: int,
+	rz0: int,
+	rx1: int,
+	rz1: int,
+	avoid: Rect2i
+) -> Array[Rect2i]:
+	var plots: Array[Rect2i] = []
+	for i in range(lines_x.size() - 1):
+		var x0 := maxi(rx0, lines_x[i] + LEFTOVER_ROAD_HW + 1)
+		var x1 := mini(rx1, lines_x[i + 1] - LEFTOVER_ROAD_HW)
+		if x1 - x0 < LEFTOVER_PLOT_MIN:
+			continue
+		for j in range(lines_z.size() - 1):
+			var z0 := maxi(rz0, lines_z[j] + LEFTOVER_ROAD_HW + 1)
+			var z1 := mini(rz1, lines_z[j + 1] - LEFTOVER_ROAD_HW)
+			if z1 - z0 < LEFTOVER_PLOT_MIN:
+				continue
+			var plot := Rect2i(x0, z0, x1 - x0, z1 - z0)
+			if plot.intersects(avoid):
+				continue
+			if _plot_hits_gate(plot):
+				continue
+			plots.append(plot)
+	return plots
+
+
+func _leftover_blocked(x: int, z: int, avoid: Rect2i) -> bool:
+	var p := Vector2i(x, z)
+	if avoid.has_point(p):
+		return true
+	return _in_any_gate(p)
+
+
+func _plot_hits_gate(plot: Rect2i) -> bool:
+	for g: Rect2i in layout.gate_rects:
+		if plot.intersects(g):
+			return true
+	return false

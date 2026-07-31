@@ -132,6 +132,20 @@ func _ready() -> void:
 		_fail("FAIL pit not inside outer mass")
 		_quit()
 		return
+	if layout.forest_plots.is_empty():
+		_fail("FAIL leftover meadow has no forest plots")
+		_quit()
+		return
+	for plot: Rect2i in layout.forest_plots:
+		if plot.intersects(layout.outer_rect.grow(4)):
+			_fail("FAIL forest plot %s overlaps arena apron" % plot)
+			_quit()
+			return
+		if plot.size.x < 24 or plot.size.y < 24:
+			_fail("FAIL forest plot too small for planting: %s" % plot)
+			_quit()
+			return
+	print("leftover forests: %d plots" % layout.forest_plots.size())
 	if RoomDecorator.purpose_name(RoomDecorator.Purpose.ARENA_PIT) != "arena_pit":
 		_fail("FAIL ARENA_PIT purpose name")
 		_quit()

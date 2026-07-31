@@ -25,6 +25,8 @@ var gate_rects: Array[Rect2i] = []
 var board_mounts: Array[Dictionary] = []
 ## Summon lift pad centers in the pit (district-local XZ), one near each side.
 var lift_pads: Array[Vector2i] = []
+## Leftover meadow forest plots (district-local XZ), between gravel roads.
+var forest_plots: Array[Rect2i] = []
 
 
 ## Clear air volume above the sand for decorate / wipe (lift pads stay clear).
@@ -53,7 +55,7 @@ func pit_volume_world(district_origin: Vector3i, air_h: int = 8) -> RoomVolume:
 func describe() -> String:
 	return (
 		(
-			"arena outer=%s pit=%s floor_y=%d wall_top=%d seating_y=%d board_wall=%d r=%d boards=%d lifts=%d"
+			"arena outer=%s pit=%s floor_y=%d wall_top=%d seating_y=%d board_wall=%d r=%d boards=%d lifts=%d forests=%d"
 			% [
 				outer_rect,
 				pit_rect,
@@ -64,6 +66,7 @@ func describe() -> String:
 				corner_radius,
 				board_mounts.size(),
 				lift_pads.size(),
+				forest_plots.size(),
 			]
 		)
 	)
