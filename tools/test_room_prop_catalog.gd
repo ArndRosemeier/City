@@ -31,6 +31,7 @@ func _ready() -> void:
 	_check_material_tables()
 	_check_families()
 	_check_nav_budget()
+	_check_walk_through_collision()
 	if _failed:
 		print("RESULT: FAILED")
 		get_tree().quit(1)
@@ -246,3 +247,57 @@ func _check_nav_budget() -> void:
 		"nav: %d of %d material ids used, %d props a body walks through"
 		% [VoxelMaterial.COUNT, NavSolidityScript.TABLE_SIZE, walkable]
 	)
+
+
+## Walk-through ground decor must not carry collision AABBs, and multi-cell stamps must
+## not leave solid PROP_FOOTPRINT siblings (that was how tall flowers snagged walkers).
+func _check_walk_through_collision() -> void:
+	var lib := VoxelBlockLibraryScript.build()
+	var models: Array = lib.models
+	var checked := 0
+	for i in range(RoomPropCatalog.ENTRIES.size()):
+		var id := RoomPropCatalog.PROP_FIRST + i
+		if not RoomPropCatalog.walk_through_of(id):
+			continue
+		checked += 1
+		if id >= models.size():
+			_fail("FAIL walk-through %s has no library model" % RoomPropCatalog.stem_of(id))
+			return
+		var model: VoxelBlockyModel = models[id]
+		if model.collision_aabbs.size() > 0:
+			_fail(
+				"FAIL %s is walk_through but has %d collision AABBs"
+				% [RoomPropCatalog.stem_of(id), model.collision_aabbs.size()]
+			)
+			return
+	var brush := CityBrush.new(null, Vector3i.ZERO)
+	brush.use_offline_volume()
+	## Tall flower (2 cells high) and wide grass — both used to leave colliding footprints.
+	for stem: String in ["flower_redA", "grass", "rock_smallA"]:
+		var origin := Vector3i(4, 2, 4)
+		if not RoomPropKit.stamp_brush(brush, origin, stem):
+			_fail("FAIL could not stamp walk-through %s for footprint check" % stem)
+			return
+		var size := RoomPropCatalog.size_of_stem(stem)
+		for y in range(size.y):
+			for z in range(size.z):
+				for x in range(size.x):
+					var at := origin + Vector3i(x, y, z)
+					var id2 := brush.get_vox(at)
+					if Vector3i(x, y, z) == Vector3i.ZERO:
+						continue
+					if id2 == VoxelMaterial.PROP_FOOTPRINT:
+						_fail(
+							"FAIL %s wrote a solid PROP_FOOTPRINT at offset %s"
+							% [stem, Vector3i(x, y, z)]
+						)
+						return
+					if id2 != VoxelMaterial.AIR:
+						_fail(
+							"FAIL %s left non-air %d at offset %s (want air siblings)"
+							% [stem, id2, Vector3i(x, y, z)]
+						)
+						return
+		## Clear for the next stamp.
+		brush.destroy_vox(origin)
+	print("walk-through: %d props collision-free; multi-cell stamps leave no footprint solids" % checked)

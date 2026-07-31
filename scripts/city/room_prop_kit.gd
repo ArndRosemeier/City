@@ -4,6 +4,8 @@
 ## Multi-cell props: the origin cell carries the mesh (which may extend past 1×1×1);
 ## other cells of the footprint get PROP_FOOTPRINT so nav and the decorator treat
 ## them as occupied without drawing a second copy of the mesh.
+## Walk-through ground decor writes *only* the origin — a solid PROP_FOOTPRINT sibling
+## would snag the walker on tall flowers / grass even when the mesh cell is passable.
 class_name RoomPropKit
 extends RefCounted
 
@@ -36,7 +38,10 @@ static func stamp(
 	var mat := material_for(stem)
 	if mat == VoxelMaterial.AIR or mat == 0:
 		return
+	var walk := RoomPropCatalog.walk_through_of(mat)
 	for off in recipe_cells(stem):
+		if walk and off != Vector3i.ZERO:
+			continue
 		var at := origin + off
 		if not overwrite and tool.get_voxel(at) != VoxelMaterial.AIR:
 			continue
@@ -80,11 +85,16 @@ static func stamp_brush(
 	if mat == VoxelMaterial.AIR or mat == 0:
 		return false
 	var cells := recipe_cells(stem)
+	var walk := RoomPropCatalog.walk_through_of(mat)
 	if not overwrite:
 		for off in cells:
 			if brush.get_vox(origin + off) != VoxelMaterial.AIR:
 				return false
 	for off in cells:
+		## Passable decor: reserve the full footprint for placement checks, but only
+		## persist the origin so sibling cells stay air (no solid collision boxes).
+		if walk and off != Vector3i.ZERO:
+			continue
 		var id := mat if off == Vector3i.ZERO else VoxelMaterial.PROP_FOOTPRINT
 		brush.set_vox(origin + off, id)
 	return true

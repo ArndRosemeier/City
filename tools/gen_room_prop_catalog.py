@@ -281,7 +281,20 @@ def walk_through_indoor(stem: str, family: str) -> bool:
 def walk_through_outdoor(stem: str, family: str, size: tuple[int, int, int]) -> bool:
 	"""Outdoors only ground cover is passable. A topiary or a railing is the garden's
 	wall, and walking through a headstone would read as a bug."""
-	del stem
+	s = stem.lower()
+	## Scatter you step through — collision on these is how walkers get stuck in beds.
+	if any(
+		k in s
+		for k in (
+			"flower",
+			"grass",
+			"mushroom",
+			"bush",
+			"rock_small",
+			"stump",
+		)
+	):
+		return True
 	if family != "foliage":
 		return False
 	## Ankle-high planting whatever its spread, or a single stem up to a metre.
