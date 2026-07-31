@@ -306,12 +306,14 @@ func _mat_at(blocks: Dictionary, wx: int, wy: int, wz: int) -> int:
 		return VoxelMaterial.AIR
 	var data: PackedByteArray = blocks[bp]
 	if data.size() <= 2:
-		return int(data[0])
+		## LE u16 uniform sentinel.
+		return int(data[0]) | (int(data[1]) << 8) if data.size() >= 2 else int(data[0])
 	var lx := wx - bp.x * BLOCK
 	var ly := wy - bp.y * BLOCK
 	var lz := wz - bp.z * BLOCK
 	var idx := ly + lx * BLOCK + lz * BLOCK * BLOCK
-	return int(data[idx * 2])
+	var off := idx * 2
+	return int(data[off]) | (int(data[off + 1]) << 8)
 
 func _index_xz_stacks(blocks: Dictionary) -> Dictionary:
 	var stacks: Dictionary = {}
@@ -322,7 +324,11 @@ func _index_xz_stacks(blocks: Dictionary) -> Dictionary:
 			stacks[xz] = []
 		var data: PackedByteArray = blocks[key]
 		var uniform := data.size() <= 2
-		var mat := int(data[0]) if data.size() >= 1 else VoxelMaterial.AIR
+		var mat := (
+			(int(data[0]) | (int(data[1]) << 8))
+			if data.size() >= 2
+			else (int(data[0]) if data.size() >= 1 else VoxelMaterial.AIR)
+		)
 		if not uniform and data.size() != BLOCK * BLOCK * BLOCK * 2:
 			push_error(
 				"NavSpanMeasure: unexpected block byte size %d at %s" % [data.size(), bp]

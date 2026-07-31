@@ -53,7 +53,7 @@ pub const LINK_JUMP: u8 = 2;
 /// Per-material collision facts, mirrored from the voxel block library.
 #[derive(Clone)]
 pub struct Solidity {
-    /// `SOL_*` class per material id (always 256 entries).
+    /// `SOL_*` class per material id. Length tracks the GDScript table (`VoxelMaterial.COUNT`).
     pub class: Vec<u8>,
     /// Top of the collision volume inside the cell, 0..1, meaningful for `SOL_PARTIAL`.
     pub top: Vec<f32>,
@@ -65,37 +65,50 @@ pub struct Solidity {
 
 impl Default for Solidity {
     fn default() -> Self {
-        // Unknown materials read as solid: an agent refusing to walk is a visible bug,
-        // an agent walking through a wall is a silent one.
-        Self {
-            class: vec![SOL_SOLID; 256],
-            top: vec![1.0; 256],
-            destructible: vec![false; 256],
-            climbable: vec![false; 256],
-        }
+        Self::with_len(crate::materials::COUNT as usize)
     }
 }
 
 impl Solidity {
+    pub fn with_len(n: usize) -> Self {
+        // Unknown materials read as solid: an agent refusing to walk is a visible bug,
+        // an agent walking through a wall is a silent one.
+        let n = n.max(1);
+        Self {
+            class: vec![SOL_SOLID; n],
+            top: vec![1.0; n],
+            destructible: vec![false; n],
+            climbable: vec![false; n],
+        }
+    }
+
     #[inline]
-    pub fn class_of(&self, mat: u8) -> u8 {
-        self.class[mat as usize]
+    pub fn class_of(&self, mat: u16) -> u8 {
+        self.class
+            .get(mat as usize)
+            .copied()
+            .unwrap_or(SOL_SOLID)
     }
 
     /// Height of the collision top inside a cell; 0 when nothing supports weight.
     #[inline]
-    pub fn support(&self, mat: u8) -> f32 {
+    pub fn support(&self, mat: u16) -> f32 {
         match self.class_of(mat) {
             SOL_SOLID => 1.0,
-            SOL_PARTIAL => self.top[mat as usize],
+            SOL_PARTIAL => self.top.get(mat as usize).copied().unwrap_or(1.0),
             _ => 0.0,
         }
     }
 
     /// True when the cell stops an agent occupying the space above a lower surface.
     #[inline]
-    pub fn occupies_cell(&self, mat: u8) -> bool {
+    pub fn occupies_cell(&self, mat: u16) -> bool {
         matches!(self.class_of(mat), SOL_SOLID | SOL_PARTIAL)
+    }
+
+    #[inline]
+    pub fn is_destructible(&self, mat: u16) -> bool {
+        self.destructible.get(mat as usize).copied().unwrap_or(false)
     }
 }
 
@@ -116,7 +129,7 @@ pub struct Span {
     /// Geodesic distance in cells to the edge of walkable space, saturating.
     pub clearance: u8,
     /// Material of the supporting voxel, used for surface cost.
-    pub mat: u8,
+    pub mat: u16,
     pub flags: u8,
 }
 
@@ -178,7 +191,7 @@ impl Default for Profile {
             can_climb: false,
             can_jump: false,
             can_break: false,
-            surface_cost: vec![1.0; 256],
+            surface_cost: vec![1.0; crate::materials::COUNT as usize],
         }
     }
 }
@@ -197,7 +210,7 @@ impl Profile {
             can_climb: false,
             can_jump: false,
             can_break: false,
-            surface_cost: vec![1.0; 256],
+            surface_cost: vec![1.0; crate::materials::COUNT as usize],
         }
     }
 
@@ -224,7 +237,10 @@ impl Profile {
 
     #[inline]
     pub fn cost_of(&self, s: &Span) -> f32 {
-        self.surface_cost[s.mat as usize]
+        self.surface_cost
+            .get(s.mat as usize)
+            .copied()
+            .unwrap_or(1.0)
     }
 }
 
@@ -234,7 +250,7 @@ impl Profile {
 
 /// Read access to a voxel volume in world voxel coordinates.
 pub trait VoxelSource {
-    fn mat(&self, x: i32, y: i32, z: i32) -> u8;
+    fn mat(&self, x: i32, y: i32, z: i32) -> u16;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +319,7 @@ pub fn extract_column<S: VoxelSource>(
 
         if headroom > 0 {
             let mut flags = 0u8;
-            if sol.destructible[mat as usize] {
+            if sol.is_destructible(mat) {
                 flags |= FLAG_DESTRUCTIBLE;
             }
             out.push(Span {
@@ -1685,7 +1701,7 @@ mod tests {
 
     struct Ground(i32);
     impl VoxelSource for Ground {
-        fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+        fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
             if y <= self.0 {
                 3
             } else {
@@ -1705,12 +1721,37 @@ mod tests {
         assert_eq!(out[0].water_depth, 0);
     }
 
+    /// Material ids past 255 must index solidity and stamp onto spans — no byte truncation.
+    #[test]
+    fn high_material_id_past_byte_range() {
+        let mut sol = Solidity::with_len(300);
+        sol.class[0] = SOL_PASSABLE;
+        sol.class[280] = SOL_SOLID;
+        struct HiMat;
+        impl VoxelSource for HiMat {
+            fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
+                if y <= 2 {
+                    280
+                } else {
+                    0
+                }
+            }
+        }
+        let mut out = Vec::new();
+        extract_column(&HiMat, &sol, 0, 0, 0, 20, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].surface_y, 3.0);
+        assert_eq!(out[0].mat, 280);
+        assert_eq!(sol.class_of(280), SOL_SOLID);
+        assert_eq!(sol.class_of(400), SOL_SOLID);
+    }
+
     #[test]
     fn foliage_is_passable_and_creates_no_surface() {
         let sol = test_solidity();
         struct Grove;
         impl VoxelSource for Grove {
-            fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 2 {
                     3
                 } else if y <= 6 {
@@ -1732,7 +1773,7 @@ mod tests {
         let sol = test_solidity();
         struct Curb;
         impl VoxelSource for Curb {
-            fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
                 match y {
                     y if y <= 2 => 3,
                     3 => 4,
@@ -1751,7 +1792,7 @@ mod tests {
         let sol = test_solidity();
         struct Lake;
         impl VoxelSource for Lake {
-            fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 2 {
                     3
                 } else if y <= 5 {
@@ -1772,7 +1813,7 @@ mod tests {
         let sol = test_solidity();
         struct Tower;
         impl VoxelSource for Tower {
-            fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 || y == 6 || y == 12 {
                     3
                 } else {
@@ -1794,7 +1835,7 @@ mod tests {
         let sol = test_solidity();
         struct Room;
         impl VoxelSource for Room {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -1867,7 +1908,7 @@ mod tests {
         let sol = test_solidity();
         struct Pillars;
         impl VoxelSource for Pillars {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if x % 2 == 0 && y <= 0 {
                     3
                 } else {
@@ -1910,7 +1951,7 @@ mod tests {
         // with one doorway, so the border carries a real crossing instead of open ground.
         struct Doorway;
         impl VoxelSource for Doorway {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2015,7 +2056,7 @@ mod tests {
         // A three cell garden wall and a six cell facade on the same flat ground.
         struct Walls;
         impl VoxelSource for Walls {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2046,7 +2087,7 @@ mod tests {
         // is out of reach, exactly as it is for the player.
         struct Canopy;
         impl VoxelSource for Canopy {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 || y == 8 {
                     return 3;
                 }
@@ -2073,7 +2114,7 @@ mod tests {
         // span next door, because the deck itself is in the way.
         struct Deck;
         impl VoxelSource for Deck {
-            fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 || y == 10 {
                     3
                 } else {
@@ -2095,7 +2136,7 @@ mod tests {
         // A one cell step, a two cell block and a six cell platform on flat ground.
         struct Terraces;
         impl VoxelSource for Terraces {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2145,7 +2186,7 @@ mod tests {
         let sol = test_solidity();
         struct Split;
         impl VoxelSource for Split {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2187,7 +2228,7 @@ mod tests {
         // offers no grip, so the only way off its top is to fall.
         struct Plinth;
         impl VoxelSource for Plinth {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2259,7 +2300,7 @@ mod tests {
         // open ground of sector 1, so sector 0 holds links whose landings live next door.
         struct Shelf;
         impl VoxelSource for Shelf {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2273,7 +2314,7 @@ mod tests {
         // only span, so the neighbour's landings are gone rather than merely moved.
         struct Blasted;
         impl VoxelSource for Blasted {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if x >= SECTOR {
                     return 0;
                 }

@@ -161,7 +161,7 @@ fn paint_column(
         soil = 0;
     }
     if h >= 5 {
-        vol.set_raw(Vector3i::new(wx, ground_y, wz), materials::DIRT as u8);
+        vol.set_raw(Vector3i::new(wx, ground_y, wz), materials::DIRT as u16);
     }
     let rock_top = top - soil;
     let dip = (dip_x[x as usize] + dip_z[z as usize]).round() as i32;
@@ -186,7 +186,7 @@ fn paint_column(
         cap = materials::DIRT;
     }
     for y2 in (top - soil + 1)..=top {
-        vol.set_raw(Vector3i::new(wx, y2, wz), cap as u8);
+        vol.set_raw(Vector3i::new(wx, y2, wz), cap as u16);
     }
 }
 
@@ -292,7 +292,7 @@ fn place_gem_cluster(
     for _ in 0..count {
         let here = vol.raw(Vector3i::new(cx, cy, cz)) as i32;
         if is_gem_host(here) {
-            vol.set_raw(Vector3i::new(cx, cy, cz), gem as u8);
+            vol.set_raw(Vector3i::new(cx, cy, cz), gem as u16);
             positions.push(Vector3::new(cx as f32, cy as f32, cz as f32));
             mats.push(gem);
         }

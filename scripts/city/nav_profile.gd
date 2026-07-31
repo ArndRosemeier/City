@@ -36,7 +36,7 @@ var can_climb: bool = false
 var can_jump: bool = false
 ## Destructible fabric becomes a priced routing decision instead of a dead end.
 var can_break: bool = false
-## Cost multiplier per VoxelMaterial id. Always 256 long, never below 1.0.
+## Cost multiplier per VoxelMaterial id. Length tracks NavSolidity.TABLE_SIZE; never below 1.0.
 var surface_cost: PackedFloat32Array = PackedFloat32Array()
 
 
@@ -209,7 +209,7 @@ static func car() -> _Self:
 	return p
 
 
-## 256 multipliers indexed by VoxelMaterial id, defaulting to 1.0.
+## Multipliers indexed by VoxelMaterial id, defaulting to 1.0.
 static func _surface_costs(penalties: Dictionary) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(NavSolidity.TABLE_SIZE)

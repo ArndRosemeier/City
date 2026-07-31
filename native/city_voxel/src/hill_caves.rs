@@ -356,7 +356,7 @@ impl<'a> Ctx<'a> {
 
     fn set(&mut self, wx: i32, y: i32, wz: i32, mat: i32) {
         self.vol
-            .set_raw(Vector3i::new(wx, y, wz), mat.clamp(0, 255) as u8);
+            .set_raw(Vector3i::new(wx, y, wz), mat.clamp(0, 65535) as u16);
     }
 
     fn carve_cheese(&mut self, portals: &[IVec2]) -> Stats {

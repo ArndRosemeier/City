@@ -154,10 +154,28 @@ func _check_material_tables() -> void:
 			% [VoxelMaterial.LOS_VEIL, VoxelMaterial.ARENA_SHELL]
 		)
 		return
-	if VoxelMaterial.COUNT != VoxelMaterial.LOS_VEIL + 1:
+	if VoxelMaterial.BRANCH_X != VoxelMaterial.LOS_VEIL + 1:
 		_fail(
-			"FAIL COUNT=%d leaves a gap after LOS_VEIL=%d"
-			% [VoxelMaterial.COUNT, VoxelMaterial.LOS_VEIL]
+			"FAIL BRANCH_X=%d is not the id after LOS_VEIL=%d"
+			% [VoxelMaterial.BRANCH_X, VoxelMaterial.LOS_VEIL]
+		)
+		return
+	if VoxelMaterial.BRANCH_Z != VoxelMaterial.BRANCH_X + 1:
+		_fail(
+			"FAIL BRANCH_Z=%d is not the id after BRANCH_X=%d"
+			% [VoxelMaterial.BRANCH_Z, VoxelMaterial.BRANCH_X]
+		)
+		return
+	if VoxelMaterial.LEAVES_DARK != VoxelMaterial.BRANCH_Z + 1:
+		_fail(
+			"FAIL LEAVES_DARK=%d is not the id after BRANCH_Z=%d"
+			% [VoxelMaterial.LEAVES_DARK, VoxelMaterial.BRANCH_Z]
+		)
+		return
+	if VoxelMaterial.COUNT != VoxelMaterial.LEAVES_DARK + 1:
+		_fail(
+			"FAIL COUNT=%d leaves a gap after LEAVES_DARK=%d"
+			% [VoxelMaterial.COUNT, VoxelMaterial.LEAVES_DARK]
 		)
 		return
 	if VoxelMaterial.is_destructible(VoxelMaterial.ARENA_SHELL):
@@ -177,6 +195,9 @@ func _check_material_tables() -> void:
 		["DOOR", VoxelMaterial.DOOR],
 		["ARENA_SHELL", VoxelMaterial.ARENA_SHELL],
 		["LOS_VEIL", VoxelMaterial.LOS_VEIL],
+		["BRANCH_X", VoxelMaterial.BRANCH_X],
+		["BRANCH_Z", VoxelMaterial.BRANCH_Z],
+		["LEAVES_DARK", VoxelMaterial.LEAVES_DARK],
 		["COUNT", VoxelMaterial.COUNT],
 		["TIMBER", VoxelMaterial.TIMBER],
 	]:
@@ -185,7 +206,10 @@ func _check_material_tables() -> void:
 			_fail("FAIL materials.rs does not say `%s` — regenerate the catalog" % want)
 			return
 	print(
-		"tables: props %d..%d, footprint %d, door %d, arena_shell %d, los_veil %d, count %d, agreed with materials.rs"
+		(
+			"tables: props %d..%d, footprint %d, door %d, arena_shell %d, los_veil %d, "
+			+ "branch %d..%d, leaves_dark %d, count %d, agreed with materials.rs"
+		)
 		% [
 			VoxelMaterial.PROP_FIRST,
 			VoxelMaterial.PROP_LAST,
@@ -193,6 +217,9 @@ func _check_material_tables() -> void:
 			VoxelMaterial.DOOR,
 			VoxelMaterial.ARENA_SHELL,
 			VoxelMaterial.LOS_VEIL,
+			VoxelMaterial.BRANCH_X,
+			VoxelMaterial.BRANCH_Z,
+			VoxelMaterial.LEAVES_DARK,
 			VoxelMaterial.COUNT,
 		]
 	)
@@ -226,19 +253,12 @@ func _check_families() -> void:
 	print("families: %s" % ", ".join(parts))
 
 
-## The voxel type channel is 16 bits, but the nav pipeline is not: its solidity tables are
-## `NavSolidity.TABLE_SIZE` long and the terrain copy the bake reads is one byte per cell.
-## An id past that aliases onto another material's passability, and the failure mode is a
-## whole district baking with zero walkable spans in it.
+## Nav tables track VoxelMaterial.COUNT (16-bit capable). Props must stay inside that palette.
 func _check_nav_budget() -> void:
-	if VoxelMaterial.COUNT > NavSolidityScript.TABLE_SIZE:
+	if NavSolidityScript.TABLE_SIZE != VoxelMaterial.COUNT:
 		_fail(
-			"FAIL VoxelMaterial.COUNT=%d exceeds the %d entry nav table — cut %d props"
-			% [
-				VoxelMaterial.COUNT,
-				NavSolidityScript.TABLE_SIZE,
-				VoxelMaterial.COUNT - NavSolidityScript.TABLE_SIZE,
-			]
+			"FAIL NavSolidity.TABLE_SIZE=%d must equal VoxelMaterial.COUNT=%d"
+			% [NavSolidityScript.TABLE_SIZE, VoxelMaterial.COUNT]
 		)
 		return
 	var lib := VoxelBlockLibraryScript.build()
@@ -266,8 +286,8 @@ func _check_nav_budget() -> void:
 		if sol.is_traversable(id):
 			walkable += 1
 	print(
-		"nav: %d of %d material ids used, %d props a body walks through"
-		% [VoxelMaterial.COUNT, NavSolidityScript.TABLE_SIZE, walkable]
+		"nav: palette %d ids (16-bit), %d props a body walks through"
+		% [VoxelMaterial.COUNT, walkable]
 	)
 
 

@@ -282,7 +282,7 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.normal_strength = 0.75
 			s.tint_variation = 0.3
 			s.weathering = 0.4
-		VoxelMaterial.BARK:
+		VoxelMaterial.BARK, VoxelMaterial.BRANCH_X, VoxelMaterial.BRANCH_Z:
 			s.albedo_file = "bark.jpg"
 			s.normal_file = "bark_normal.jpg"
 			s.tile_meters = Vector2(1.0, 1.0)
@@ -296,6 +296,13 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.tile_meters = Vector2(1.0, 1.0)
 			s.roughness = 0.88
 			s.tint_variation = 0.4
+		VoxelMaterial.LEAVES_DARK:
+			s.kind = Kind.FOLIAGE
+			s.albedo_file = "leaves.png"
+			s.tile_meters = Vector2(1.0, 1.0)
+			s.tint = Color(0.55, 0.62, 0.48, 1.0)
+			s.roughness = 0.9
+			s.tint_variation = 0.25
 		VoxelMaterial.PAINT:
 			## Accent bands and pilasters: the widest colour spread in the palette, so a
 			## banded shaft picks up a different accent hue per lot.

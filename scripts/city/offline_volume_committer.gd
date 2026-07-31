@@ -86,7 +86,8 @@ static func make_buffer_u16(data: PackedByteArray) -> VoxelBuffer:
 	var buf := VoxelBuffer.new()
 	buf.create(BLOCK, BLOCK, BLOCK)
 	if data.size() == 2:
-		buf.fill(int(data[0]), VoxelBuffer.CHANNEL_TYPE)
+		## LE u16 sentinel [lo, hi].
+		buf.fill(int(data[0]) | (int(data[1]) << 8), VoxelBuffer.CHANNEL_TYPE)
 		return buf
 	if data.size() < BLOCK_VOXELS * 2:
 		buf.fill(0, VoxelBuffer.CHANNEL_TYPE)

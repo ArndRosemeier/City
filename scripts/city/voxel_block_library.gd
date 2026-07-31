@@ -37,6 +37,14 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 		VoxelMaterial.BARK:
 			## Trunk visuals only — dense groves were trapping large CharacterBodies.
 			return _mesh_model(id, _mesh_trunk(), false, false, AABB(), false)
+		VoxelMaterial.BRANCH_X:
+			## Horizontal limb along +X — walk-through wood like bark.
+			return _mesh_model(id, _mesh_branch_x(), false, false, AABB(), false)
+		VoxelMaterial.BRANCH_Z:
+			return _mesh_model(id, _mesh_branch_z(), false, false, AABB(), false)
+		VoxelMaterial.LEAVES_DARK:
+			## Same cards as LEAVES; darker tint comes from the surface spec.
+			return _mesh_model(id, _mesh_leaves(), true, false, AABB(), false)
 		VoxelMaterial.WATER:
 			## Full-cell visual + neighbor cull so a pool reads as one volume, not a
 			## grid of inset slabs. Collision stays recessed on bit 1 (swim ignores it).
@@ -194,6 +202,8 @@ static func _mesh_model(
 	model.culls_neighbors = culls_neighbors
 	if transparent:
 		model.transparency_index = 1
+		## Skirts at chunk edges show through alpha-cut foliage as a hard horizontal band.
+		model.lod_skirts_enabled = false
 	return model
 
 
@@ -442,8 +452,10 @@ static func _mesh_yew() -> ArrayMesh:
 static func _mesh_foliage_cards() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var y0 := 0.05
-	var y1 := 0.95
+	## Full-cell height (slight overlap). Inset tops/bottoms left a sky slit between
+	## stacked leaf cells — reads as one hard air-line at 16³ chunk seams.
+	var y0 := -0.02
+	var y1 := 1.02
 	var inset := 0.08
 	## Plane along X
 	_add_quad(
@@ -479,6 +491,53 @@ static func _mesh_foliage_cards() -> ArrayMesh:
 		Vector3(0.5, y1, 1.0 - inset),
 		Vector3(-1, 0, 0)
 	)
+	st.index()
+	return st.commit()
+
+
+## Thin horizontal branch along X (limb kit for landmark trees).
+static func _mesh_branch_x() -> ArrayMesh:
+	return _mesh_branch_cylinder(true)
+
+
+## Thin horizontal branch along Z.
+static func _mesh_branch_z() -> ArrayMesh:
+	return _mesh_branch_cylinder(false)
+
+
+## Cylinder spanning the cell on one horizontal axis. Thinner than the trunk so limbs
+## read as wood at 0.5 m without becoming full beams.
+static func _mesh_branch_cylinder(along_x: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var sides := 10
+	var r := 0.11
+	var cy := 0.52
+	for i in range(sides):
+		var a0 := TAU * float(i) / float(sides)
+		var a1 := TAU * float(i + 1) / float(sides)
+		var c0 := cos(a0) * r
+		var s0 := sin(a0) * r
+		var c1 := cos(a1) * r
+		var s1 := sin(a1) * r
+		var n: Vector3
+		var p0a: Vector3
+		var p1a: Vector3
+		var p1b: Vector3
+		var p0b: Vector3
+		if along_x:
+			n = Vector3(0.0, cos((a0 + a1) * 0.5), sin((a0 + a1) * 0.5)).normalized()
+			p0a = Vector3(0.0, cy + c0, 0.5 + s0)
+			p1a = Vector3(1.0, cy + c0, 0.5 + s0)
+			p1b = Vector3(1.0, cy + c1, 0.5 + s1)
+			p0b = Vector3(0.0, cy + c1, 0.5 + s1)
+		else:
+			n = Vector3(cos((a0 + a1) * 0.5), sin((a0 + a1) * 0.5), 0.0).normalized()
+			p0a = Vector3(0.5 + c0, cy + s0, 0.0)
+			p1a = Vector3(0.5 + c0, cy + s0, 1.0)
+			p1b = Vector3(0.5 + c1, cy + s1, 1.0)
+			p0b = Vector3(0.5 + c1, cy + s1, 0.0)
+		_add_quad(st, p0a, p1a, p1b, p0b, n)
 	st.index()
 	return st.commit()
 

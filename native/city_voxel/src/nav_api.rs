@@ -28,7 +28,7 @@ struct VolumeSource<'a> {
 
 impl<'a> VoxelSource for VolumeSource<'a> {
     #[inline]
-    fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+    fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
         self.volume
             .raw(Vector3i::new(x - self.origin_x, y, z - self.origin_z))
     }
@@ -36,19 +36,18 @@ impl<'a> VoxelSource for VolumeSource<'a> {
 
 /// Reads a dense material box copied out of the live terrain.
 struct BufferSource<'a> {
-    /// The terrain copy as GDScript handed it over, read in place: `stride` bytes per
-    /// voxel with the material in the first of them. De-interleaving it first would cost
-    /// a pass over every voxel of the box before the rebuild could even start.
+    /// Terrain TYPE channel copy: `stride` bytes per voxel. City uses stride 2 (LE u16).
+    /// Stride 1 is accepted for older fixtures (material in the single byte).
     data: &'a [u8],
     stride: usize,
     min: (i32, i32, i32),
     size: (i32, i32, i32),
-    outside: u8,
+    outside: u16,
 }
 
 impl VoxelSource for BufferSource<'_> {
     #[inline]
-    fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+    fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
         let lx = x - self.min.0;
         let ly = y - self.min.1;
         let lz = z - self.min.2;
@@ -57,7 +56,14 @@ impl VoxelSource for BufferSource<'_> {
             return self.outside;
         }
         let idx = (ly + lx * self.size.1 + lz * self.size.1 * self.size.0) as usize;
-        self.data[idx * self.stride]
+        let base = idx * self.stride;
+        if self.stride >= 2 {
+            let lo = self.data[base] as u16;
+            let hi = self.data[base + 1] as u16;
+            lo | (hi << 8)
+        } else {
+            self.data[base] as u16
+        }
     }
 }
 
@@ -70,8 +76,14 @@ fn solidity_from(
     destructible: &PackedByteArray,
     climbable: &PackedByteArray,
 ) -> Solidity {
-    let mut sol = Solidity::default();
-    for i in 0..256usize {
+    let n = class
+        .len()
+        .max(top.len())
+        .max(destructible.len())
+        .max(climbable.len())
+        .max(crate::materials::COUNT as usize);
+    let mut sol = Solidity::with_len(n);
+    for i in 0..n {
         if i < class.len() {
             let c = class[i];
             if !(SOL_PASSABLE..=SOL_PARTIAL).contains(&c) {
@@ -288,9 +300,12 @@ impl NativeNavWorld {
                 .unwrap_or(fallback)
         };
         let def = Profile::default();
-        let mut surface_cost = vec![1.0f32; 256];
+        let mut surface_cost = vec![1.0f32; crate::materials::COUNT as usize];
         if let Some(v) = spec.get("surface_cost") {
             if let Ok(arr) = v.try_to::<PackedFloat32Array>() {
+                if arr.len() > surface_cost.len() {
+                    surface_cost.resize(arr.len(), 1.0);
+                }
                 for i in 0..surface_cost.len().min(arr.len()) {
                     let c = arr[i];
                     if c < 1.0 {

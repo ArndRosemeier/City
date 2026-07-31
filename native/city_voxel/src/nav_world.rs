@@ -1344,7 +1344,7 @@ mod tests {
 
     struct Ground;
     impl VoxelSource for Ground {
-        fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+        fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
             if y <= 0 {
                 3
             } else {
@@ -1359,7 +1359,7 @@ mod tests {
         door_z: i32,
     }
     impl VoxelSource for Walled {
-        fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+        fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
             if y <= 0 {
                 return 3;
             }
@@ -1414,12 +1414,12 @@ mod tests {
         const WALK_X1: i32 = 36;
         /// Far enough off the crossing that a corridor ignoring cost crosses bare asphalt.
         const PAIR_X: f32 = 38.5;
-        const PAVEMENT: u8 = 3;
-        const ASPHALT: u8 = 6;
-        const CROSSWALK: u8 = 7;
+        const PAVEMENT: u16 = 3;
+        const ASPHALT: u16 = 6;
+        const CROSSWALK: u16 = 7;
     }
     impl VoxelSource for Street {
-        fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+        fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
             if y > 0 {
                 return 0;
             }
@@ -1462,7 +1462,7 @@ mod tests {
         let field = bake_field(&Street, &sol, 0, 0, 84, 44, 0, 10, &LinkParams::default());
         let mut w = NavWorld::new();
         w.solidity = sol;
-        let mut costs = vec![1.0f32; 256];
+        let mut costs = vec![1.0f32; crate::materials::COUNT as usize];
         costs[Street::ASPHALT as usize] = 2.5;
         costs[Street::CROSSWALK as usize] = 1.25;
         w.set_profile(
@@ -1556,7 +1556,7 @@ mod tests {
         // A closed box of sheer wall (material 5 offers no grip) around the target column.
         struct Sealed;
         impl VoxelSource for Sealed {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -1631,7 +1631,7 @@ mod tests {
         // A corridor one column wide: blocking it must break the route.
         struct Corridor;
         impl VoxelSource for Corridor {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -1667,7 +1667,7 @@ mod tests {
         let sol = solidity();
         struct Flat;
         impl VoxelSource for Flat {
-            fn mat(&self, _x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, _x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 {
                     3
                 } else {
@@ -1694,7 +1694,7 @@ mod tests {
         let sol = solidity();
         struct Sealed;
         impl VoxelSource for Sealed {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -1706,7 +1706,7 @@ mod tests {
         }
         struct Breached;
         impl VoxelSource for Breached {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -1869,7 +1869,7 @@ mod tests {
         hole: bool,
     }
     impl VoxelSource for Yard {
-        fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+        fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
             let gone = self.hole && (x - 56).pow(2) + (z - 56).pow(2) <= 36;
             if y <= 0 {
                 return if gone { 0 } else { 3 };
@@ -2009,7 +2009,7 @@ mod tests {
         // Two open halves joined only by a five column gap in a long wall.
         struct Gap;
         impl VoxelSource for Gap {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2057,7 +2057,7 @@ mod tests {
         let sol = solidity();
         struct Building;
         impl VoxelSource for Building {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2117,7 +2117,7 @@ mod tests {
         // agent standing on it can step off; nothing gets it back up.
         struct Terrace;
         impl VoxelSource for Terrace {
-            fn mat(&self, x: i32, y: i32, _z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, _z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }
@@ -2162,7 +2162,7 @@ mod tests {
         let sol = solidity();
         struct TwoFloors;
         impl VoxelSource for TwoFloors {
-            fn mat(&self, x: i32, y: i32, z: i32) -> u8 {
+            fn mat(&self, x: i32, y: i32, z: i32) -> u16 {
                 if y <= 0 {
                     return 3;
                 }

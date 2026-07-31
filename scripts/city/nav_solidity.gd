@@ -16,8 +16,8 @@ enum Kind {
 	PARTIAL = 3,
 }
 
-## Materials are one byte in the voxel volume, so the Rust tables are always 256 long.
-const TABLE_SIZE := 256
+## Table length tracks the material palette (16-bit type channel; no 256 ceiling).
+const TABLE_SIZE := VoxelMaterial.COUNT
 
 ## Indexed by VoxelMaterial id. Length is always VoxelMaterial.COUNT.
 var kind: PackedByteArray = PackedByteArray()
@@ -27,11 +27,6 @@ var top_frac: PackedFloat32Array = PackedFloat32Array()
 
 
 static func build(library: VoxelBlockyLibrary = null) -> _Self:
-	if VoxelMaterial.COUNT > TABLE_SIZE:
-		push_error(
-			"NavSolidity.build: VoxelMaterial.COUNT=%d exceeds the %d-entry nav table"
-			% [VoxelMaterial.COUNT, TABLE_SIZE]
-		)
 	var lib: VoxelBlockyLibrary = library
 	if lib == null:
 		lib = VoxelBlockLibraryScript.build()
@@ -94,20 +89,22 @@ func count_by_kind() -> PackedInt32Array:
 ## Rust default: an agent refusing to walk is a visible bug, one walking through a wall is
 ## a silent one.
 func export_class() -> PackedByteArray:
+	var n := TABLE_SIZE
 	var out := PackedByteArray()
-	out.resize(TABLE_SIZE)
+	out.resize(n)
 	out.fill(Kind.SOLID)
-	for id in range(kind.size()):
+	for id in range(mini(kind.size(), n)):
 		out[id] = kind[id]
 	return out
 
 
 ## `solid_top` for the Rust bake — sub-cell collision top, only read for PARTIAL cells.
 func export_top() -> PackedFloat32Array:
+	var n := TABLE_SIZE
 	var out := PackedFloat32Array()
-	out.resize(TABLE_SIZE)
+	out.resize(n)
 	out.fill(1.0)
-	for id in range(top_frac.size()):
+	for id in range(mini(top_frac.size(), n)):
 		out[id] = top_frac[id]
 	return out
 
@@ -115,10 +112,11 @@ func export_top() -> PackedFloat32Array:
 ## `solid_destructible` for the Rust bake. Spans resting on carveable fabric are flagged
 ## fragile, so routing can price a floor that a blast may remove.
 func export_destructible() -> PackedByteArray:
+	var n := TABLE_SIZE
 	var out := PackedByteArray()
-	out.resize(TABLE_SIZE)
+	out.resize(n)
 	out.fill(0)
-	for id in range(kind.size()):
+	for id in range(mini(kind.size(), n)):
 		out[id] = 1 if VoxelMaterial.is_destructible(id) else 0
 	return out
 
@@ -126,10 +124,11 @@ func export_destructible() -> PackedByteArray:
 ## `solid_climbable` for the Rust bake. Only full-cell collision offers a facade to climb;
 ## a curb lip or roof wedge is a step the walk rules already cover.
 func export_climbable() -> PackedByteArray:
+	var n := TABLE_SIZE
 	var out := PackedByteArray()
-	out.resize(TABLE_SIZE)
+	out.resize(n)
 	out.fill(0)
-	for id in range(kind.size()):
+	for id in range(mini(kind.size(), n)):
 		out[id] = 1 if int(kind[id]) == Kind.SOLID else 0
 	return out
 

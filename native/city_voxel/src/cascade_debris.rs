@@ -31,8 +31,9 @@ const UNSUP_OFFSETS: [Vector3i; 9] = [
     Vector3i::new(0, 1, -1),
 ];
 
-const CANOPY_RADIUS: i32 = 2;
-const CANOPY_UP: i32 = 4;
+// Landmark limbs reach farther than park ellipsoids — search a wider leaf shell.
+const CANOPY_RADIUS: i32 = 8;
+const CANOPY_UP: i32 = 10;
 const MAX_PENDING_UNSUPPORTED: usize = 400;
 
 /// Cleared cells are reported per bucket of this many columns square, which is one
@@ -423,7 +424,7 @@ impl NativeCascadeDebris {
                 mat,
                 detached: true,
             });
-            if mat == materials::BARK {
+            if materials::is_wood(mat) {
                 bark_hits.push(vox);
             }
         }
@@ -436,8 +437,8 @@ impl NativeCascadeDebris {
         if !column.is_empty() {
             self.append_column(column);
         }
-        for bark in bark_hits {
-            self.drop_canopy_for_bark(bark);
+        for wood in bark_hits {
+            self.drop_canopy_for_wood(wood);
         }
         if !self.flushing {
             self.flush_unsupported_drops(self.max_removals_per_tick.max(1));
@@ -788,8 +789,8 @@ impl NativeCascadeDebris {
         if entry.detached {
             self.spawn_cube(v, mat_id);
             self.collect_unsupported_neighbors(v);
-            if mat_id == materials::BARK {
-                self.drop_canopy_for_bark(v);
+            if materials::is_wood(mat_id) {
+                self.drop_canopy_for_wood(v);
             }
             return;
         }
@@ -801,25 +802,25 @@ impl NativeCascadeDebris {
         let spawn_mat = if mat_id > 0 { mat_id } else { cur };
         self.spawn_cube(v, spawn_mat);
         self.collect_unsupported_neighbors(v);
-        if spawn_mat == materials::BARK || cur == materials::BARK {
-            self.drop_canopy_for_bark(v);
+        if materials::is_wood(spawn_mat) || materials::is_wood(cur) {
+            self.drop_canopy_for_wood(v);
         }
     }
 
-    fn drop_canopy_for_bark(&mut self, bark: Vector3i) {
+    fn drop_canopy_for_wood(&mut self, wood: Vector3i) {
         if self.tool.is_none() || self.debris_root.is_none() {
             return;
         }
-        let stem = (bark.x, bark.z);
+        let stem = (wood.x, wood.z);
         if self.canopy_dropped.contains(&stem) {
             return;
         }
-        let mut top_y = bark.y;
-        for y in bark.y..(bark.y + 14) {
-            let id = self.get_voxel(Vector3i::new(bark.x, y, bark.z));
-            if id == materials::BARK {
+        let mut top_y = wood.y;
+        for y in wood.y..(wood.y + 28) {
+            let id = self.get_voxel(Vector3i::new(wood.x, y, wood.z));
+            if materials::is_wood(id) {
                 top_y = y;
-            } else if y > bark.y {
+            } else if y > wood.y {
                 break;
             }
         }
@@ -831,14 +832,15 @@ impl NativeCascadeDebris {
                     continue;
                 }
                 for y in (top_y - 1)..=(top_y + CANOPY_UP) {
-                    let v = Vector3i::new(bark.x + dx, y, bark.z + dz);
-                    if self.get_voxel(v) != materials::LEAVES {
+                    let v = Vector3i::new(wood.x + dx, y, wood.z + dz);
+                    let id = self.get_voxel(v);
+                    if !materials::is_foliage(id) {
                         continue;
                     }
                     self.clear_voxel(v);
                     by_col.entry((v.x, v.z)).or_default().push(ColumnEntry {
                         vox: v,
-                        mat: materials::LEAVES,
+                        mat: id,
                         detached: true,
                     });
                     found_any = true;
@@ -852,7 +854,7 @@ impl NativeCascadeDebris {
         for (_key, mut col) in by_col {
             col.sort_by_key(|e| e.vox.y);
             let first = col.remove(0);
-            self.spawn_cube(first.vox, materials::LEAVES);
+            self.spawn_cube(first.vox, first.mat);
             self.collect_unsupported_neighbors(first.vox);
             if !col.is_empty() {
                 self.append_column(col);

@@ -23,8 +23,8 @@ const BLOCK_VOXELS: usize = (BLOCK * BLOCK * BLOCK) as usize;
 #[class(base=RefCounted)]
 struct NativeOfflineVoxelVolume {
     base: Base<RefCounted>,
-    /// Sparse 16³ TYPE channel (8-bit material ids), Y-major layout matching VoxelBuffer.
-    blocks: HashMap<(i32, i32, i32), Vec<u8>>,
+    /// Sparse 16³ TYPE channel (16-bit material ids), Y-major layout matching VoxelBuffer.
+    blocks: HashMap<(i32, i32, i32), Vec<u16>>,
 }
 
 #[godot_api]
@@ -51,7 +51,7 @@ impl NativeOfflineVoxelVolume {
 
     #[func]
     fn set_vox(&mut self, pos: Vector3i, material_id: i32) {
-        let mat = material_id.clamp(0, 255) as u8;
+        let mat = material_id.clamp(0, 65535) as u16;
         let bp = block_pos(pos);
         let data = self.ensure_block(bp);
         let lp = Vector3i::new(pos.x - bp.0 * BLOCK, pos.y - bp.1 * BLOCK, pos.z - bp.2 * BLOCK);
@@ -76,7 +76,7 @@ impl NativeOfflineVoxelVolume {
         if min_v.x >= max_v.x || min_v.y >= max_v.y || min_v.z >= max_v.z {
             return;
         }
-        let mat = material_id.clamp(0, 255) as u8;
+        let mat = material_id.clamp(0, 65535) as u16;
         let bx0 = div_floor(min_v.x, BLOCK);
         let by0 = div_floor(min_v.y, BLOCK);
         let bz0 = div_floor(min_v.z, BLOCK);
@@ -142,14 +142,16 @@ impl NativeOfflineVoxelVolume {
             if uniform {
                 let mut tiny = PackedByteArray::new();
                 tiny.resize(2);
-                tiny[0] = v0;
-                tiny[1] = 0;
+                tiny[0] = (v0 & 0xff) as u8;
+                tiny[1] = ((v0 >> 8) & 0xff) as u8;
                 out.set(key, &tiny);
             } else {
                 let mut dst = PackedByteArray::new();
                 dst.resize(BLOCK_VOXELS * 2);
                 for i in 0..n {
-                    dst[i * 2] = src[i];
+                    let v = src[i];
+                    dst[i * 2] = (v & 0xff) as u8;
+                    dst[i * 2 + 1] = ((v >> 8) & 0xff) as u8;
                 }
                 out.set(key, &dst);
             }
@@ -162,7 +164,7 @@ impl NativeOfflineVoxelVolume {
     /// Material id without the Godot marshalling, for in-process consumers such as the
     /// navigation bake.
     #[inline]
-    pub(crate) fn raw(&self, pos: Vector3i) -> u8 {
+    pub(crate) fn raw(&self, pos: Vector3i) -> u16 {
         let bp = block_pos(pos);
         match self.blocks.get(&bp) {
             Some(data) => {
@@ -175,17 +177,17 @@ impl NativeOfflineVoxelVolume {
     }
 
     #[inline]
-    pub(crate) fn set_raw(&mut self, pos: Vector3i, mat: u8) {
+    pub(crate) fn set_raw(&mut self, pos: Vector3i, mat: u16) {
         let bp = block_pos(pos);
         let data = self.ensure_block(bp);
         let lp = Vector3i::new(pos.x - bp.0 * BLOCK, pos.y - bp.1 * BLOCK, pos.z - bp.2 * BLOCK);
         data[index(lp)] = mat;
     }
 
-    fn ensure_block(&mut self, bp: (i32, i32, i32)) -> &mut Vec<u8> {
+    fn ensure_block(&mut self, bp: (i32, i32, i32)) -> &mut Vec<u16> {
         self.blocks
             .entry(bp)
-            .or_insert_with(|| vec![0u8; BLOCK_VOXELS])
+            .or_insert_with(|| vec![0u16; BLOCK_VOXELS])
     }
 }
 
@@ -202,11 +204,9 @@ fn index(lp: Vector3i) -> usize {
 }
 
 fn div_floor(a: i32, b: i32) -> i32 {
-    let q = a / b;
-    let r = a % b;
-    if r != 0 && a < 0 {
-        q - 1
+    if a >= 0 {
+        a / b
     } else {
-        q
+        (a - (b - 1)) / b
     }
 }

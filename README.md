@@ -245,14 +245,13 @@ is followed by a DLL rebuild** (`cargo build --release --manifest-path
 native/city_voxel/Cargo.toml`, then copy the binary over `addons/city_voxel/bin/city_voxel.dll`)
 or GDScript and native disagree about what a voxel id means.
 
-The hard limit is navigation, not the voxel format. The type channel is 16-bit, but the nav
-bake reads a byte per cell and `NavSolidity.TABLE_SIZE` is 256 entries — one id past that
-aliases onto another material's passability, and the failure mode is a district that bakes with
-no walkable spans at all rather than a wall in the wrong place. The generator refuses to write
-a catalog that would cross it, and `tools/test_room_prop_catalog.tscn` re-checks the committed
-result: every stem has a mesh, the ids are one contiguous run, both material tables agree with
-the catalog, every family resolves to a surface spec, each `_z` twin is its original's
-footprint turned, and the whole id space still fits in the nav table.
+Material ids are 16-bit end-to-end (type channel, offline volume, nav solidity/cost tables, and
+live dirty rebuild). There is one `VoxelMaterial` id space — nav no longer truncates to a byte.
+`NavSolidity.TABLE_SIZE` tracks `VoxelMaterial.COUNT` (raise `COUNT` when adding ids; rebuild the
+DLL). The prop catalog generator leaves headroom under the 65536 ceiling for non-prop materials;
+`tools/test_room_prop_catalog.tscn` re-checks the committed result: every stem has a mesh, the
+ids are one contiguous run, both material tables agree with the catalog, every family resolves
+to a surface spec, and each `_z` twin is its original's footprint turned.
 
 ## Building interiors
 

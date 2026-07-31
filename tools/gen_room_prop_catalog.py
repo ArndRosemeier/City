@@ -37,11 +37,8 @@ MATERIALS_RS = ROOT / "native" / "city_voxel" / "src" / "materials.rs"
 
 ## First prop id. Everything below it is a hand-written block material.
 PROP_FIRST = 76
-## Hard ceiling on the material id space. The voxel type channel is 16-bit, but the
-## navigation pipeline is not: `Solidity::class_of` takes a u8, the terrain copy the
-## nav bake reads is one byte per cell, and `NavSolidity.TABLE_SIZE` says so. An id
-## past this would alias onto another material's passability and quietly move a wall.
-MAT_ID_LIMIT = 256
+## Soft catalog budget. Type channel and nav are 16-bit; leave headroom for non-prop ids.
+MAT_ID_LIMIT = 65536
 VOXEL_M = 0.5
 MARGIN_VOX = 0.04
 
@@ -662,45 +659,68 @@ static func id_for_stem(stem: String) -> int:
 	print(f"Wrote {CATALOG_GD} ({len(entries)} props)")
 
 
+def _tail_ids(last: int) -> dict[str, int]:
+	"""Ids after the prop run. Keep in sync with voxel_material.gd / materials.rs."""
+	footprint = last + 1
+	door = footprint + 1
+	arena_shell = door + 1
+	los_veil = arena_shell + 1
+	branch_x = los_veil + 1
+	branch_z = branch_x + 1
+	leaves_dark = branch_z + 1
+	return {
+		"footprint": footprint,
+		"door": door,
+		"arena_shell": arena_shell,
+		"los_veil": los_veil,
+		"branch_x": branch_x,
+		"branch_z": branch_z,
+		"leaves_dark": leaves_dark,
+		"count": leaves_dark + 1,
+	}
+
+
 def patch_voxel_material(count: int, last: int) -> None:
 	text = VOXEL_MAT_GD.read_text(encoding="utf-8")
 	pattern = re.compile(
 		r"## Room prop kit.*?const COUNT := \d+",
 		re.DOTALL,
 	)
-	footprint = last + 1
-	door = footprint + 1
-	arena_shell = door + 1
-	total = arena_shell + 1
+	ids = _tail_ids(last)
 	replacement = (
 		"## Room prop kit — see RoomPropCatalog / tools/gen_room_prop_catalog.py.\n"
 		f"const PROP_FIRST := {PROP_FIRST}\n"
 		f"const PROP_LAST := {last}\n"
 		f"const PROP_COUNT := {count}\n"
 		"## Invisible solid filler for multi-cell prop footprints (nav / occupancy).\n"
-		f"const PROP_FOOTPRINT := {footprint}\n"
+		f"const PROP_FOOTPRINT := {ids['footprint']}\n"
 		"## Closed door plug — solid barrier in a doorway clear (E-toggle; open restores AIR).\n"
-		f"const DOOR := {door}\n"
+		f"const DOOR := {ids['door']}\n"
 		"## Arena pit walls / undercroft / lift shafts — looks like masonry, never digs away.\n"
-		f"const ARENA_SHELL := {arena_shell}\n"
+		f"const ARENA_SHELL := {ids['arena_shell']}\n"
+		"## Invisible, walk-through volume that still blocks combat LOS / projectiles (arena lip).\n"
+		f"const LOS_VEIL := {ids['los_veil']}\n"
+		"## Oriented thin wood cylinders for landmark trees (axis = cell traversal direction).\n"
+		f"const BRANCH_X := {ids['branch_x']}\n"
+		f"const BRANCH_Z := {ids['branch_z']}\n"
+		"## Darker underside foliage for landmark canopy depth (past the old 256 soft cap).\n"
+		f"const LEAVES_DARK := {ids['leaves_dark']}\n"
 		"## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.\n"
 		"const PROP_CRATE := PROP_FIRST\n"
 		"const PROP_BARREL := PROP_FIRST + 1\n"
 		"const PROP_CHAIR := PROP_FIRST + 2\n"
-		f"const COUNT := {total}"
+		"## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).\n"
+		f"const COUNT := {ids['count']}"
 	)
 	if not pattern.search(text):
 		raise RuntimeError(f"{VOXEL_MAT_GD}: room prop block not found")
 	text = pattern.sub(replacement, text)
 	VOXEL_MAT_GD.write_text(text, encoding="utf-8")
-	print(f"Patched {VOXEL_MAT_GD} COUNT={total} FOOTPRINT={footprint}")
+	print(f"Patched {VOXEL_MAT_GD} COUNT={ids['count']} FOOTPRINT={ids['footprint']}")
 
 
 def patch_materials_rs(last: int) -> None:
-	footprint = last + 1
-	door = footprint + 1
-	arena_shell = door + 1
-	total = arena_shell + 1
+	ids = _tail_ids(last)
 	text = MATERIALS_RS.read_text(encoding="utf-8")
 	block = re.compile(
 		r"pub const PROP_FIRST: i32 = \d+;.*?pub const COUNT: i32 = \d+;", re.DOTALL
@@ -716,17 +736,27 @@ def patch_materials_rs(last: int) -> None:
 			f"#[allow(dead_code)]\n"
 			f"pub const PROP_LAST: i32 = {last};\n"
 			f"#[allow(dead_code)]\n"
-			f"pub const PROP_FOOTPRINT: i32 = {footprint};\n"
+			f"pub const PROP_FOOTPRINT: i32 = {ids['footprint']};\n"
 			f"#[allow(dead_code)]\n"
-			f"pub const DOOR: i32 = {door};\n"
+			f"pub const DOOR: i32 = {ids['door']};\n"
 			f"#[allow(dead_code)]\n"
-			f"pub const ARENA_SHELL: i32 = {arena_shell};\n"
-			f"pub const COUNT: i32 = {total};"
+			f"pub const ARENA_SHELL: i32 = {ids['arena_shell']};\n"
+			f"/// Invisible walk-through LOS blocker (arena tribune lip). Keep in sync with GD.\n"
+			f"#[allow(dead_code)]\n"
+			f"pub const LOS_VEIL: i32 = {ids['los_veil']};\n"
+			f"#[allow(dead_code)]\n"
+			f"pub const BRANCH_X: i32 = {ids['branch_x']};\n"
+			f"#[allow(dead_code)]\n"
+			f"pub const BRANCH_Z: i32 = {ids['branch_z']};\n"
+			f"#[allow(dead_code)]\n"
+			f"pub const LEAVES_DARK: i32 = {ids['leaves_dark']};\n"
+			f"/// Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).\n"
+			f"pub const COUNT: i32 = {ids['count']};"
 		),
 		text,
 	)
 	MATERIALS_RS.write_text(patched, encoding="utf-8")
-	print(f"Patched {MATERIALS_RS} COUNT={total}")
+	print(f"Patched {MATERIALS_RS} COUNT={ids['count']}")
 
 
 def write_credits(n: int, per_pack: dict[str, int]) -> None:
@@ -891,12 +921,13 @@ def main() -> int:
 			print(f"  removed stale {meta.name}")
 
 	last = PROP_FIRST + len(entries) - 1
+	ids = _tail_ids(last)
 	## Before anything is patched: a catalog that overflows the id space would compile
 	## and bake, and only show up as a district with no navigation in it.
-	if last + 3 > MAT_ID_LIMIT:
+	if ids["count"] > MAT_ID_LIMIT:
 		raise RuntimeError(
-			f"{len(entries)} props need {last + 3} material ids, "
-			f"{MAT_ID_LIMIT} is the ceiling — cut {last + 3 - MAT_ID_LIMIT} stems"
+			f"{len(entries)} props need COUNT={ids['count']}, "
+			f"{MAT_ID_LIMIT} is the 16-bit ceiling — cut {ids['count'] - MAT_ID_LIMIT} stems"
 		)
 	write_catalog_gd(entries)
 	patch_voxel_material(len(entries), last)
@@ -904,7 +935,9 @@ def main() -> int:
 	write_credits(len(entries), per_pack)
 	print(
 		f"DONE {len(entries)} props  ids {PROP_FIRST}..{last}  "
-		f"FOOTPRINT={last + 1} DOOR={last + 2} ARENA_SHELL={last + 3} COUNT={last + 4}"
+		f"FOOTPRINT={ids['footprint']} DOOR={ids['door']} ARENA_SHELL={ids['arena_shell']} "
+		f"LOS_VEIL={ids['los_veil']} BRANCH={ids['branch_x']}..{ids['branch_z']} "
+		f"LEAVES_DARK={ids['leaves_dark']} COUNT={ids['count']}"
 	)
 	return 0
 

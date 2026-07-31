@@ -12,6 +12,8 @@ pub const LEAVES: i32 = 24;
 /// Kept for id parity with `voxel_material.gd` even when unused in native code.
 #[allow(dead_code)]
 pub const STONE: i32 = 25;
+#[allow(dead_code)]
+pub const YEW: i32 = 40;
 pub const METEOR_ROCK: i32 = 29;
 pub const INFECTION: i32 = 30;
 pub const INFECTION_LEAD: i32 = 31;
@@ -59,7 +61,24 @@ pub const ARENA_SHELL: i32 = 252;
 /// Invisible walk-through LOS blocker (arena tribune lip). Keep in sync with GD.
 #[allow(dead_code)]
 pub const LOS_VEIL: i32 = 253;
-pub const COUNT: i32 = 254;
+#[allow(dead_code)]
+pub const BRANCH_X: i32 = 254;
+#[allow(dead_code)]
+pub const BRANCH_Z: i32 = 255;
+#[allow(dead_code)]
+pub const LEAVES_DARK: i32 = 256;
+/// Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
+pub const COUNT: i32 = 257;
+
+#[inline]
+pub fn is_wood(id: i32) -> bool {
+    id == BARK || id == BRANCH_X || id == BRANCH_Z
+}
+
+#[inline]
+pub fn is_foliage(id: i32) -> bool {
+    id == LEAVES || id == LEAVES_DARK || id == YEW
+}
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR

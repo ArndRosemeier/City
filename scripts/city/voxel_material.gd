@@ -114,11 +114,17 @@ const DOOR := 251
 const ARENA_SHELL := 252
 ## Invisible, walk-through volume that still blocks combat LOS / projectiles (arena lip).
 const LOS_VEIL := 253
+## Oriented thin wood cylinders for landmark trees (axis = cell traversal direction).
+const BRANCH_X := 254
+const BRANCH_Z := 255
+## Darker underside foliage for landmark canopy depth (past the old 256 soft cap).
+const LEAVES_DARK := 256
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
-const COUNT := 254
+## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
+const COUNT := 257
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -241,7 +247,16 @@ static func is_undead_structure_target(id: int) -> bool:
 
 ## Park / plaza greenery — giants and minions should ignore these.
 static func is_vegetation(id: int) -> bool:
-	return id == BARK or id == LEAVES or id == PLANTER or id == YEW
+	return is_wood(id) or is_foliage(id) or id == PLANTER
+
+
+## Trunk + oriented limb segments (landmark tree kit).
+static func is_wood(id: int) -> bool:
+	return id == BARK or id == BRANCH_X or id == BRANCH_Z
+
+
+static func is_foliage(id: int) -> bool:
+	return id == LEAVES or id == LEAVES_DARK or id == YEW
 
 
 ## Indoor / room furniture stamps (custom meshes in the block library).
@@ -377,6 +392,8 @@ static func color(id: int) -> Color:
 			return Color(0.78, 0.74, 0.68)
 		PARK, LEAVES:
 			return Color(0.28, 0.48, 0.26)
+		LEAVES_DARK:
+			return Color(0.16, 0.32, 0.14)
 		ROOF, ROOF_SLOPE_POS_X, ROOF_SLOPE_NEG_X, ROOF_SLOPE_POS_Z, ROOF_SLOPE_NEG_Z:
 			return Color(0.35, 0.32, 0.3)
 		ROOF_CLAY, ROOF_CLAY_SLOPE_POS_X, ROOF_CLAY_SLOPE_NEG_X, ROOF_CLAY_SLOPE_POS_Z, ROOF_CLAY_SLOPE_NEG_Z:
@@ -447,6 +464,8 @@ static func color(id: int) -> Color:
 		LOS_VEIL:
 			## Debug / atlas only — the block model has no mesh.
 			return Color(0.0, 0.0, 0.0, 0.0)
+		BRANCH_X, BRANCH_Z:
+			return Color(0.42, 0.28, 0.16)
 		DOOR:
 			## Timber plug — reads as a shut door, not masonry.
 			return Color(0.40, 0.26, 0.14)
