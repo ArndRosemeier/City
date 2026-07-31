@@ -142,11 +142,29 @@ func _check_material_tables() -> void:
 	if VoxelMaterial.DOOR != VoxelMaterial.PROP_FOOTPRINT + 1:
 		_fail("FAIL DOOR=%d is not the id after PROP_FOOTPRINT" % VoxelMaterial.DOOR)
 		return
-	if VoxelMaterial.COUNT != VoxelMaterial.DOOR + 1:
+	if VoxelMaterial.ARENA_SHELL != VoxelMaterial.DOOR + 1:
 		_fail(
-			"FAIL COUNT=%d leaves a gap after DOOR=%d"
-			% [VoxelMaterial.COUNT, VoxelMaterial.DOOR]
+			"FAIL ARENA_SHELL=%d is not the id after DOOR=%d"
+			% [VoxelMaterial.ARENA_SHELL, VoxelMaterial.DOOR]
 		)
+		return
+	if VoxelMaterial.LOS_VEIL != VoxelMaterial.ARENA_SHELL + 1:
+		_fail(
+			"FAIL LOS_VEIL=%d is not the id after ARENA_SHELL=%d"
+			% [VoxelMaterial.LOS_VEIL, VoxelMaterial.ARENA_SHELL]
+		)
+		return
+	if VoxelMaterial.COUNT != VoxelMaterial.LOS_VEIL + 1:
+		_fail(
+			"FAIL COUNT=%d leaves a gap after LOS_VEIL=%d"
+			% [VoxelMaterial.COUNT, VoxelMaterial.LOS_VEIL]
+		)
+		return
+	if VoxelMaterial.is_destructible(VoxelMaterial.ARENA_SHELL):
+		_fail("FAIL ARENA_SHELL must not be destructible")
+		return
+	if VoxelMaterial.is_destructible(VoxelMaterial.LOS_VEIL):
+		_fail("FAIL LOS_VEIL must not be destructible")
 		return
 	var rs := FileAccess.get_file_as_string("res://native/city_voxel/src/materials.rs")
 	if rs.is_empty():
@@ -157,6 +175,8 @@ func _check_material_tables() -> void:
 		["PROP_LAST", VoxelMaterial.PROP_LAST],
 		["PROP_FOOTPRINT", VoxelMaterial.PROP_FOOTPRINT],
 		["DOOR", VoxelMaterial.DOOR],
+		["ARENA_SHELL", VoxelMaterial.ARENA_SHELL],
+		["LOS_VEIL", VoxelMaterial.LOS_VEIL],
 		["COUNT", VoxelMaterial.COUNT],
 		["TIMBER", VoxelMaterial.TIMBER],
 	]:
@@ -165,12 +185,14 @@ func _check_material_tables() -> void:
 			_fail("FAIL materials.rs does not say `%s` — regenerate the catalog" % want)
 			return
 	print(
-		"tables: props %d..%d, footprint %d, door %d, count %d, agreed with materials.rs"
+		"tables: props %d..%d, footprint %d, door %d, arena_shell %d, los_veil %d, count %d, agreed with materials.rs"
 		% [
 			VoxelMaterial.PROP_FIRST,
 			VoxelMaterial.PROP_LAST,
 			VoxelMaterial.PROP_FOOTPRINT,
 			VoxelMaterial.DOOR,
+			VoxelMaterial.ARENA_SHELL,
+			VoxelMaterial.LOS_VEIL,
 			VoxelMaterial.COUNT,
 		]
 	)

@@ -53,6 +53,9 @@ const GRAVEYARD_IDS: Array[int] = [
 const CASTLE_IDS: Array[int] = [
 	VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.CASTLE_BLOCK_MOSSY,
 ]
+const ARENA_IDS: Array[int] = [
+	VoxelMaterial.ARENA_SHELL,
+]
 const STREET_PNG := "res://tools/city_theme_street.png"
 const SKYLINE_PNG := "res://tools/city_theme_skyline.png"
 const NEIGHBOUR_PNG := "res://tools/city_theme_neighbour.png"
@@ -179,6 +182,7 @@ func _summarize(coord: Vector2i, res: Dictionary) -> Dictionary:
 		"graveyard_cells": int(tags.get(LandUse.GRAVEYARD, 0)),
 		"lake_cells": int(tags.get(LandUse.LAKE, 0)),
 		"castle_cells": int(tags.get(LandUse.CASTLE, 0)),
+		"arena_cells": int(tags.get(LandUse.ARENA, 0)),
 		"road_cells": int(tags.get(LandUse.ROAD, 0)) + int(tags.get(LandUse.AVENUE, 0)),
 		"lot_cells": (
 			int(tags.get(LandUse.CORE_LOT, 0))
@@ -218,6 +222,9 @@ func _material_histogram(blocks: Dictionary, ground_thickness: int) -> Dictionar
 	for id5: int in CASTLE_IDS:
 		if not counts.has(id5):
 			counts[id5] = 0
+	for id6: int in ARENA_IDS:
+		if not counts.has(id6):
+			counts[id6] = 0
 	for key: Variant in blocks.keys():
 		var bp: Vector3i = key
 		var block_y0 := bp.y * BLOCK
@@ -292,6 +299,7 @@ func _check_parks(stats: Array) -> void:
 	var basins := 0
 	var castles := 0
 	var fractals := 0
+	var arenas := 0
 	for s: Variant in stats:
 		var d: Dictionary = s
 		var m: Dictionary = d["walls"]
@@ -373,6 +381,18 @@ func _check_parks(stats: Array) -> void:
 			## push_errors in DistrictPlanner._build_fractal_layout.
 			fractals += 1
 			continue
+		if int(d["theme_id"]) == DistrictTheme.ARENA:
+			arenas += 1
+			if int(d["lot_cells"]) > 0:
+				_fail("FAIL %s Arena district still has housing lots" % d["coord"])
+				return
+			if int(d["arena_cells"]) <= 0:
+				_fail("FAIL %s Arena district has no arena cells" % d["coord"])
+				return
+			if int(m[VoxelMaterial.ARENA_SHELL]) <= 0:
+				_fail("FAIL %s Arena district has no ARENA_SHELL mass" % d["coord"])
+				return
+			continue
 		urban += 1
 		if int(m[VoxelMaterial.GRAVEL]) <= 0:
 			_fail("FAIL %s (%s) has no park paths" % [d["coord"], d["theme"]])
@@ -388,9 +408,9 @@ func _check_parks(stats: Array) -> void:
 	print(
 		(
 			"OK open space: parks on %d tiles (ponds %d), hills on %d, graveyards on %d,"
-			+ " lakes on %d, castles on %d, fractals on %d"
+			+ " lakes on %d, castles on %d, fractals on %d, arenas on %d"
 		)
-		% [urban, ponds, hills, graveyards, basins, castles, fractals]
+		% [urban, ponds, hills, graveyards, basins, castles, fractals, arenas]
 	)
 
 

@@ -20,7 +20,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -54,7 +54,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -90,7 +90,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 26.4,
-          "vs_mob": 0.0
+          "vs_mob": 26.4
         },
         "stomp": {
           "vs_player": 110.0,
@@ -132,7 +132,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -174,7 +174,7 @@
         },
         "melee": {
           "vs_player": 21.6,
-          "vs_mob": 0.0
+          "vs_mob": 21.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -224,7 +224,7 @@
       },
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.0,
+        "monsters": 0.6,
         "ped": 0.6,
         "player": 1.0
       },
@@ -257,7 +257,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -296,7 +296,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -330,7 +330,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -364,7 +364,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -417,7 +417,7 @@
         },
         "melee": {
           "vs_player": 26.4,
-          "vs_mob": 0.0
+          "vs_mob": 26.4
         },
         "nibble": {
           "vs_player": 0.0,
@@ -426,7 +426,7 @@
       },
       "prey_weights": {
         "building": 0.5,
-        "monsters": 0.375,
+        "monsters": 0.525,
         "ped": 0.525,
         "player": 0.875
       },
@@ -459,7 +459,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -495,7 +495,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 26.4,
-          "vs_mob": 0.0
+          "vs_mob": 26.4
         },
         "stomp": {
           "vs_player": 110.0,
@@ -536,7 +536,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -580,7 +580,7 @@
         },
         "melee": {
           "vs_player": 21.6,
-          "vs_mob": 0.0
+          "vs_mob": 21.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -621,7 +621,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 26.4,
-          "vs_mob": 0.0
+          "vs_mob": 26.4
         },
         "stomp": {
           "vs_player": 110.0,
@@ -665,7 +665,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -708,7 +708,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -751,7 +751,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 12.0,
-          "vs_mob": 0.0
+          "vs_mob": 12.0
         },
         "nibble": {
           "vs_player": 0.0,
@@ -795,7 +795,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -839,7 +839,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -883,7 +883,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -927,7 +927,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -970,7 +970,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1013,7 +1013,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1057,7 +1057,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1100,7 +1100,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1144,7 +1144,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1187,7 +1187,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1230,7 +1230,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1274,7 +1274,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1325,7 +1325,7 @@
       },
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.0,
+        "monsters": 0.6,
         "ped": 0.6,
         "player": 1.0
       },
@@ -1359,7 +1359,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1408,7 +1408,7 @@
         },
         "melee": {
           "vs_player": 21.6,
-          "vs_mob": 0.0
+          "vs_mob": 21.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1455,7 +1455,7 @@
         },
         "melee": {
           "vs_player": 21.6,
-          "vs_mob": 0.0
+          "vs_mob": 21.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1497,7 +1497,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1539,7 +1539,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1578,7 +1578,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -1631,7 +1631,7 @@
         },
         "melee": {
           "vs_player": 21.6,
-          "vs_mob": 0.0
+          "vs_mob": 21.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1640,7 +1640,7 @@
       },
       "prey_weights": {
         "building": 0.5,
-        "monsters": 0.375,
+        "monsters": 0.525,
         "ped": 0.525,
         "player": 0.875
       },
@@ -1691,7 +1691,7 @@
         },
         "melee": {
           "vs_player": 21.6,
-          "vs_mob": 0.0
+          "vs_mob": 21.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1700,7 +1700,7 @@
       },
       "prey_weights": {
         "building": 0.5,
-        "monsters": 0.375,
+        "monsters": 0.525,
         "ped": 0.525,
         "player": 0.875
       },
@@ -1743,12 +1743,12 @@
         },
         "melee": {
           "vs_player": 12.0,
-          "vs_mob": 0.0
+          "vs_mob": 12.0
         }
       },
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.4,
+        "monsters": 0.7,
         "ped": 0.7,
         "player": 1.0
       },
@@ -1789,12 +1789,12 @@
         },
         "melee": {
           "vs_player": 12.0,
-          "vs_mob": 0.0
+          "vs_mob": 12.0
         }
       },
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.4,
+        "monsters": 0.7,
         "ped": 0.7,
         "player": 1.0
       },
@@ -1827,7 +1827,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1869,7 +1869,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -1910,7 +1910,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -1946,7 +1946,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         }
       },
       "prey_weights": {
@@ -1992,12 +1992,12 @@
         },
         "melee": {
           "vs_player": 12.0,
-          "vs_mob": 0.0
+          "vs_mob": 12.0
         }
       },
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.4,
+        "monsters": 0.7,
         "ped": 0.7,
         "player": 1.0
       },
@@ -2030,7 +2030,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -2072,7 +2072,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -2119,7 +2119,7 @@
         },
         "melee": {
           "vs_player": 21.6,
-          "vs_mob": 0.0
+          "vs_mob": 21.6
         },
         "nibble": {
           "vs_player": 0.0,
@@ -2171,7 +2171,7 @@
         },
         "melee": {
           "vs_player": 12.0,
-          "vs_mob": 0.0
+          "vs_mob": 12.0
         },
         "orb_convert": {
           "vs_player": 70.0,
@@ -2180,7 +2180,7 @@
       },
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.4,
+        "monsters": 0.7,
         "ped": 0.7,
         "player": 1.0
       },
@@ -2213,7 +2213,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
-          "vs_mob": 0.0
+          "vs_mob": 10.2
         },
         "nibble": {
           "vs_player": 0.0,
@@ -2260,7 +2260,7 @@
         },
         "melee": {
           "vs_player": 12.0,
-          "vs_mob": 0.0
+          "vs_mob": 12.0
         },
         "orb_convert": {
           "vs_player": 70.0,
@@ -2269,7 +2269,7 @@
       },
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.4,
+        "monsters": 0.7,
         "ped": 0.7,
         "player": 1.0
       },
@@ -2304,7 +2304,7 @@
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
-          "vs_mob": 0.0
+          "vs_mob": 15.6
         },
         "nibble": {
           "vs_player": 0.0,

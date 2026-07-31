@@ -56,6 +56,9 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			return _make_glass_cube(id)
 		VoxelMaterial.GLASS_LIT:
 			return _make_glass_cube(id)
+		VoxelMaterial.LOS_VEIL:
+			## Invisible walk-through volume that still counts as solid for LOS probes.
+			return _make_los_veil_model()
 		VoxelMaterial.CURB:
 			## Low curb lip (~0.2 m world) so CharacterBody can step/jump it.
 			return _mesh_model(id, _mesh_curb(), false, true, AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.4, 1.0)))
@@ -110,6 +113,18 @@ static func _make_prop_footprint_model() -> VoxelBlockyModelMesh:
 	model.set_mesh_collision_enabled(0, false)
 	model.culls_neighbors = false
 	model.collision_aabbs = [AABB(Vector3.ZERO, Vector3.ONE)]
+	return model
+
+
+## No mesh, no collision — CharacterBody and nav pass through; ProjectileLos still hits
+## because the voxel id is non-air (`VoxelMaterial.is_solid`).
+static func _make_los_veil_model() -> VoxelBlockyModelMesh:
+	var model := VoxelBlockyModelMesh.new()
+	model.mesh = ArrayMesh.new()
+	model.set_mesh_collision_enabled(0, false)
+	model.culls_neighbors = false
+	model.collision_aabbs = []
+	model.collision_mask = 0
 	return model
 
 

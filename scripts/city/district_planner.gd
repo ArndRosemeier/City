@@ -28,6 +28,8 @@ var large_lake: Rect2i = Rect2i()
 var large_castle: Rect2i = Rect2i()
 ## Bounding rect of LandUse.FRACTAL cells. Empty when unused.
 var large_fractal: Rect2i = Rect2i()
+## Bounding rect of LandUse.ARENA cells. Empty when unused.
+var large_arena: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## Multi-cell CORE tower parcels (planner cells). `position` is the anchor corner;
 ## every cell in the rect stays `CORE_LOT`, but only the anchor paints a building.
@@ -69,6 +71,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	large_lake = Rect2i()
 	large_castle = Rect2i()
 	large_fractal = Rect2i()
+	large_arena = Rect2i()
 
 	if theme.id == DistrictTheme.HILL:
 		## Edge stubs only — a full arterial cross would slice the massif into wedges.
@@ -90,6 +93,9 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	elif theme.id == DistrictTheme.FRACTAL:
 		_stamp_hill_edge_connectors(district_coord)
 		_build_fractal_layout()
+	elif theme.id == DistrictTheme.ARENA:
+		_stamp_hill_edge_connectors(district_coord)
+		_build_arena_layout()
 	else:
 		_stamp_world_arterials(district_coord)
 		_stamp_organic_interior_roads()
@@ -258,6 +264,13 @@ func _build_fractal_layout() -> void:
 	large_fractal = _fill_open_reserve(LandUse.FRACTAL)
 	if large_fractal.size.x <= 0:
 		push_error("DistrictPlanner._build_fractal_layout: no fractal cells after road stamp")
+
+
+## Arena theme: non-road cells become the colosseum reserve for ArenaComposer.
+func _build_arena_layout() -> void:
+	large_arena = _fill_open_reserve(LandUse.ARENA)
+	if large_arena.size.x <= 0:
+		push_error("DistrictPlanner._build_arena_layout: no arena cells after road stamp")
 
 
 func _fill_open_reserve(tag: int) -> Rect2i:

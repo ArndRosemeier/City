@@ -11,6 +11,7 @@ const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.g
 const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
+const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -37,6 +38,8 @@ var scale_pads: ScalePadPlacer
 var castle_doors: CastleDoorPlacer
 ## Glowing plane + Mandelbrot panels. Null on every tile that is not Fractal.
 var mandelbrot_arena: Node3D
+## Summon boards + lifts + pit wipe. Null outside Arena districts.
+var arena_controller: ArenaController
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -86,11 +89,12 @@ func live_brush() -> CityBrush:
 	return _live_brush
 
 
-## False on Fractal — plaza stays empty of pedestrians, cars, lamps, and pads.
+## False on Fractal / Arena — spectacle plazas stay empty of pedestrians, cars, lamps, pads.
 func allows_auto_actors() -> bool:
 	if generator == null or generator.theme == null:
 		return true
-	return generator.theme.id != DistrictTheme.FRACTAL
+	var tid := generator.theme.id
+	return tid != DistrictTheme.FRACTAL and tid != DistrictTheme.ARENA
 
 
 func configure(
@@ -222,6 +226,9 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		castle_doors.clear_doors()
 		castle_doors.queue_free()
 	castle_doors = null
+	if arena_controller != null and is_instance_valid(arena_controller):
+		arena_controller.queue_free()
+	arena_controller = null
 	_topology = null
 	generator = null
 	_terrain_ref = terrain
@@ -258,6 +265,9 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		castle_doors.clear_doors()
 		castle_doors.queue_free()
 	castle_doors = null
+	if arena_controller != null and is_instance_valid(arena_controller):
+		arena_controller.queue_free()
+	arena_controller = null
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
 		building_lod.queue_free()
@@ -493,6 +503,11 @@ func _stamp_detail_async() -> void:
 	CityProfiler.end("stream_fractal_ui")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_arena_ui")
+	_spawn_arena_controller(generator)
+	CityProfiler.end("stream_arena_ui")
+	await get_tree().process_frame
+
 	CityProfiler.begin("stream_impostors")
 	building_lod = BuildingImpostorLodScript.new()
 	building_lod.name = "BuildingImpostors"
@@ -535,6 +550,41 @@ func _spawn_mandelbrot_arena(gen: DistrictGenerator) -> void:
 		Callable(self, "live_brush"),
 		_voxel_size
 	)
+
+
+func _spawn_arena_controller(gen: DistrictGenerator) -> void:
+	if gen == null:
+		return
+	var layout: ArenaLayout = gen.get_arena_layout()
+	if layout == null:
+		return
+	if arena_controller != null and is_instance_valid(arena_controller):
+		arena_controller.queue_free()
+	arena_controller = null
+	var city := _find_city_root()
+	if city == null:
+		push_error("DistrictInstance: Arena needs CityRoot for summon/wipe")
+		return
+	arena_controller = ArenaControllerScript.new() as ArenaController
+	add_child(arena_controller)
+	arena_controller.setup(
+		layout,
+		origin_vox,
+		_voxel_size,
+		_dseed,
+		Callable(self, "live_brush"),
+		Callable(city, "spawn_monster_at"),
+		Callable(city, "alive_undead_units")
+	)
+
+
+func _find_city_root() -> CityRoot:
+	var n: Node = get_parent()
+	while n != null:
+		if n is CityRoot:
+			return n as CityRoot
+		n = n.get_parent()
+	return null
 
 
 func _bake_on_worker() -> Dictionary:

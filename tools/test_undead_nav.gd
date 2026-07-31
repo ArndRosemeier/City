@@ -76,6 +76,8 @@ class TestCity:
 	## Whatever the next nibble or scrape reports back.
 	var nibble_hits: bool = true
 	var scrape_removes: int = 12
+	## When false, voxel LOS fails (corner-juke / pursuit investigate tests).
+	var los_ok: bool = true
 
 	func is_player_alive() -> bool:
 		## Units refuse to tick while the player is dead; keep them alive for the sim.
@@ -96,6 +98,16 @@ class TestCity:
 
 	func find_nearest_ped_only(from: Vector3, max_dist: float) -> Vector3:
 		return find_nearest_ped_position(from, max_dist)
+
+	func collect_ped_positions(from: Vector3, max_dist: float) -> PackedVector3Array:
+		var out := PackedVector3Array()
+		var ped := find_nearest_ped_position(from, max_dist)
+		if ped != Vector3.INF:
+			out.append(ped)
+		return out
+
+	func has_voxel_line_of_sight(_from_world: Vector3, _to_world: Vector3) -> bool:
+		return los_ok
 
 	func find_nearest_building_nibble(from: Vector3, max_dist: float) -> Vector3:
 		if fabric_at == Vector3.INF or from.distance_to(fabric_at) > max_dist:
@@ -172,6 +184,10 @@ func _ready() -> void:
 		_quit()
 		return
 	await _test_mage_closes_to_orb_range()
+	if _failed:
+		_quit()
+		return
+	await _test_pursuit_investigates_after_los_break()
 	if _failed:
 		_quit()
 		return
@@ -331,6 +347,90 @@ func _test_mage_closes_to_orb_range() -> void:
 	print("mage: closed to %.1f m and cast after %d ticks" % [range_m, frames])
 	_despawn(unit)
 	_city.prey_at = Vector3.INF
+
+
+## After LOS breaks, the body keeps a hunt corridor to the last seen prey point with
+## combat_prey cleared (no blind fire), then drops memory when the investigate window ends.
+func _test_pursuit_investigates_after_los_break() -> void:
+	var start := _w(Vector3i(40, 1, 40))
+	var prey := _w(Vector3i(100, 1, 40))
+	_city.fabric_at = Vector3.INF
+	_city.prey_at = prey
+	_city.los_ok = true
+	var unit := _spawn(UndeadUnit.Role.MAGE, start)
+	if unit == null:
+		return
+	var provider := unit.goal_provider()
+	if provider == null:
+		_fail("FAIL mage has no goal provider")
+		return
+
+	var frames := await _run(
+		unit,
+		func() -> bool: return provider.pursuit() == UndeadGoalProvider.Pursuit.HOT
+	)
+	if provider.pursuit() != UndeadGoalProvider.Pursuit.HOT:
+		_fail("FAIL pursuit never went Hot in %d ticks (prey %.1f m away)" % [
+			frames,
+			start.distance_to(prey),
+		])
+		return
+	var lkp := provider.last_known_prey()
+	if lkp == Vector3.INF:
+		_fail("FAIL Hot pursuit stored no last-known prey")
+		return
+	if unit.combat_prey() == Vector3.INF:
+		_fail("FAIL Hot pursuit cleared combat_prey")
+		return
+
+	## Prey ducks behind geometry — still in range, but no voxel LOS.
+	_city.los_ok = false
+	frames = await _run(
+		unit,
+		func() -> bool: return provider.pursuit() == UndeadGoalProvider.Pursuit.INVESTIGATE
+	)
+	if provider.pursuit() != UndeadGoalProvider.Pursuit.INVESTIGATE:
+		_fail("FAIL LOS break did not enter Investigate in %d ticks (phase %d)" % [
+			frames,
+			provider.pursuit(),
+		])
+		return
+	if unit.combat_prey() != Vector3.INF:
+		_fail("FAIL Investigate left combat_prey set for blind fire")
+		return
+	var goal := unit.nav_agent().goal()
+	if goal == null or goal.tag != UndeadGoalProvider.TAG_HUNT:
+		_fail("FAIL Investigate has no hunt goal toward LKP")
+		return
+	var goal_flat := Vector2(goal.point.x - lkp.x, goal.point.z - lkp.z).length()
+	if goal_flat > 2.5:
+		_fail(
+			"FAIL Investigate goal is %.1f m from LKP (expected the remembered point)"
+			% goal_flat
+		)
+		return
+
+	## Wait out the investigate timeout with LOS still blocked.
+	frames = await _run(
+		unit,
+		func() -> bool: return provider.pursuit() == UndeadGoalProvider.Pursuit.NONE
+	)
+	if provider.pursuit() != UndeadGoalProvider.Pursuit.NONE:
+		_fail("FAIL Investigate never cleared after timeout (%d ticks, phase %d)" % [
+			frames,
+			provider.pursuit(),
+		])
+		return
+	if provider.last_known_prey() != Vector3.INF:
+		_fail("FAIL cleared pursuit kept an LKP")
+		return
+	if unit.combat_prey() != Vector3.INF:
+		_fail("FAIL cleared pursuit kept combat_prey")
+		return
+	print("pursuit: Hot → Investigate (no blind prey) → cleared after timeout")
+	_despawn(unit)
+	_city.prey_at = Vector3.INF
+	_city.los_ok = true
 
 
 ## A three-metre Quaternius body is neither a minion nor a giant. It registers on the

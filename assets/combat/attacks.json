@@ -83,13 +83,13 @@
       "id": "melee",
       "kind": "melee",
       "damage_vs_player": 12.0,
-      "damage_vs_mob": 0.0,
+      "damage_vs_mob": 12.0,
       "cooldown_s": 1.1,
       "energy_cost": 0.0,
       "range_m": 1.8,
       "carves_voxels": false,
       "damage_source": null,
-      "notes": "Basic monster contact/swing. Not yet a DamageSource.Id. Clip binding later: prefer Rogue 1H_Melee_Attack_* then CreatureClips MELEE fallback. Not the player fist (see `fist`)."
+      "notes": "Basic monster contact/swing. DamageSource.MONSTER_MELEE (player) / MONSTER_MELEE_MOB (creature). Clip binding later: prefer Rogue 1H_Melee_Attack_* then CreatureClips MELEE fallback. Not the player fist (see `fist`)."
     },
     "nibble": {
       "id": "nibble",

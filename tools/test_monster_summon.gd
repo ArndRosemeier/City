@@ -101,6 +101,28 @@ func _test_summon_list() -> void:
 	if ids.has("flying/Pigeon"):
 		_fail("FAIL non-spawnable flying/Pigeon listed")
 		return
+	var groups: Array = MonsterSummonPanelScript.summonable_groups()
+	if groups.is_empty():
+		_fail("FAIL summonable_groups is empty")
+		return
+	var grouped := 0
+	var seen_faction := {}
+	for g: Variant in groups:
+		var gd: Dictionary = g as Dictionary
+		var fname := str(gd["name"])
+		if seen_faction.has(fname):
+			_fail("FAIL duplicate faction group '%s'" % fname)
+			return
+		seen_faction[fname] = true
+		var gids: PackedStringArray = gd["ids"] as PackedStringArray
+		grouped += gids.size()
+		var header := "—— %s ——" % fname.capitalize()
+		if not labels.has(header):
+			_fail("FAIL list_labels missing faction divider '%s'" % header)
+			return
+	if grouped != ids.size():
+		_fail("FAIL grouped count %d != summonable_ids %d" % [grouped, ids.size()])
+		return
 	var panel: CanvasLayer = MonsterSummonPanelScript.new()
 	add_child(panel)
 	if panel.layer != UiLayers.MODAL_MONSTER_SUMMON:
@@ -118,7 +140,10 @@ func _test_summon_list() -> void:
 		return
 	panel.call("close_panel")
 	panel.queue_free()
-	print("summon UI: Random first, %d spawnable bodies" % ids.size())
+	print(
+		"summon UI: Random first, %d spawnable bodies in %d factions, panel %.0f wide"
+		% [ids.size(), groups.size(), MonsterSummonPanelScript.PANEL_WIDTH]
+	)
 
 
 func _test_cached_aim_spawn() -> void:

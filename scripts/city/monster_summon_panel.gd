@@ -1,5 +1,6 @@
-## N-key monster summon modal: Random first, then every spawnable catalogue body.
-## Confirm with Enter / click; Esc or dim dismisses without spawning.
+## N-key monster summon modal: Random first, then every spawnable catalogue body
+## grouped by combat-table faction (with section dividers). Confirm with Enter / click;
+## Esc or dim dismisses without spawning.
 class_name MonsterSummonPanel
 extends CanvasLayer
 
@@ -8,16 +9,23 @@ signal closed
 signal summon_requested(monster_id: String)
 
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
+const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
+const CombatTableScript := preload("res://scripts/city/combat_table.gd")
 
 const RANDOM_ID := ""
-const PANEL_WIDTH := 420.0
+## Sentinel in `_row_ids` for non-selectable faction headers.
+const HEADER_ID := "__faction_header__"
+## Wide enough for long body ids + faction chrome, with room to grow.
+const PANEL_WIDTH := 820.0
+const PANEL_HEIGHT := 640.0
+const LIST_HEIGHT := 500.0
 
 var _open: bool = false
 var _dim: ColorRect
 var _panel: PanelContainer
 var _list: ItemList
 var _hint: Label
-## Row index → monster id (empty string = Random).
+## Row index → monster id (empty = Random; HEADER_ID = section divider).
 var _row_ids: PackedStringArray = PackedStringArray()
 
 
@@ -33,20 +41,64 @@ func is_open() -> bool:
 	return _open
 
 
-## Ids shown under Random: every CreatureCatalog body with spawn slots.
+## Ids shown under Random: every CreatureCatalog body with spawn slots, faction order.
 static func summonable_ids() -> PackedStringArray:
 	var out := PackedStringArray()
-	for entry: CreatureCatalog.Entry in CreatureCatalogScript.all():
-		if entry.is_spawnable():
-			out.append(entry.id)
+	for group: Dictionary in summonable_groups():
+		var ids: PackedStringArray = group["ids"] as PackedStringArray
+		out.append_array(ids)
 	return out
 
 
-## Display labels in list order (Random first).
+## Faction bands for boards / lists: [{ "faction": Id, "name": String, "ids": PackedStringArray }].
+## Empty factions are omitted. Ids within a band are sorted.
+static func summonable_groups() -> Array[Dictionary]:
+	var buckets: Dictionary = {}  ## String faction name → PackedStringArray
+	for entry: CreatureCatalog.Entry in CreatureCatalogScript.all():
+		if not entry.is_spawnable():
+			continue
+		if not CombatTableScript.has_monster(entry.id):
+			push_error(
+				"MonsterSummonPanel: spawnable '%s' has no combat_table faction" % entry.id
+			)
+			assert(false, "MonsterSummonPanel: spawnable missing combat row")
+			continue
+		var fname := CombatTableScript.faction_for(entry.id)
+		if not buckets.has(fname):
+			buckets[fname] = PackedStringArray()
+		var arr: PackedStringArray = buckets[fname] as PackedStringArray
+		arr.append(entry.id)
+		buckets[fname] = arr
+	var groups: Array[Dictionary] = []
+	for fid: MonsterFaction.Id in MonsterFactionScript.all():
+		var name := MonsterFactionScript.faction_name(fid)
+		if not buckets.has(name):
+			continue
+		var ids: PackedStringArray = buckets[name] as PackedStringArray
+		ids.sort()
+		groups.append({"faction": fid, "name": name, "ids": ids})
+	## Loud if a combat faction string is not in MonsterFaction.all().
+	for fname: Variant in buckets.keys():
+		var known := false
+		for fid2: MonsterFaction.Id in MonsterFactionScript.all():
+			if MonsterFactionScript.faction_name(fid2) == str(fname):
+				known = true
+				break
+		if not known:
+			push_error("MonsterSummonPanel: unknown faction '%s' on spawnable bodies" % str(fname))
+			assert(false, "MonsterSummonPanel: unknown faction")
+	return groups
+
+
+## Display labels in list order (Random first; faction headers included).
 static func list_labels() -> PackedStringArray:
 	var labels := PackedStringArray(["Random"])
-	for mid: String in summonable_ids():
-		labels.append(mid)
+	for group: Dictionary in summonable_groups():
+		var name: String = str(group["name"])
+		labels.append("—— %s ——" % name.capitalize())
+		var ids: PackedStringArray = group["ids"] as PackedStringArray
+		for mid: String in ids:
+			labels.append(mid)
 	return labels
 
 
@@ -94,7 +146,10 @@ func selected_monster_id() -> String:
 	if idx < 0 or idx >= _row_ids.size():
 		push_error("MonsterSummonPanel.selected_monster_id: index %d out of range" % idx)
 		return RANDOM_ID
-	return _row_ids[idx]
+	var mid := _row_ids[idx]
+	if mid == HEADER_ID:
+		return RANDOM_ID
+	return mid
 
 
 ## Probe/accessibility helper: choose a concrete row through the same list the player sees.
@@ -112,6 +167,8 @@ func confirm_selection() -> void:
 	if not _open:
 		return
 	var mid := selected_monster_id()
+	if mid == HEADER_ID:
+		return
 	## Aim was sampled when N opened the panel (world aim point). Closing must not re-aim.
 	summon_requested.emit(mid)
 	close_panel()
@@ -151,7 +208,7 @@ func _build_ui() -> void:
 	_panel = PanelContainer.new()
 	_panel.name = "Panel"
 	_panel.visible = false
-	_panel.custom_minimum_size = Vector2(PANEL_WIDTH, 480.0)
+	_panel.custom_minimum_size = Vector2(PANEL_WIDTH, PANEL_HEIGHT)
 	center.add_child(_panel)
 
 	var margin := MarginContainer.new()
@@ -179,7 +236,7 @@ func _build_ui() -> void:
 	_list = ItemList.new()
 	_list.name = "MonsterList"
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_list.custom_minimum_size = Vector2(PANEL_WIDTH - 48.0, 360.0)
+	_list.custom_minimum_size = Vector2(PANEL_WIDTH - 48.0, LIST_HEIGHT)
 	_list.allow_reselect = true
 	_list.item_activated.connect(_on_item_activated)
 	col.add_child(_list)
@@ -207,9 +264,17 @@ func _rebuild_list() -> void:
 	_row_ids = PackedStringArray()
 	_row_ids.append(RANDOM_ID)
 	_list.add_item("Random")
-	for mid: String in summonable_ids():
-		_row_ids.append(mid)
-		_list.add_item(mid)
+	for group: Dictionary in summonable_groups():
+		var name: String = str(group["name"])
+		var header_i := _list.add_item("—— %s ——" % name.capitalize())
+		_list.set_item_selectable(header_i, false)
+		_list.set_item_disabled(header_i, true)
+		_list.set_item_custom_fg_color(header_i, Color(0.72, 0.78, 0.88, 1.0))
+		_row_ids.append(HEADER_ID)
+		var ids: PackedStringArray = group["ids"] as PackedStringArray
+		for mid: String in ids:
+			_row_ids.append(mid)
+			_list.add_item(mid)
 	if _list.item_count == 0:
 		push_error("MonsterSummonPanel: no summonable monsters")
 		assert(false, "MonsterSummonPanel: empty roster")
@@ -217,6 +282,8 @@ func _rebuild_list() -> void:
 
 func _on_item_activated(index: int) -> void:
 	if index < 0 or index >= _row_ids.size():
+		return
+	if _row_ids[index] == HEADER_ID:
 		return
 	_list.select(index)
 	confirm_selection()

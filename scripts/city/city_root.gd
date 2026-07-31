@@ -717,6 +717,38 @@ func capture_summon_aim() -> void:
 	)
 
 
+## Spawn a catalogue body at an explicit world point (Arena lifts, tests). Ensures the
+## undead director exists. Returns null when nav / caps refuse.
+## When `snap_nav` is false the body stays at `world_pos` (lift undercroft delivery).
+func spawn_monster_at(
+	body_id: String, world_pos: Vector3, snap_nav: bool = true
+) -> UndeadUnit:
+	if body_id.is_empty():
+		push_error("CityRoot.spawn_monster_at: empty body id")
+		return null
+	_ensure_undead_director()
+	if _undead == null or not _undead.has_method("spawn_monster_by_id"):
+		push_error("CityRoot.spawn_monster_at: undead director missing spawn")
+		assert(false, "CityRoot: no spawn_monster_by_id")
+		return null
+	var pos := world_pos
+	if snap_nav:
+		var entry: CreatureCatalog.Entry = CreatureCatalogScript.by_id(body_id)
+		if entry != null and NavService.instance().is_configured():
+			var stand := NavService.instance().nearest_surface(entry.nav_profile, pos, 8.0)
+			if stand.found:
+				pos = stand.position
+	return _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
+
+
+## Living undead units (for Arena wipe). Empty when the director is not up.
+func alive_undead_units() -> Array:
+	_ensure_undead_director()
+	if _undead == null or not _undead.has_method("get_alive_units"):
+		return []
+	return _undead.call("get_alive_units") as Array
+
+
 ## Spawn at the world aim captured when N opened. Tiny upward clearance keeps feet out of the
 ## hit surface; there is no feet/ring/nav fallback on a true miss.
 func summon_monster_at_aim(body_id: String) -> UndeadUnit:
@@ -1148,6 +1180,13 @@ func get_player_position() -> Vector3:
 	if _walker != null and is_instance_valid(_walker) and not _game_over:
 		return _walker.global_position
 	return Vector3.INF
+
+
+## Living player body, or null. Used when a hit promotes the attacker as pursuit prey.
+func get_player_node() -> Node:
+	if not is_player_alive():
+		return null
+	return _walker
 
 
 func is_player_alive() -> bool:
@@ -2612,28 +2651,90 @@ func find_nearest_ped_only(from: Vector3, max_dist: float) -> Vector3:
 	return best
 
 
-## Nearest living undead/monster other than `except_unit`. Vector3.INF when none in range.
+## All crowd pedestrians within max_dist (XZ). Empty when none / no streamer.
+func collect_ped_positions(from: Vector3, max_dist: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if _streamer == null:
+		return out
+	var districts := _streamer.get_loaded_districts()
+	for entry in districts:
+		var inst := _as_district_instance(entry)
+		if inst == null or not is_instance_valid(inst) or inst.crowd == null:
+			continue
+		if not inst.crowd.has_method("collect_positions_in_range"):
+			continue
+		var chunk: PackedVector3Array = inst.crowd.call(
+			"collect_positions_in_range", from, max_dist
+		) as PackedVector3Array
+		out.append_array(chunk)
+	return out
+
+
+## All living hostile monster aim points within max_dist (XZ) for `hunter`.
+func collect_hostile_monster_positions(
+	from: Vector3, max_dist: float, hunter: UndeadUnit = null
+) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if _undead == null or not is_instance_valid(_undead) or not _undead.has_method("get_alive_units"):
+		return out
+	var max_d2 := max_dist * max_dist
+	var units: Array = _undead.call("get_alive_units") as Array
+	for entry in units:
+		var unit := entry as UndeadUnit
+		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
+			continue
+		if hunter != null:
+			if unit == hunter:
+				continue
+			if not hunter.is_hostile_to(unit):
+				continue
+		var d2 := Vector2(
+			unit.global_position.x - from.x, unit.global_position.z - from.z
+		).length_squared()
+		if d2 > max_d2:
+			continue
+		out.append(unit.global_position + Vector3(0.0, 1.0, 0.0))
+	return out
+
+
+## Nearest living undead/monster other than `except_unit`. When `except_unit` is set, only
+## other-faction bodies count as prey (same-faction packs do not hunt each other).
+## Vector3.INF when none in range.
 func find_nearest_monster_position(
 	from: Vector3, max_dist: float, except_unit: UndeadUnit = null
 ) -> Vector3:
-	if _undead == null or not is_instance_valid(_undead) or not _undead.has_method("get_alive_units"):
+	var unit := find_nearest_hostile_monster(from, max_dist, except_unit)
+	if unit == null:
 		return Vector3.INF
-	var best := Vector3.INF
+	return unit.global_position
+
+
+## Nearest living hostile monster for `hunter` (or any other unit when `hunter` is null).
+## Null when none in range.
+func find_nearest_hostile_monster(
+	from: Vector3, max_dist: float, hunter: UndeadUnit = null
+) -> UndeadUnit:
+	if _undead == null or not is_instance_valid(_undead) or not _undead.has_method("get_alive_units"):
+		return null
+	var best: UndeadUnit = null
 	var best_d2 := max_dist * max_dist
 	var units: Array = _undead.call("get_alive_units") as Array
 	for entry in units:
 		var unit := entry as UndeadUnit
 		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
 			continue
-		if except_unit != null and unit == except_unit:
-			continue
+		if hunter != null:
+			if unit == hunter:
+				continue
+			if not hunter.is_hostile_to(unit):
+				continue
 		var d2 := Vector2(
 			unit.global_position.x - from.x, unit.global_position.z - from.z
 		).length_squared()
 		if d2 > best_d2:
 			continue
 		best_d2 = d2
-		best = unit.global_position
+		best = unit
 	return best
 
 
@@ -3318,23 +3419,88 @@ func _notify_destruction(world_pos: Vector3, radius_m: float = 32.0) -> void:
 ## bark / leaves / planters). Physics rays miss those because they have no collision.
 ## Returns {} or {point, normal, distance} in world space.
 func probe_destructible_ray(from_world: Vector3, to_world: Vector3) -> Dictionary:
+	return _probe_voxel_ray(from_world, to_world, true)
+
+
+## First *solid* voxel along a world ray (walls, glass, bedrock, arena shell, …).
+## Used for mob/player projectile occlusion and combat line of sight. Agents are ignored.
+## Returns {} or {point, normal, distance, voxel_id} in world space.
+func probe_solid_ray(from_world: Vector3, to_world: Vector3) -> Dictionary:
+	return _probe_voxel_ray(from_world, to_world, false)
+
+
+## True when no solid voxel blocks the segment. Missing terrain fails open (tools / boot).
+func has_voxel_line_of_sight(from_world: Vector3, to_world: Vector3) -> bool:
+	if _tool == null or _terrain == null:
+		return true
+	var hit := probe_solid_ray(from_world, to_world)
+	if hit.is_empty():
+		return true
+	var dist := from_world.distance_to(to_world)
+	return float(hit["distance"]) + VOXEL_SIZE * 0.6 >= dist
+
+
+## Mid-flight probe for blaster / laser / charged blast. Distance to the nearest blocker
+## along from→tip, or -1. Solids always count; agents (peds/cars/undead) when requested.
+func projectile_obstacle_distance(
+	from_world: Vector3, tip_world: Vector3, include_agents: bool = true
+) -> float:
+	var best := -1.0
+	var solid := probe_solid_ray(from_world, tip_world)
+	if not solid.is_empty():
+		best = float(solid["distance"])
+	if include_agents:
+		var agent_d := laser_probe_agent_distance(from_world, tip_world)
+		if agent_d >= 0.0 and (best < 0.0 or agent_d < best):
+			best = agent_d
+	return best
+
+
+func _probe_voxel_ray(
+	from_world: Vector3, to_world: Vector3, destructible_only: bool
+) -> Dictionary:
 	if _tool == null or _terrain == null:
 		return {}
 	var local_from := _terrain.to_local(from_world)
 	var local_to := _terrain.to_local(to_world)
-	var delta := local_to - local_from
-	var dist := delta.length()
-	if dist < 0.05:
+	var get_voxel := func(v: Vector3i) -> int: return int(_tool.get_voxel(v))
+	var local_hit: Dictionary
+	if destructible_only:
+		local_hit = _probe_destructible_local(local_from, local_to, get_voxel)
+	else:
+		local_hit = ProjectileLos.probe_solid_ray(
+			local_from, local_to, get_voxel, VOXEL_SIZE
+		)
+	if local_hit.is_empty():
 		return {}
-	var dir := delta / dist
-	## ~0.2 voxel steps — same density as melee march.
-	var step := 0.2
-	var steps := int(ceil(dist / step)) + 1
 	var world_dir := to_world - from_world
 	var world_len := world_dir.length()
 	if world_len < 0.05:
 		return {}
 	world_dir /= world_len
+	var hit_t := float(local_hit["distance"])
+	## Local march distance matches world when the terrain node is unscaled.
+	hit_t = clampf(hit_t, 0.0, world_len)
+	var out := {
+		"point": from_world + world_dir * hit_t,
+		"normal": -world_dir,
+		"distance": hit_t,
+	}
+	if local_hit.has("voxel_id"):
+		out["voxel_id"] = local_hit["voxel_id"]
+	return out
+
+
+func _probe_destructible_local(
+	local_from: Vector3, local_to: Vector3, get_voxel: Callable
+) -> Dictionary:
+	var delta := local_to - local_from
+	var dist := delta.length()
+	if dist < 0.05:
+		return {}
+	var dir := delta / dist
+	var step := ProjectileLos.STEP_M
+	var steps := int(ceil(dist / step)) + 1
 	var prev := Vector3i(2147483647, 2147483647, 2147483647)
 	for i in range(1, steps + 1):
 		var p := local_from + dir * (float(i) * step)
@@ -3342,14 +3508,15 @@ func probe_destructible_ray(from_world: Vector3, to_world: Vector3) -> Dictionar
 		if v == prev:
 			continue
 		prev = v
-		var id := int(_tool.get_voxel(v))
+		var id := int(get_voxel.call(v))
 		if not VoxelMaterial.is_destructible(id):
 			continue
-		var hit_t := clampf((float(i) * step / dist) * world_len - VOXEL_SIZE * 0.2, 0.0, world_len)
+		var hit_t := clampf(float(i) * step - VOXEL_SIZE * 0.2, 0.0, dist)
 		return {
-			"point": from_world + world_dir * hit_t,
-			"normal": -world_dir,
+			"point": local_from + dir * hit_t,
+			"normal": -dir,
 			"distance": hit_t,
+			"voxel_id": id,
 		}
 	return {}
 

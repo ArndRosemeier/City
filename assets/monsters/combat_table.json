@@ -1,7 +1,7 @@
 {
   "templates": {
     "brute": {
-      "intent": "Tanky melee pressure — Quaternius Big / warrior bulk that sticks to the player. chase behaviour supplies stupid creature prey weights (incl. monsters).",
+      "intent": "Tanky melee pressure — Quaternius Big / warrior bulk that sticks to the player. chase behaviour supplies living prey weights (other-faction monsters included).",
       "hp_mult": 1.4,
       "damage_mult": 1.3,
       "speed_mult": 0.9,
@@ -21,7 +21,7 @@
       ]
     },
     "minion": {
-      "intent": "Convert fodder and pack hunters — fast, fragile, chew buildings between fights. chase + wander_hunt + demolish: stupid living prey averaged with building hunger from demolish.",
+      "intent": "Convert fodder and pack hunters — fast, fragile, chew buildings between fights. chase + wander_hunt + demolish: living prey (other-faction monsters) averaged with building hunger from demolish.",
       "hp_mult": 0.5,
       "damage_mult": 0.85,
       "speed_mult": 1.0,
@@ -137,7 +137,7 @@
       ]
     },
     "demolisher": {
-      "intent": "Building-first chewer — demolish behaviour weights building high and is stupid about creatures. Stacks onto other templates for structure threat.",
+      "intent": "Building-first chewer — demolish behaviour weights building high and also hunts other-faction creatures. Stacks onto other templates for structure threat.",
       "hp_mult": 1.1,
       "damage_mult": 1.0,
       "speed_mult": 0.95,
@@ -180,6 +180,7 @@
   "monsters": [
     {
       "id": "kaykit/Skeleton_Mage",
+      "faction": "undead",
       "templates": [
         "rangestriker"
       ],
@@ -192,6 +193,7 @@
     },
     {
       "id": "kaykit/Skeleton_Minion",
+      "faction": "undead",
       "templates": [
         "minion"
       ],
@@ -201,6 +203,7 @@
     },
     {
       "id": "kaykit/Skeleton_Rogue",
+      "faction": "undead",
       "templates": [
         "rangestriker"
       ],
@@ -221,6 +224,7 @@
     },
     {
       "id": "kaykit/Skeleton_Warrior",
+      "faction": "undead",
       "templates": [
         "brute",
         "minion"
@@ -231,6 +235,7 @@
     },
     {
       "id": "big/Alien",
+      "faction": "infernal",
       "templates": [
         "brute"
       ],
@@ -239,6 +244,7 @@
     },
     {
       "id": "big/Birb",
+      "faction": "beast",
       "templates": [
         "brute"
       ],
@@ -247,6 +253,7 @@
     },
     {
       "id": "big/BlueDemon",
+      "faction": "infernal",
       "templates": [
         "melee_boss",
         "guard"
@@ -257,6 +264,7 @@
     },
     {
       "id": "big/Bunny",
+      "faction": "beast",
       "templates": [
         "brute"
       ],
@@ -265,6 +273,7 @@
     },
     {
       "id": "big/Cactoro",
+      "faction": "grove",
       "templates": [
         "boss",
         "demolisher"
@@ -275,6 +284,7 @@
     },
     {
       "id": "big/Demon",
+      "faction": "infernal",
       "templates": [
         "ranged_boss"
       ],
@@ -284,6 +294,7 @@
     },
     {
       "id": "big/Dino",
+      "faction": "beast",
       "templates": [
         "brute",
         "demolisher"
@@ -293,6 +304,7 @@
     },
     {
       "id": "big/Fish",
+      "faction": "beast",
       "templates": [
         "brute"
       ],
@@ -301,6 +313,7 @@
     },
     {
       "id": "big/Frog",
+      "faction": "beast",
       "templates": [
         "brute"
       ],
@@ -309,6 +322,7 @@
     },
     {
       "id": "big/Monkroose",
+      "faction": "beast",
       "templates": [
         "brute"
       ],
@@ -317,6 +331,7 @@
     },
     {
       "id": "big/MushroomKing",
+      "faction": "grove",
       "templates": [
         "boss",
         "ranged_boss"
@@ -327,6 +342,7 @@
     },
     {
       "id": "big/Ninja",
+      "faction": "horde",
       "templates": [
         "brute"
       ],
@@ -339,6 +355,7 @@
     },
     {
       "id": "big/Orc",
+      "faction": "horde",
       "templates": [
         "melee_boss"
       ],
@@ -348,6 +365,7 @@
     },
     {
       "id": "big/Orc_Skull",
+      "faction": "horde",
       "templates": [
         "brute",
         "guard"
@@ -357,6 +375,7 @@
     },
     {
       "id": "big/Tribal",
+      "faction": "horde",
       "templates": [
         "boss",
         "demolisher"
@@ -366,6 +385,7 @@
     },
     {
       "id": "big/Yeti",
+      "faction": "beast",
       "templates": [
         "melee_boss",
         "brute"
@@ -377,6 +397,7 @@
     },
     {
       "id": "blob/Alien",
+      "faction": "infernal",
       "templates": [
         "minion"
       ],
@@ -385,6 +406,7 @@
     },
     {
       "id": "blob/Birb",
+      "faction": "beast",
       "templates": [
         "minion"
       ],
@@ -393,6 +415,7 @@
     },
     {
       "id": "blob/Cactoro",
+      "faction": "grove",
       "templates": [
         "minion",
         "demolisher"
@@ -402,6 +425,7 @@
     },
     {
       "id": "blob/Cat",
+      "faction": "beast",
       "templates": [
         "minion"
       ],
@@ -413,6 +437,7 @@
     },
     {
       "id": "blob/Chicken",
+      "faction": "beast",
       "templates": [
         "minion"
       ],
@@ -424,6 +449,7 @@
     },
     {
       "id": "blob/Dog",
+      "faction": "beast",
       "templates": [
         "minion"
       ],
@@ -435,6 +461,7 @@
     },
     {
       "id": "blob/Fish",
+      "faction": "beast",
       "templates": [
         "minion"
       ],
@@ -443,6 +470,7 @@
     },
     {
       "id": "blob/GreenBlob",
+      "faction": "grove",
       "templates": [
         "minion"
       ],
@@ -452,6 +480,7 @@
     },
     {
       "id": "blob/GreenSpikyBlob",
+      "faction": "grove",
       "templates": [
         "minion",
         "brute"
@@ -462,6 +491,7 @@
     },
     {
       "id": "blob/Mushnub",
+      "faction": "grove",
       "templates": [
         "minion"
       ],
@@ -470,6 +500,7 @@
     },
     {
       "id": "blob/Mushnub_Evolved",
+      "faction": "grove",
       "templates": [
         "minion",
         "brute"
@@ -479,6 +510,7 @@
     },
     {
       "id": "blob/Orc",
+      "faction": "horde",
       "templates": [
         "minion"
       ],
@@ -487,6 +519,7 @@
     },
     {
       "id": "blob/Pigeon",
+      "faction": "beast",
       "templates": [
         "minion"
       ],
@@ -498,6 +531,7 @@
     },
     {
       "id": "blob/PinkBlob",
+      "faction": "grove",
       "templates": [
         "minion"
       ],
@@ -509,6 +543,7 @@
     },
     {
       "id": "blob/Yeti",
+      "faction": "beast",
       "templates": [
         "minion",
         "brute"
@@ -518,6 +553,7 @@
     },
     {
       "id": "blob/Wizard",
+      "faction": "arcane",
       "templates": [
         "ranged_boss"
       ],
@@ -527,6 +563,7 @@
     },
     {
       "id": "blob/Ninja",
+      "faction": "horde",
       "templates": [
         "minion"
       ],
@@ -536,6 +573,7 @@
     },
     {
       "id": "flying/Alpaking",
+      "faction": "arcane",
       "templates": [
         "boss"
       ],
@@ -547,6 +585,7 @@
     },
     {
       "id": "flying/Alpaking_Evolved",
+      "faction": "arcane",
       "templates": [
         "boss"
       ],
@@ -557,6 +596,7 @@
     },
     {
       "id": "flying/Armabee",
+      "faction": "grove",
       "templates": [
         "minion"
       ],
@@ -567,6 +607,7 @@
     },
     {
       "id": "flying/Armabee_Evolved",
+      "faction": "grove",
       "templates": [
         "minion"
       ],
@@ -577,6 +618,7 @@
     },
     {
       "id": "flying/Demon",
+      "faction": "infernal",
       "templates": [
         "brute"
       ],
@@ -587,6 +629,7 @@
     },
     {
       "id": "flying/Dragon",
+      "faction": "arcane",
       "templates": [
         "boss",
         "rangestriker"
@@ -599,6 +642,7 @@
     },
     {
       "id": "flying/Dragon_Evolved",
+      "faction": "arcane",
       "templates": [
         "boss",
         "rangestriker"
@@ -610,6 +654,7 @@
     },
     {
       "id": "flying/Ghost",
+      "faction": "arcane",
       "templates": [
         "rangestriker"
       ],
@@ -620,6 +665,7 @@
     },
     {
       "id": "flying/Ghost_Skull",
+      "faction": "arcane",
       "templates": [
         "rangestriker"
       ],
@@ -630,6 +676,7 @@
     },
     {
       "id": "flying/Glub",
+      "faction": "grove",
       "templates": [
         "minion"
       ],
@@ -640,6 +687,7 @@
     },
     {
       "id": "flying/Glub_Evolved",
+      "faction": "grove",
       "templates": [
         "minion",
         "brute"
@@ -651,6 +699,7 @@
     },
     {
       "id": "flying/Goleling",
+      "faction": "grove",
       "templates": [
         "brute",
         "guard"
@@ -662,6 +711,7 @@
     },
     {
       "id": "flying/Goleling_Evolved",
+      "faction": "grove",
       "templates": [
         "brute",
         "guard"
@@ -673,6 +723,7 @@
     },
     {
       "id": "flying/Hywirl",
+      "faction": "arcane",
       "templates": [
         "rangestriker"
       ],
@@ -683,6 +734,7 @@
     },
     {
       "id": "flying/Pigeon",
+      "faction": "beast",
       "templates": [
         "minion"
       ],
@@ -694,6 +746,7 @@
     },
     {
       "id": "flying/Squidle",
+      "faction": "arcane",
       "templates": [
         "minion"
       ],
@@ -704,6 +757,7 @@
     },
     {
       "id": "flying/Tribal",
+      "faction": "horde",
       "templates": [
         "boss",
         "demolisher"

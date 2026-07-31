@@ -33,11 +33,26 @@ const FACADE_SNAP_M := 8.0
 ## every acquire without this.
 const FACADE_MISS_CACHE_SEC := 1.25
 const FACADE_MISS_REUSE_M := 10.0
+## After LOS breaks, keep walking to the last seen point this long before giving up.
+const INVESTIGATE_TIMEOUT_SEC := 5.0
+## Do not treat "already standing on LKP" as give-up until this elapses — otherwise a
+## stand-off fight drops aggro the frame the prey steps behind a corner.
+const INVESTIGATE_MIN_SEC := 0.85
+
+## Hot = visible prey. Investigate = walking to last known position after LOS/range loss.
+enum Pursuit { NONE = 0, HOT = 1, INVESTIGATE = 2 }
 
 var _unit: UndeadUnit = null
 var _city: CityRoot = null
 var _prey: Vector3 = Vector3.INF
 var _prey_at_msec: int = -1000000
+## Last aim-point where living prey was seen with LOS (Hot / Investigate memory).
+var _lkp: Vector3 = Vector3.INF
+var _pursuit: Pursuit = Pursuit.NONE
+## Simulated seconds in Investigate (advanced from UndeadUnit.tick — not wall clock).
+var _investigate_age_sec: float = 0.0
+## Whoever last hurt this body — overrides table prey weights / LOS acquire until cleared.
+var _forced_attacker: Node = null
 ## The wall voxel behind the current facade goal — the goal itself points at the span the
 ## body stands on, not at the solid it is there to chew.
 var _facade: Vector3 = Vector3.INF
@@ -56,6 +71,42 @@ func setup(unit: UndeadUnit, city: CityRoot) -> void:
 		return
 	_unit = unit
 	_city = city
+	_clear_pursuit()
+
+
+## Test / debug: NONE / HOT / INVESTIGATE.
+func pursuit() -> Pursuit:
+	return _pursuit
+
+
+func last_known_prey() -> Vector3:
+	return _lkp
+
+
+## True while a damage-driven attacker is sticky pursuit prey.
+func has_forced_attacker() -> bool:
+	return _forced_attacker != null and is_instance_valid(_forced_attacker)
+
+
+## Promote `attacker` (player body or UndeadUnit) above all table prey rules.
+func promote_attacker(attacker: Node) -> void:
+	if not _has_unit() or attacker == null or not is_instance_valid(attacker):
+		return
+	if attacker == _unit:
+		return
+	_forced_attacker = attacker
+	_prey_at_msec = -1000000
+	var aim := _aim_of_attacker(attacker)
+	if aim != Vector3.INF:
+		_mark_hot_pursuit(aim)
+		_prey = aim
+		_unit.set_combat_prey(aim)
+
+
+## Advance investigate age with the unit's simulation delta (headless tests use fixed dt).
+func tick_pursuit(delta: float) -> void:
+	if _pursuit == Pursuit.INVESTIGATE and delta > 0.0:
+		_investigate_age_sec += delta
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +143,18 @@ func goal_reached(_request: NavGoalRequest, goal: NavGoal) -> void:
 		return
 	match goal.tag:
 		TAG_HUNT:
-			_unit.on_prey_in_range()
+			if _pursuit == Pursuit.INVESTIGATE:
+				## Arrived at last-known point: reacquire or give up (no blind fire).
+				var found := _nearest_living_prey()
+				if found != Vector3.INF:
+					_unit.set_combat_prey(found)
+					_unit.on_prey_in_range()
+				elif _investigate_age_sec >= INVESTIGATE_MIN_SEC:
+					_clear_pursuit()
+					_unit.set_combat_prey(Vector3.INF)
+				## Else still investigating — next_goal re-issues the LKP walk.
+			else:
+				_unit.on_prey_in_range()
 		TAG_NIBBLE:
 			_unit.on_facade_in_reach(_facade, UndeadUnit.State.NIBBLE)
 		TAG_DEMOLISH:
@@ -117,6 +179,8 @@ func goal_failed(_request: NavGoalRequest, goal: NavGoal, state: NavLadder.State
 	_prey = Vector3.INF
 	_prey_at_msec = -1000000
 	_facade = Vector3.INF
+	_clear_pursuit()
+	_unit.set_combat_prey(Vector3.INF)
 	_unit.on_goal_failed(goal, state)
 	_wander_next = goal.tag != TAG_WANDER
 
@@ -138,31 +202,63 @@ func retarget(agent: NavAgent) -> void:
 			_unit.state == UndeadUnit.State.SEEK_PED
 			or _unit.state == UndeadUnit.State.STOMP
 		):
-			var hold_prey := _nearest_living_prey()
-			_unit.set_combat_prey(hold_prey)
-			if hold_prey != Vector3.INF:
-				var resume := _hunt(hold_prey)
-				if resume != null:
-					## Prey left stand-off — resume the corridor immediately.
-					agent.set_goal(resume)
+			_retarget_engage_in_place(agent)
 		return
 	if goal.tag != TAG_HUNT:
 		return
 	var prey := _nearest_living_prey()
-	if prey == Vector3.INF:
-		## Soft leash: they broke aggro / pursue range, so stop chasing.
-		_unit.set_combat_prey(Vector3.INF)
+	if prey != Vector3.INF:
+		_unit.set_combat_prey(prey)
+		if prey.distance_to(goal.point) <= RETARGET_SLACK_M and _pursuit == Pursuit.HOT:
+			return
+		var next := _hunt(prey)
+		if next == null:
+			## Prey walked into stand-off — drop the corridor and hold.
+			agent.abandon_goal()
+			return
+		agent.set_goal(next)
+		return
+	## No visible prey — pursue last known point before giving up.
+	var memory := _handle_lost_prey()
+	if memory == null:
 		agent.set_goal(_wander())
 		return
-	_unit.set_combat_prey(prey)
-	if prey.distance_to(goal.point) <= RETARGET_SLACK_M:
+	_unit.set_combat_prey(Vector3.INF)
+	if memory.point.distance_to(goal.point) <= RETARGET_SLACK_M:
 		return
-	var next := _hunt(prey)
-	if next == null:
-		## Prey walked into stand-off — drop the corridor and hold.
-		agent.abandon_goal()
+	agent.set_goal(memory)
+
+
+func _retarget_engage_in_place(agent: NavAgent) -> void:
+	var hold_prey := _nearest_living_prey()
+	if hold_prey != Vector3.INF:
+		_unit.set_combat_prey(hold_prey)
+		var resume := _hunt(hold_prey)
+		if resume != null:
+			## Prey left stand-off — resume the corridor immediately.
+			agent.set_goal(resume)
 		return
-	agent.set_goal(next)
+	var memory := _handle_lost_prey()
+	if memory == null:
+		_unit.set_combat_prey(Vector3.INF)
+		return
+	_unit.set_combat_prey(Vector3.INF)
+	agent.set_goal(memory)
+
+
+## Hot→Investigate on first loss; keep LKP goal while investigating; null when cleared.
+func _handle_lost_prey() -> NavGoal:
+	if _pursuit == Pursuit.HOT and _lkp != Vector3.INF:
+		_begin_investigate()
+	if _pursuit != Pursuit.INVESTIGATE or _lkp == Vector3.INF:
+		_clear_pursuit()
+		_unit.set_combat_prey(Vector3.INF)
+		return null
+	if _should_give_up_investigate():
+		_clear_pursuit()
+		_unit.set_combat_prey(Vector3.INF)
+		return null
+	return _investigate_goal()
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +280,24 @@ func _hunt_or_chew() -> NavGoal:
 				_unit.set_combat_prey(legacy)
 				legacy_goal = _hunt(legacy)
 			else:
-				legacy_goal = _wander()
+				var legacy_memory := _handle_lost_prey()
+				legacy_goal = legacy_memory if legacy_memory != null else _wander()
 		CityProfiler.end("undead_hunt_pick")
 		return legacy_goal
+
+	## Living-memory investigate outranks building nibble until pursuit clears.
+	if _pursuit == Pursuit.INVESTIGATE and _lkp != Vector3.INF:
+		var reacquired := _nearest_living_prey()
+		if reacquired != Vector3.INF:
+			_unit.set_combat_prey(reacquired)
+			var hot_goal := _hunt(reacquired)
+			CityProfiler.end("undead_hunt_pick")
+			return hot_goal
+		var memory := _handle_lost_prey()
+		if memory != null:
+			_unit.set_combat_prey(Vector3.INF)
+			CityProfiler.end("undead_hunt_pick")
+			return memory
 
 	var best_kind := ""
 	var best_score := -1.0
@@ -216,6 +327,13 @@ func _hunt_or_chew() -> NavGoal:
 				best_score = score_living
 				best_kind = "living"
 				best_living = living
+		elif _pursuit == Pursuit.HOT and _lkp != Vector3.INF:
+			## Acquire path saw Hot then lost LOS before a corridor existed.
+			var lost := _handle_lost_prey()
+			if lost != null:
+				_unit.set_combat_prey(Vector3.INF)
+				CityProfiler.end("undead_hunt_pick")
+				return lost
 
 	## Building fabric flood is the expensive path. Skip it when living prey is close enough
 	## to commit to — otherwise one summoned minion re-scans tens of metres of voxels every
@@ -288,6 +406,10 @@ func _demolish() -> NavGoal:
 		if prey != Vector3.INF:
 			_unit.set_combat_prey(prey)
 			return _hunt(prey)
+		var memory := _handle_lost_prey()
+		if memory != null:
+			_unit.set_combat_prey(Vector3.INF)
+			return memory
 	var seek := UndeadUnit.GIANT_BUILDING_SEEK_M
 	if combat != null:
 		var aggro: float = float(combat.call("aggro_range_m"))
@@ -364,22 +486,31 @@ func _tagged(goal: NavGoal, tag: StringName) -> NavGoal:
 # Queries
 # ---------------------------------------------------------------------------
 
-## Weighted living prey inside aggro range. Vector3.INF for nobody.
+## Living prey inside aggro range with clear voxel LOS. Among visible targets: highest
+## combat-table weight, then closest. A forced attacker (revenge) overrides all of that —
+## no weight filter, no LOS gate for acquire (shots still check LOS in MonsterCombat).
+## Vector3.INF for nobody.
 func _nearest_living_prey() -> Vector3:
 	var now := Time.get_ticks_msec()
 	if now - _prey_at_msec < int(PREY_CACHE_SEC * 1000.0):
 		return _prey
 	_prey_at_msec = now
+	var forced := _forced_prey_aim()
+	if forced != Vector3.INF:
+		_mark_hot_pursuit(forced)
+		_prey = forced
+		return _prey
 	var combat: RefCounted = _unit.combat()
 	var range_m := UndeadUnit.MAGE_PURSUE_RANGE_M
 	if combat != null:
 		var aggro: float = float(combat.call("aggro_range_m"))
 		if aggro > 0.0:
 			range_m = aggro
-	var best := Vector3.INF
-	var best_score := -1.0
 	var from := _unit.global_position
-	## Player
+	var eye := _unit.muzzle_world() if _unit.has_method("muzzle_world") else from + Vector3(0.0, 1.4, 0.0)
+	## { "pos": Vector3, "weight": float, "dist": float }
+	var candidates: Array[Dictionary] = []
+
 	var w_player := 1.0
 	if combat != null:
 		w_player = float(combat.call("prey_weight", "player"))
@@ -387,37 +518,149 @@ func _nearest_living_prey() -> Vector3:
 		var ppos := _city.get_player_target_position()
 		var d := Vector2(ppos.x - from.x, ppos.z - from.z).length()
 		if d <= range_m:
-			var score := w_player / maxf(d, 0.5)
-			if score > best_score:
-				best_score = score
-				best = ppos
-	## Pedestrians (same city query the mage used; weight 0 skips them).
+			candidates.append({"pos": ppos, "weight": w_player, "dist": d})
+
 	var w_ped := 0.8
 	if combat != null:
 		w_ped = float(combat.call("prey_weight", "ped"))
-	if w_ped > 0.0:
-		var ped := _city.find_nearest_ped_only(from, range_m)
-		if ped != Vector3.INF:
+	if w_ped > 0.0 and _city.has_method("collect_ped_positions"):
+		var peds: PackedVector3Array = _city.call(
+			"collect_ped_positions", from, range_m
+		) as PackedVector3Array
+		for i in range(peds.size()):
+			var ped: Vector3 = peds[i]
 			var d_ped := Vector2(ped.x - from.x, ped.z - from.z).length()
-			var score_ped := w_ped / maxf(d_ped, 0.5)
-			if score_ped > best_score:
-				best_score = score_ped
-				best = ped
-	## Other monsters — weight 0 skips pack infighting.
+			if d_ped <= range_m:
+				candidates.append({
+					"pos": ped + Vector3(0.0, 1.0, 0.0),
+					"weight": w_ped,
+					"dist": d_ped,
+				})
+
 	var w_monsters := 0.0
 	if combat != null:
 		w_monsters = float(combat.call("prey_weight", "monsters"))
-	if w_monsters > 0.0 and _city.has_method("find_nearest_monster_position"):
-		var other: Vector3 = _city.call(
-			"find_nearest_monster_position", from, range_m, _unit
-		) as Vector3
-		if other != Vector3.INF:
+	if w_monsters > 0.0 and _city.has_method("collect_hostile_monster_positions"):
+		var others: PackedVector3Array = _city.call(
+			"collect_hostile_monster_positions", from, range_m, _unit
+		) as PackedVector3Array
+		for j in range(others.size()):
+			var other: Vector3 = others[j]
 			var d_m := Vector2(other.x - from.x, other.z - from.z).length()
-			var score_m := w_monsters / maxf(d_m, 0.5)
-			if score_m > best_score:
-				best = other
+			if d_m <= range_m:
+				candidates.append({"pos": other, "weight": w_monsters, "dist": d_m})
+
+	var best := Vector3.INF
+	var best_weight := -1.0
+	var best_dist := INF
+	for c in candidates:
+		var pos: Vector3 = c["pos"] as Vector3
+		if not _city.has_voxel_line_of_sight(eye, pos):
+			continue
+		var w: float = float(c["weight"])
+		var d: float = float(c["dist"])
+		if w > best_weight or (is_equal_approx(w, best_weight) and d < best_dist):
+			best_weight = w
+			best_dist = d
+			best = pos
 	_prey = best
+	if best != Vector3.INF:
+		_mark_hot_pursuit(best)
 	return _prey
+
+
+# ---------------------------------------------------------------------------
+# Pursuit memory (last known position)
+# ---------------------------------------------------------------------------
+
+func _mark_hot_pursuit(aim: Vector3) -> void:
+	_lkp = aim
+	_pursuit = Pursuit.HOT
+	_investigate_age_sec = 0.0
+
+
+func _begin_investigate() -> void:
+	if _lkp == Vector3.INF:
+		_pursuit = Pursuit.NONE
+		return
+	_pursuit = Pursuit.INVESTIGATE
+	_investigate_age_sec = 0.0
+	## Force a fresh LOS scan on the next query — do not keep a stale Hot cache hit.
+	_prey = Vector3.INF
+	_prey_at_msec = -1000000
+
+
+func _clear_pursuit() -> void:
+	_pursuit = Pursuit.NONE
+	_lkp = Vector3.INF
+	_investigate_age_sec = 0.0
+	_forced_attacker = null
+
+
+## Forced attacker aim if still valid and inside leash; otherwise drops the sticky target.
+func _forced_prey_aim() -> Vector3:
+	if _forced_attacker == null or not is_instance_valid(_forced_attacker):
+		_forced_attacker = null
+		return Vector3.INF
+	var aim := _aim_of_attacker(_forced_attacker)
+	if aim == Vector3.INF:
+		_forced_attacker = null
+		return Vector3.INF
+	var from := _unit.global_position
+	var flat := Vector2(aim.x - from.x, aim.z - from.z).length()
+	if flat > _investigate_leash_m():
+		_forced_attacker = null
+		return Vector3.INF
+	return aim
+
+
+func _aim_of_attacker(attacker: Node) -> Vector3:
+	var unit := attacker as UndeadUnit
+	if unit != null:
+		if not unit.is_alive():
+			return Vector3.INF
+		return unit.global_position + Vector3(0.0, 1.0, 0.0)
+	## Player body from CityRoot, or any Node3D stand-in (headless stubs).
+	if _city != null and _city.has_method("get_player_node"):
+		var player: Node = _city.call("get_player_node") as Node
+		if player != null and attacker == player and _city.is_player_alive():
+			return _city.get_player_target_position()
+	var as3 := attacker as Node3D
+	if as3 != null:
+		return as3.global_position + Vector3(0.0, 1.0, 0.0)
+	return Vector3.INF
+
+
+## Walk to the remembered aim point itself (not a combat stand-off).
+func _investigate_goal() -> NavGoal:
+	return _tagged(NavGoal.go_to_point(_lkp, ARRIVE_TOLERANCE_M), TAG_HUNT)
+
+
+func _should_give_up_investigate() -> bool:
+	if _lkp == Vector3.INF:
+		return true
+	var from := _unit.global_position
+	var flat := Vector2(from.x - _lkp.x, from.z - _lkp.z).length()
+	if _investigate_age_sec >= INVESTIGATE_TIMEOUT_SEC:
+		return true
+	if flat > _investigate_leash_m():
+		return true
+	## Arrived at LKP after a short search window and still nothing visible.
+	if flat <= ARRIVE_TOLERANCE_M and _investigate_age_sec >= INVESTIGATE_MIN_SEC:
+		return true
+	return false
+
+
+func _investigate_leash_m() -> float:
+	var combat: RefCounted = _unit.combat()
+	if combat != null:
+		var leash: float = float(combat.call("leash_m"))
+		if leash > 0.0:
+			return leash
+		var aggro: float = float(combat.call("aggro_range_m"))
+		if aggro > 0.0:
+			return aggro * 1.25
+	return UndeadUnit.MAGE_PURSUE_RANGE_M * 1.25
 
 
 func _has_unit() -> bool:

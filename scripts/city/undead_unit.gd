@@ -23,6 +23,7 @@ const CreatureHealthScript := preload("res://scripts/city/creature_health.gd")
 const CreatureVariationScript := preload("res://scripts/city/creature_variation.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const MonsterCombatScript := preload("res://scripts/city/monster_combat.gd")
+const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
 
 ## PackedScenes stay referenced so a second summon of the same body is a cache hit, matching
@@ -144,6 +145,8 @@ var _cast_fired: bool = false
 var _facade_target: Vector3 = Vector3.INF
 ## Resolved combat kit (MonsterCombat). Null only before setup finishes.
 var _combat: RefCounted = null
+## MonsterFaction.Id for this body. Set once the catalogue entry is known.
+var _faction: int = -1
 ## Cached living-prey aim for the combat tick (refreshed with the goal provider).
 var _combat_prey: Vector3 = Vector3.INF
 
@@ -220,6 +223,22 @@ func creature_variation() -> CreatureVariation:
 
 func combat() -> RefCounted:
 	return _combat
+
+
+## MonsterFaction.Id for this body. Loud when called before setup finishes.
+func faction() -> int:
+	if _faction < 0:
+		push_error("UndeadUnit %s: faction read before body bind" % name)
+		assert(false, "UndeadUnit: no faction")
+		return int(MonsterFactionScript.Id.UNDEAD)
+	return _faction
+
+
+## True when this unit may hunt / hurt `other` (different faction).
+func is_hostile_to(other: UndeadUnit) -> bool:
+	if other == null or not is_instance_valid(other):
+		return false
+	return MonsterFactionScript.is_hostile(_faction, other.faction())
 
 
 func city() -> CityRoot:
@@ -322,6 +341,10 @@ func nav_agent() -> NavAgent:
 	return _nav_agent
 
 
+func goal_provider() -> UndeadGoalProvider:
+	return _provider
+
+
 func health() -> float:
 	return _health
 
@@ -347,7 +370,26 @@ func health_bar() -> MonsterHealthBar:
 ##
 ## Incoming damage is divided by the body's resolved `armor_mult` (1.0 = catalogue tier as-is).
 func apply_damage(source: DamageSource.Id) -> int:
+	return apply_damage_scaled(source, 1.0)
+
+
+## Same as `apply_damage`, with the attacker's resolved `damage_mult` applied to the table amount.
+## `attacker_label` is who the damage log credits (player punches stay `"player"`).
+## `attacker` is promoted to forced pursuit prey (overrides table weights / LOS acquire).
+func apply_damage_scaled(
+	source: DamageSource.Id,
+	scale: float,
+	attacker_label: String = "player",
+	attacker: Node = null
+) -> int:
 	if not _alive:
+		return 0
+	if scale <= 0.0:
+		push_error(
+			"UndeadUnit %s: apply_damage_scaled got non-positive scale %f"
+			% [name, scale]
+		)
+		assert(false, "UndeadUnit: bad damage scale")
 		return 0
 	if DamageSourceScript.target(source) != DamageSourceScript.Target.CREATURE:
 		push_error(
@@ -359,7 +401,7 @@ func apply_damage(source: DamageSource.Id) -> int:
 	if _combat != null:
 		armor = maxf(float(_combat.call("armor_mult")), 0.001)
 	var before := _health
-	var raw := DamageSourceScript.amount(source) / armor
+	var raw := DamageSourceScript.amount(source) * scale / armor
 	_health -= raw
 	var taken := minf(raw, before)
 	var body_name: String = _entry.id if _entry != null else String(name)
@@ -371,16 +413,29 @@ func apply_damage(source: DamageSource.Id) -> int:
 		_health = 0.0
 		if log_node != null and log_node.has_method("record"):
 			log_node.call(
-				"record", "player", body_name, source, taken, 0.0, _health_max, true
+				"record", attacker_label, body_name, source, taken, 0.0, _health_max, true
 			)
 		return kill_from_player()
 	if log_node != null and log_node.has_method("record"):
 		log_node.call(
-			"record", "player", body_name, source, taken, _health, _health_max, false
+			"record", attacker_label, body_name, source, taken, _health, _health_max, false
 		)
 	_update_health_bar()
 	_play_hit_reaction()
+	_promote_attacker_after_hit(source, attacker)
 	return 0
+
+
+func _promote_attacker_after_hit(source: DamageSource.Id, attacker: Node) -> void:
+	if _provider == null:
+		return
+	var who := attacker
+	if who == null and DamageSourceScript.is_player_vs_creature(source):
+		if _city != null and _city.has_method("get_player_node"):
+			who = _city.call("get_player_node") as Node
+	if who == null or not is_instance_valid(who) or who == self:
+		return
+	_provider.promote_attacker(who)
 
 
 ## Death itself, unchanged: navigation disposed, the death clip played, `died` emitted, the body
@@ -580,6 +635,7 @@ func _bind_combat() -> void:
 		push_error("UndeadUnit %s: cannot resolve combat without a catalogue body" % name)
 		assert(false, "UndeadUnit: no body for combat")
 		return
+	_faction = int(MonsterFactionScript.for_body(_entry.id))
 	var stats: RefCounted = CombatTableScript.resolve(_entry.id)
 	if stats == null:
 		push_error("UndeadUnit %s: CombatTable.resolve failed for '%s'" % [name, _entry.id])
@@ -892,6 +948,8 @@ func tick(delta: float) -> void:
 	_nibble_cd = maxf(0.0, _nibble_cd - delta)
 	_retarget_cd = maxf(0.0, _retarget_cd - delta)
 	_hit_react_left = maxf(0.0, _hit_react_left - delta)
+	if _provider != null:
+		_provider.tick_pursuit(delta)
 	if _combat != null:
 		_combat.call("tick", delta)
 
@@ -1044,8 +1102,9 @@ func _fire_orb(toward: Vector3) -> void:
 	var parent: Node = _director if _director != null else self
 	parent.add_child(orb)
 	var muzzle := global_position + Vector3(0.0, MUZZLE_BASE_M * _span_tall() * character_scale, 0.0)
+	## Prey aim point already includes chest height from LOS selection.
 	if orb.has_method("launch"):
-		orb.call("launch", muzzle, toward + Vector3(0.0, 1.0, 0.0), _director)
+		orb.call("launch", muzzle, toward, _director, _city)
 
 
 func _distance_to_player() -> float:

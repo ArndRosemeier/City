@@ -8,8 +8,9 @@ Reads / writes:
 
 Validates via tools/validate_combat_tables.py (in-memory). The Monsters tab shows
 a always-visible EFFECTIVE STATS panel from combat_resolve.effective_monster_combat
-(same rules as scripts/city/combat_table.gd). After saving combat JSON, regenerate
-the sync golden with: python tools/sync_combat_resolve.py --write
+(same rules as scripts/city/combat_table.gd), plus an editable per-body `faction`
+(undead / infernal / horde / beast / grove / arcane). After saving combat JSON,
+regenerate the sync golden with: python tools/sync_combat_resolve.py --write
 
 Run from repo root:
   python tools/edit_combat_tables.py
@@ -94,8 +95,11 @@ TEMPLATE_FIELD_ORDER = (
     *LIST_KEYS,
 )
 
+ALLOWED_FACTIONS = tuple(sorted(validate_mod.ALLOWED_FACTIONS))
+
 MONSTER_CORE_ORDER = (
     "id",
+    "faction",
     "templates",
     "spawn_ready",
     "spawn_weight",
@@ -292,6 +296,7 @@ class CombatEditor(tk.Tk):
         self._template_intent = tk.StringVar()
         self._template_checklists: dict[str, Checklist] = {}
         self._monster_template_check: Checklist | None = None
+        self._monster_faction = tk.StringVar(value=ALLOWED_FACTIONS[0])
         self._monster_spawn_ready = tk.BooleanVar(value=False)
         self._monster_spawn_weight = tk.StringVar()
         self._monster_notes: tk.Text | None = None
@@ -1224,31 +1229,46 @@ class CombatEditor(tk.Tk):
         self._monster_id_label = ttk.Label(form, text="")
         self._monster_id_label.grid(row=0, column=1, sticky="w")
 
-        ttk.Label(form, text="templates").grid(row=1, column=0, sticky="nw", pady=4)
+        ttk.Label(form, text="faction").grid(row=1, column=0, sticky="w", pady=2)
+        faction_box = ttk.Combobox(
+            form,
+            textvariable=self._monster_faction,
+            values=ALLOWED_FACTIONS,
+            state="readonly",
+        )
+        faction_box.grid(row=1, column=1, sticky="w", pady=2)
+        self._monster_faction.trace_add("write", self._on_monster_field_change)
+        ttk.Label(
+            form,
+            text="Same-faction monsters do not hunt or hurt each other.",
+            foreground="#666666",
+        ).grid(row=2, column=1, sticky="w", pady=(0, 4))
+
+        ttk.Label(form, text="templates").grid(row=3, column=0, sticky="nw", pady=4)
         self._monster_template_check = Checklist(form, height=8)
-        self._monster_template_check.grid(row=1, column=1, sticky="ew", pady=4)
+        self._monster_template_check.grid(row=3, column=1, sticky="ew", pady=4)
         self._wire_checklist_monster_preview(self._monster_template_check)
 
         ttk.Checkbutton(
             form, text="spawn_ready", variable=self._monster_spawn_ready
-        ).grid(row=2, column=1, sticky="w")
+        ).grid(row=4, column=1, sticky="w")
         self._monster_spawn_ready.trace_add("write", self._on_monster_field_change)
 
-        ttk.Label(form, text="spawn_weight").grid(row=3, column=0, sticky="w")
+        ttk.Label(form, text="spawn_weight").grid(row=5, column=0, sticky="w")
         ttk.Entry(form, textvariable=self._monster_spawn_weight).grid(
-            row=3, column=1, sticky="ew"
+            row=5, column=1, sticky="ew"
         )
         self._monster_spawn_weight.trace_add("write", self._on_monster_field_change)
 
-        ttk.Label(form, text="notes").grid(row=4, column=0, sticky="nw")
+        ttk.Label(form, text="notes").grid(row=6, column=0, sticky="nw")
         self._monster_notes = tk.Text(form, height=3, wrap="word")
-        self._monster_notes.grid(row=4, column=1, sticky="ew")
+        self._monster_notes.grid(row=6, column=1, sticky="ew")
         self._monster_notes.bind("<<Modified>>", self._on_monster_notes_modified)
 
         scalars = ttk.LabelFrame(
             form, text="Scalar overrides (blank = inherit merged max)", padding=4
         )
-        scalars.grid(row=5, column=0, columnspan=2, sticky="ew", pady=6)
+        scalars.grid(row=7, column=0, columnspan=2, sticky="ew", pady=6)
         for i, key in enumerate(SCALAR_KEYS):
             var = tk.StringVar()
             self._monster_scalar_vars[key] = var
@@ -1267,7 +1287,7 @@ class CombatEditor(tk.Tk):
             ),
             padding=4,
         )
-        body_attacks.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=6)
+        body_attacks.grid(row=8, column=0, columnspan=2, sticky="nsew", pady=6)
         ttk.Label(
             body_attacks,
             text=(
@@ -1307,7 +1327,7 @@ class CombatEditor(tk.Tk):
             ),
             padding=4,
         )
-        lists.grid(row=7, column=0, columnspan=2, sticky="nsew", pady=6)
+        lists.grid(row=9, column=0, columnspan=2, sticky="nsew", pady=6)
         other_list_keys = tuple(k for k in LIST_KEYS if k != "attacks")
         for i, key in enumerate(other_list_keys):
             col = ttk.Frame(lists)
@@ -1383,16 +1403,60 @@ class CombatEditor(tk.Tk):
 
     def _on_monster_field_change(self, *_args: object) -> None:
         self._mark_dirty()
-        if not self._loading:
-            self._update_monster_preview()
+        if self._loading:
+            return
+        self._sync_selected_monster_list_label()
+        self._update_monster_preview()
+
+    def _sync_selected_monster_list_label(self) -> None:
+        if self._selected_monster is None:
+            return
+        sel = self._monster_list.curselection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        fac = self._monster_faction.get().strip() or "?"
+        label = self._monster_list_label(self._selected_monster, fac)
+        if self._monster_list.get(idx) == label:
+            return
+        was_loading = self._loading
+        self._loading = True
+        try:
+            self._monster_list.delete(idx)
+            self._monster_list.insert(idx, label)
+            self._monster_list.selection_set(idx)
+        finally:
+            self._loading = was_loading
+
+    def _monster_list_label(self, mid: str, faction: str | None = None) -> str:
+        fac = faction
+        if fac is None:
+            try:
+                fac = str(self._find_monster(mid).get("faction", "?"))
+            except KeyError:
+                fac = "?"
+        return f"{mid}  ·  {fac}"
+
+    def _monster_id_from_list_label(self, label: str) -> str:
+        if "  ·  " in label:
+            return label.split("  ·  ", 1)[0]
+        return label
 
     def _refresh_monster_list(self, select: str | None = None) -> None:
         monsters = self.table_doc.get("monsters", [])
         assert isinstance(monsters, list)
-        ids = [m["id"] for m in monsters if isinstance(m, dict) and isinstance(m.get("id"), str)]
+        rows: list[tuple[str, str]] = []
+        for mon in monsters:
+            if not isinstance(mon, dict) or not isinstance(mon.get("id"), str):
+                continue
+            mid = mon["id"]
+            fac = mon.get("faction")
+            fac_s = fac if isinstance(fac, str) and fac else "?"
+            rows.append((mid, fac_s))
         self._monster_list.delete(0, "end")
-        for mid in ids:
-            self._monster_list.insert("end", mid)
+        for mid, fac in rows:
+            self._monster_list.insert("end", self._monster_list_label(mid, fac))
+        ids = [mid for mid, _fac in rows]
         target = select if select in ids else (ids[0] if ids else None)
         if target is None:
             self._selected_monster = None
@@ -1431,7 +1495,7 @@ class CombatEditor(tk.Tk):
         sel = self._monster_list.curselection()
         if not sel:
             return
-        new_id = self._monster_list.get(sel[0])
+        new_id = self._monster_id_from_list_label(self._monster_list.get(sel[0]))
         if new_id == self._selected_monster:
             return
         try:
@@ -1456,6 +1520,11 @@ class CombatEditor(tk.Tk):
         self._selected_monster = mid
         try:
             self._monster_id_label.configure(text=mid)
+            fac = mon.get("faction")
+            if isinstance(fac, str) and fac in ALLOWED_FACTIONS:
+                self._monster_faction.set(fac)
+            elif ALLOWED_FACTIONS:
+                self._monster_faction.set(ALLOWED_FACTIONS[0])
             assert self._monster_template_check is not None
             tids = mon.get("templates", [])
             if not isinstance(tids, list):
@@ -1512,6 +1581,12 @@ class CombatEditor(tk.Tk):
         for forbidden in validate_mod.FORBIDDEN_PREY_KEYS:
             row.pop(forbidden, None)
         row["id"] = mid
+        faction = self._monster_faction.get().strip()
+        if faction not in ALLOWED_FACTIONS:
+            raise ValueError(
+                f"Monster {mid}: faction must be one of {', '.join(ALLOWED_FACTIONS)}"
+            )
+        row["faction"] = faction
         row["templates"] = tids
         row["spawn_ready"] = bool(self._monster_spawn_ready.get())
 
@@ -1588,6 +1663,9 @@ class CombatEditor(tk.Tk):
             )
             self._insert_preview_heading("BODY")
             self._monster_preview.insert("end", f"  {body['id']}\n", "accent")
+            faction = str(body.get("faction", "?"))
+            self._monster_preview.insert("end", "  faction: ", "muted")
+            self._monster_preview.insert("end", f"{faction}\n", "accent")
             self._monster_preview.insert("end", f"  templates: {', '.join(tids)}\n\n")
 
             self._insert_preview_heading("BEHAVIOURS (effective)")
@@ -1709,6 +1787,7 @@ class CombatEditor(tk.Tk):
         assert self._monster_template_check is not None
         body: dict[str, Any] = {
             "id": mid,
+            "faction": self._monster_faction.get().strip(),
             "templates": self._monster_template_check.get_selected(),
             "spawn_ready": bool(self._monster_spawn_ready.get()),
         }
@@ -1971,6 +2050,32 @@ def _smoke_assert_preview_live_refresh(app: CombatEditor) -> None:
     def preview_text() -> str:
         assert app._monster_preview is not None
         return app._monster_preview.get("1.0", "end-1c")
+
+    if "faction:" not in preview_text():
+        raise RuntimeError("smoke: EFFECTIVE STATS missing faction line")
+    start_faction = app._monster_faction.get()
+    alt_faction = next(
+        (f for f in ALLOWED_FACTIONS if f != start_faction),
+        None,
+    )
+    if alt_faction is None:
+        raise RuntimeError("smoke: need at least two factions to toggle")
+    app._monster_faction.set(alt_faction)
+    app.update_idletasks()
+    if f"faction: {alt_faction}" not in preview_text():
+        raise RuntimeError(
+            f"smoke: changing faction to {alt_faction!r} did not update EFFECTIVE STATS"
+        )
+    list_sel = app._monster_list.curselection()
+    if not list_sel:
+        raise RuntimeError("smoke: monster list lost selection after faction edit")
+    list_label = app._monster_list.get(list_sel[0])
+    if alt_faction not in list_label:
+        raise RuntimeError(
+            f"smoke: monster list label did not show faction {alt_faction!r}: {list_label!r}"
+        )
+    app._monster_faction.set(start_faction)
+    app.update_idletasks()
 
     app.update_idletasks()
     before = preview_text()

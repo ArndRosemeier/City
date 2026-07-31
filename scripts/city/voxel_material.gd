@@ -110,11 +110,15 @@ const PROP_COUNT := 174
 const PROP_FOOTPRINT := 250
 ## Closed door plug — solid barrier in a doorway clear (E-toggle; open restores AIR).
 const DOOR := 251
+## Arena pit walls / undercroft / lift shafts — looks like masonry, never digs away.
+const ARENA_SHELL := 252
+## Invisible, walk-through volume that still blocks combat LOS / projectiles (arena lip).
+const LOS_VEIL := 253
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
-const COUNT := 252
+const COUNT := 254
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -158,6 +162,10 @@ static func is_roof_slope(id: int) -> bool:
 
 static func is_solid(id: int) -> bool:
 	return id != AIR
+
+
+static func is_los_veil(id: int) -> bool:
+	return id == LOS_VEIL
 
 
 static func is_walkable_surface(id: int) -> bool:
@@ -210,7 +218,7 @@ static func is_self_supporting_terrain(id: int) -> bool:
 static func is_building_fabric(id: int) -> bool:
 	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground, road, or diggable stone.
 	match id:
-		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR:
+		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, LOS_VEIL:
 			return false
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
@@ -254,7 +262,7 @@ static func is_destructible(id: int) -> bool:
 	## Laser / melee / blast carve targets. Infection body, meteor rock, and gems are
 	## immune; only the glowing tip (INFECTION_LEAD) stays player-killable among specials.
 	## Gems are collected, not carved.
-	if id == AIR or id == BEDROCK or id == WATER:
+	if id == AIR or id == BEDROCK or id == WATER or id == ARENA_SHELL or id == LOS_VEIL:
 		return false
 	if id == METEOR_ROCK or id == INFECTION or is_gem(id):
 		return false
@@ -267,6 +275,8 @@ static func is_player_carve_immune(id: int) -> bool:
 		or id == INFECTION
 		or is_gem(id)
 		or id == BEDROCK
+		or id == ARENA_SHELL
+		or id == LOS_VEIL
 		or id == WATER
 		or id == AIR
 	)
@@ -432,6 +442,11 @@ static func color(id: int) -> Color:
 			return Color(0.52, 0.5, 0.46)
 		CASTLE_BLOCK_MOSSY:
 			return Color(0.4, 0.44, 0.34)
+		ARENA_SHELL:
+			return Color(0.78, 0.62, 0.42)
+		LOS_VEIL:
+			## Debug / atlas only — the block model has no mesh.
+			return Color(0.0, 0.0, 0.0, 0.0)
 		DOOR:
 			## Timber plug — reads as a shut door, not masonry.
 			return Color(0.40, 0.26, 0.14)

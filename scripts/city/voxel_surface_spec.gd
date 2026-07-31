@@ -68,6 +68,13 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 		fp.albedo_file = "wood.jpg"
 		fp.tint = Color(0.4, 0.3, 0.2, 1.0)
 		return fp
+	if id == VoxelMaterial.LOS_VEIL:
+		## Invisible walk-through volume — empty mesh, but cascade debris table still
+		## indexes every material id at CityRoot boot.
+		var veil := VoxelSurfaceSpec.new()
+		veil.albedo_file = "plaster.jpg"
+		veil.tint = Color(0.0, 0.0, 0.0, 0.0)
+		return veil
 	if VoxelMaterial.is_room_prop(id):
 		return _spec_for_room_prop(id)
 	var s := VoxelSurfaceSpec.new()
@@ -453,6 +460,19 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			## Tall walls: the wash has to run much further down than a two-storey facade.
 			s.grime_height = 8.0
 			s.streaks = 0.35
+		VoxelMaterial.ARENA_SHELL:
+			## Warm packed sandstone — reads as arena masonry, not grey bedrock.
+			s.albedo_file = "stone.jpg"
+			s.normal_file = "stone_normal.jpg"
+			s.tile_meters = Vector2(1.1, 1.1)
+			s.tint = Color(0.86, 0.72, 0.52, 1.0)
+			s.roughness = 0.88
+			s.normal_strength = 1.15
+			s.tint_variation = 0.18
+			s.weathering = 0.35
+			s.grime = 0.4
+			s.grime_height = 10.0
+			s.streaks = 0.3
 		VoxelMaterial.CASTLE_BLOCK_MOSSY:
 			## Same rock face, greened. Lower courses / weathered patches — same wall, older.
 			s.albedo_file = "stone.jpg"

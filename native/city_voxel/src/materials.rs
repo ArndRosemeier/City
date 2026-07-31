@@ -54,7 +54,12 @@ pub const PROP_LAST: i32 = 249;
 pub const PROP_FOOTPRINT: i32 = 250;
 #[allow(dead_code)]
 pub const DOOR: i32 = 251;
-pub const COUNT: i32 = 252;
+#[allow(dead_code)]
+pub const ARENA_SHELL: i32 = 252;
+/// Invisible walk-through LOS blocker (arena tribune lip). Keep in sync with GD.
+#[allow(dead_code)]
+pub const LOS_VEIL: i32 = 253;
+pub const COUNT: i32 = 254;
 
 pub fn is_solid(id: i32) -> bool {
     id != AIR
@@ -73,7 +78,7 @@ pub fn is_cave_shellable(id: i32) -> bool {
 }
 
 pub fn is_destructible(id: i32) -> bool {
-    if id == AIR || id == BEDROCK || id == WATER {
+    if id == AIR || id == BEDROCK || id == WATER || id == ARENA_SHELL || id == LOS_VEIL {
         return false;
     }
     if id == METEOR_ROCK || id == INFECTION || is_gem(id) {

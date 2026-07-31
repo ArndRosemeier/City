@@ -119,7 +119,7 @@ fully reproducible: the seed is printed at startup and `--city-seed=N` replays i
 means "pick a new one". The player boots into a random district tile within three
 tiles of the world origin (chosen from the same seed, so `--city-seed=N` also
 replays the spawn). Override with `--spawn-district=x,z` or `--spawn-theme=hill`
-(etc.). In-game, **J** opens a district-type picker and teleports to the nearest
+(or `arena`, `castle`, …). In-game, **J** opens a district-type picker and teleports to the nearest
 matching tile. The tile at the world origin is still always the downtown core theme,
 even when you spawn elsewhere.
 
@@ -156,6 +156,25 @@ out of the water automatically.
 Checks: `tools/test_voxel_surface_shader.gd` (run with `--script`),
 `tools/test_district_themes.tscn` and `tools/shot_city_parks.tscn` (run as scenes — the
 city scripts need the `CityProfiler` autoload).
+
+## Arena districts
+
+An Arena tile is a full outer-ring open reserve (edge road stubs only). Inside it,
+`scripts/city/arena_composer.gd` stamps a compact ~50×50 m rounded-rect colosseum of
+indestructible `ARENA_SHELL`: rectangular sand pit, seating raised above the pit wall, four
+gate tunnels with stairs, low parapets for summon boards, a clear glass lip on the tribune,
+and four undercroft lift pads. At runtime `ArenaController` mounts four wide outward-facing
+Ui3D boards (monster portraits, full CreatureCatalog) and delivers summons on lit elevators
+from under the pit. Arena-owned monsters ignore the player on the tribune (jump into the pit
+to fight); Clear on any board wipes pit props and arena-tagged monsters, then redecorates
+(`RoomDecorator.Purpose.ARENA_PIT`).
+
+Checks: `tools/test_arena_district.tscn`. Looks: `tools/shot_arena_district.tscn`:
+
+```
+powershell -Command "& '.\tools\run_test.ps1' -Scene shot_arena_district -Rendered
+  -GodotArgs @('--spawn-theme=arena','--city-seed=42')"
+```
 
 ## Castle districts
 

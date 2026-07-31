@@ -11,11 +11,16 @@ const CAPTURE_RADIUS_M := 1.76
 var _velocity: Vector3 = Vector3.ZERO
 var _traveled: float = 0.0
 var _director: Node
+## CityRoot (or any host with projectile_obstacle_distance) for wall occlusion.
+var _obstacle_host: Node
 var _alive: bool = true
 
 
-func launch(from: Vector3, toward: Vector3, director: Node) -> void:
+func launch(
+	from: Vector3, toward: Vector3, director: Node, obstacle_host: Node = null
+) -> void:
 	_director = director
+	_obstacle_host = obstacle_host if obstacle_host != null else director
 	global_position = from
 	var dir := toward - from
 	if dir.length_squared() < 0.0001:
@@ -62,12 +67,22 @@ func _build() -> void:
 func _physics_process(delta: float) -> void:
 	if not _alive:
 		return
+	var prev := global_position
 	var step := _velocity * delta
 	global_position += step
 	_traveled += step.length()
 	if _traveled >= MAX_RANGE_M:
 		_die()
 		return
+	## Solid voxels stop the orb (same probe as bolts / player projectiles).
+	if _obstacle_host != null and _obstacle_host.has_method("projectile_obstacle_distance"):
+		var tip := global_position
+		var hit_d: float = float(
+			_obstacle_host.call("projectile_obstacle_distance", prev, tip, false)
+		)
+		if hit_d >= 0.0 and hit_d < prev.distance_to(tip):
+			_die()
+			return
 	if _director != null and _director.has_method("try_convert_ped_at"):
 		if bool(_director.call("try_convert_ped_at", global_position, CAPTURE_RADIUS_M)):
 			_die()

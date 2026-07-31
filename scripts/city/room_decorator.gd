@@ -29,6 +29,8 @@ enum Purpose {
 	BREAK_ROOM,
 	CORRIDOR,
 	SHOP,
+	## Arena sand pit cover: pillars / crates / low walls with walk lanes.
+	ARENA_PIT,
 }
 
 ## Placement role for one plan step.
@@ -123,6 +125,8 @@ static func purpose_name(purpose: Purpose) -> String:
 			return "corridor"
 		Purpose.SHOP:
 			return "shop"
+		Purpose.ARENA_PIT:
+			return "arena_pit"
 	return "unknown"
 
 
@@ -166,6 +170,8 @@ static func purpose_from_name(name: String) -> Purpose:
 			return Purpose.CORRIDOR
 		"shop", "retail", "store_front":
 			return Purpose.SHOP
+		"arena_pit", "arena":
+			return Purpose.ARENA_PIT
 		_:
 			return Purpose.GENERIC
 
@@ -405,6 +411,16 @@ func _plan_for(purpose: Purpose, volume: RoomVolume) -> Array[Dictionary]:
 				_step(Role.SCATTER, ["crate", "cardboardBoxOpen"], scatter_n),
 				_step(Role.CORNER, ["pottedPlant", "trashcan", "plantSmall1"], corner_n),
 				_step(Role.CEILING, ["lampSquareCeiling"], maxi(1, area / 150)),
+			])
+		Purpose.ARENA_PIT:
+			## Cover props with walk lanes — no ceiling hangings over the open pit.
+			var pit_scatter := _scaled(4, area, 180, 36)
+			var pit_wall := _scaled(2, area, 220, 16)
+			return _steps([
+				_step(Role.SCATTER, ["crate", "barrel", "cardboardBoxOpen"], pit_scatter, 5),
+				_step(Role.WALL, ["pillarSmall", "statue_column", "statue_obelisk"], pit_wall, 8),
+				_step(Role.CORNER, ["urnRound", "crate", "barrel"], corner_n),
+				_step(Role.CENTER, ["table", "benchStone"], 1 if area >= 200 else 0),
 			])
 	return [] as Array[Dictionary]
 

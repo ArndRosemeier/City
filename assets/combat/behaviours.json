@@ -13,7 +13,7 @@
     },
     "chase": {
       "id": "chase",
-      "intent": "Close and pursue living targets. Stupid: does not distinguish creatures (includes monsters).",
+      "intent": "Close and pursue living targets. Monster prey is other-faction only.",
       "attacks": [
         "melee"
       ],
@@ -26,7 +26,7 @@
     },
     "demolish": {
       "id": "demolish",
-      "intent": "Building-first chew; also stupid about creatures when AI is wired.",
+      "intent": "Building-first chew; also hunts other-faction creatures when AI is wired.",
       "attacks": [
         "melee",
         "nibble"
@@ -53,7 +53,7 @@
     },
     "guard": {
       "id": "guard",
-      "intent": "Hold a post; engage the player. Selective — no pack infighting.",
+      "intent": "Hold a post; engage the player and other-faction monsters.",
       "attacks": [
         "melee"
       ],
@@ -66,21 +66,21 @@
     },
     "skirmish": {
       "id": "skirmish",
-      "intent": "Standoff / ranged pressure — hunt player and peds; no infighting or structure chew. Attack pool is the full caster/artillery set; AI selection among them is deferred.",
+      "intent": "Standoff / ranged pressure — hunt player, peds, and other-faction monsters; no structure chew. Attack pool is the full caster/artillery set; AI selection among them is deferred.",
       "attacks": [
         "blaster",
         "eye_laser"
       ],
       "prey_weights": {
         "building": 0.0,
-        "monsters": 0.0,
+        "monsters": 0.6,
         "ped": 0.6,
         "player": 1.0
       }
     },
     "wander_hunt": {
       "id": "wander_hunt",
-      "intent": "Roam and hunt living targets like chase — stupid creature set.",
+      "intent": "Roam and hunt living targets like chase — other-faction monsters included.",
       "attacks": [
         "melee"
       ],

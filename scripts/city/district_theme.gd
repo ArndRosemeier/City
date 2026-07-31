@@ -25,7 +25,9 @@ const LAKE := 7
 const CASTLE := 8
 ## Outer-ring fractal plaza: edge stubs only, glowing plane + Mandelbrot UI walls.
 const FRACTAL := 9
-const COUNT := 10
+## Outer-ring colosseum: edge stubs only, massive arena filling the tile.
+const ARENA := 10
+const COUNT := 11
 
 ## Districts within this many tiles of the world origin are always the high-rise core.
 const CORE_RING := 0
@@ -80,12 +82,12 @@ static func for_district(world_seed: int, coord: Vector2i) -> DistrictTheme:
 	elif ring == 2:
 		choices = PackedInt32Array([
 			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL,
-			GRAVEYARD, LAKE, CASTLE, FRACTAL
+			GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA
 		])
 	else:
 		choices = PackedInt32Array([
 			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GRAVEYARD,
-			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE, FRACTAL,
+			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE, FRACTAL, ARENA,
 		])
 	return make(choices[pick % choices.size()])
 
@@ -150,6 +152,9 @@ static func parse_theme_id(raw: String) -> int:
 		"fractal": FRACTAL,
 		"mandelbrot": FRACTAL,
 		"mandelbrotplaza": FRACTAL,
+		"arena": ARENA,
+		"colosseum": ARENA,
+		"coliseum": ARENA,
 	}
 	if aliases.has(key):
 		return int(aliases[key])
@@ -465,6 +470,36 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.sidewalk_mat = VoxelMaterial.SIDEWALK
 			t.plaza_mat = VoxelMaterial.GLASS_LIT
 			t.plaza_inner_mat = VoxelMaterial.METAL_PLATE
+			t.intensity_bias = -0.5
+			t.height_scale = 0.0
+			t.tower_chance = 0.0
+			t.modern_chance = 0.0
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.0
+			t.cylinder_chance = 0.0
+			t.wild_chance = 0.0
+			t.park_count = 0
+			t.road_density = 0.0
+			t.median_planting = false
+		ARENA:
+			t.display_name = "Arena"
+			t.blurb = "A colosseum filling the tile — summon monsters into the pit from four walls."
+			t.wall_mats = PackedInt32Array([
+				VoxelMaterial.ARENA_SHELL, VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.STONE
+			])
+			t.townhouse_mats = PackedInt32Array([
+				VoxelMaterial.ARENA_SHELL, VoxelMaterial.CASTLE_BLOCK
+			])
+			t.roof_mats = PackedInt32Array([VoxelMaterial.ROOF_CLAY, VoxelMaterial.STONE])
+			t.base_mat = VoxelMaterial.ARENA_SHELL
+			t.tower_shaft_mat = VoxelMaterial.ARENA_SHELL
+			t.accent_mat = VoxelMaterial.WROUGHT_IRON
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.ARENA_SHELL, VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.BRICK
+			])
+			t.sidewalk_mat = VoxelMaterial.GRAVEL
+			t.plaza_mat = VoxelMaterial.DIRT
+			t.plaza_inner_mat = VoxelMaterial.DIRT
 			t.intensity_bias = -0.5
 			t.height_scale = 0.0
 			t.tower_chance = 0.0

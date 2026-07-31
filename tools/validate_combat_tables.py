@@ -63,6 +63,17 @@ ALLOWED_CROWD_ROLES = frozenset(
         "ambient",
     }
 )
+## Combat allegiance ids — keep in sync with MonsterFaction.faction_name / combat_table.json.
+ALLOWED_FACTIONS = frozenset(
+    {
+        "undead",
+        "infernal",
+        "horde",
+        "beast",
+        "grove",
+        "arcane",
+    }
+)
 
 KNOWN_ATTACK_KINDS = frozenset(
     {
@@ -451,6 +462,15 @@ def validate_monster(
         return None
     where = f"monster '{mid}'"
     reject_prey_fields(mon, where, errors)
+    faction = mon.get("faction")
+    if not isinstance(faction, str) or not faction:
+        fail(f"{where}: 'faction' must be a non-empty string", errors)
+    elif faction not in ALLOWED_FACTIONS:
+        fail(
+            f"{where}: unknown faction '{faction}' "
+            f"(allowed: {', '.join(sorted(ALLOWED_FACTIONS))})",
+            errors,
+        )
     templates = mon.get("templates")
     if not isinstance(templates, list) or not templates or not all(
         isinstance(t, str) for t in templates

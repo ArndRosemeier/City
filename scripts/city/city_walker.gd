@@ -2770,9 +2770,9 @@ func _setup_eye_laser() -> void:
 			"set_obstacle_probe",
 			func(from: Vector3, tip: Vector3) -> float:
 				var root := _city_root()
-				if root == null or not root.has_method("laser_probe_agent_distance"):
+				if root == null or not root.has_method("projectile_obstacle_distance"):
 					return -1.0
-				return float(root.call("laser_probe_agent_distance", from, tip))
+				return float(root.call("projectile_obstacle_distance", from, tip, true))
 		)
 	if _eye_laser.has_signal("impact") and not _eye_laser.is_connected("impact", _on_laser_impact):
 		_eye_laser.connect("impact", _on_laser_impact)
@@ -2797,9 +2797,9 @@ func _setup_charged_blast() -> void:
 			"set_obstacle_probe",
 			func(from: Vector3, tip: Vector3) -> float:
 				var root := _city_root()
-				if root == null or not root.has_method("laser_probe_agent_distance"):
+				if root == null or not root.has_method("projectile_obstacle_distance"):
 					return -1.0
-				return float(root.call("laser_probe_agent_distance", from, tip))
+				return float(root.call("projectile_obstacle_distance", from, tip, true))
 		)
 	if _charged_blast.has_signal("impact") and not _charged_blast.is_connected(
 		"impact", _on_charged_blast_impact
@@ -3525,9 +3525,9 @@ func _fire_blaster_bolt() -> void:
 			"set_obstacle_probe",
 			func(from: Vector3, tip: Vector3) -> float:
 				var root := _city_root()
-				if root == null or not root.has_method("laser_probe_agent_distance"):
+				if root == null or not root.has_method("projectile_obstacle_distance"):
 					return -1.0
-				return float(root.call("laser_probe_agent_distance", from, tip))
+				return float(root.call("projectile_obstacle_distance", from, tip, true))
 		)
 	if bolt.has_signal("impact"):
 		bolt.connect("impact", _on_blaster_impact)

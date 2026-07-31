@@ -88,6 +88,10 @@ func _ready() -> void:
 		_quit()
 		return
 	await _test_melee_hurts_player()
+	if _failed:
+		_quit()
+		return
+	await _test_factions_and_mob_melee()
 	_quit()
 
 
@@ -258,6 +262,84 @@ func _test_melee_hurts_player() -> void:
 	_despawn(unit)
 	_despawn(summoned)
 	walker.queue_free()
+
+
+## Every catalogue body maps to a faction; same-faction packs do not hunt each other; a
+## cross-faction melee swing must drain HP (the old hug bug).
+func _test_factions_and_mob_melee() -> void:
+	for entry: CreatureCatalog.Entry in CreatureCatalog.all():
+		var faction_id: int = int(MonsterFaction.for_body(entry.id))
+		if faction_id < 0:
+			_fail("FAIL no faction for %s" % entry.id)
+			return
+	var undead_a := _spawn(
+		UndeadUnit.Role.MINION, _w(Vector3i(40, 1, 40)), "kaykit/Skeleton_Minion"
+	)
+	## Same-faction decoy farther out; hostile frog inside melee reach (1.8 m).
+	var undead_b := _spawn(
+		UndeadUnit.Role.MINION, _w(Vector3i(50, 1, 40)), "kaykit/Skeleton_Warrior"
+	)
+	var beast := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(41, 1, 40)), "big/Frog")
+	if undead_a == null or undead_b == null or beast == null:
+		return
+	if undead_a.faction() != int(MonsterFaction.Id.UNDEAD):
+		_fail("FAIL Skeleton_Minion faction is %d" % undead_a.faction())
+		return
+	if beast.faction() != int(MonsterFaction.Id.BEAST):
+		_fail("FAIL big/Frog faction is %d" % beast.faction())
+		return
+	if undead_a.is_hostile_to(undead_b):
+		_fail("FAIL same-faction skeletons are hostile to each other")
+		return
+	if not undead_a.is_hostile_to(beast):
+		_fail("FAIL undead is not hostile to beast")
+		return
+	var ally_pos: Vector3 = _city.find_nearest_monster_position(
+		undead_a.global_position, 20.0, undead_a
+	)
+	if ally_pos != Vector3.INF and ally_pos.distance_to(undead_b.global_position) < 0.5:
+		_fail("FAIL find_nearest_monster_position returned same-faction ally")
+		return
+	if ally_pos == Vector3.INF or ally_pos.distance_to(beast.global_position) > 0.5:
+		_fail("FAIL find_nearest_monster_position missed cross-faction prey")
+		return
+	var before := beast.health()
+	undead_a.set_combat_prey(beast.global_position)
+	var combat: RefCounted = undead_a.combat()
+	if not bool(combat.call("try_attack_living", beast.global_position)):
+		_fail("FAIL cross-faction melee try_attack_living returned false")
+		return
+	var after := beast.health()
+	var dmg_mult := float(combat.call("damage_mult"))
+	var armor := float(beast.combat().call("armor_mult"))
+	var expect: float = (
+		before - DamageSource.amount(DamageSource.Id.MONSTER_MELEE_MOB) * dmg_mult / maxf(armor, 0.001)
+	)
+	if absf(after - expect) > HEALTH_EPS:
+		_fail("FAIL mob melee left %.2f, want %.2f" % [after, expect])
+		return
+	if after >= before:
+		_fail("FAIL mob melee dealt no damage (%.2f → %.2f)" % [before, after])
+		return
+	## Revenge: the frog must sticky-pursue the skeleton that hit it, overriding prey pick.
+	var frog_provider := beast.goal_provider()
+	if frog_provider == null or not frog_provider.has_forced_attacker():
+		_fail("FAIL victim did not promote the attacker as forced pursuit prey")
+		return
+	if frog_provider.pursuit() != UndeadGoalProvider.Pursuit.HOT:
+		_fail("FAIL revenge pursuit is not Hot (phase %d)" % frog_provider.pursuit())
+		return
+	var revenge: Vector3 = frog_provider.last_known_prey()
+	if revenge.distance_to(undead_a.global_position + Vector3(0.0, 1.0, 0.0)) > 1.5:
+		_fail("FAIL revenge LKP %s is not the attacker" % str(revenge))
+		return
+	print(
+		"factions: undead↔undead allied, undead→frog melee %.1f→%.1f, frog revenge-pursues"
+		% [before, after]
+	)
+	_despawn(undead_a)
+	_despawn(undead_b)
+	_despawn(beast)
 
 
 ## Killing a body used to leave a freed Ref in the director list; blaster aim then crashed

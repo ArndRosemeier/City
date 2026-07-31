@@ -11,6 +11,7 @@ const GraveyardComposerScript := preload("res://scripts/city/graveyard_composer.
 const LakeComposerScript := preload("res://scripts/city/lake_composer.gd")
 const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
 const FractalComposerScript := preload("res://scripts/city/fractal_composer.gd")
+const ArenaComposerScript := preload("res://scripts/city/arena_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CastleDoorwayScript := preload("res://scripts/city/castle_doorway.gd")
@@ -71,6 +72,7 @@ var _graveyard: GraveyardComposer
 var _lake: LakeComposer
 var _castle: CastleComposer
 var _fractal: FractalComposer
+var _arena: ArenaComposer
 ## Survives end_generate so DistrictInstance can spawn MandelbrotArena.
 var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
@@ -92,6 +94,8 @@ var _hill_cave_mouths: PackedVector2Array = PackedVector2Array()
 var _hill_cave_summit: Vector2i = Vector2i(-1, -1)
 ## Castle plan from the compose pass; outlives the composer so the bake can hand it on.
 var _castle_layout: CastleLayout = null
+## Arena plan from the compose pass; outlives the composer for runtime boards/lifts.
+var _arena_layout: ArenaLayout = null
 ## World voxel origin of this district tile (local paint stays 0..size).
 var origin_vox: Vector3i = Vector3i.ZERO
 var district_coord: Vector2i = Vector2i.ZERO
@@ -159,6 +163,11 @@ func get_offline_volume():
 ## Survives end_generate() so a finished bake can still be asked what it built.
 func get_castle_layout() -> CastleLayout:
 	return _castle_layout
+
+
+## The arena plan in *district-local* voxel coords, or null outside Arena districts.
+func get_arena_layout() -> ArenaLayout:
+	return _arena_layout
 
 
 ## Daylight cave mouths (district-local XZ) from the hill compose pass.
@@ -242,6 +251,14 @@ func _setup_composers() -> void:
 	_fractal.ground_y = ground_thickness
 	_fractal.planner = _planner
 	_fractal.cell_size = cell_size
+
+	_arena = ArenaComposerScript.new()
+	_arena.brush = _brush
+	_arena.rng = _rng
+	_arena.ground_y = ground_thickness
+	_arena.planner = _planner
+	_arena.cell_size = cell_size
+	_arena_layout = null
 
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
@@ -352,9 +369,10 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			_paint_street_cell(smin, smax, cx, cz, false)
 		LandUse.PLAZA:
 			_brush.fill_box(smin, smax, theme.plaza_mat)
-		LandUse.PARK, LandUse.HILL, LandUse.LAKE, LandUse.CASTLE:
+		LandUse.PARK, LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA:
 			## Lake tiles start as meadow; LakeComposer carves the basin into it. Castle
-			## tiles keep the meadow as the open field the fortress stands in.
+			## tiles keep the meadow as the open field the fortress stands in. Arena
+			## tiles keep meadow under the colosseum approach.
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		LandUse.FRACTAL:
 			## Meadow verge; FractalComposer stamps the centered glowing square.
@@ -387,7 +405,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -403,7 +421,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA:
 			return
 		_:
 			pass
@@ -494,8 +512,20 @@ func decorate_open_spaces() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
-		or _fractal == null
+		or _fractal == null or _arena == null
 	):
+		return
+	var la := _planner.large_arena
+	if la.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 8)
+		var amin := Vector3i(
+			la.position.x * cell_size, ground_thickness, la.position.y * cell_size
+		)
+		var amax := Vector3i(
+			la.end.x * cell_size, ground_thickness + 1, la.end.y * cell_size
+		)
+		_arena.compose(amin, amax)
+		_arena_layout = _arena.layout
 		return
 	var lf := _planner.large_fractal
 	if lf.size.x > 0:
@@ -589,8 +619,21 @@ func decorate_open_spaces_far() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
-		or _fractal == null
+		or _fractal == null or _arena == null
 	):
+		return
+	var la := _planner.large_arena
+	if la.size.x > 0:
+		## Same feature seed as the near pass: distant silhouette must match the walk-up.
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 8)
+		var amin := Vector3i(
+			la.position.x * cell_size, ground_thickness, la.position.y * cell_size
+		)
+		var amax := Vector3i(
+			la.end.x * cell_size, ground_thickness + 1, la.end.y * cell_size
+		)
+		_arena.compose_far_sparse(amin, amax)
+		_arena_layout = _arena.layout
 		return
 	var lf := _planner.large_fractal
 	if lf.size.x > 0:
@@ -685,6 +728,16 @@ func open_space_bounds() -> Array[AABB]:
 	var yh := 12.0
 	var ox := float(origin_vox.x)
 	var oz := float(origin_vox.z)
+	var la := _planner.large_arena
+	if la.size.x > 0:
+		## Undercroft digs below the deck; walls rise above seating.
+		out.append(
+			AABB(
+				Vector3(ox + la.position.x * cell_size, 0.0, oz + la.position.y * cell_size),
+				Vector3(la.size.x * cell_size, y0 + 40.0, la.size.y * cell_size)
+			)
+		)
+		return out
 	var lf := _planner.large_fractal
 	if lf.size.x > 0:
 		out.append(
@@ -812,6 +865,7 @@ func end_generate() -> void:
 	_lake = null
 	_castle = null
 	_fractal = null
+	_arena = null
 	_grammar = null
 
 
@@ -828,7 +882,7 @@ func _paint_cell(cx: int, cz: int) -> void:
 			_paint_plaza_cell(min_v, max_v, cx, cz, _plaza)
 		LandUse.PARK:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
-		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE:
+		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		LandUse.FRACTAL:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
@@ -883,6 +937,8 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 		spawn = _find_fractal_panel_spawn(spawn_y, HEADROOM_VOX)
 	elif theme != null and theme.id == DistrictTheme.HILL:
 		spawn = _find_hill_cave_mouth_spawn(spawn_y, HEADROOM_VOX)
+	elif theme != null and theme.id == DistrictTheme.ARENA:
+		spawn = _find_arena_gate_spawn(spawn_y, HEADROOM_VOX)
 	if not is_finite(spawn.x):
 		var cx := size_x / 2
 		var cz := size_z / 2
@@ -1001,6 +1057,46 @@ func _find_hill_cave_mouth_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
 					spawn_y,
 					(float(origin_vox.z + z) + 0.5) * vs
 				)
+	return Vector3(INF, INF, INF)
+
+
+## Stand at the outer mouth of an arena gate, facing into the pit.
+func _find_arena_gate_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
+	if _arena_layout == null or _arena_layout.gate_rects.is_empty():
+		return Vector3(INF, INF, INF)
+	var vs := voxel_size
+	var pit := _arena_layout.pit_rect
+	var pit_mid := Vector2(
+		float(pit.position.x) + float(pit.size.x) * 0.5,
+		float(pit.position.y) + float(pit.size.y) * 0.5
+	)
+	for gi in range(_arena_layout.gate_rects.size()):
+		var g: Rect2i = _arena_layout.gate_rects[gi]
+		var gmid := Vector2(
+			float(g.position.x) + float(g.size.x) * 0.5,
+			float(g.position.y) + float(g.size.y) * 0.5
+		)
+		var outward := gmid - pit_mid
+		if outward.length_squared() < 1.0:
+			outward = Vector2(0.0, -1.0)
+		outward = outward.normalized()
+		## Prefer the outer end of the tunnel, then step onto the meadow.
+		for dist in range(0, 20):
+			var x := int(round(gmid.x + outward.x * float(dist)))
+			var z := int(round(gmid.y + outward.y * float(dist)))
+			if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
+				continue
+			var mat := _brush.get_vox(Vector3i(x, ground_thickness, z))
+			if not VoxelMaterial.is_walkable_surface(mat):
+				continue
+			if not _has_spawn_headroom(x, z, headroom_vox):
+				continue
+			last_spawn_yaw = atan2(-(pit_mid.x - float(x)), -(pit_mid.y - float(z)))
+			return Vector3(
+				(float(origin_vox.x + x) + 0.5) * vs,
+				spawn_y,
+				(float(origin_vox.z + z) + 0.5) * vs
+			)
 	return Vector3(INF, INF, INF)
 
 

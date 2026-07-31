@@ -71,15 +71,20 @@ func add_button(
 	uv_rect: Rect2,
 	label: String = "",
 	color: Color = Color(0.15, 0.15, 0.18, 1.0),
-	defer_rebuild: bool = false
+	defer_rebuild: bool = false,
+	texture: Texture2D = null,
+	bg_color: Color = Color(0, 0, 0, 0)
 ) -> void:
 	for i in range(_buttons.size()):
 		if _buttons[i]["id"] == button_id:
+			var prev_tex: Variant = _buttons[i].get("texture")
 			_buttons[i] = {
 				"id": button_id,
 				"uv_rect": uv_rect,
 				"label": label,
 				"color": color,
+				"texture": texture if texture != null else prev_tex,
+				"bg_color": bg_color,
 				"mesh": _buttons[i].get("mesh"),
 			}
 			if not defer_rebuild:
@@ -90,6 +95,8 @@ func add_button(
 		"uv_rect": uv_rect,
 		"label": label,
 		"color": color,
+		"texture": texture,
+		"bg_color": bg_color,
 		"mesh": null,
 	})
 	if not defer_rebuild:
@@ -306,26 +313,53 @@ func _rebuild_button_meshes() -> void:
 	for i in range(_buttons.size()):
 		var btn: Dictionary = _buttons[i]
 		var rect: Rect2 = btn["uv_rect"]
+		var center_uv := rect.position + rect.size * 0.5
+		var local := _uv_to_local(center_uv)
+		var quad_size := Vector2(rect.size.x * size_m.x, rect.size.y * size_m.y)
+		var bg: Color = btn.get("bg_color", Color(0, 0, 0, 0)) as Color
+		if bg.a > 0.01:
+			## Plate sits just behind the face content so transparent icons show tint.
+			var bg_mesh := MeshInstance3D.new()
+			bg_mesh.name = "BtnBg_%s" % str(btn["id"])
+			var bg_quad := QuadMesh.new()
+			bg_quad.size = quad_size
+			bg_mesh.mesh = bg_quad
+			var bg_mat := StandardMaterial3D.new()
+			bg_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			bg_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			bg_mat.albedo_color = bg
+			bg_mesh.material_override = bg_mat
+			bg_mesh.position = Vector3(local.x, local.y, BUTTON_Z + 0.004)
+			_button_root.add_child(bg_mesh)
 		var mesh_inst := MeshInstance3D.new()
 		mesh_inst.name = "Btn_%s" % str(btn["id"])
 		var quad := QuadMesh.new()
-		quad.size = Vector2(rect.size.x * size_m.x, rect.size.y * size_m.y)
+		quad.size = quad_size
 		mesh_inst.mesh = quad
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.albedo_color = btn["color"] as Color
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var tex: Texture2D = btn.get("texture") as Texture2D
+		if tex != null:
+			## Portraits are RGBA; keep alpha so `bg_color` reads through empty pixels.
+			mat.albedo_color = btn["color"] as Color
+			mat.albedo_texture = tex
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
+		else:
+			mat.albedo_color = btn["color"] as Color
 		mesh_inst.material_override = mat
-		var center_uv := rect.position + rect.size * 0.5
-		var local := _uv_to_local(center_uv)
 		mesh_inst.position = Vector3(local.x, local.y, BUTTON_Z)
 		_button_root.add_child(mesh_inst)
 		var label := str(btn.get("label", ""))
-		if label == "+" or label == "-":
-			## Geometric glyphs stay sharper than tiny font strokes for ±.
-			_add_button_glyph(mesh_inst, label, btn["color"] as Color)
-		elif not label.is_empty():
-			_add_button_label(mesh_inst, label, btn["color"] as Color)
+		## Textured buttons stay caption-free — the picture is the affordance.
+		if tex == null:
+			if label == "+" or label == "-":
+				## Geometric glyphs stay sharper than tiny font strokes for ±.
+				_add_button_glyph(mesh_inst, label, btn["color"] as Color)
+			elif not label.is_empty():
+				_add_button_label(mesh_inst, label, btn["color"] as Color)
 		_buttons[i]["mesh"] = mesh_inst
 
 

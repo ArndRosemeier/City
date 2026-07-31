@@ -669,7 +669,9 @@ def patch_voxel_material(count: int, last: int) -> None:
 		re.DOTALL,
 	)
 	footprint = last + 1
-	total = footprint + 2
+	door = footprint + 1
+	arena_shell = door + 1
+	total = arena_shell + 1
 	replacement = (
 		"## Room prop kit — see RoomPropCatalog / tools/gen_room_prop_catalog.py.\n"
 		f"const PROP_FIRST := {PROP_FIRST}\n"
@@ -678,7 +680,9 @@ def patch_voxel_material(count: int, last: int) -> None:
 		"## Invisible solid filler for multi-cell prop footprints (nav / occupancy).\n"
 		f"const PROP_FOOTPRINT := {footprint}\n"
 		"## Closed door plug — solid barrier in a doorway clear (E-toggle; open restores AIR).\n"
-		f"const DOOR := {footprint + 1}\n"
+		f"const DOOR := {door}\n"
+		"## Arena pit walls / undercroft / lift shafts — looks like masonry, never digs away.\n"
+		f"const ARENA_SHELL := {arena_shell}\n"
 		"## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.\n"
 		"const PROP_CRATE := PROP_FIRST\n"
 		"const PROP_BARREL := PROP_FIRST + 1\n"
@@ -694,7 +698,9 @@ def patch_voxel_material(count: int, last: int) -> None:
 
 def patch_materials_rs(last: int) -> None:
 	footprint = last + 1
-	total = footprint + 2
+	door = footprint + 1
+	arena_shell = door + 1
+	total = arena_shell + 1
 	text = MATERIALS_RS.read_text(encoding="utf-8")
 	block = re.compile(
 		r"pub const PROP_FIRST: i32 = \d+;.*?pub const COUNT: i32 = \d+;", re.DOTALL
@@ -712,7 +718,9 @@ def patch_materials_rs(last: int) -> None:
 			f"#[allow(dead_code)]\n"
 			f"pub const PROP_FOOTPRINT: i32 = {footprint};\n"
 			f"#[allow(dead_code)]\n"
-			f"pub const DOOR: i32 = {footprint + 1};\n"
+			f"pub const DOOR: i32 = {door};\n"
+			f"#[allow(dead_code)]\n"
+			f"pub const ARENA_SHELL: i32 = {arena_shell};\n"
 			f"pub const COUNT: i32 = {total};"
 		),
 		text,
@@ -896,7 +904,7 @@ def main() -> int:
 	write_credits(len(entries), per_pack)
 	print(
 		f"DONE {len(entries)} props  ids {PROP_FIRST}..{last}  "
-		f"FOOTPRINT={last + 1} DOOR={last + 2} COUNT={last + 3}"
+		f"FOOTPRINT={last + 1} DOOR={last + 2} ARENA_SHELL={last + 3} COUNT={last + 4}"
 	)
 	return 0
 

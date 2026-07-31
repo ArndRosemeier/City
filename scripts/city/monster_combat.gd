@@ -163,6 +163,9 @@ func try_attack_living(prey: Vector3) -> bool:
 	var attack_id := _pick_attack(dist)
 	if attack_id.is_empty():
 		return false
+	## Ranged kits need a clear voxel corridor — same filter as prey selection.
+	if _is_ranged_attack(attack_id) and not _has_voxel_los_to(prey):
+		return false
 	return _begin_attack(attack_id, prey)
 
 
@@ -232,7 +235,40 @@ func _finish_windup() -> void:
 	var reach := CombatTableScript.monster_attack_range_m(attack_id)
 	if _flat_distance(_unit.global_position, prey) > reach * 1.15:
 		return
+	## Voxel LOS can close during windup (door, corner, glass lip).
+	if _is_ranged_attack(attack_id) and not _has_voxel_los_to(prey):
+		return
 	_execute_attack(attack_id, prey)
+
+
+func _is_ranged_attack(attack_id: String) -> bool:
+	for kind: String in RANGED_KINDS:
+		if kind == attack_id:
+			return true
+	return false
+
+
+func _has_voxel_los_to(prey: Vector3) -> bool:
+	var city: Node = _unit.call("city") as Node
+	if city == null or not city.has_method("has_voxel_line_of_sight"):
+		return true
+	var muzzle: Vector3 = _unit.call("muzzle_world") as Vector3
+	return bool(city.call("has_voxel_line_of_sight", muzzle, prey))
+
+
+## Shared CityRoot solid-voxel (+ optional agent) mid-flight probe. Mobs ignore agents so
+## packs do not block each other's shots; walls / glass / arena shell still stop bolts.
+func _bind_projectile_probe(bolt: Node, include_agents: bool = false) -> void:
+	if bolt == null or not bolt.has_method("set_obstacle_probe"):
+		return
+	var city: Node = _unit.call("city") as Node
+	if city == null or not city.has_method("projectile_obstacle_distance"):
+		return
+	bolt.call(
+		"set_obstacle_probe",
+		func(from: Vector3, tip: Vector3) -> float:
+			return float(city.call("projectile_obstacle_distance", from, tip, include_agents))
+	)
 
 
 func _execute_attack(attack_id: String, prey: Vector3) -> bool:
@@ -261,13 +297,17 @@ func _execute_attack(attack_id: String, prey: Vector3) -> bool:
 func _execute_melee(prey: Vector3) -> bool:
 	_unit.call("play_combat_strike", "melee")
 	_set_cooldown("melee")
-	if not _is_player_prey(prey):
-		## Ped / other creature: one-shot remove when weighted; buildings are not melee prey.
-		_unit.call(
-			"try_remove_ped_at", prey, CombatTableScript.monster_attack_range_m("melee")
-		)
+	if _is_player_prey(prey):
+		_hurt_player(DamageSourceScript.Id.MONSTER_MELEE)
 		return true
-	_hurt_player(DamageSourceScript.Id.MONSTER_MELEE)
+	var mob := _hostile_monster_near(prey, CombatTableScript.monster_attack_range_m("melee"))
+	if mob != null:
+		_hurt_monster(mob, "melee")
+		return true
+	## Pedestrian: one-shot remove when weighted; buildings are not melee prey.
+	_unit.call(
+		"try_remove_ped_at", prey, CombatTableScript.monster_attack_range_m("melee")
+	)
 	return true
 
 
@@ -289,21 +329,22 @@ func _execute_eye_laser(prey: Vector3) -> bool:
 	bolt.call("setup")
 	var scale: float = float(_unit.get("character_scale"))
 	bolt.call("set_character_scale", maxf(scale, 0.05))
+	_bind_projectile_probe(bolt, false)
 	bolt.connect("impact", _on_eye_laser_impact)
-	bolt.call("fire", muzzle, prey + Vector3(0.0, 1.0, 0.0), speed, scale)
+	## Prey is already an aim-height point from LOS selection.
+	bolt.call("fire", muzzle, prey, speed, scale)
 	return true
 
 
 func _on_eye_laser_impact(hit_point: Vector3, _direction: Vector3) -> void:
 	if _unit == null or not bool(_unit.call("is_alive")):
 		return
-	var city: Node = _unit.call("city") as Node
-	if city == null or not bool(city.call("is_player_alive")):
+	if _player_near(hit_point, 2.8):
+		_hurt_player(DamageSourceScript.Id.MONSTER_LASER)
 		return
-	var ppos: Vector3 = city.call("get_player_target_position") as Vector3
-	if hit_point.distance_squared_to(ppos) > 2.8 * 2.8:
-		return
-	_hurt_player(DamageSourceScript.Id.MONSTER_LASER)
+	var mob := _hostile_monster_near(hit_point, 2.8)
+	if mob != null:
+		_hurt_monster(mob, "eye_laser")
 
 
 func _execute_blaster(prey: Vector3) -> bool:
@@ -327,8 +368,10 @@ func _fire_blaster_bolt(prey: Vector3) -> void:
 	bolt.call("setup")
 	var scale: float = float(_unit.get("character_scale"))
 	bolt.call("set_character_scale", maxf(scale, 0.05))
+	_bind_projectile_probe(bolt, false)
 	bolt.connect("impact", _on_blaster_impact)
-	bolt.call("fire", muzzle, prey + Vector3(0.0, 1.0, 0.0), speed, scale)
+	## Prey is already an aim-height point from LOS selection.
+	bolt.call("fire", muzzle, prey, speed, scale)
 	if _blaster_burst_left > 0:
 		_blaster_burst_left -= 1
 		_blaster_burst_cd = interval
@@ -346,13 +389,12 @@ func _vfx_parent() -> Node:
 func _on_blaster_impact(hit_point: Vector3, _direction: Vector3, _shot_origin: Vector3) -> void:
 	if _unit == null or not bool(_unit.call("is_alive")):
 		return
-	var city: Node = _unit.call("city") as Node
-	if city == null or not bool(city.call("is_player_alive")):
+	if _player_near(hit_point, 2.8):
+		_hurt_player(DamageSourceScript.Id.MONSTER_BLASTER)
 		return
-	var ppos: Vector3 = city.call("get_player_target_position") as Vector3
-	if hit_point.distance_squared_to(ppos) > 2.8 * 2.8:
-		return
-	_hurt_player(DamageSourceScript.Id.MONSTER_BLASTER)
+	var mob := _hostile_monster_near(hit_point, 2.8)
+	if mob != null:
+		_hurt_monster(mob, "blaster")
 
 
 func _execute_stomp(prey: Vector3) -> bool:
@@ -363,21 +405,27 @@ func _execute_stomp(prey: Vector3) -> bool:
 	var radius := float(row.get("radius_m", 2.52)) * maxf(scale, 0.05)
 	if _is_player_prey(prey) and _flat_distance(_unit.global_position, prey) <= radius:
 		_hurt_player(DamageSourceScript.Id.MONSTER_STOMP)
+	var mob := _hostile_monster_near(prey, radius)
+	if mob != null and _flat_distance(_unit.global_position, mob.global_position) <= radius:
+		_hurt_monster(mob, "stomp")
 	return true
 
 
 func _execute_charged_blast(prey: Vector3) -> bool:
 	_unit.call("play_combat_strike", "charged_blast")
 	_set_cooldown("charged_blast")
-	## Vertical slice: telegraphed hit on the player if still near the aim point.
+	var row := CombatTableScript.attack_def("charged_blast")
+	var radius := float(row.get("radius_m", 2.52))
+	## Vertical slice: telegraphed hit on the player / hostile if still near the aim point.
 	if _is_player_prey(prey):
 		var city: Node = _unit.call("city") as Node
 		if city != null and bool(city.call("is_player_alive")):
 			var ppos: Vector3 = city.call("get_player_target_position") as Vector3
-			var row := CombatTableScript.attack_def("charged_blast")
-			var radius := float(row.get("radius_m", 2.52))
 			if prey.distance_to(ppos) <= radius + 1.2:
 				_hurt_player(DamageSourceScript.Id.MONSTER_BLAST)
+	var mob := _hostile_monster_near(prey, radius + 1.2)
+	if mob != null and prey.distance_to(mob.global_position) <= radius + 1.2:
+		_hurt_monster(mob, "charged_blast")
 	return true
 
 
@@ -386,6 +434,38 @@ func _hurt_player(source: DamageSource.Id) -> void:
 	if city == null:
 		return
 	city.call("damage_player_scaled", source, damage_mult())
+
+
+func _hurt_monster(target: CharacterBody3D, attack_id: String) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	if not bool(target.call("is_alive")):
+		return
+	if not bool(_unit.call("is_hostile_to", target)):
+		return
+	var source: DamageSource.Id = DamageSourceScript.for_monster_attack_mob(attack_id)
+	var attacker_label: String = str(_stats.get("monster_id"))
+	## Direct apply — mob kills must not award player score via the director.
+	## Pass self so the victim promotes this body as forced pursuit prey.
+	target.call("apply_damage_scaled", source, damage_mult(), attacker_label, _unit)
+
+
+func _hostile_monster_near(near: Vector3, radius_m: float) -> CharacterBody3D:
+	var city: Node = _unit.call("city") as Node
+	if city == null or not city.has_method("find_nearest_hostile_monster"):
+		return null
+	var unit: CharacterBody3D = city.call(
+		"find_nearest_hostile_monster", near, radius_m, _unit
+	) as CharacterBody3D
+	return unit
+
+
+func _player_near(hit_point: Vector3, radius_m: float) -> bool:
+	var city: Node = _unit.call("city") as Node
+	if city == null or not bool(city.call("is_player_alive")):
+		return false
+	var ppos: Vector3 = city.call("get_player_target_position") as Vector3
+	return hit_point.distance_squared_to(ppos) <= radius_m * radius_m
 
 
 func _set_cooldown(attack_id: String) -> void:

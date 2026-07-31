@@ -172,6 +172,7 @@ def build_html(
         eff = row["effective"]
         cols = [
             cell(esc(body["id"]), "id"),
+            cell(esc(str(body.get("faction") or "")), "id"),
             cell(fmt_list(body.get("templates") or []), "wrap list"),
             cell(fmt_list(eff.get("behaviour") or []), "wrap list"),
         ]
@@ -205,7 +206,7 @@ def build_html(
     monster_header = "".join(
         th(c)
         for c in (
-            ("id", "templates", "behaviour")
+            ("id", "faction", "templates", "behaviour")
             + SCALAR_KEYS
             + ("prey_weights (avg)", "attacks (derived)")
             + tuple(k for k in LIST_KEYS if k not in ("behaviour", "attacks"))

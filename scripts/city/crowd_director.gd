@@ -403,6 +403,23 @@ func find_nearest_agent(world_pos: Vector3, max_dist: float) -> Dictionary:
 	return best
 
 
+## Every living ped within max_dist (XZ) — for combat LOS prey filtering.
+func collect_positions_in_range(world_pos: Vector3, max_dist: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var max_d2 := max_dist * max_dist
+	for i in range(_agents.size()):
+		var ped: PedAgent = _agents[i]
+		if ped == null or ped.dead:
+			continue
+		var d2 := Vector2(
+			ped.global_position.x - world_pos.x, ped.global_position.z - world_pos.z
+		).length_squared()
+		if d2 > max_d2:
+			continue
+		out.append(ped.global_position)
+	return out
+
+
 ## Remove a ped with no corpse (undead conversion). Returns former world position.
 func convert_agent_silent(ped: PedAgent) -> Vector3:
 	if ped == null or ped.dead:

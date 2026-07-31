@@ -231,6 +231,22 @@ static func has_monster(monster_id: String) -> bool:
 	return _monsters.has(monster_id)
 
 
+## Required `faction` string on the combat-table body (`undead`, `beast`, …).
+static func faction_for(monster_id: String) -> String:
+	ensure_loaded()
+	if not _monsters.has(monster_id):
+		push_error("CombatTable.faction_for: unknown monster '%s'" % monster_id)
+		assert(false, "CombatTable: unknown monster for faction")
+		return ""
+	var body: Dictionary = _monsters[monster_id]
+	var faction := str(body.get("faction", ""))
+	if faction.is_empty():
+		push_error("CombatTable.faction_for: monster '%s' has no faction" % monster_id)
+		assert(false, "CombatTable: missing faction")
+		return ""
+	return faction
+
+
 ## Bodies marked `spawn_ready` in combat_table.json. Summon UI and tools use this roster.
 static func spawnable_ids() -> PackedStringArray:
 	ensure_loaded()
