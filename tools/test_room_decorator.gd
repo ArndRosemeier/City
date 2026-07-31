@@ -19,6 +19,7 @@ func _initialize() -> void:
 
 	failed = _check_factories(failed)
 	failed = _check_purpose_names(failed)
+	failed = _check_arena_labyrinth(rng, failed)
 	failed = _check_bed_footprint(failed)
 
 	var purposes: Array[int] = [
@@ -158,6 +159,74 @@ func _check_purpose_names(failed: bool) -> bool:
 	if RoomDecoratorScript.purpose_name(RoomDecoratorScript.Purpose.ARMORY) != "armory":
 		push_error("FAIL purpose_name armory")
 		failed = true
+	if RoomDecoratorScript.purpose_from_name("arena") != RoomDecoratorScript.Purpose.ARENA:
+		push_error("FAIL purpose_from_name arena")
+		failed = true
+	if RoomDecoratorScript.purpose_from_name("arena_pit") != RoomDecoratorScript.Purpose.ARENA_PIT:
+		push_error("FAIL purpose_from_name arena_pit still maps to pit")
+		failed = true
+	return failed
+
+
+func _check_arena_labyrinth(rng: RandomNumberGenerator, failed: bool) -> bool:
+	var dec: RoomDecorator = _make_decorator(rng) as RoomDecorator
+	var volume: RoomVolume = RoomVolumeScript.make(Rect2i(2, 2, 40, 36), 0, 6)
+	_shell_room(dec.brush, volume)
+	## Lift pad clear in the middle — must stay open.
+	volume.keep_clear.append(Rect2i(18, 16, 6, 6))
+	var walls := dec.decorate(volume, RoomDecoratorScript.Purpose.ARENA)
+	if walls < 20:
+		push_error("FAIL ARENA labyrinth walls=%d (want some fractal columns)" % walls)
+		failed = true
+	var y := volume.prop_y()
+	var r := volume.rect
+	var mid_x := r.position.x + r.size.x / 2
+	var mid_z := r.position.y + r.size.y / 2
+	var fractal := 0
+	var usable := 0
+	var clear_ok := true
+	## Each quarter should use only one band id among its remaining walls.
+	var quarter_band: Array[int] = [-1, -1, -1, -1]
+	for z in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			var id := dec.brush.get_vox(Vector3i(x, y, z))
+			if volume.is_cleared(Vector2i(x, z)):
+				if id != VoxelMaterial.AIR:
+					clear_ok = false
+				continue
+			usable += 1
+			if id == VoxelMaterial.AIR:
+				continue
+			if not VoxelMaterial.is_fractal_band(id):
+				push_error("FAIL ARENA non-fractal wall mat %d at %d,%d" % [id, x, z])
+				failed = true
+				continue
+			fractal += 1
+			if not VoxelMaterial.is_destructible(id):
+				push_error("FAIL ARENA wall mat %d is not destructible" % id)
+				failed = true
+			var qi := (1 if x >= mid_x else 0) + (2 if z >= mid_z else 0)
+			if quarter_band[qi] < 0:
+				quarter_band[qi] = id
+			elif quarter_band[qi] != id:
+				push_error(
+					"FAIL ARENA quarter %d mixed mats %d and %d" % [qi, quarter_band[qi], id]
+				)
+				failed = true
+	if not clear_ok:
+		push_error("FAIL ARENA keep_clear still has walls")
+		failed = true
+	if fractal != walls:
+		push_error("FAIL ARENA counted fractal=%d walls=%d" % [fractal, walls])
+		failed = true
+	var wall_frac := float(fractal) / float(maxi(usable, 1))
+	if wall_frac > 0.20:
+		push_error("FAIL ARENA wall coverage %.2f (want ~0.15)" % wall_frac)
+		failed = true
+	print(
+		"arena labyrinth: walls=%d coverage=%.0f%% keep_clear open"
+		% [walls, wall_frac * 100.0]
+	)
 	return failed
 
 

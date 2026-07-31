@@ -336,15 +336,17 @@ func _execute_eye_laser(prey: Vector3) -> bool:
 	return true
 
 
-func _on_eye_laser_impact(hit_point: Vector3, _direction: Vector3) -> void:
+func _on_eye_laser_impact(hit_point: Vector3, direction: Vector3) -> void:
 	if _unit == null or not bool(_unit.call("is_alive")):
 		return
-	if _player_near(hit_point, 2.8):
+	if _player_near_los(hit_point, 2.8):
 		_hurt_player(DamageSourceScript.Id.MONSTER_LASER)
 		return
 	var mob := _hostile_monster_near(hit_point, 2.8)
 	if mob != null:
 		_hurt_monster(mob, "eye_laser")
+		return
+	_strike_voxels_at_impact(hit_point, direction)
 
 
 func _execute_blaster(prey: Vector3) -> bool:
@@ -386,15 +388,36 @@ func _vfx_parent() -> Node:
 	return _unit
 
 
-func _on_blaster_impact(hit_point: Vector3, _direction: Vector3, _shot_origin: Vector3) -> void:
+func _on_blaster_impact(hit_point: Vector3, direction: Vector3, _shot_origin: Vector3) -> void:
 	if _unit == null or not bool(_unit.call("is_alive")):
 		return
-	if _player_near(hit_point, 2.8):
+	if _player_near_los(hit_point, 2.8):
 		_hurt_player(DamageSourceScript.Id.MONSTER_BLASTER)
 		return
 	var mob := _hostile_monster_near(hit_point, 2.8)
 	if mob != null:
 		_hurt_monster(mob, "blaster")
+		return
+	_strike_voxels_at_impact(hit_point, direction)
+
+
+func _strike_voxels_at_impact(hit_point: Vector3, direction: Vector3) -> void:
+	var city: Node = _unit.call("city") as Node
+	if city == null or not city.has_method("apply_voxel_strike"):
+		return
+	var dir := direction
+	if dir.length_squared() < 0.0001:
+		dir = Vector3.FORWARD
+	else:
+		dir = dir.normalized()
+	var scale: float = float(_unit.get("character_scale"))
+	city.call(
+		"apply_voxel_strike",
+		hit_point - dir * 0.15,
+		dir,
+		maxf(2.5, scale * 2.0),
+		maxf(scale, 0.5)
+	)
 
 
 func _execute_stomp(prey: Vector3) -> bool:
@@ -466,6 +489,17 @@ func _player_near(hit_point: Vector3, radius_m: float) -> bool:
 		return false
 	var ppos: Vector3 = city.call("get_player_target_position") as Vector3
 	return hit_point.distance_squared_to(ppos) <= radius_m * radius_m
+
+
+## Impact splash must not reach the player through a solid wall / arena shell.
+func _player_near_los(hit_point: Vector3, radius_m: float) -> bool:
+	if not _player_near(hit_point, radius_m):
+		return false
+	var city: Node = _unit.call("city") as Node
+	if city == null or not city.has_method("has_voxel_line_of_sight"):
+		return false
+	var ppos: Vector3 = city.call("get_player_target_position") as Vector3
+	return bool(city.call("has_voxel_line_of_sight", hit_point, ppos))
 
 
 func _set_cooldown(attack_id: String) -> void:

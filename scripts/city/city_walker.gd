@@ -825,6 +825,11 @@ func is_health_depleted() -> bool:
 	return _health.is_depleted()
 
 
+## Game-over respawn: refill the wound pool before unlocking controls.
+func restore_full_health() -> void:
+	_health.restore_full()
+
+
 ## Deliberately not scaled by `character_scale`. Growing is already the strongest thing the
 ## player can do — free durability on top of it would make the giant form the only form.
 func take_damage(source: DamageSource.Id) -> float:

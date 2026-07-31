@@ -31,6 +31,8 @@ enum Purpose {
 	SHOP,
 	## Arena sand pit cover: pillars / crates / low walls with walk lanes.
 	ARENA_PIT,
+	## Arena pit labyrinth: fractal walls, big carved rooms (destructible).
+	ARENA,
 }
 
 ## Placement role for one plan step.
@@ -48,12 +50,25 @@ const OPENING_APRON_DEPTH := 3
 ## Clear cells a walker needs over the floor: the capsule is 1.7 m plus its sole, and
 ## anything hanging into that band is something to bump into, not decoration.
 const WALK_CLEAR_VOX := 4
+## Arena labyrinth: open corridor width / separating wall thickness (voxels).
+const ARENA_MAZE_PASS := 4
+const ARENA_MAZE_WALL := 1
+## Wall height above the floor slab (leaves headroom in the air band).
+const ARENA_MAZE_WALL_H := 4
+## Empty chambers stamped through the maze (overlapping is intentional).
+const ARENA_ROOM_MIN := 14
+const ARENA_ROOM_MAX := 28
+## Final wall coverage of usable pit columns (maze corridors already count as free).
+const ARENA_WALL_TARGET := 0.15
+## Four fractal-band hues, one per pit quarter (evenly spaced on the 16-band wheel).
+const ARENA_QUARTER_BANDS: Array[int] = [0, 4, 8, 12]
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
 
 
 ## Stamp props for `purpose` into `volume`. Returns how many props were written.
+## Arena labyrinth returns wall columns stamped (not furniture props).
 func decorate(volume: RoomVolume, purpose: Purpose) -> int:
 	if brush == null:
 		push_error("RoomDecorator.decorate: brush is null")
@@ -64,7 +79,12 @@ func decorate(volume: RoomVolume, purpose: Purpose) -> int:
 	if volume == null:
 		push_error("RoomDecorator.decorate: volume is null")
 		return 0
+	if purpose == Purpose.ARENA:
+		return _decorate_arena_labyrinth(volume)
 	if volume.rect.size.x < 3 or volume.rect.size.y < 3 or volume.air_h < 2:
+		push_error(
+			"RoomDecorator.decorate: volume too small for props (%s)" % volume.describe()
+		)
 		return 0
 
 	## Columns reserved by the world (stairs, pillars, missing floor, door aprons).
@@ -127,6 +147,8 @@ static func purpose_name(purpose: Purpose) -> String:
 			return "shop"
 		Purpose.ARENA_PIT:
 			return "arena_pit"
+		Purpose.ARENA:
+			return "arena"
 	return "unknown"
 
 
@@ -170,10 +192,211 @@ static func purpose_from_name(name: String) -> Purpose:
 			return Purpose.CORRIDOR
 		"shop", "retail", "store_front":
 			return Purpose.SHOP
-		"arena_pit", "arena":
+		"arena_pit":
 			return Purpose.ARENA_PIT
+		"arena", "arena_labyrinth", "labyrinth":
+			return Purpose.ARENA
 		_:
 			return Purpose.GENERIC
+
+
+## Fractal-material maze in the pit air band: fill walls (one hue per quarter), carve
+## passages, then punch overlapping rooms until wall coverage is ~15%. A plain maze is
+## already ~half open — that free space counts; rooms only need to clear the rest.
+## No outer wall ring — the pit shell already bounds the fight.
+func _decorate_arena_labyrinth(volume: RoomVolume) -> int:
+	var r := volume.rect
+	if r.size.x < 16 or r.size.y < 16 or volume.air_h < 2:
+		push_error(
+			"RoomDecorator.ARENA: volume too small for a labyrinth (%s)" % volume.describe()
+		)
+		return 0
+	var wall_h := mini(ARENA_MAZE_WALL_H, volume.air_h)
+	var y0 := volume.prop_y()
+	var y1 := y0 + wall_h
+	var reserved: Dictionary = {}
+	_mark_clears(volume, reserved)
+	var mid_x := r.position.x + r.size.x / 2
+	var mid_z := r.position.y + r.size.y / 2
+
+	brush.begin_edit()
+	## 1) Solid fill — one fractal band per pit quarter (not per-column stripes).
+	for z in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			if reserved.has(Vector2i(x, z)):
+				continue
+			_arena_fill_column(x, z, y0, y1, _arena_quarter_mat(x, z, mid_x, mid_z))
+
+	## 2) Perfect maze — cells flush to the pit edge (no outer wall ring).
+	var stride := ARENA_MAZE_PASS + ARENA_MAZE_WALL
+	var cells_x := (r.size.x + ARENA_MAZE_WALL) / stride
+	var cells_z := (r.size.y + ARENA_MAZE_WALL) / stride
+	if cells_x < 2 or cells_z < 2:
+		push_error(
+			"RoomDecorator.ARENA: maze grid %dx%d too small in %s" % [cells_x, cells_z, r]
+		)
+		brush.end_edit()
+		return 0
+	var ox0 := r.position.x
+	var oz0 := r.position.y
+	var links := _arena_maze_links(cells_x, cells_z)
+	for cz in range(cells_z):
+		for cx in range(cells_x):
+			var px := ox0 + cx * stride
+			var pz := oz0 + cz * stride
+			_arena_carve_box(px, pz, ARENA_MAZE_PASS, ARENA_MAZE_PASS, y0, y1, r, reserved)
+	for link: Vector4i in links:
+		var ax := ox0 + link.x * stride
+		var az := oz0 + link.y * stride
+		var bx := ox0 + link.z * stride
+		var bz := oz0 + link.w * stride
+		if ax == bx:
+			var z_lo := mini(az, bz) + ARENA_MAZE_PASS
+			_arena_carve_box(ax, z_lo, ARENA_MAZE_PASS, ARENA_MAZE_WALL, y0, y1, r, reserved)
+		else:
+			var x_lo := mini(ax, bx) + ARENA_MAZE_PASS
+			_arena_carve_box(x_lo, az, ARENA_MAZE_WALL, ARENA_MAZE_PASS, y0, y1, r, reserved)
+
+	## 3) Gate mouths — clear a short corridor from each mid-edge inward.
+	var mouth_w := ARENA_MAZE_PASS + 2
+	var mouth_d := ARENA_MAZE_PASS * 3
+	var mouth_x := r.position.x + r.size.x / 2 - mouth_w / 2
+	var mouth_z := r.position.y + r.size.y / 2 - mouth_w / 2
+	_arena_carve_box(mouth_x, r.position.y, mouth_w, mouth_d, y0, y1, r, reserved)
+	_arena_carve_box(mouth_x, r.end.y - mouth_d, mouth_w, mouth_d, y0, y1, r, reserved)
+	_arena_carve_box(r.position.x, mouth_z, mouth_d, mouth_w, y0, y1, r, reserved)
+	_arena_carve_box(r.end.x - mouth_d, mouth_z, mouth_d, mouth_w, y0, y1, r, reserved)
+
+	## 4) Punch rooms until wall coverage ≤ ~15% (overlap is fine).
+	var usable := maxi(volume.area() - reserved.size(), 1)
+	var guard := 96
+	while guard > 0 and _arena_wall_ratio(r, reserved, y0) > ARENA_WALL_TARGET:
+		guard -= 1
+		var rw := rng.randi_range(ARENA_ROOM_MIN, ARENA_ROOM_MAX)
+		var rd := rng.randi_range(ARENA_ROOM_MIN, ARENA_ROOM_MAX)
+		var rx := rng.randi_range(r.position.x, maxi(r.position.x, r.end.x - rw))
+		var rz := rng.randi_range(r.position.y, maxi(r.position.y, r.end.y - rd))
+		_arena_carve_box(rx, rz, rw, rd, y0, y1, r, reserved)
+
+	## 5) Reserved columns always finish clear (lifts).
+	for p: Vector2i in reserved.keys():
+		_arena_carve_column(p.x, p.y, y0, y1)
+
+	brush.end_edit()
+	var walls := 0
+	for z in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			if reserved.has(Vector2i(x, z)):
+				continue
+			if VoxelMaterial.is_fractal_band(brush.get_vox(Vector3i(x, y0, z))):
+				walls += 1
+	if walls <= 0:
+		push_error("RoomDecorator.ARENA: labyrinth left no wall columns")
+	var wall_frac := float(walls) / float(usable)
+	print(
+		"RoomDecorator.ARENA: walls=%d coverage=%.0f%% (target %.0f%%)"
+		% [walls, wall_frac * 100.0, ARENA_WALL_TARGET * 100.0]
+	)
+	return walls
+
+
+## Recursive-backtracker links as Vector4i(ax, az, bx, bz) cell indices.
+func _arena_maze_links(cells_x: int, cells_z: int) -> Array[Vector4i]:
+	var visited: Dictionary = {}
+	var links: Array[Vector4i] = []
+	var stack: Array[Vector2i] = []
+	var start := Vector2i(rng.randi_range(0, cells_x - 1), rng.randi_range(0, cells_z - 1))
+	visited[start] = true
+	stack.append(start)
+	var dirs: Array[Vector2i] = [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
+	]
+	while not stack.is_empty():
+		var cur: Vector2i = stack[stack.size() - 1]
+		var options: Array[Vector2i] = []
+		for d: Vector2i in dirs:
+			var n := cur + d
+			if n.x < 0 or n.y < 0 or n.x >= cells_x or n.y >= cells_z:
+				continue
+			if visited.has(n):
+				continue
+			options.append(n)
+		if options.is_empty():
+			stack.pop_back()
+			continue
+		var nxt: Vector2i = options[rng.randi_range(0, options.size() - 1)]
+		visited[nxt] = true
+		links.append(Vector4i(cur.x, cur.y, nxt.x, nxt.y))
+		stack.append(nxt)
+	return links
+
+
+func _arena_quarter_mat(x: int, z: int, mid_x: int, mid_z: int) -> int:
+	var qi := 0
+	if x >= mid_x:
+		qi += 1
+	if z >= mid_z:
+		qi += 2
+	return VoxelMaterial.fractal_band(ARENA_QUARTER_BANDS[qi])
+
+
+## Fraction of usable columns still holding a fractal wall (maze corridors count as free).
+func _arena_wall_ratio(r: Rect2i, reserved: Dictionary, sample_y: int) -> float:
+	var walls := 0
+	var total := 0
+	for z in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			if reserved.has(Vector2i(x, z)):
+				continue
+			total += 1
+			if VoxelMaterial.is_fractal_band(brush.get_vox(Vector3i(x, sample_y, z))):
+				walls += 1
+	if total <= 0:
+		return 0.0
+	return float(walls) / float(total)
+
+
+func _arena_fill_column(x: int, z: int, y0: int, y1: int, mat: int) -> void:
+	brush.fill_box(Vector3i(x, y0, z), Vector3i(x + 1, y1, z + 1), mat)
+
+
+func _arena_carve_column(x: int, z: int, y0: int, y1: int) -> void:
+	brush.fill_box(Vector3i(x, y0, z), Vector3i(x + 1, y1, z + 1), VoxelMaterial.AIR)
+
+
+func _arena_carve_box(
+	x: int,
+	z: int,
+	w: int,
+	d: int,
+	y0: int,
+	y1: int,
+	bounds: Rect2i,
+	reserved: Dictionary
+) -> void:
+	var x0 := maxi(x, bounds.position.x)
+	var z0 := maxi(z, bounds.position.y)
+	var x1 := mini(x + w, bounds.end.x)
+	var z1 := mini(z + d, bounds.end.y)
+	if x0 >= x1 or z0 >= z1:
+		return
+	## Prefer one fill when the box has no reserved holes.
+	var hit_reserved := false
+	for zz in range(z0, z1):
+		for xx in range(x0, x1):
+			if reserved.has(Vector2i(xx, zz)):
+				hit_reserved = true
+				break
+		if hit_reserved:
+			break
+	if not hit_reserved:
+		brush.fill_box(Vector3i(x0, y0, z0), Vector3i(x1, y1, z1), VoxelMaterial.AIR)
+		return
+	for zz in range(z0, z1):
+		for xx in range(x0, x1):
+			if reserved.has(Vector2i(xx, zz)):
+				continue
+			_arena_carve_column(xx, zz, y0, y1)
 
 
 func _mark_clears(volume: RoomVolume, blocked: Dictionary) -> void:
@@ -422,6 +645,9 @@ func _plan_for(purpose: Purpose, volume: RoomVolume) -> Array[Dictionary]:
 				_step(Role.CORNER, ["urnRound", "crate", "barrel"], corner_n),
 				_step(Role.CENTER, ["table", "benchStone"], 1 if area >= 200 else 0),
 			])
+		Purpose.ARENA:
+			## Voxel labyrinth — handled in `_decorate_arena_labyrinth`, not furniture steps.
+			return [] as Array[Dictionary]
 	return [] as Array[Dictionary]
 
 

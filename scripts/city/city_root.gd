@@ -21,6 +21,7 @@ const CitySettingsPanelScript := preload("res://scripts/city/city_settings_panel
 const InfectionDirectorScript := preload("res://scripts/city/infection_director.gd")
 const InfectionMeteorScript := preload("res://scripts/city/infection_meteor.gd")
 const InfectionTendrilHudScript := preload("res://scripts/city/infection_tendril_hud.gd")
+const MonsterRosterScript := preload("res://scripts/city/monster_roster.gd")
 const UndeadInvasionDirectorScript := preload("res://scripts/city/undead_invasion_director.gd")
 const UndeadInvasionHudScript := preload("res://scripts/city/undead_invasion_hud.gd")
 const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
@@ -112,6 +113,9 @@ var _spawn_meteors_enabled: bool = false
 var _meteor_spawn_accum: float = 0.0
 var _meteor_spawn_interval_sec: float = 120.0
 var _undead_invasion_enabled: bool = false
+## Shared living-monster list (arena, N-key, invasion). Always available once first used.
+var _monsters: MonsterRoster
+## Optional invasion scenario on top of `_monsters` (waves / giant / convert).
 var _undead: UndeadInvasionDirector
 var _player_score: int = 0
 ## Collected gems and crafted items (25 stackable slots).
@@ -121,6 +125,8 @@ var _monster_summon_panel: MonsterSummonPanel
 ## World aim captured when N opens the summon panel (before the mouse moves onto UI).
 var _summon_aim: Variant = null
 var _game_over: bool = false
+## True while Enter-after-death is teleporting to the zone spawn.
+var _respawning: bool = false
 var _radar_cooldown_left: float = 0.0
 var _radar_reveal_left: float = 0.0
 var _gem_pickup_accum: float = 0.0
@@ -579,7 +585,7 @@ func _build_game_over_overlay() -> void:
 	box.add_child(_game_over_detail)
 
 	var hint := Label.new()
-	hint.text = "Press Enter to retry"
+	hint.text = "Press Enter to respawn at this zone's spawn"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 20)
 	hint.add_theme_color_override("font_color", Color(0.75, 0.95, 0.85))
@@ -717,19 +723,19 @@ func capture_summon_aim() -> void:
 	)
 
 
-## Spawn a catalogue body at an explicit world point (Arena lifts, tests). Ensures the
-## undead director exists. Returns null when nav / caps refuse.
-## When `snap_nav` is false the body stays at `world_pos` (lift undercroft delivery).
+## Spawn a catalogue body at an explicit world point (Arena lifts, tests).
+## Returns null when nav / caps refuse. When `snap_nav` is false the body stays at
+## `world_pos` (lift undercroft delivery). Does not involve the invasion director.
 func spawn_monster_at(
 	body_id: String, world_pos: Vector3, snap_nav: bool = true
 ) -> UndeadUnit:
 	if body_id.is_empty():
 		push_error("CityRoot.spawn_monster_at: empty body id")
 		return null
-	_ensure_undead_director()
-	if _undead == null or not _undead.has_method("spawn_monster_by_id"):
-		push_error("CityRoot.spawn_monster_at: undead director missing spawn")
-		assert(false, "CityRoot: no spawn_monster_by_id")
+	_ensure_monster_roster()
+	if _monsters == null:
+		push_error("CityRoot.spawn_monster_at: no MonsterRoster")
+		assert(false, "CityRoot: no MonsterRoster")
 		return null
 	var pos := world_pos
 	if snap_nav:
@@ -738,15 +744,26 @@ func spawn_monster_at(
 			var stand := NavService.instance().nearest_surface(entry.nav_profile, pos, 8.0)
 			if stand.found:
 				pos = stand.position
-	return _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
+	return _monsters.spawn_by_id(body_id, pos)
 
 
-## Living undead units (for Arena wipe). Empty when the director is not up.
+## Living monsters (for Arena wipe). Empty when the roster is not up.
 func alive_undead_units() -> Array:
-	_ensure_undead_director()
-	if _undead == null or not _undead.has_method("get_alive_units"):
+	_ensure_monster_roster()
+	if _monsters == null:
 		return []
-	return _undead.call("get_alive_units") as Array
+	return _monsters.get_alive_units() as Array
+
+
+## Drop one living unit without a death clip (Arena Clear / tools).
+func despawn_undead_unit(unit: UndeadUnit) -> void:
+	if unit == null or not is_instance_valid(unit):
+		return
+	_ensure_monster_roster()
+	if _monsters != null:
+		_monsters.despawn_unit(unit)
+		return
+	unit.queue_free()
 
 
 ## Spawn at the world aim captured when N opened. Tiny upward clearance keeps feet out of the
@@ -766,10 +783,10 @@ func summon_monster_at_aim(body_id: String) -> UndeadUnit:
 	if not bool(aim.get("did_hit", false)):
 		print("CityRoot: summon cancelled — world aim missed")
 		return null
-	_ensure_undead_director()
-	if _undead == null or not _undead.has_method("spawn_monster_by_id"):
-		push_error("CityRoot.summon_monster_at_aim: undead director missing spawn")
-		assert(false, "CityRoot: no spawn_monster_by_id")
+	_ensure_monster_roster()
+	if _monsters == null:
+		push_error("CityRoot.summon_monster_at_aim: no MonsterRoster")
+		assert(false, "CityRoot: no MonsterRoster")
 		return null
 	const BODY_CLEARANCE_M := 0.06
 	var requested: Vector3 = aim["point"] as Vector3
@@ -796,7 +813,7 @@ func summon_monster_at_aim(body_id: String) -> UndeadUnit:
 	)
 	CityProfiler.note_event("monster_summon %s" % body_id)
 	CityProfiler.begin("monster_summon")
-	var unit := _undead.call("spawn_monster_by_id", body_id, pos) as UndeadUnit
+	var unit := _monsters.spawn_by_id(body_id, pos)
 	CityProfiler.end("monster_summon")
 	if unit != null:
 		print("CityRoot: spawn actual=%s requested_voxel_hit=%s" % [unit.global_position, requested])
@@ -1210,8 +1227,8 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 	var undead: Array = []
 	var radar_on := _radar_reveal_left > 0.0
 	var range_r2 := range_m * range_m
-	if _undead != null and is_instance_valid(_undead):
-		for u: UndeadUnit in _undead.get_alive_units():
+	if _monsters != null and is_instance_valid(_monsters):
+		for u: UndeadUnit in _monsters.get_alive_units():
 			if u == null or not is_instance_valid(u):
 				continue
 			var pos := u.global_position
@@ -1219,7 +1236,7 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 			var dz := pos.z - origin.z
 			var d2 := dx * dx + dz * dz
 			var outside := d2 > range_r2
-			## Nearby undead always paint; beyond-range only while radar is live.
+			## Nearby monsters always paint; beyond-range only while radar is live.
 			if outside and not radar_on:
 				continue
 			var kind := "mage"
@@ -1328,10 +1345,11 @@ func _hide_game_over_overlay() -> void:
 
 
 func _retry_after_game_over() -> void:
-	if not _game_over or _booting:
+	if not _game_over or _booting or _respawning:
 		return
-	## Clear immediately so double-Enter / _input+_unhandled can't double-regen.
+	## Clear immediately so double-Enter / _input+_unhandled can't double-fire.
 	_game_over = false
+	_respawning = true
 	var want_undead := _undead_invasion_enabled
 	if _settings_panel != null and _settings_panel.has_method("is_undead_invasion_enabled"):
 		want_undead = bool(_settings_panel.call("is_undead_invasion_enabled"))
@@ -1339,15 +1357,88 @@ func _retry_after_game_over() -> void:
 	if _settings_panel != null and _settings_panel.has_method("is_spawn_meteors_enabled"):
 		_spawn_meteors_enabled = bool(_settings_panel.call("is_spawn_meteors_enabled"))
 	_hide_game_over_overlay()
-	call_deferred("_regenerate")
+	## Stay in the current world — teleport to this district's spawn point.
+	_respawn_at_zone_spawn()
+
+
+## Put the player back on their feet at the loaded district's spawn (Enter after death).
+func _respawn_at_zone_spawn() -> void:
+	if _booting:
+		_respawning = false
+		return
+	if _walker == null or not is_instance_valid(_walker) or _streamer == null or _tool == null:
+		_respawning = false
+		push_error("CityRoot: respawn unavailable — regenerating world")
+		call_deferred("_regenerate")
+		return
+	var death_pos := _walker.global_position
+	var coord := DistrictCoord.from_world(death_pos, VOXEL_SIZE)
+	var inst: DistrictInstance = _streamer.get_district(coord)
+	if inst == null or not is_instance_valid(inst) or inst.generator == null:
+		_respawning = false
+		push_error("CityRoot: respawn — district %s not ready, regenerating" % coord)
+		call_deferred("_regenerate")
+		return
+	_walker.set_physics_process(false)
+	_walker.velocity = Vector3.ZERO
+	var spawn: Vector3 = inst.generator.find_spawn_world(_tool)
+	if not is_finite(spawn.x):
+		_respawning = false
+		push_error("CityRoot: respawn — no spawn in %s, regenerating" % coord)
+		_walker.set_physics_process(true)
+		call_deferred("_regenerate")
+		return
+	_walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
+	_walker.velocity = Vector3.ZERO
+	_apply_spawn_yaw(_walker, inst.generator)
+	var floor_y := await _wait_floor_collision_ms(spawn, 15_000)
+	if is_nan(floor_y):
+		## Soft land on the generator Y if collisions are slow.
+		floor_y = spawn.y
+	if not is_instance_valid(_walker):
+		_respawning = false
+		return
+	_walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
+	_walker.velocity = Vector3.ZERO
+	_apply_spawn_yaw(_walker, inst.generator)
+	if _walker.has_method("restore_full_health"):
+		_walker.call("restore_full_health")
+	if _walker.has_method("set_game_over_locked"):
+		_walker.call("set_game_over_locked", false)
+	_walker.set_physics_process(true)
+	if _status != null:
+		_status.visible = true
+	_set_hud_enabled(true)
+	## Resume systems halted on death (settings may still leave them off).
+	if _undead_invasion_enabled:
+		_ensure_undead_director()
+		if _undead != null and _undead.has_method("set_enabled"):
+			_undead.call("set_enabled", true)
+	if _spawn_meteors_enabled:
+		_meteor_spawn_accum = 0.0
+		_roll_meteor_spawn_interval()
+	_respawning = false
+	print(
+		"CityRoot: respawned at zone spawn %s (%s) y=%.2f"
+		% [coord, DistrictTheme.for_district(city_seed, coord).display_name, floor_y]
+	)
+
+
+func _ensure_monster_roster() -> void:
+	if _monsters == null or not is_instance_valid(_monsters):
+		_monsters = MonsterRosterScript.new() as MonsterRoster
+		_monsters.name = "MonsterRoster"
+		add_child(_monsters)
+	_monsters.setup(self)
 
 
 func _ensure_undead_director() -> void:
+	_ensure_monster_roster()
 	if _undead == null or not is_instance_valid(_undead):
 		_undead = UndeadInvasionDirectorScript.new()
 		_undead.name = "UndeadInvasion"
 		add_child(_undead)
-	_undead.call("setup", self)
+	_undead.call("setup", self, _monsters)
 	if _undead_hud != null and is_instance_valid(_undead_hud) and _undead_invasion_enabled:
 		_undead_hud.call("bind_director", _undead)
 
@@ -1745,8 +1836,9 @@ func _regenerate() -> void:
 		_infection.call("clear_all")
 		_infection.queue_free()
 		_infection = null
+	if _monsters != null and is_instance_valid(_monsters):
+		_monsters.clear_all()
 	if _undead != null and is_instance_valid(_undead):
-		_undead.call("clear_all")
 		_undead.queue_free()
 		_undead = null
 	_player_score = 0
@@ -2266,9 +2358,9 @@ func apply_area_damage(center: Vector3, radius: float, source: DamageSource.Id) 
 	if radius <= 0.0:
 		push_error("CityRoot: an area attack of radius %f reaches nothing" % radius)
 		return 0
-	if _undead == null or not is_instance_valid(_undead):
+	if _monsters == null or not is_instance_valid(_monsters):
 		return 0
-	return int(_undead.call("damage_units_in_sphere", center, radius, source))
+	return _monsters.damage_units_in_sphere(center, radius, source)
 
 
 func _on_melee_strike(
@@ -2289,9 +2381,25 @@ func _on_melee_strike(
 	## stays out of the carving path — one strike is one or the other, never both.
 	if _apply_agent_hit(origin, end, dir, source):
 		return
-	var scale := float(_walker.get_character_scale())
+	apply_voxel_strike(origin, dir, max_range, float(_walker.get_character_scale()))
+
+
+## Shared voxel impact for player strikes and enemy projectiles. Indestructible solids
+## (arena shell, bedrock, LOS veil) stop the shot via solid probes but are not carved.
+## Returns true when at least one destructible / gem cell was resolved.
+func apply_voxel_strike(
+	origin: Vector3, direction: Vector3, max_range_m: float, character_scale: float
+) -> bool:
+	if _tool == null or _terrain == null or _brush == null:
+		return false
+	var dir := direction
+	if dir.length_squared() < 0.0001:
+		return false
+	dir = dir.normalized()
+	var scale := character_scale
 	if scale < 0.5:
-		return
+		return false
+	var max_range := maxf(max_range_m, 0.05)
 	var local_origin := _terrain.to_local(origin)
 	var max_range_vox := max_range / VOXEL_SIZE
 	var step := 0.2  ## fraction of a voxel — precision over speed
@@ -2317,7 +2425,7 @@ func _on_melee_strike(
 		found = true
 		break
 	if not found:
-		return
+		return false
 
 	## Diameter = 1 voxel per human scale → radius = scale/2.
 	var radius_vox := scale * 0.5
@@ -2359,10 +2467,10 @@ func _on_melee_strike(
 	_brush.end_edit()
 
 	if hit_gem and detached.is_empty():
-		return
+		return true
 
 	if _cascade == null:
-		return
+		return not detached.is_empty() or hit_gem
 	var hit_world := _terrain.to_global(
 		Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
 	)
@@ -2383,6 +2491,7 @@ func _on_melee_strike(
 
 	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, 30.0 + 8.0 * scale)
+	return true
 
 
 func _on_meteor_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:
@@ -2675,10 +2784,10 @@ func collect_hostile_monster_positions(
 	from: Vector3, max_dist: float, hunter: UndeadUnit = null
 ) -> PackedVector3Array:
 	var out := PackedVector3Array()
-	if _undead == null or not is_instance_valid(_undead) or not _undead.has_method("get_alive_units"):
+	if _monsters == null or not is_instance_valid(_monsters):
 		return out
 	var max_d2 := max_dist * max_dist
-	var units: Array = _undead.call("get_alive_units") as Array
+	var units: Array = _monsters.get_alive_units() as Array
 	for entry in units:
 		var unit := entry as UndeadUnit
 		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
@@ -2714,11 +2823,11 @@ func find_nearest_monster_position(
 func find_nearest_hostile_monster(
 	from: Vector3, max_dist: float, hunter: UndeadUnit = null
 ) -> UndeadUnit:
-	if _undead == null or not is_instance_valid(_undead) or not _undead.has_method("get_alive_units"):
+	if _monsters == null or not is_instance_valid(_monsters):
 		return null
 	var best: UndeadUnit = null
 	var best_d2 := max_dist * max_dist
-	var units: Array = _undead.call("get_alive_units") as Array
+	var units: Array = _monsters.get_alive_units() as Array
 	for entry in units:
 		var unit := entry as UndeadUnit
 		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
@@ -2763,6 +2872,9 @@ func try_orb_hit_player(world_pos: Vector3, radius: float) -> bool:
 	var hit_r := radius + 0.45 * float(_walker.get_character_scale())
 	if world_pos.distance_squared_to(ppos) > hit_r * hit_r:
 		return false
+	## Capture sphere must not reach through solid walls / arena shell / LOS veil.
+	if not has_voxel_line_of_sight(world_pos, ppos):
+		return false
 	damage_player(DamageSourceScript.Id.UNDEAD_ORB)
 	return true
 
@@ -2789,6 +2901,9 @@ func try_convert_ped_near(world_pos: Vector3, radius: float) -> Variant:
 		best_crowd = inst.crowd
 		best_agent = hit["agent"] as PedAgent
 	if best_crowd == null or best_agent == null:
+		return null
+	var ped_pos: Vector3 = best_agent.global_position
+	if not has_voxel_line_of_sight(world_pos, ped_pos):
 		return null
 	var former: Vector3 = best_crowd.convert_agent_silent(best_agent)
 	if former == Vector3.INF:
@@ -3468,8 +3583,9 @@ func _probe_voxel_ray(
 	if destructible_only:
 		local_hit = _probe_destructible_local(local_from, local_to, get_voxel)
 	else:
+		## Endpoints are terrain-local voxels — step pull-back is in voxel units (~1).
 		local_hit = ProjectileLos.probe_solid_ray(
-			local_from, local_to, get_voxel, VOXEL_SIZE
+			local_from, local_to, get_voxel, 1.0
 		)
 	if local_hit.is_empty():
 		return {}
@@ -3478,9 +3594,10 @@ func _probe_voxel_ray(
 	if world_len < 0.05:
 		return {}
 	world_dir /= world_len
-	var hit_t := float(local_hit["distance"])
-	## Local march distance matches world when the terrain node is unscaled.
-	hit_t = clampf(hit_t, 0.0, world_len)
+	## March ran in terrain-local voxel units (terrain.scale = VOXEL_SIZE). Convert.
+	var hit_t := ProjectileLos.local_distance_to_world(
+		float(local_hit["distance"]), local_from, local_to, world_len
+	)
 	var out := {
 		"point": from_world + world_dir * hit_t,
 		"normal": -world_dir,
@@ -3511,7 +3628,8 @@ func _probe_destructible_local(
 		var id := int(get_voxel.call(v))
 		if not VoxelMaterial.is_destructible(id):
 			continue
-		var hit_t := clampf(float(i) * step - VOXEL_SIZE * 0.2, 0.0, dist)
+		## Local march: pull back ~0.2 voxel (not VOXEL_SIZE metres).
+		var hit_t := clampf(float(i) * step - 0.2, 0.0, dist)
 		return {
 			"point": local_from + dir * hit_t,
 			"normal": -dir,
@@ -3631,15 +3749,15 @@ func _query_closest_agent_hit(from: Vector3, to: Vector3) -> Dictionary:
 					best = car_hit.duplicate()
 					best["kind"] = "vehicle"
 					best["vehicles"] = inst.vehicles
-	if _undead != null and is_instance_valid(_undead) and _undead.has_method("query_segment_hit"):
-		var u_hit: Dictionary = _undead.call("query_segment_hit", from, to)
+	if _monsters != null and is_instance_valid(_monsters):
+		var u_hit: Dictionary = _monsters.query_segment_hit(from, to)
 		if not u_hit.is_empty():
 			var d3: float = float(u_hit["distance"])
 			if d3 < best_dist:
 				best_dist = d3
 				best = u_hit.duplicate()
 				best["kind"] = "undead"
-				best["undead"] = _undead
+				best["undead"] = _monsters
 	return best
 
 
@@ -3958,8 +4076,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
-	## Game-over retry must work even if another control ate unhandled input.
-	if not _game_over or _booting:
+	## Game-over respawn must work even if another control ate unhandled input.
+	if not _game_over or _booting or _respawning:
 		return
 	var ek := event as InputEventKey
 	if ek == null or not ek.pressed or ek.echo:

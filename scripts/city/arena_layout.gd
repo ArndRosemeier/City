@@ -28,10 +28,25 @@ var lift_pads: Array[Vector2i] = []
 
 
 ## Clear air volume above the sand for decorate / wipe (lift pads stay clear).
+## District-local voxel coords — offset with `pit_volume_world` for the live brush.
 func pit_volume(air_h: int = 8) -> RoomVolume:
 	var v := RoomVolume.make(pit_rect, pit_floor_y, air_h)
 	for pad: Vector2i in lift_pads:
 		v.keep_clear.append(Rect2i(pad.x - 4, pad.y - 4, 9, 9))
+	return v
+
+
+## Same as `pit_volume`, shifted into world voxel space for CityBrush (origin = 0).
+func pit_volume_world(district_origin: Vector3i, air_h: int = 8) -> RoomVolume:
+	var local := pit_volume(air_h)
+	var oxz := Vector2i(district_origin.x, district_origin.z)
+	var v := RoomVolume.make(
+		Rect2i(local.rect.position + oxz, local.rect.size),
+		local.floor_y + district_origin.y,
+		local.air_h
+	)
+	for c: Rect2i in local.keep_clear:
+		v.keep_clear.append(Rect2i(c.position + oxz, c.size))
 	return v
 
 

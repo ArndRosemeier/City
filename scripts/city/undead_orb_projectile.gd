@@ -81,11 +81,32 @@ func _physics_process(delta: float) -> void:
 			_obstacle_host.call("projectile_obstacle_distance", prev, tip, false)
 		)
 		if hit_d >= 0.0 and hit_d < prev.distance_to(tip):
+			var dir := _velocity
+			if dir.length_squared() < 0.0001:
+				dir = tip - prev
+			if dir.length_squared() > 0.0001:
+				dir = dir.normalized()
+			else:
+				dir = Vector3.FORWARD
+			var hit_point := prev + dir * hit_d
+			## Same voxel strike path as player laser / blaster impacts.
+			if _obstacle_host.has_method("apply_voxel_strike"):
+				_obstacle_host.call(
+					"apply_voxel_strike", hit_point - dir * 0.15, dir, 2.5, 1.0
+				)
 			_die()
 			return
+	## Invasion director converts peds (+ player). Free / arena summons still kill the player.
 	if _director != null and _director.has_method("try_convert_ped_at"):
 		if bool(_director.call("try_convert_ped_at", global_position, CAPTURE_RADIUS_M)):
 			_die()
+			return
+	if (
+		_obstacle_host != null
+		and _obstacle_host.has_method("try_orb_hit_player")
+		and bool(_obstacle_host.call("try_orb_hit_player", global_position, CAPTURE_RADIUS_M))
+	):
+		_die()
 
 
 func _die() -> void:

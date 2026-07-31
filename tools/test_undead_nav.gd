@@ -135,14 +135,17 @@ class TestCity:
 		pass
 
 
-## The real director, minus the CityRoot child lookup it does to find the terrain.
+## Invasion director on a harness-owned MonsterRoster (terrain injected, no CityRoot boot).
 class TestDirector:
 	extends UndeadInvasionDirector
 
 	func bind(city: CityRoot, terrain: VoxelTerrain, lod: NavLod) -> void:
 		_city = city
-		_terrain = terrain
-		_lod = lod
+		var monsters := MonsterRoster.new()
+		monsters.name = "MonsterRoster"
+		add_child(monsters)
+		monsters.setup(city, terrain, lod)
+		_roster = monsters
 
 
 func _fail(msg: String) -> void:
@@ -666,11 +669,10 @@ func _spawn(spawn_role: UndeadUnit.Role, at: Vector3, body_id: String = "") -> U
 	return unit
 
 
-## Dropping a body straight out of the tree trips the director's registered-on-exit alarm, so
+## Dropping a body straight out of the tree trips the roster's registered-on-exit alarm, so
 ## the roster loses it first — the same order a death goes in.
 func _despawn(unit: UndeadUnit) -> void:
-	_director.unregister_unit(unit)
-	unit.queue_free()
+	_director.despawn_unit(unit)
 
 
 func _note_rung(state: NavLadder.State) -> void:

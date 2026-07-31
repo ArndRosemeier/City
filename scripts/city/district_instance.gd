@@ -574,7 +574,8 @@ func _spawn_arena_controller(gen: DistrictGenerator) -> void:
 		_dseed,
 		Callable(self, "live_brush"),
 		Callable(city, "spawn_monster_at"),
-		Callable(city, "alive_undead_units")
+		Callable(city, "alive_undead_units"),
+		Callable(city, "despawn_undead_unit")
 	)
 
 

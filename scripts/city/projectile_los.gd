@@ -2,15 +2,35 @@
 ##
 ## Only solid voxels count — agents (player, peds, mobs) are ignored here so packs can
 ## shoot past each other. CityRoot owns the terrain tool; callers use the wrappers there.
+##
+## Callers may pass either world metres or terrain-local voxel units as endpoints — the
+## march is unit-agnostic. When CityRoot marches in `VoxelTerrain.to_local` space it must
+## convert the returned distance back to world metres via `local_distance_to_world`
+## (terrain scale is VOXEL_SIZE; local length ≠ world length).
 class_name ProjectileLos
 extends RefCounted
 
-## March step in metres (~0.4 voxel at 0.5 m). Same ballpark as destructible probe.
+## March step in the same units as the endpoints (~0.2 voxel when marching in local space).
 const STEP_M := 0.2
 
 
-## First solid voxel along a world ray. `get_voxel` is Callable(Vector3i) -> int.
-## Returns {} or {point, normal, distance, voxel_id}.
+## Map a hit distance from terrain-local units onto the world segment length.
+## `local_dist` / `local_from` / `local_to` use VoxelTerrain.to_local space; `world_len` is
+## metres. Clamped to the world segment.
+static func local_distance_to_world(
+	local_dist: float, local_from: Vector3, local_to: Vector3, world_len: float
+) -> float:
+	if world_len <= 0.0:
+		return 0.0
+	var local_len := local_from.distance_to(local_to)
+	if local_len <= 0.0001:
+		return 0.0
+	return clampf(world_len * (local_dist / local_len), 0.0, world_len)
+
+
+## First solid voxel along a ray. `get_voxel` is Callable(Vector3i) -> int.
+## Returns {} or {point, normal, distance, voxel_id}. `distance` is in the same units as
+## the endpoints (local voxels when CityRoot passes to_local points).
 static func probe_solid_ray(
 	from_world: Vector3,
 	to_world: Vector3,
@@ -37,6 +57,8 @@ static func probe_solid_ray(
 		var id := int(get_voxel.call(v))
 		if not VoxelMaterial.is_solid(id):
 			continue
+		## Pull the hit slightly toward the entry face; `voxel_size` is in endpoint units
+		## (pass ~1.0 when marching in voxel-local space, or VOXEL_SIZE in world metres).
 		var hit_t := clampf(
 			float(i) * STEP_M - voxel_size * 0.2, 0.0, dist
 		)

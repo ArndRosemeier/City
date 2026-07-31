@@ -100,7 +100,10 @@ signal died(unit: UndeadUnit, was_giant: bool)
 var role: Role = Role.MAGE
 var state: State = State.IDLE
 var character_scale: float = 1.0
-var _director: UndeadInvasionDirector
+var _roster: MonsterRoster
+## Optional UndeadInvasionDirector (giant pad / orb convert). Null for arena / free summons.
+## Typed Node to avoid a class_name parse cycle with the director.
+var _invasion: Node
 var _city: CityRoot
 var _terrain: VoxelTerrain
 var _lod: NavLod
@@ -157,17 +160,19 @@ var _combat_prey: Vector3 = Vector3.INF
 ## particular creature rather than about the roster.
 func setup(
 	p_role: Role,
-	director: UndeadInvasionDirector,
+	roster: MonsterRoster,
 	city: CityRoot,
 	world_pos: Vector3,
 	terrain: VoxelTerrain,
 	lod: NavLod,
 	p_seed: int,
-	p_body_id: String = ""
+	p_body_id: String = "",
+	invasion: Node = null
 ) -> void:
 	role = p_role
 	_body_id = p_body_id
-	_director = director
+	_roster = roster
+	_invasion = invasion
 	_city = city
 	_terrain = terrain
 	_lod = lod
@@ -958,7 +963,12 @@ func tick(delta: float) -> void:
 	if _anim != null:
 		_anim.active = not far or role == Role.GIANT
 
-	if role != Role.GIANT and _director != null and _director.wants_giant_candidate(self):
+	if (
+		role != Role.GIANT
+		and _invasion != null
+		and _invasion.has_method("wants_giant_candidate")
+		and bool(_invasion.call("wants_giant_candidate", self))
+	):
 		_begin_pad_seek()
 
 	match state:
@@ -1070,7 +1080,8 @@ func _become_giant() -> void:
 	_apply_scale()
 	## A giant is a different body to the field: it re-registers on the giant profile.
 	_rebuild_nav()
-	_director.notify_giant_ready(self)
+	if _invasion != null and _invasion.has_method("notify_giant_ready"):
+		_invasion.call("notify_giant_ready", self)
 	_play_action(CreatureClips.Action.IDLE)
 
 
@@ -1099,12 +1110,13 @@ func _tick_scrape() -> void:
 func _fire_orb(toward: Vector3) -> void:
 	var orb: Node = OrbScript.new()
 	orb.name = "UndeadOrb"
-	var parent: Node = _director if _director != null else self
+	var parent: Node = _roster if _roster != null else self
 	parent.add_child(orb)
 	var muzzle := global_position + Vector3(0.0, MUZZLE_BASE_M * _span_tall() * character_scale, 0.0)
 	## Prey aim point already includes chest height from LOS selection.
+	## Convert callback is invasion-only; arena mages still fire for player hit via city.
 	if orb.has_method("launch"):
-		orb.call("launch", muzzle, toward, _director, _city)
+		orb.call("launch", muzzle, toward, _invasion, _city)
 
 
 func _distance_to_player() -> float:

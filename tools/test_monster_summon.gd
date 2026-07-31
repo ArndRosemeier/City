@@ -19,13 +19,13 @@ class TestCity:
 	func bind_player(walker: CityWalker) -> void:
 		_walker = walker
 
-	func bind_undead(director: UndeadInvasionDirector) -> void:
-		_undead = director
+	func bind_monsters(roster: MonsterRoster) -> void:
+		_monsters = roster
 
-	func _ensure_undead_director() -> void:
-		if _undead == null or not is_instance_valid(_undead):
-			push_error("TestCity: undead director not bound before summon")
-			assert(false, "TestCity: no undead")
+	func _ensure_monster_roster() -> void:
+		if _monsters == null or not is_instance_valid(_monsters):
+			push_error("TestCity: MonsterRoster not bound before summon")
+			assert(false, "TestCity: no MonsterRoster")
 
 
 ## A real walker whose cursor aim is scripted, so the summon path is exercised with the
@@ -38,14 +38,20 @@ class AimStub:
 		return aim
 
 
-class RecordingDirector:
-	extends UndeadInvasionDirector
+class RecordingRoster:
+	extends MonsterRoster
 
 	var last_body_id: String = ""
 	var last_pos: Vector3 = Vector3.INF
 	var spawn_count: int = 0
 
-	func spawn_monster_by_id(body_id: String, world_pos: Vector3, _body_seed: int = -1) -> UndeadUnit:
+	func spawn_by_id(
+		body_id: String,
+		world_pos: Vector3,
+		_body_seed: int = -1,
+		_for_invasion: bool = false,
+		_invasion: Node = null
+	) -> UndeadUnit:
 		last_body_id = body_id
 		last_pos = world_pos
 		spawn_count += 1
@@ -150,10 +156,10 @@ func _test_cached_aim_spawn() -> void:
 	var city := TestCity.new()
 	city.name = "TestCity"
 	add_child(city)
-	var director := RecordingDirector.new()
-	director.name = "RecordingDirector"
-	city.add_child(director)
-	city.bind_undead(director)
+	var roster := RecordingRoster.new()
+	roster.name = "RecordingRoster"
+	city.add_child(roster)
+	city.bind_monsters(roster)
 
 	var aim_pos := Vector3(40.0, 1.0, 28.0)
 	var stub := AimStub.new()
@@ -178,23 +184,23 @@ func _test_cached_aim_spawn() -> void:
 		city.queue_free()
 		return
 	var expected := aim_pos + Vector3.UP * BODY_CLEARANCE_M
-	if director.last_pos.distance_to(expected) > 0.001:
+	if roster.last_pos.distance_to(expected) > 0.001:
 		_fail(
 			"FAIL spawn used %s want cached aim %s (live stub was moved)"
-			% [str(director.last_pos), str(expected)]
+			% [str(roster.last_pos), str(expected)]
 		)
 		city.queue_free()
 		return
-	if director.last_body_id != "kaykit/Skeleton_Minion":
-		_fail("FAIL spawn body id %s" % director.last_body_id)
+	if roster.last_body_id != "kaykit/Skeleton_Minion":
+		_fail("FAIL spawn body id %s" % roster.last_body_id)
 		city.queue_free()
 		return
 	unit.queue_free()
 
 	city._summon_aim = {"point": Vector3.ZERO, "normal": Vector3.UP, "did_hit": false}
-	var before := director.spawn_count
+	var before := roster.spawn_count
 	var missed := city.summon_monster_at_aim("kaykit/Skeleton_Minion")
-	if missed != null or director.spawn_count != before:
+	if missed != null or roster.spawn_count != before:
 		_fail("FAIL summon_monster_at_aim must not spawn on aim miss")
 		if missed != null:
 			missed.queue_free()

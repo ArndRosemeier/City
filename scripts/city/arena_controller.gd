@@ -18,6 +18,7 @@ var _lifts: Array[ArenaSummonLift] = []
 var _brush_cb: Callable = Callable()
 var _spawn_cb: Callable = Callable()
 var _units_cb: Callable = Callable()
+var _despawn_cb: Callable = Callable()
 var _decorate_seed: int = 0
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -29,7 +30,8 @@ func setup(
 	p_district_seed: int,
 	live_brush: Callable,
 	spawn_monster: Callable,
-	alive_units: Callable
+	alive_units: Callable,
+	despawn_unit: Callable = Callable()
 ) -> void:
 	layout = p_layout
 	origin_vox = p_origin_vox
@@ -42,6 +44,7 @@ func setup(
 			return null
 		return spawn_monster.call(body_id, world_pos, false) as UndeadUnit
 	_units_cb = alive_units
+	_despawn_cb = despawn_unit
 	_decorate_seed = district_seed ^ 0xA5E4A
 	_rng.seed = district_seed ^ 0x51C0DE
 	name = "ArenaController"
@@ -64,15 +67,27 @@ func redecorate_pit() -> void:
 	var brush: CityBrush = _brush_cb.call() as CityBrush if _brush_cb.is_valid() else null
 	if brush == null:
 		push_error("ArenaController.redecorate_pit: no live brush")
+		assert(false, "ArenaController: decorate needs live brush")
 		return
-	var vol := layout.pit_volume()
+	if layout == null:
+		push_error("ArenaController.redecorate_pit: null layout")
+		assert(false, "ArenaController: decorate needs layout")
+		return
+	## Live CityBrush is world-voxel space (origin 0) — never feed district-local rects.
+	var vol := layout.pit_volume_world(origin_vox)
 	var dec: RoomDecorator = RoomDecoratorScript.new()
 	dec.brush = brush
 	dec.rng = RandomNumberGenerator.new()
 	dec.rng.seed = _decorate_seed
-	## Castle dungeon kit for now — specialized arena dressing can replace this later.
-	var n := dec.decorate(vol, RoomDecorator.Purpose.DUNGEON_CHAMBER)
-	print("ArenaController: decorated pit with %d props (seed=%d)" % [n, _decorate_seed])
+	var n := dec.decorate(vol, RoomDecorator.Purpose.ARENA)
+	if n <= 0:
+		push_error(
+			"ArenaController.redecorate_pit: labyrinth placed 0 walls (seed=%d vol=%s origin=%s)"
+			% [_decorate_seed, vol.describe(), origin_vox]
+		)
+		assert(false, "ArenaController: arena labyrinth placed nothing")
+		return
+	print("ArenaController: arena labyrinth walls=%d (seed=%d)" % [n, _decorate_seed])
 
 
 ## Deliver every selected body; pads / lifts are shuffled so a batch does not clump.
@@ -173,21 +188,31 @@ func _shuffle_strings(arr: PackedStringArray) -> void:
 func _despawn_arena_units() -> void:
 	if not _units_cb.is_valid():
 		return
-	var units: Array = _units_cb.call() as Array
+	## Snapshot — despawn unregisters and may mutate the director list.
+	var units: Array = (_units_cb.call() as Array).duplicate()
 	for u in units:
 		var unit := u as UndeadUnit
 		if unit == null or not is_instance_valid(unit):
 			continue
 		if not ArenaCombatScript.is_arena_owned(unit):
 			continue
-		unit.queue_free()
+		if _despawn_cb.is_valid():
+			_despawn_cb.call(unit)
+		else:
+			push_error("ArenaController._despawn_arena_units: no despawn callback")
+			unit.queue_free()
 
 
 func _clear_pit_props() -> void:
 	var brush: CityBrush = _brush_cb.call() as CityBrush if _brush_cb.is_valid() else null
 	if brush == null:
 		push_error("ArenaController._clear_pit_props: no live brush")
+		assert(false, "ArenaController: clear needs live brush")
 		return
-	var vol := layout.pit_volume()
+	if layout == null:
+		push_error("ArenaController._clear_pit_props: null layout")
+		assert(false, "ArenaController: clear needs layout")
+		return
+	var vol := layout.pit_volume_world(origin_vox)
 	## Clear the air band only — sand slab and ARENA_SHELL undercroft stay.
 	brush.fill_box(vol.air_min(), vol.air_max(), VoxelMaterial.AIR)

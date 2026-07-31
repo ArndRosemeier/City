@@ -75,8 +75,11 @@ class TestDirector:
 
 	func bind(city: CityRoot, terrain: VoxelTerrain, lod: NavLod) -> void:
 		_city = city
-		_terrain = terrain
-		_lod = lod
+		var monsters := MonsterRoster.new()
+		monsters.name = "MonsterRoster"
+		add_child(monsters)
+		monsters.setup(city, terrain, lod)
+		_roster = monsters
 
 
 func _fail(msg: String) -> void:
@@ -833,9 +836,7 @@ func _spawn(role: UndeadUnit.Role, at: Vector3, body_id: String) -> UndeadUnit:
 func _settle(unit: UndeadUnit) -> void:
 	await get_tree().process_frame
 	if is_instance_valid(unit):
-		if _director._units.has(unit):
-			_director.unregister_unit(unit)
-		unit.queue_free()
+		_director.despawn_unit(unit)
 	await get_tree().process_frame
 
 

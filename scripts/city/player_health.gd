@@ -116,6 +116,13 @@ func apply_damage_scaled(source: DamageSource.Id, scale: float) -> float:
 	return taken
 
 
+## Full restore after a chosen respawn — not gradual regen.
+func restore_full() -> void:
+	_current = _maximum
+	_regen_block_sec = 0.0
+	changed.emit(_current, _maximum)
+
+
 ## Out-of-combat recovery. The delay is spent first and the same frame does not also heal, so
 ## "six seconds since the last hit" means six seconds and not five and a frame.
 func tick(delta: float) -> void:

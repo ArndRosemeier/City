@@ -43,11 +43,14 @@ class TestCity:
 	func trigger_game_over(reason: String = "Converted by undead") -> void:
 		pass
 
-	## Harness binds a TestDirector with its own terrain; skip CityRoot.setup().
-	func _ensure_undead_director() -> void:
-		if _undead == null or not is_instance_valid(_undead):
-			push_error("TestCity: undead director not bound before summon")
-			assert(false, "TestCity: no undead")
+	## Harness binds a MonsterRoster; skip CityRoot.setup().
+	func _ensure_monster_roster() -> void:
+		if _monsters == null or not is_instance_valid(_monsters):
+			push_error("TestCity: MonsterRoster not bound before summon")
+			assert(false, "TestCity: no MonsterRoster")
+
+	func bind_monsters(roster: MonsterRoster) -> void:
+		_monsters = roster
 
 
 class TestDirector:
@@ -55,8 +58,13 @@ class TestDirector:
 
 	func bind(city: CityRoot, terrain: VoxelTerrain, lod: NavLod) -> void:
 		_city = city
-		_terrain = terrain
-		_lod = lod
+		var monsters := MonsterRoster.new()
+		monsters.name = "MonsterRoster"
+		add_child(monsters)
+		monsters.setup(city, terrain, lod)
+		_roster = monsters
+		if city is TestCity:
+			(city as TestCity).bind_monsters(monsters)
 
 
 func _fail(msg: String) -> void:
@@ -359,20 +367,21 @@ func _test_freed_unit_aim_query() -> void:
 		return
 	## Death unregisters; free immediately (skip the 1.6 s corpse timer).
 	var _score: int = unit.kill_from_player()
-	if _director._units.has(unit):
-		_fail("FAIL dead unit still registered on the director")
+	var monsters := _director.roster()
+	if monsters.is_registered(unit):
+		_fail("FAIL dead unit still registered on the MonsterRoster")
 		unit.queue_free()
 		return
-	var roster_after_death := _director._units.size()
+	var roster_after_death := monsters.tracked_count()
 	unit.queue_free()
 	await get_tree().process_frame
 	await get_tree().process_frame
 	## Must not throw "Nonexistent function is_alive in base previously freed".
 	var after: Dictionary = _director.query_segment_hit(from, to)
-	if _director._units.size() != roster_after_death:
+	if monsters.tracked_count() != roster_after_death:
 		_fail(
-			"FAIL director roster changed after free (%d → %d)"
-			% [roster_after_death, _director._units.size()]
+			"FAIL MonsterRoster changed after free (%d → %d)"
+			% [roster_after_death, monsters.tracked_count()]
 		)
 		return
 	if not after.is_empty():
@@ -393,8 +402,9 @@ class AimStub:
 func _despawn(unit: UndeadUnit) -> void:
 	if unit == null or not is_instance_valid(unit):
 		return
-	if _director != null and _director._units.has(unit):
-		_director.unregister_unit(unit)
+	if _director != null:
+		_director.despawn_unit(unit)
+		return
 	unit.queue_free()
 
 

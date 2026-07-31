@@ -136,10 +136,42 @@ func _ready() -> void:
 		_fail("FAIL ARENA_PIT purpose name")
 		_quit()
 		return
+	if RoomDecorator.purpose_name(RoomDecorator.Purpose.ARENA) != "arena":
+		_fail("FAIL ARENA purpose name")
+		_quit()
+		return
+	if RoomDecorator.purpose_from_name("arena") != RoomDecorator.Purpose.ARENA:
+		_fail("FAIL purpose_from_name arena")
+		_quit()
+		return
+	if RoomDecorator.purpose_from_name("arena_pit") != RoomDecorator.Purpose.ARENA_PIT:
+		_fail("FAIL purpose_from_name arena_pit")
+		_quit()
+		return
 	if VoxelMaterial.is_destructible(VoxelMaterial.ARENA_SHELL):
 		_fail("FAIL ARENA_SHELL must not be destructible")
 		_quit()
 		return
+	## Live brush is world-voxel space — decorate/clear must shift the pit by district origin.
+	var origin := Vector3i(480, 0, -960)
+	var world_vol := layout.pit_volume_world(origin)
+	var local_vol := layout.pit_volume()
+	if world_vol.rect.position != local_vol.rect.position + Vector2i(origin.x, origin.z):
+		_fail(
+			"FAIL pit_volume_world XZ %s want local+origin %s"
+			% [world_vol.rect.position, local_vol.rect.position + Vector2i(origin.x, origin.z)]
+		)
+		_quit()
+		return
+	if world_vol.floor_y != local_vol.floor_y + origin.y:
+		_fail("FAIL pit_volume_world floor_y %d" % world_vol.floor_y)
+		_quit()
+		return
+	if world_vol.keep_clear.size() != local_vol.keep_clear.size():
+		_fail("FAIL pit_volume_world keep_clear count")
+		_quit()
+		return
+	print("pit_volume_world: ok offset=%s" % origin)
 
 	var blocks: Dictionary = res["blocks"]
 	var deck := int(res["ground_thickness"])
@@ -190,6 +222,28 @@ func _ready() -> void:
 		_fail(
 			"FAIL tribune lip at (%d,%d,%d) is %d not LOS_VEIL"
 			% [lip_x, layout.seating_y + 2, lip_z, veil_mat]
+		)
+		_quit()
+		return
+	## Gate mouth must keep a full-height LOS curtain (stair tunnel used to leave a
+	## shoot-through hole at the summon UI).
+	var gate_mid_x := pit.position.x + pit.size.x / 2
+	var gate_lip_z := pit.position.y - 4
+	var gate_veil_low := _probe(blocks, gate_mid_x, deck + 4, gate_lip_z)
+	if gate_veil_low != VoxelMaterial.LOS_VEIL:
+		_fail(
+			"FAIL gate LOS curtain at (%d,%d,%d) is %d not LOS_VEIL"
+			% [gate_mid_x, deck + 4, gate_lip_z, gate_veil_low]
+		)
+		_quit()
+		return
+	## Board parapet is restored after the gate carve — no hole where stairs meet UI.
+	var board_z := pit.position.y - 5
+	var board_mat := _probe(blocks, gate_mid_x, layout.seating_y + 2, board_z)
+	if board_mat != VoxelMaterial.ARENA_SHELL:
+		_fail(
+			"FAIL board parapet at gate mid (%d,%d,%d) is %d not ARENA_SHELL"
+			% [gate_mid_x, layout.seating_y + 2, board_z, board_mat]
 		)
 		_quit()
 		return

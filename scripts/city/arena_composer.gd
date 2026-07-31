@@ -51,9 +51,12 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_outer_mass()
 	_build_pit()
 	_finish_seating_deck()
+	## Gates first: they carve AIR through the wall ring. LOS veil + board parapets
+	## are stamped afterward so stair mouths stay sealed to combat and the UI wall
+	## is not left with a hole at mid-face.
+	_carve_gates()
 	_build_tribune_los_veil()
 	_build_board_walls()
-	_carve_gates()
 	_build_lift_shafts()
 	_scatter_spectators()
 	print("ArenaComposer: %s" % layout.describe())
@@ -68,9 +71,9 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_outer_mass()
 	_build_pit()
 	_finish_seating_deck()
+	_carve_gates()
 	_build_tribune_los_veil()
 	_build_board_walls()
-	_carve_gates()
 
 
 func _begin(_min_v: Vector3i, _max_v: Vector3i) -> bool:
@@ -320,20 +323,23 @@ func _build_board_walls() -> void:
 
 func _build_tribune_los_veil() -> void:
 	## One-cell invisible LOS veil on the seating lip. Tall enough to cover a standing
-	## spectator; walk-through so players can jump in. Gates carve through it afterward.
+	## spectator; walk-through so players can still jump in. Gate mouths get a full-height
+	## curtain (sand → above seating) because `_carve_gates` opens the pit wall there —
+	## without that, pit mages shoot spectators / the summon UI through the stair tunnels.
 	var pit := layout.pit_rect
 	var wall := pit.grow(WALL_T)
 	var lip := pit.grow(WALL_T + 1)
 	var seat_y := layout.seating_y
-	var y0 := seat_y + 1
 	var y1 := seat_y + 1 + LOS_VEIL_H
+	var sand_y := layout.pit_floor_y
 	for z in range(lip.position.y, lip.end.y):
 		for x in range(lip.position.x, lip.end.x):
 			var p := Vector2i(x, z)
 			if wall.has_point(p):
 				continue
+			var y0 := seat_y + 1
 			if _in_any_gate(p):
-				continue
+				y0 = sand_y + 1
 			brush.fill_box(
 				Vector3i(x, y0, z),
 				Vector3i(x + 1, y1, z + 1),
