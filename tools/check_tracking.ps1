@@ -28,10 +28,15 @@ try {
 
 	$untracked = @(git -c core.quotepath=false ls-files --others --exclude-standard)
 	if ($untracked.Count -gt 0) {
-		Write-Step "ERROR: Unexpected untracked files (add them, or add an explicit .gitignore rule):"
+		Write-Step "COMMIT REMINDER: unexpected untracked files block packaging/publish."
+		Write-Step "Releases stage from git-tracked files only. Commit these, or add an explicit .gitignore rule:"
 		$untracked | ForEach-Object { Write-Host ("  ?? " + $_) }
 		Write-Step ""
-		Write-Step "Policy: everything important is tracked; exceptions must be explicit in .gitignore."
+		Write-Step "Suggested next steps:"
+		Write-Step "  git add path/to/file"
+		Write-Step "  git commit"
+		Write-Step "  git push"
+		Write-Step "  then re-run publish_portable_release.bat"
 		exit 1
 	}
 
@@ -54,8 +59,9 @@ try {
 		}
 	}
 	if ($missing.Count -gt 0) {
-		Write-Step "ERROR: Required ship files are not tracked in git:"
+		Write-Step "COMMIT REMINDER: required ship files are not tracked in git:"
 		$missing | ForEach-Object { Write-Host ("  missing: " + $_) }
+		Write-Step "Add and commit them before publishing."
 		exit 1
 	}
 
@@ -86,9 +92,9 @@ try {
 		}
 	}
 	if ($lackUid.Count -gt 0) {
-		Write-Step "ERROR: Tracked sources missing tracked .uid sidecars:"
+		Write-Step "COMMIT REMINDER: tracked sources are missing tracked .uid sidecars:"
 		$lackUid | ForEach-Object { Write-Host ("  " + $_) }
-		Write-Step "Open the project once in Godot, then: git add **/*.uid"
+		Write-Step "Open the project once in Godot, then git-add the .uid files, commit, and push."
 		exit 1
 	}
 

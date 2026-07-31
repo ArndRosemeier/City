@@ -318,14 +318,42 @@ This build is staged from **git-tracked files only** (dirty working-tree junk ca
 	& gh release view $tag --json url -q .url
 }
 
+function Invoke-TrackingCheck {
+	$track = Join-Path $Root "tools\check_tracking.ps1"
+	Write-Step "Checking tracking policy..."
+	## Keep child stdout/stderr as plain text — do not let Stop turn them into terminating errors.
+	$prev = $ErrorActionPreference
+	$ErrorActionPreference = "Continue"
+	$lines = @(
+		& powershell -NoProfile -ExecutionPolicy Bypass -File $track -Root $Root 2>&1 |
+			ForEach-Object { "$_" }
+	)
+	$code = $LASTEXITCODE
+	$ErrorActionPreference = $prev
+	foreach ($line in $lines) {
+		Write-Host $line
+	}
+	if ($code -eq 0) {
+		return
+	}
+	Write-Host ""
+	Write-Host "============================================================"
+	Write-Host "PUBLISH BLOCKED: commit (or gitignore) first, then retry."
+	Write-Host "============================================================"
+	Write-Host "pack_release stages from git-tracked files only, so a dirty"
+	Write-Host "untracked tree cannot be published. Fix tracking, then:"
+	Write-Host ""
+	Write-Host "  git status"
+	Write-Host "  git add path/to/file     (or add a .gitignore rule)"
+	Write-Host "  git commit && git push"
+	Write-Host "  publish_portable_release.bat"
+	Write-Host ""
+	exit 1
+}
+
 function Build-ValidatedStage {
 	if (-not $SkipTrackingCheck) {
-		$track = Join-Path $Root "tools\check_tracking.ps1"
-		Write-Step "Checking tracking policy..."
-		& powershell -NoProfile -ExecutionPolicy Bypass -File $track -Root $Root
-		if ($LASTEXITCODE -ne 0) {
-			throw "Tracking check failed"
-		}
+		Invoke-TrackingCheck
 	}
 
 	$files = Get-ShipFiles

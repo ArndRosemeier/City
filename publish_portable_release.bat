@@ -30,7 +30,9 @@ if "%TAG%"=="" (
 )
 set "ERR=%ERRORLEVEL%"
 if not "%ERR%"=="0" (
+    echo.
     echo ERROR: publish failed with code %ERR%.
+    echo If you saw PUBLISH BLOCKED / COMMIT REMINDER above: commit and push, then re-run this bat.
     exit /b 1
 )
 endlocal
