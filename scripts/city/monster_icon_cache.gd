@@ -9,6 +9,8 @@ const CreatureClipsScript := preload("res://scripts/city/creature_clips.gd")
 const ICON_PX := 128
 ## Static cache survives board rebuilds within a session.
 static var _textures: Dictionary = {}  ## String -> ImageTexture
+## One bake at a time — four arena boards otherwise race the same ids and die on unload.
+static var _bake_lock: bool = false
 
 
 static func texture_for(monster_id: String) -> Texture2D:
@@ -20,13 +22,34 @@ static func bake_ids(ids: PackedStringArray, host: Node) -> void:
 	if host == null or not is_instance_valid(host):
 		push_error("MonsterIconCache.bake_ids: host required")
 		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		push_error("MonsterIconCache.bake_ids: no SceneTree")
+		return
+	## Wait our turn; abort quietly if the board/district was torn down mid-wait.
+	while _bake_lock:
+		if not _host_ok(host):
+			return
+		await tree.process_frame
+	if not _host_ok(host):
+		return
+	_bake_lock = true
 	for mid: String in ids:
+		if not _host_ok(host):
+			break
 		if mid.is_empty() or _textures.has(mid):
 			continue
-		await _bake_one(mid, host)
+		await _bake_one(mid, host, tree)
+	_bake_lock = false
 
 
-static func _bake_one(monster_id: String, host: Node) -> void:
+static func _host_ok(host: Node) -> bool:
+	return host != null and is_instance_valid(host) and host.is_inside_tree()
+
+
+static func _bake_one(monster_id: String, host: Node, tree: SceneTree) -> void:
+	if not _host_ok(host):
+		return
 	var entry: CreatureCatalog.Entry = CreatureCatalogScript.by_id(monster_id)
 	if entry == null:
 		_textures[monster_id] = _fallback_tex(monster_id)
@@ -80,16 +103,22 @@ static func _bake_one(monster_id: String, host: Node) -> void:
 	cam.look_at(Vector3(0.0, tall * 0.45, 0.0), Vector3.UP)
 	cam.fov = 28.0
 
-	## Two frames so the viewport paints the posed mesh.
-	await host.get_tree().process_frame
-	await host.get_tree().process_frame
+	## Two frames so the viewport paints the posed mesh. Await the main tree — never
+	## `host.get_tree()` after an await, the board may already be freed on district hop.
+	await tree.process_frame
+	if not is_instance_valid(vp):
+		return
+	await tree.process_frame
+	if not is_instance_valid(vp):
+		return
 	var img: Image = vp.get_texture().get_image()
 	if img != null:
 		img.convert(Image.FORMAT_RGBA8)
 		_textures[monster_id] = ImageTexture.create_from_image(img)
 	else:
 		_textures[monster_id] = _fallback_tex(monster_id)
-	vp.queue_free()
+	if is_instance_valid(vp):
+		vp.queue_free()
 
 
 static func _fallback_tex(monster_id: String) -> ImageTexture:

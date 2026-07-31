@@ -8,6 +8,7 @@ extends Node
 const AERIAL_PNG := "res://tools/arena_aerial.png"
 const GATE_PNG := "res://tools/arena_gate.png"
 const PIT_PNG := "res://tools/arena_pit.png"
+const HOLO_PNG := "res://tools/arena_hologram.png"
 const DECK_Y := 6
 
 
@@ -76,8 +77,31 @@ func _ready() -> void:
 		PIT_PNG
 	)
 
+	var holo := _find_hologram(city)
+	if holo == null:
+		push_error("FAIL no ArenaHologram under spawn district")
+		get_tree().quit(1)
+		return
+	## Centre of the 20 m hologram cube (feet at holo.global_position).
+	var holo_mid := holo.global_position + Vector3(0.0, 10.0, 0.0)
+	print("ArenaHologram at %s (mid %s)" % [holo.global_position, holo_mid])
+	## Outside the mass, eye-level-ish, looking *up* at the hologram above the pit.
+	var outside := mid + Vector3(radius * 1.25, 6.0, radius * 0.35)
+	await _shoot_from(walker, outside, outside + Vector3(0.0, 1.6, 0.0), holo_mid, HOLO_PNG)
+
 	print("RESULT: OK")
 	get_tree().quit(0)
+
+
+func _find_hologram(city: CityRoot) -> Node3D:
+	var stack: Array[Node] = [city]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is ArenaHologram:
+			return n as Node3D
+		for c in n.get_children():
+			stack.append(c)
+	return null
 
 
 func _survey_shell(city: CityRoot, center: Vector3) -> Dictionary:

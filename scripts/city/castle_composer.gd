@@ -1708,6 +1708,50 @@ func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
 	var used: Array[bool] = []
 	used.resize(edges.size())
 	used.fill(false)
+	## Strict Prim first (doors clear stair/flight claims), then a forced pass that still
+	## punches a tree link when claims blanket the shared wall — better a grate through a
+	## reserved lane than a chamber with no way in.
+	_grow_dungeon_tree(out, plan, rooms, edges, seen, used, false)
+	_grow_dungeon_tree(out, plan, rooms, edges, seen, used, true)
+	for k2 in range(edges.size()):
+		if used[k2] or rng.randf() >= DUNGEON_LOOP_CHANCE:
+			continue
+		var e2: Vector3i = edges[k2]
+		var door2 := _dungeon_door_between(
+			rooms[e2.x], rooms[e2.y], e2.z, plan, CastleDoorway.LINK_LOOP, false
+		)
+		if door2 == null:
+			continue
+		used[k2] = true
+		out.dungeon_doorways.append(door2)
+	## Geometric islands (no facing wall to the reachable set) are dropped, not left as
+	## unreachable volumes that only exist to spam the error overlay on far bakes.
+	var dropped := 0
+	for i2 in range(rooms.size() - 1, -1, -1):
+		if seen[i2]:
+			continue
+		var stranded: CastleVault = rooms[i2]
+		plan.vaults.remove_at(i2)
+		var idx := out.dungeon_vaults.find(stranded)
+		if idx >= 0:
+			out.dungeon_vaults.remove_at(idx)
+		dropped += 1
+	if dropped > 0:
+		push_warning(
+			"CastleComposer: dungeon level %d dropped %d chamber(s) with no facing link"
+			% [plan.level, dropped]
+		)
+
+
+func _grow_dungeon_tree(
+	out: CastleLayout,
+	plan: DungeonLevel,
+	rooms: Array[CastleVault],
+	edges: Array[Vector3i],
+	seen: Array[bool],
+	used: Array[bool],
+	force_slot: bool
+) -> void:
 	var added := true
 	while added:
 		added = false
@@ -1718,7 +1762,7 @@ func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
 			if seen[e.x] == seen[e.y]:
 				continue
 			var door := _dungeon_door_between(
-				rooms[e.x], rooms[e.y], e.z, plan, CastleDoorway.LINK_TREE
+				rooms[e.x], rooms[e.y], e.z, plan, CastleDoorway.LINK_TREE, force_slot
 			)
 			if door == null:
 				continue
@@ -1727,23 +1771,6 @@ func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
 			seen[e.x] = true
 			seen[e.y] = true
 			added = true
-	for k2 in range(edges.size()):
-		if used[k2] or rng.randf() >= DUNGEON_LOOP_CHANCE:
-			continue
-		var e2: Vector3i = edges[k2]
-		var door2 := _dungeon_door_between(
-			rooms[e2.x], rooms[e2.y], e2.z, plan, CastleDoorway.LINK_LOOP
-		)
-		if door2 == null:
-			continue
-		used[k2] = true
-		out.dungeon_doorways.append(door2)
-	for i2 in range(rooms.size()):
-		if not seen[i2]:
-			push_error(
-				"CastleComposer: dungeon level %d chamber %s has no way in"
-				% [plan.level, (rooms[i2] as CastleVault).rect]
-			)
 
 
 ## Axis two chambers face each other across, or -1 when the masonry between them is too thick
@@ -1765,7 +1792,12 @@ func _facing_axis(a: Rect2i, b: Rect2i, min_overlap: int) -> int:
 
 
 func _dungeon_door_between(
-	a: CastleVault, b: CastleVault, axis: int, plan: DungeonLevel, link: int
+	a: CastleVault,
+	b: CastleVault,
+	axis: int,
+	plan: DungeonLevel,
+	link: int,
+	force_slot: bool = false
 ) -> CastleDoorway:
 	var near := a
 	var far := b
@@ -1778,6 +1810,8 @@ func _dungeon_door_between(
 	var lo := maxi(_axis_lo(a.rect, other), _axis_lo(b.rect, other))
 	var hi := mini(_axis_hi(a.rect, other), _axis_hi(b.rect, other))
 	var t := _dungeon_door_slot(lo, hi, axis, band_lo, gap, plan.claims)
+	if t == NO_SLOT and force_slot:
+		t = _dungeon_door_slot_geometric(lo, hi)
 	if t == NO_SLOT:
 		return null
 	var d := CastleDoorway.new()
@@ -1819,6 +1853,16 @@ func _dungeon_door_slot(
 			if step == 0:
 				break
 	return NO_SLOT
+
+
+## Mid-overlap slot with no claim test — tree links only, when claims ate every legal opening.
+func _dungeon_door_slot_geometric(lo: int, hi: int) -> int:
+	var half := DUNGEON_DOOR_W / 2
+	var first := lo + half + 1
+	var last := hi - half - 2
+	if last < first:
+		return NO_SLOT
+	return clampi((lo + hi) / 2, first, last)
 
 
 ## Index of the bay a footprint belongs to, or -1 when it straddles a cross wall or leaves the

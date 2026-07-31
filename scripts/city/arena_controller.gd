@@ -5,6 +5,7 @@ extends Node3D
 
 const ArenaSummonBoardScript := preload("res://scripts/city/arena_summon_board.gd")
 const ArenaSummonLiftScript := preload("res://scripts/city/arena_summon_lift.gd")
+const ArenaHologramScript := preload("res://scripts/city/arena_hologram.gd")
 const RoomDecoratorScript := preload("res://scripts/city/room_decorator.gd")
 const ArenaCombatScript := preload("res://scripts/city/arena_combat.gd")
 
@@ -15,6 +16,7 @@ var district_seed: int = 0
 
 var _boards: Array[ArenaSummonBoard] = []
 var _lifts: Array[ArenaSummonLift] = []
+var _hologram: ArenaHologram = null
 var _brush_cb: Callable = Callable()
 var _spawn_cb: Callable = Callable()
 var _units_cb: Callable = Callable()
@@ -53,6 +55,7 @@ func setup(
 		return
 	_spawn_lifts()
 	_spawn_boards()
+	_spawn_hologram()
 	redecorate_pit()
 
 
@@ -109,6 +112,14 @@ func request_summon(monster_id: String) -> void:
 	var one := PackedStringArray()
 	one.append(monster_id)
 	request_summon_batch(one)
+
+
+func _spawn_hologram() -> void:
+	if _hologram != null and is_instance_valid(_hologram):
+		_hologram.queue_free()
+	_hologram = ArenaHologramScript.new() as ArenaHologram
+	add_child(_hologram)
+	_hologram.setup(layout, origin_vox, voxel_size, district_seed)
 
 
 func _spawn_lifts() -> void:
