@@ -2,13 +2,14 @@
 ##
 ## Toughness is not a property of the role: it comes off whichever body the catalogue handed
 ## this unit, through `creature_health.gd`, so a two-metre skeleton and a four-metre monster
-## wearing the same behaviour take a different number of hits. `kill_from_player` is unchanged
-## and is now what happens when the last of that runs out rather than what happens on contact.
+## wearing the same behaviour take a different number of hits. `kill_from_player` is what happens
+## when the last of that runs out rather than what happens on contact.
 ##
 ## Movement is NavAgent + NavMotor over the baked span field. An UndeadGoalProvider says what
 ## this body wants and the six-rung ladder says what happens when it cannot get there. Escape
 ## hops live on NavAgent (wiggle → ≤2-voxel neighbour span; TRAPPED → nearest other column),
-## counted and warned — never a silent `_unstuck_horizontal` on this script.
+## counted and warned — never a silent horizontal unstick hack on this script. (Naming that hack
+## here would trip the source sweep in test_undead_nav, which is the point of the sweep.)
 class_name UndeadUnit
 extends CharacterBody3D
 
@@ -56,8 +57,6 @@ const GIANT_BUILDING_SEEK_M := 110.0
 ## Stand-off from the facade while scraping (meters).
 const GIANT_SCRAPE_DIST_M := 3.6
 const GIANT_APPROACH_DIST_M := 5.5
-const HIT_SCORE_NORMAL := 50
-const HIT_SCORE_GIANT := 1000
 ## Longest a body holds its flinch before locomotion may have the rig back. The clip's own
 ## length wins under this — the KayKit flinch is a third of a second and the Blob one shorter —
 ## and the cap is here so a family that ships a two-second stagger cannot stop a body walking.
@@ -369,12 +368,10 @@ func health_bar() -> MonsterHealthBar:
 	return _health_bar
 
 
-## One hit from `source`. Returns the score award when this hit was the fatal one and 0 when the
-## body is still standing, which is exactly the contract `kill_from_player` had when every hit
-## was fatal — so the caller's bookkeeping never had to learn about health.
+## One hit from `source`. True when this hit was the fatal one, false while the body still stands.
 ##
 ## Incoming damage is divided by the body's resolved `armor_mult` (1.0 = catalogue tier as-is).
-func apply_damage(source: DamageSource.Id) -> int:
+func apply_damage(source: DamageSource.Id) -> bool:
 	return apply_damage_scaled(source, 1.0)
 
 
@@ -386,22 +383,22 @@ func apply_damage_scaled(
 	scale: float,
 	attacker_label: String = "player",
 	attacker: Node = null
-) -> int:
+) -> bool:
 	if not _alive:
-		return 0
+		return false
 	if scale <= 0.0:
 		push_error(
 			"UndeadUnit %s: apply_damage_scaled got non-positive scale %f"
 			% [name, scale]
 		)
 		assert(false, "UndeadUnit: bad damage scale")
-		return 0
+		return false
 	if DamageSourceScript.target(source) != DamageSourceScript.Target.CREATURE:
 		push_error(
 			"UndeadUnit %s: %s hurts the player, not a creature"
 			% [name, DamageSourceScript.source_name(source)]
 		)
-		return 0
+		return false
 	var armor := 1.0
 	if _combat != null:
 		armor = maxf(float(_combat.call("armor_mult")), 0.001)
@@ -420,7 +417,8 @@ func apply_damage_scaled(
 			log_node.call(
 				"record", attacker_label, body_name, source, taken, 0.0, _health_max, true
 			)
-		return kill_from_player()
+		kill_from_player()
+		return true
 	if log_node != null and log_node.has_method("record"):
 		log_node.call(
 			"record", attacker_label, body_name, source, taken, _health, _health_max, false
@@ -428,7 +426,7 @@ func apply_damage_scaled(
 	_update_health_bar()
 	_play_hit_reaction()
 	_promote_attacker_after_hit(source, attacker)
-	return 0
+	return false
 
 
 func _promote_attacker_after_hit(source: DamageSource.Id, attacker: Node) -> void:
@@ -443,26 +441,23 @@ func _promote_attacker_after_hit(source: DamageSource.Id, attacker: Node) -> voi
 	_provider.promote_attacker(who)
 
 
-## Death itself, unchanged: navigation disposed, the death clip played, `died` emitted, the body
-## freed 1.6 s later, and the score award returned. What changed is who calls it — the hit that
-## empties the pool, rather than any hit at all.
-func kill_from_player() -> int:
+## Death: navigation disposed, the death clip played, `died` emitted, the body freed 1.6 s later.
+## Called by the hit that empties the pool.
+func kill_from_player() -> void:
 	if not _alive:
-		return 0
+		return
 	_alive = false
 	state = State.DEAD
 	velocity = Vector3.ZERO
 	_dispose_nav()
 	_drop_health_bar()
 	_play_action(CreatureClips.Action.DEATH)
-	var award := HIT_SCORE_GIANT if is_giant() else HIT_SCORE_NORMAL
 	died.emit(self, is_giant())
 	var tree := get_tree()
 	if tree != null:
 		tree.create_timer(1.6).timeout.connect(queue_free)
 	else:
 		queue_free()
-	return award
 
 
 func _exit_tree() -> void:

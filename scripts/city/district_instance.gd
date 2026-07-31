@@ -10,6 +10,7 @@ const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
 const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
 const SignpostPlacerScript := preload("res://scripts/city/signpost_placer.gd")
+const GemChestPlacerScript := preload("res://scripts/city/gem_chest_placer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
@@ -37,6 +38,8 @@ var street_props: StreetPropPlacer
 var scale_pads: ScalePadPlacer
 ## Fingerposts naming the four neighbours. Empty of posts on special tiles.
 var signposts: SignpostPlacer
+## Gem chests placed as this tile's rooms get furnished. Created on the first chest.
+var gem_chests: GemChestPlacer
 ## Mesh doors hung in the castle's openings. Null on every tile that is not a Castle.
 var castle_doors: CastleDoorPlacer
 ## Glowing plane + Mandelbrot panels. Null on every tile that is not Fractal.
@@ -86,6 +89,16 @@ var hill_gem_mats: PackedInt32Array = PackedInt32Array()
 
 func bind_live_brush(brush: CityBrush) -> void:
 	_live_brush = brush
+
+
+## The chest holder, made on demand — most tiles never have a room furnished in them.
+func ensure_gem_chests() -> GemChestPlacer:
+	if gem_chests != null and is_instance_valid(gem_chests):
+		return gem_chests
+	gem_chests = GemChestPlacerScript.new() as GemChestPlacer
+	gem_chests.name = "GemChests"
+	add_child(gem_chests)
+	return gem_chests
 
 
 func live_brush() -> CityBrush:
@@ -231,6 +244,10 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		signposts.clear_posts()
 		signposts.queue_free()
 	signposts = null
+	if gem_chests != null and is_instance_valid(gem_chests):
+		gem_chests.clear_chests()
+		gem_chests.queue_free()
+	gem_chests = null
 	if castle_doors != null and is_instance_valid(castle_doors):
 		castle_doors.clear_doors()
 		castle_doors.queue_free()
@@ -274,6 +291,10 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		signposts.clear_posts()
 		signposts.queue_free()
 	signposts = null
+	if gem_chests != null and is_instance_valid(gem_chests):
+		gem_chests.clear_chests()
+		gem_chests.queue_free()
+	gem_chests = null
 	if castle_doors != null and is_instance_valid(castle_doors):
 		castle_doors.clear_doors()
 		castle_doors.queue_free()

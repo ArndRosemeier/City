@@ -33,7 +33,7 @@ enum Escape {
 	DUG_OUT = 1,
 	## Moved to the nearest span the profile can stand on.
 	TELEPORTED = 2,
-	## No span within reach. The agent stays put and the failure is an error.
+	## No span within reach. The agent stays put; consumers may despawn the body.
 	LOST = 3,
 }
 

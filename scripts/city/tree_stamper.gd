@@ -3,6 +3,15 @@
 class_name TreeStamper
 extends RefCounted
 
+## How often a leafy crown hides one gem among its outer leaves. Deliberately tiny: a gem in a
+## tree is meant to be something you notice once and remember, not a crop. What all the trees in
+## a district can pay out together is capped by that district's gem budget anyway, so this rate
+## only decides how often one is *visible* — see `DistrictEconomy`.
+const CANOPY_GEM_CHANCE := 0.008
+## Where in the crown it sits, as a fraction of the ellipsoid radius. Out near the rim, so it
+## catches the eye from the path instead of being buried where only a carve would find it.
+const CANOPY_GEM_SHELL_MIN := 0.72
+
 var brush: CityBrush
 var rng: RandomNumberGenerator
 
@@ -232,3 +241,23 @@ func _canopy(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
 				if n > 0.68 and rng.randf() < 0.35:
 					continue
 				brush.set_vox(Vector3i(cx + dx, cy + dy, cz + dz), VoxelMaterial.LEAVES)
+	_maybe_hide_gem(cx, cy, cz, rxz, ry)
+
+
+## Occasionally swap one outer leaf for a gem. The rarity curve is the city-wide one, so the
+## tree that has anything at all is most often holding quartz.
+func _maybe_hide_gem(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
+	if rng.randf() >= CANOPY_GEM_CHANCE:
+		return
+	for _attempt in range(12):
+		var dx := rng.randi_range(-rxz, rxz)
+		var dy := rng.randi_range(-ry, ry)
+		var dz := rng.randi_range(-rxz, rxz)
+		var n := (
+			float(dx * dx + dz * dz) / float(rxz * rxz)
+			+ float(dy * dy) / float(ry * ry)
+		)
+		if n > 1.0 or n < CANOPY_GEM_SHELL_MIN:
+			continue
+		brush.set_vox(Vector3i(cx + dx, cy + dy, cz + dz), VoxelMaterial.pick_gem(rng))
+		return

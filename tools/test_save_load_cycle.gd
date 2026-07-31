@@ -52,6 +52,15 @@ func _ready() -> void:
 	inv.clear()
 	if inv.add(InventoryCatalog.ID_TOPAZ, GEM_COUNT) != 0:
 		_fail("FAIL could not stock the inventory before saving")
+	## Standing in the spawn district has already paid the explore score for it, and its gem
+	## budget has already been rolled — both belong to the save now.
+	var saved_coord := DistrictCoord.from_world(saved_pos, CityRoot.VOXEL_SIZE)
+	var saved_score := city.get_player_score()
+	var saved_owed := city.get_economy().remaining_total(saved_coord)
+	if saved_score < DistrictEconomy.EXPLORE_SCORE:
+		_fail("FAIL standing in the spawn district scored %d" % saved_score)
+	if saved_owed <= 0:
+		_fail("FAIL the spawn district owes no gems at all")
 	if not city.write_quicksave("Cycle test"):
 		_fail("FAIL the live city wrote no quicksave")
 		_finish()
@@ -88,6 +97,19 @@ func _ready() -> void:
 	var got_gems := city.get_inventory().count_of(InventoryCatalog.ID_TOPAZ)
 	if got_gems != GEM_COUNT:
 		_fail("FAIL topaz came back as %d, saved %d" % [got_gems, GEM_COUNT])
+	## The rebuilt world re-bakes the spawn district's ore, so the ledger — not the voxels — is
+	## what has to come back, and the tile must not pay its explore score a second time.
+	if city.get_player_score() != saved_score:
+		_fail("FAIL the score came back as %d, saved %d" % [city.get_player_score(), saved_score])
+	var reloaded_owed := city.get_economy().remaining_total(saved_coord)
+	if reloaded_owed != saved_owed:
+		_fail("FAIL the spawn district came back owing %d gems, saved %d"
+			% [reloaded_owed, saved_owed])
+	elif not city.get_economy().is_explored(saved_coord):
+		_fail("FAIL the spawn district came back unexplored")
+	else:
+		print("OK the ledger came back: %d gems owed, score %d, tile still explored"
+			% [reloaded_owed, saved_score])
 	if not _failed:
 		print("OK the load rebuilt the saved world and put the character back in it")
 

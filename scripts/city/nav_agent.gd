@@ -326,7 +326,8 @@ static func nearby_unstuck_events() -> int:
 	return _nearby_unstuck_events
 
 
-## TRAPPED bodies that had no span to escape to. Always an error as well.
+## TRAPPED bodies that had no span to escape to. Counted and warned about; consumers decide
+## what to do with the body (the crowd despawns pedestrians).
 static func lost_events() -> int:
 	return _lost_events
 
@@ -786,7 +787,9 @@ func _escape_to_nearest_span(from: Vector3) -> NavLadder.Escape:
 			spot = hit.position
 	if spot == Vector3.INF:
 		_lost_events += 1
-		push_error(
+		## A warning, not an error: the crowd despawns LOST pedestrians, and shouting about a
+		## single stuck ped as a script fault floods the overlay for something that is scenery.
+		push_warning(
 			"NavAgent %d: entombed at %.1f,%.1f,%.1f with no %s span within %.1f m"
 			% [
 				_agent_id,

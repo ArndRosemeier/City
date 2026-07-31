@@ -131,9 +131,6 @@ class TestCity:
 	func try_convert_ped_near(_world_pos: Vector3, _radius: float) -> Variant:
 		return null
 
-	func adjust_player_score(_delta: int) -> void:
-		pass
-
 
 ## Invasion director on a harness-owned MonsterRoster (terrain injected, no CityRoot boot).
 class TestDirector:

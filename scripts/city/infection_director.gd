@@ -9,7 +9,6 @@ signal tendril_killed(tendril_id: int)
 signal tendril_spawned(tendril_id: int)
 ## Any removal path (tip-kill, inert retire, stream unload).
 signal tendril_ended(tendril_id: int)
-signal player_score_changed(score: int)
 
 @export var tick_interval_sec: float = 0.12
 @export var max_tendrils: int = 10
@@ -48,7 +47,6 @@ var _tendrils: Dictionary = {}
 var _lead_at: Dictionary = {}
 ## Spawn order (HUD + stable iteration).
 var _rr_ids: Array[int] = []
-var player_score: int = 0
 ## tendril_id → aura Node3D
 var _auras: Dictionary = {}
 
@@ -80,15 +78,6 @@ func clear_all() -> void:
 	var audio := _city_audio()
 	if audio != null and audio.has_method("stop_all_tendril_voices"):
 		audio.call("stop_all_tendril_voices")
-
-
-func get_player_score() -> int:
-	return player_score
-
-
-func reset_player_score() -> void:
-	player_score = 0
-	player_score_changed.emit(player_score)
 
 
 func active_tendril_count() -> int:
@@ -376,17 +365,20 @@ func _infect_step(tid: int, from_lead: Vector3i, target: Vector3i) -> void:
 		t["steps_until_reaim"] = left
 	_lead_at[target] = tid
 	_tendrils[tid] = t
-	_apply_digest_score(tid)
+	_spend_tendril_value(tid)
 	_sfx_tendril_transmuted(tid, target)
 
 
-func _apply_digest_score(tid: int) -> void:
+## Every voxel a tip digests costs the tendril one point of the potency its HUD row counts down.
+## Nothing is paid out for it: the infection is a proof of concept waiting to become a place-bound
+## event, and the run score does not know it exists.
+func _spend_tendril_value(tid: int) -> void:
 	if not _tendrils.has(tid):
 		return
 	var t: Dictionary = _tendrils[tid]
 	var value := int(t.get("value", 0))
 	if value <= 0:
-		## Depleted tips keep converting; score is never taxed.
+		## Spent tips keep converting — running dry slows nothing down.
 		return
 	t["value"] = value - 1
 	_tendrils[tid] = t
@@ -499,11 +491,6 @@ func _kill_tendril(tid: int) -> void:
 	var t: Dictionary = _tendrils[tid]
 	if bool(t.get("dying", false)):
 		return
-	## Bank whatever value is left — kill early for the full 1000.
-	var remaining := maxi(int(t.get("value", 0)), 0)
-	if remaining > 0:
-		player_score += remaining
-		player_score_changed.emit(player_score)
 	var lead: Vector3i = t["lead"]
 	var cells: Dictionary = t["cells"]
 	var order := _build_revert_order(lead, cells)

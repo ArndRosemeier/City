@@ -27,7 +27,6 @@ var _terrain: VoxelTerrain
 
 class TestCity:
 	extends CityRoot
-	var score: int = 0
 
 	## Combat kit damage goes through CityRoot; this CityRoot has to be in the tree — but it
 	## must not boot a city to get there.
@@ -36,9 +35,6 @@ class TestCity:
 
 	func bind_player(walker: CharacterBody3D) -> void:
 		_walker = walker
-
-	func adjust_player_score(delta: int) -> void:
-		score += delta
 
 	func trigger_game_over(reason: String = "Converted by undead") -> void:
 		pass
@@ -366,7 +362,7 @@ func _test_freed_unit_aim_query() -> void:
 		_despawn(unit)
 		return
 	## Death unregisters; free immediately (skip the 1.6 s corpse timer).
-	var _score: int = unit.kill_from_player()
+	unit.kill_from_player()
 	var monsters := _director.roster()
 	if monsters.is_registered(unit):
 		_fail("FAIL dead unit still registered on the MonsterRoster")

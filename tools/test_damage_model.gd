@@ -48,11 +48,10 @@ var _terrain: VoxelTerrain
 # Stubs
 # ---------------------------------------------------------------------------
 
-## CityRoot with the score ledger and the game-over screen replaced by counters. Never entered
-## into the tree, so `_ready` never boots a world.
+## CityRoot with the game-over screen replaced by counters. Never entered into the tree, so
+## `_ready` never boots a world.
 class TestCity:
 	extends CityRoot
-	var score: int = 0
 	var game_over_calls: int = 0
 	var game_over_reason: String = ""
 
@@ -60,9 +59,6 @@ class TestCity:
 	## the orb case below is a test of those, so stubbing them would test the stub.
 	func bind_player(walker: CityWalker) -> void:
 		_walker = walker
-
-	func adjust_player_score(delta: int) -> void:
-		score += delta
 
 	func trigger_game_over(reason: String = "Converted by undead") -> void:
 		game_over_calls += 1
@@ -116,7 +112,7 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
-	await _test_giant_takes_many_and_still_pays_a_thousand()
+	await _test_giant_takes_many_hits_and_keeps_its_wounds()
 	if _failed:
 		_quit()
 		return
@@ -455,8 +451,7 @@ func _test_hud_follows_the_pool() -> void:
 # ---------------------------------------------------------------------------
 
 ## Hits are dealt through the director, exactly as `CityRoot._apply_agent_hit` deals them, so
-## what is measured is the whole path: the unit's pool, the death it triggers and the score the
-## director credits for it.
+## what is measured is the whole path: the unit's pool and the death it triggers.
 func _test_weak_bodies_die_on_the_expected_hit() -> void:
 	## One punch. Combat-table minion hp_mult 0.5 → 17 pool; still dies to the fist.
 	var skeleton := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(20, 1, 20)), "kaykit/Skeleton_Minion")
@@ -474,20 +469,15 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 			% [skeleton.health_max(), minion_hp, minion_hp_mult]
 		)
 		return
-	_city.score = 0
 	if not _director.damage_unit(skeleton, DamageSource.Id.PLAYER_MELEE):
 		_fail("FAIL the director refused a punch")
 		return
 	if skeleton.is_alive():
 		_fail("FAIL a punched skeleton has %.2f health left" % skeleton.health())
 		return
-	if _city.score != UndeadUnit.HIT_SCORE_NORMAL:
-		_fail("FAIL a killed skeleton paid %d, not %d" % [_city.score, UndeadUnit.HIT_SCORE_NORMAL])
-		return
-	## And it only pays once, however many shots arrive after it.
-	_director.damage_unit(skeleton, DamageSource.Id.PLAYER_MELEE)
-	if _city.score != UndeadUnit.HIT_SCORE_NORMAL:
-		_fail("FAIL a corpse paid another %d" % (_city.score - UndeadUnit.HIT_SCORE_NORMAL))
+	## And a corpse takes no more hits, however many shots arrive after it.
+	if _director.damage_unit(skeleton, DamageSource.Id.PLAYER_MELEE):
+		_fail("FAIL the director dealt a punch to a corpse")
 		return
 	await _settle(skeleton)
 
@@ -505,17 +495,15 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 	if absf(chipped.health_max() - war_hp) > HEALTH_EPS:
 		_fail("FAIL warrior has %.2f health, want %.2f" % [chipped.health_max(), war_hp])
 		return
-	_city.score = 0
-	_director.damage_unit(chipped, DamageSource.Id.PLAYER_LASER)
+	if chipped.apply_damage(DamageSource.Id.PLAYER_LASER):
+		_fail("FAIL one laser dart reported a warrior dead")
+		return
 	if not chipped.is_alive():
 		_fail("FAIL one laser dart killed a warrior outright")
 		return
 	var after_one: float = war_hp - DamageSource.amount(DamageSource.Id.PLAYER_LASER) / war_armor
 	if absf(chipped.health() - after_one) > HEALTH_EPS:
 		_fail("FAIL one laser dart left %.2f, want %.2f" % [chipped.health(), after_one])
-		return
-	if _city.score != 0:
-		_fail("FAIL a surviving warrior already paid %d" % _city.score)
 		return
 	var darts := _hits_to_kill_armored(
 		chipped.health_max(), DamageSource.Id.PLAYER_LASER, war_armor
@@ -527,9 +515,6 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 		_director.damage_unit(chipped, DamageSource.Id.PLAYER_LASER)
 	if chipped.is_alive():
 		_fail("FAIL %d laser darts left a warrior standing at %.2f" % [darts, chipped.health()])
-		return
-	if _city.score != UndeadUnit.HIT_SCORE_NORMAL:
-		_fail("FAIL the finishing dart paid %d" % _city.score)
 		return
 	await _settle(chipped)
 
@@ -548,7 +533,6 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 	if punches < 3:
 		_fail("FAIL a Big monster falls to %d punches" % punches)
 		return
-	_city.score = 0
 	for hit in range(punches):
 		if not monster.is_alive():
 			_fail("FAIL the monster died on punch %d of %d" % [hit, punches])
@@ -556,9 +540,6 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 		_director.damage_unit(monster, DamageSource.Id.PLAYER_MELEE)
 	if monster.is_alive():
 		_fail("FAIL %d punches left a monster at %.2f" % [punches, monster.health()])
-		return
-	if _city.score != UndeadUnit.HIT_SCORE_NORMAL:
-		_fail("FAIL a killed monster paid %d" % _city.score)
 		return
 	await _settle(monster)
 
@@ -574,7 +555,6 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 	var far := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(70, 1, 40)), "kaykit/Skeleton_Minion")
 	if far == null:
 		return
-	_city.score = 0
 	var reached := _director.damage_units_in_sphere(
 		_w(Vector3i(42, 1, 40)), 4.0, DamageSource.Id.PLAYER_STOMP
 	)
@@ -588,22 +568,19 @@ func _test_weak_bodies_die_on_the_expected_hit() -> void:
 	if not far.is_alive():
 		_fail("FAIL a skeleton fifteen metres away died to the stomp")
 		return
-	if _city.score != UndeadUnit.HIT_SCORE_NORMAL * swept.size():
-		_fail("FAIL three stomped skeletons paid %d" % _city.score)
-		return
 	for body: UndeadUnit in swept:
 		await _settle(body)
 	await _settle(far)
 	print(
 		(
 			"live bodies: minion dies to 1 punch, warrior to %d darts, Frog to %d punches,"
-			+ " and one stomp cleared 3 in its crater — %d apiece, once each"
+			+ " and one stomp cleared 3 in its crater"
 		)
-		% [darts, punches, UndeadUnit.HIT_SCORE_NORMAL]
+		% [darts, punches]
 	)
 
 
-func _test_giant_takes_many_and_still_pays_a_thousand() -> void:
+func _test_giant_takes_many_hits_and_keeps_its_wounds() -> void:
 	var giant := _spawn(UndeadUnit.Role.GIANT, _w(Vector3i(48, 1, 60)), "kaykit/Skeleton_Mage")
 	if giant == null:
 		return
@@ -622,7 +599,6 @@ func _test_giant_takes_many_and_still_pays_a_thousand() -> void:
 	var wounded := _spawn(UndeadUnit.Role.GIANT, _w(Vector3i(52, 1, 60)), "kaykit/Skeleton_Mage")
 	if wounded == null:
 		return
-	_city.score = 0
 	_director.damage_unit(wounded, DamageSource.Id.PLAYER_LASER)
 	var fraction_before := wounded.health_fraction()
 	wounded.character_scale = UndeadUnit.GIANT_SCALE_TARGET
@@ -635,10 +611,10 @@ func _test_giant_takes_many_and_still_pays_a_thousand() -> void:
 		return
 	await _settle(wounded)
 
-	_city.score = 0
 	var blasts := 0
+	var fatal := false
 	while giant.is_alive() and blasts < 12:
-		_director.damage_unit(giant, DamageSource.Id.PLAYER_BLAST)
+		fatal = giant.apply_damage(DamageSource.Id.PLAYER_BLAST)
 		blasts += 1
 	if giant.is_alive():
 		_fail("FAIL a giant survived %d charged blasts" % blasts)
@@ -646,14 +622,11 @@ func _test_giant_takes_many_and_still_pays_a_thousand() -> void:
 	if blasts != 2:
 		_fail("FAIL a giant fell to %d charged blasts" % blasts)
 		return
-	if _city.score != UndeadUnit.HIT_SCORE_GIANT:
-		_fail("FAIL a killed giant paid %d, not %d" % [_city.score, UndeadUnit.HIT_SCORE_GIANT])
+	if not fatal:
+		_fail("FAIL the blast that emptied a giant did not report the kill")
 		return
 	await _settle(giant)
-	print(
-		"giant: %.0f health, 2 charged blasts, %d points — and growing keeps its wounds"
-		% [240.7, UndeadUnit.HIT_SCORE_GIANT]
-	)
+	print("giant: %.0f health, 2 charged blasts — and growing keeps its wounds" % 240.7)
 
 
 # ---------------------------------------------------------------------------

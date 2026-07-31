@@ -1,10 +1,15 @@
-## One saved character: who he is, what he carries, and where he stood. Nothing about the world.
+## One saved character: who he is, what he carries, where he stood — plus the little the world
+## itself remembers, which is one row per district the run has touched.
 ##
 ## District voxels are deliberately absent. Terrain follows from `city_seed` alone, and the
 ## streamer already discards edits once the bubble moves off a district, so a save that claimed to
 ## restore a dug tunnel would be lying about what the game can do. Loading re-generates the same
 ## city from the seed and drops the character back in; a stored position that regeneration has
 ## filled in is resolved by `first_free_footing` instead of by remembering the hole.
+##
+## What *is* saved per district is six gem counts and an explored flag (see `DistrictEconomy`).
+## That is enough for a stripped tile to stay stripped and for exploration to pay once, without
+## a voxel edit stream anywhere in the format.
 ##
 ## Two kinds of slot share one format:
 ##   quicksave — `user://saves/quicksave.json`. Written by Quicksave, the periodic autosave and
@@ -19,7 +24,8 @@ const SAVES_DIR := "user://saves"
 const QUICKSAVE_NAME := "quicksave"
 const FILE_SUFFIX := ".json"
 ## Bump when the payload changes shape in a way an older file cannot satisfy.
-const VERSION := 1
+## 2 added `districts` (per-tile gem budgets + explored) and `score`.
+const VERSION := 2
 const NAME_MAX_LENGTH := 48
 
 ## Where slots live. A round-trip test points this at a scratch folder, because the alternative is
@@ -124,6 +130,31 @@ static func delete_quicksave() -> bool:
 	return true
 
 
+## Move an autosave this build cannot resume out of the slot, keeping it as `quicksave.json.bak` so
+## a save from an older build is not simply thrown away.
+##
+## Boot does this the moment a read comes back empty: the alternative is a file that fails the same
+## way on every launch and then gets silently overwritten by the first autosave anyway. The `.bak`
+## tail is past `FILE_SUFFIX` on purpose — the Load list only ever looks at `*.json`, so a retired
+## file is invisible to it rather than a slot that refuses to load.
+static func retire_quicksave() -> bool:
+	var path := quicksave_path()
+	if not FileAccess.file_exists(path):
+		return false
+	var kept := "%s.bak" % path
+	if FileAccess.file_exists(kept):
+		var gone := DirAccess.remove_absolute(kept)
+		if gone != OK:
+			push_error("GameSave: cannot replace %s (error %d)" % [kept, gone])
+			return false
+	var err := DirAccess.rename_absolute(path, kept)
+	if err != OK:
+		push_error("GameSave: cannot move %s aside (error %d)" % [path, err])
+		return false
+	print("GameSave: %s could not be resumed, kept as %s" % [path, kept])
+	return true
+
+
 static func write_named(raw_name: String, data: Dictionary) -> bool:
 	var path := named_path(raw_name)
 	if path.is_empty():
@@ -194,9 +225,14 @@ static func list_named() -> Array[Dictionary]:
 # ---------------------------------------------------------------------------
 
 ## Everything the save holds, read off the live character. `display_name` is what the Load list
-## shows; the quicksave passes its own label.
+## shows; the quicksave passes its own label. `economy` may be null in tools that have no world.
 static func capture(
-	world_seed: int, walker: CityWalker, inventory: PlayerInventory, display_name: String
+	world_seed: int,
+	walker: CityWalker,
+	inventory: PlayerInventory,
+	display_name: String,
+	economy: DistrictEconomy = null,
+	score: int = 0
 ) -> Dictionary:
 	if walker == null or not is_instance_valid(walker):
 		push_error("GameSave.capture: there is no walker to save")
@@ -228,11 +264,30 @@ static func capture(
 		"health": walker.get_health(),
 		"energy": walker.get_energy(),
 		"inventory": inventory.slots_snapshot(),
+		"score": score,
+		"districts": {} if economy == null else economy.to_save_dict(),
 	}
 
 
 static func saved_seed(data: Dictionary) -> int:
 	return int(data.get("city_seed", 0))
+
+
+static func saved_score(data: Dictionary) -> int:
+	return int(data.get("score", 0))
+
+
+## Pour the saved district rows back into the live economy. A save with no rows is a run that
+## never left the spawn tile, not a broken file.
+static func apply_districts(economy: DistrictEconomy, data: Dictionary) -> void:
+	if economy == null:
+		push_error("GameSave.apply_districts: no economy")
+		return
+	var raw: Variant = data.get("districts", null)
+	if typeof(raw) != TYPE_DICTIONARY:
+		push_error("GameSave.apply_districts: the save has no districts object")
+		return
+	economy.load_save_dict(raw as Dictionary)
 
 
 ## Where the character stood. Vector3.INF when the payload has no usable position, which is a
@@ -404,13 +459,19 @@ static func _read_path(path: String) -> Dictionary:
 		return {}
 	var data: Dictionary = parsed
 	var version := int(data.get("version", 0))
-	if version != VERSION:
-		push_error(
-			"GameSave: %s is save version %d and this build reads %d"
-			% [path, version, VERSION]
-		)
+	if version == VERSION:
+		return data
+	if version <= 0:
+		## No version at all: something wrote this file that was not a build of this game.
+		push_error("GameSave: %s carries no save version, so it is not a save" % path)
 		return {}
-	return data
+	## A well-formed save from another build. That is what a `VERSION` bump *does*, so it is a
+	## warning and not a fault — the run starts fresh and callers decide what to do with the file.
+	push_warning(
+		"GameSave: %s is save version %d and this build reads %d — it cannot be resumed"
+		% [path, version, VERSION]
+	)
+	return {}
 
 
 static func _vec3_to_array(v: Vector3) -> Array:

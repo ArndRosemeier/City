@@ -3,7 +3,6 @@
 class_name UndeadInvasionDirector
 extends Node3D
 
-const CONVERT_SCORE_PENALTY := 150
 const WAVE_MIN_COUNT := 3
 const WAVE_MAX_COUNT := 5
 const MAX_ALIVE_UNITS := 40
@@ -237,7 +236,6 @@ func try_convert_ped_at(world_pos: Vector3, radius: float) -> bool:
 	if converted == null or not (converted is Vector3):
 		return false
 	var pos: Vector3 = converted as Vector3
-	_city.adjust_player_score(-CONVERT_SCORE_PENALTY)
 	spawn_minion_at(pos)
 	return true
 

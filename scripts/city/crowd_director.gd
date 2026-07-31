@@ -433,6 +433,27 @@ func convert_agent_silent(ped: PedAgent) -> Vector3:
 	return pos
 
 
+## LOST means no pedestrian span within reach. Retries only re-report the same failure, so the
+## ped is dropped — rare enough that thinning the crowd by one is better than a stuck body.
+## Deferred: the trapped signal fires inside NavAgent's tick, and retiring mid-tick would dispose
+## the agent under its own feet.
+func _on_ped_trapped(_world_pos: Vector3, escape: NavLadder.Escape, ped: PedAgent) -> void:
+	if escape != NavLadder.Escape.LOST:
+		return
+	call_deferred("_despawn_lost_ped", ped)
+
+
+func _despawn_lost_ped(ped: PedAgent) -> void:
+	if ped == null or not is_instance_valid(ped) or ped.dead:
+		return
+	var pos := ped.global_position
+	convert_agent_silent(ped)
+	print(
+		"CrowdDirector: despawned ped with no span at %.1f,%.1f,%.1f"
+		% [pos.x, pos.y, pos.z]
+	)
+
+
 func kill_agent(ped: PedAgent, hit_point: Vector3, impulse_dir: Vector3) -> bool:
 	if ped == null or ped.dead:
 		return false
@@ -598,6 +619,8 @@ func _spawn_agents() -> void:
 		ped.nav.idle_retry_sec = goal_retry_sec
 		ped.nav.setup(ped, NavProfile.Id.PEDESTRIAN, ped.motor, _provider, _lod)
 		ped.nav.seed_rng(_rng.randi())
+		## A ped with nowhere to stand is scenery that failed, not a body to keep retrying.
+		ped.nav.trapped.connect(_on_ped_trapped.bind(ped))
 		## Staggered, so a fresh district does not ask for a thousand paths in one frame.
 		ped.paused_until = _rng.randf_range(0.0, 0.8)
 		_agents[i] = ped

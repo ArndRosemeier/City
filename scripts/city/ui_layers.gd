@@ -20,6 +20,9 @@ const HUD_ACTION_BAR := 15
 ## Wounds. Above the energy bar because the two never overlap on screen and, if a future layout
 ## ever puts them close, the one that decides whether the run continues should be the one on top.
 const HUD_HEALTH := 16
+## The loot card. Top of the HUD band: it is transient and sits over the bars for a second or two,
+## and a find the player cannot see is the whole thing this surface exists to fix.
+const HUD_LOOT := 17
 const HUD_MAX := 19
 
 ## Panels that own the screen while open. Above every HUD surface, below every takeover.

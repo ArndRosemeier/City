@@ -875,8 +875,9 @@ func _test_trapped_dig_out() -> void:
 	body.queue_free()
 
 
-## The loudest rung: nowhere to stand and no way to dig. One error per event, and the body
-## stays where it is rather than being teleported somewhere invented.
+## The loudest rung: nowhere to stand and no way to dig. One warning per event, and the body
+## stays where it is rather than being teleported somewhere invented — consumers (the crowd)
+## may then despawn it.
 func _test_trapped_lost() -> void:
 	var nowhere := _w(Vector3i(SX + 120, 1, 42))
 	var body := _make_body("Lost", nowhere)
@@ -889,7 +890,7 @@ func _test_trapped_lost() -> void:
 	NavAgent.reset_events()
 	agent.trapped.connect(_on_trapped)
 
-	print("--- one 'entombed ... with no pedestrian span' error below is the assertion ---")
+	print("--- one 'entombed ... with no pedestrian span' warning below is the assertion ---")
 	var frames := await _run(agent, body, func() -> bool: return _trapped_at.size() > 0, 40.0)
 	if _trapped_at.is_empty():
 		_fail("FAIL a body with no span anywhere was never reported in %d ticks" % frames)

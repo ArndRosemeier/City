@@ -35,6 +35,7 @@ const LoadingSplashScript := preload("res://scripts/city/loading_splash.gd")
 const GemLightDirectorScript := preload("res://scripts/city/gem_light_director.gd")
 const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
 const PlayerInventoryPanelScript := preload("res://scripts/city/player_inventory_panel.gd")
+const LootToastScript := preload("res://scripts/city/loot_toast.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
@@ -43,6 +44,7 @@ const InteriorDecoratorScript := preload("res://scripts/city/interior_decorator.
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const GameSaveScript := preload("res://scripts/city/game_save.gd")
 const GameMenuPanelScript := preload("res://scripts/city/game_menu_panel.gd")
+const DistrictEconomyScript := preload("res://scripts/city/district_economy.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -117,10 +119,16 @@ var _undead_invasion_enabled: bool = false
 var _monsters: MonsterRoster
 ## Optional invasion scenario on top of `_monsters` (waves / giant / convert).
 var _undead: UndeadInvasionDirector
+## Run score. Explore-once payouts only for now; combat deeds arrive with the scenarios.
 var _player_score: int = 0
+## Per-district gem budgets + explored flags. The only thing the save knows about the world.
+var _economy: DistrictEconomy = DistrictEconomyScript.new() as DistrictEconomy
+var _economy_accum: float = 0.0
 ## Collected gems and crafted items (25 stackable slots).
 var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
 var _inventory_panel: PlayerInventoryPanel
+## Transient card that shows what just came in — the inventory is closed while you play.
+var _loot_toast: LootToast
 var _monster_summon_panel: MonsterSummonPanel
 var _game_menu: GameMenuPanel
 ## Save payload waiting to be poured into the next walker. Set before a regenerate (boot resume,
@@ -140,6 +148,9 @@ const RADAR_COOLDOWN_SEC := 30.0
 const RADAR_REVEAL_SEC := 12.0
 const GEM_PICKUP_INTERVAL_SEC := 0.12
 const GEM_PICKUP_REACH_M := 1.35
+## Seconds between district budget / explore sweeps. Only fires when a tile finishes baking or
+## the player crosses a tile line, so it can be lazy.
+const ECONOMY_TICK_SEC := 0.5
 ## How close to a giant's fresh facade strip is close enough to be under it.
 const GIANT_DEBRIS_HURT_RADIUS_M := 6.0
 ## Wall-clock seconds between autosaves once the world is playable.
@@ -224,6 +235,9 @@ func _adopt_quicksave_at_boot(seed_forced: bool) -> void:
 		return
 	var data := GameSaveScript.read_quicksave()
 	if data.is_empty():
+		## Last build's format, or a file that is not a save at all. Either way there is nobody to
+		## wake up, so the autosave goes aside and this run starts a fresh character.
+		GameSaveScript.retire_quicksave()
 		return
 	_pending_restore = data
 	city_seed = GameSaveScript.saved_seed(data)
@@ -578,6 +592,10 @@ func _build_hud() -> void:
 	_game_menu.named_save_requested.connect(_on_named_save_requested)
 	_game_menu.named_load_requested.connect(_on_named_load_requested)
 	_game_menu.new_game_requested.connect(_on_new_game_requested)
+
+	_loot_toast = LootToastScript.new() as LootToast
+	_loot_toast.name = "LootToast"
+	add_child(_loot_toast)
 
 	_inventory_panel = PlayerInventoryPanelScript.new()
 	_inventory_panel.name = "PlayerInventory"
@@ -1031,6 +1049,7 @@ func _process(delta: float) -> void:
 	_fps_accum += delta
 	_infection_stream_accum += delta
 	_gem_pickup_accum += delta
+	_economy_accum += delta
 	CityProfiler.begin("underground")
 	_sync_underground_lighting()
 	CityProfiler.end("underground")
@@ -1042,7 +1061,8 @@ func _process(delta: float) -> void:
 		and _streamer != null
 	):
 		CityProfiler.begin("interior_decorate")
-		_interior_decorator.tick(_walker.global_position, _streamer.get_loaded_districts())
+		if _interior_decorator.tick(_walker.global_position, _streamer.get_loaded_districts()):
+			_try_place_room_chest()
 		CityProfiler.end("interior_decorate")
 	if (
 		not _game_over
@@ -1058,6 +1078,11 @@ func _process(delta: float) -> void:
 		CityProfiler.begin("gem_pickup")
 		_try_collect_nearby_gems()
 		CityProfiler.end("gem_pickup")
+	if _economy_accum >= ECONOMY_TICK_SEC:
+		_economy_accum = 0.0
+		CityProfiler.begin("district_economy")
+		_tick_district_economy()
+		CityProfiler.end("district_economy")
 	_tick_autosave(delta)
 	if _radar_cooldown_left > 0.0:
 		_radar_cooldown_left = maxf(0.0, _radar_cooldown_left - delta)
@@ -1087,10 +1112,6 @@ func _process(delta: float) -> void:
 			var hh := int(floor(h)) % 24
 			var mm := int(floor(fposmod(h, 1.0) * 60.0))
 			clock = "  %02d:%02d" % [hh, mm]
-		var score := _player_score
-		if _infection != null and is_instance_valid(_infection) and _infection.has_method("get_player_score"):
-			score = int(_infection.call("get_player_score"))
-			_player_score = score
 		var radar := ""
 		if _radar_reveal_left > 0.05:
 			radar = "  Radar: LIVE %.0fs" % _radar_reveal_left
@@ -1098,7 +1119,9 @@ func _process(delta: float) -> void:
 			radar = "  Radar: %.0fs" % _radar_cooldown_left
 		else:
 			radar = "  Radar: ready (U)"
-		_hud.text = "%d FPS%s  Score: %d%s" % [Engine.get_frames_per_second(), clock, score, radar]
+		_hud.text = "%d FPS%s  Score: %d%s" % [
+			Engine.get_frames_per_second(), clock, _player_score, radar
+		]
 
 
 func _create_terrain() -> void:
@@ -1226,16 +1249,221 @@ func _ensure_infection_director() -> void:
 		var cb_end := Callable(self, "_on_tendril_ended")
 		if not _infection.is_connected("tendril_ended", cb_end):
 			_infection.connect("tendril_ended", cb_end)
-	if _infection.has_signal("player_score_changed"):
-		var cb_score := Callable(self, "_on_player_score_changed")
-		if not _infection.is_connected("player_score_changed", cb_score):
-			_infection.connect("player_score_changed", cb_score)
 	if _tendril_hud != null and is_instance_valid(_tendril_hud):
 		_tendril_hud.call("bind_director", _infection)
 
 
-func _on_player_score_changed(score: int) -> void:
-	_player_score = score
+func get_economy() -> DistrictEconomy:
+	return _economy
+
+
+func get_player_score() -> int:
+	return _player_score
+
+
+## Roll a budget for every tile the run has just reached, and pay exploration for the tile the
+## player is standing in. Both happen once per coord, ever, and both are cheap enough to sweep.
+func _tick_district_economy() -> void:
+	if _streamer == null or _booting:
+		return
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
+		if inst == null or not inst.is_ready or inst.generator == null:
+			continue
+		_ensure_district_row(inst)
+	if _game_over or _walker == null or not is_instance_valid(_walker):
+		return
+	var here := DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE)
+	if not _economy.has_row(here):
+		return
+	if _economy.mark_explored(here):
+		_player_score += DistrictEconomy.EXPLORE_SCORE
+		print(
+			"CityRoot: explored %s (+%d, score %d)"
+			% [str(here), DistrictEconomy.EXPLORE_SCORE, _player_score]
+		)
+
+
+## First create of a coord in this run: fix what it will ever pay out. Hills budget from the ore
+## the bake painted; every other theme rolls its table total off the global rarity curve.
+func _ensure_district_row(inst: DistrictInstance) -> void:
+	if _economy.has_row(inst.coord):
+		return
+	var theme_id: int = inst.generator.theme.id
+	var budgets: Dictionary[int, int]
+	if theme_id == DistrictTheme.HILL:
+		budgets = DistrictEconomy.budgets_from_gem_mats(inst.hill_gem_mats)
+	else:
+		budgets = DistrictEconomy.roll_budgets(
+			theme_id, DistrictCoord.district_seed(city_seed, inst.coord)
+		)
+	_economy.ensure_row(inst.coord, budgets)
+	print(
+		"CityRoot: district %s (%s) owes %d gems"
+		% [str(inst.coord), inst.generator.theme.display_name, _economy.remaining_total(inst.coord)]
+	)
+
+
+## Spend one gem of `mat_id` from the district that holds `world_vox`. False when that tile is
+## out of that type — the ore is still there to dig, it simply stops paying.
+func try_take_district_gem(world_vox: Vector3i, mat_id: int) -> bool:
+	var world := Vector3(
+		(float(world_vox.x) + 0.5) * VOXEL_SIZE,
+		(float(world_vox.y) + 0.5) * VOXEL_SIZE,
+		(float(world_vox.z) + 0.5) * VOXEL_SIZE
+	)
+	return _economy.try_take(DistrictCoord.from_world(world, VOXEL_SIZE), mat_id)
+
+
+## A room was just furnished, so it may get a chest. The decorator paints voxels and nothing else,
+## and a chest is a node with an animated lid — so this is where it is stood up.
+func _try_place_room_chest() -> void:
+	var room := _interior_decorator.take_furnished_room()
+	if room.is_empty():
+		return
+	var purpose := int(room["purpose"])
+	var room_seed := int(room["seed"])
+	if not GemChestPlacer.should_place(purpose, room_seed):
+		return
+	var coord: Vector2i = room["coord"] as Vector2i
+	var inst := _district_at_coord(coord)
+	if inst == null:
+		## The tile unloaded between the paint and this frame. Nothing to hang the chest on.
+		return
+	var spot := _chest_spot_in_room(room)
+	if spot == Vector3i(2147483647, 2147483647, 2147483647):
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = room_seed ^ 0x43455354
+	## X and Z centred in the cell, Y at its floor — the model's own origin is its base.
+	var world := Vector3(
+		(float(spot.x) + 0.5) * VOXEL_SIZE,
+		float(spot.y) * VOXEL_SIZE,
+		(float(spot.z) + 0.5) * VOXEL_SIZE
+	)
+	## Quarter turns only: a chest shoved against a wall is not sitting at 37 degrees to it.
+	var yaw := float(rng.randi_range(0, 3)) * (PI * 0.5)
+	var chest := inst.ensure_gem_chests().place_chest(coord, world, yaw, room_seed)
+	if chest == null:
+		return
+	print(
+		"CityRoot: chest in %s room of district %s at %s"
+		% [RoomDecorator.purpose_name(purpose as RoomDecorator.Purpose), str(coord), str(spot)]
+	)
+
+
+## A free floor cell in the furnished room. The wall ring is tried first — a chest belongs against
+## the masonry rather than in the middle of the carpet — and then the rest of the floor, because
+## the rooms likeliest to hold a chest are the ones the decorator has already lined with crates.
+## The sentinel means the room has no clear floor left at all.
+##
+## `floor_y` is the topmost *solid* slab cell (see `RoomVolume`), so a chest stands one above it.
+func _chest_spot_in_room(room: Dictionary) -> Vector3i:
+	var sentinel := Vector3i(2147483647, 2147483647, 2147483647)
+	if _brush == null:
+		return sentinel
+	var rect: Rect2i = room["rect"] as Rect2i
+	var stand_y := int(room["floor_y"]) + 1
+	if rect.size.x < 3 or rect.size.y < 3:
+		return sentinel
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(room["seed"]) ^ 0x53504f54
+	## Inset by one so a chest never lands inside a partition the painter just drew.
+	var inner := Rect2i(rect.position + Vector2i.ONE, rect.size - Vector2i(2, 2))
+	if inner.size.x < 1 or inner.size.y < 1:
+		return sentinel
+	var ring: Array[Vector2i] = []
+	var middle: Array[Vector2i] = []
+	for z in range(inner.position.y, inner.end.y):
+		for x in range(inner.position.x, inner.end.x):
+			var cell := Vector2i(x, z)
+			var on_edge := (
+				x == inner.position.x or x == inner.end.x - 1
+				or z == inner.position.y or z == inner.end.y - 1
+			)
+			if on_edge:
+				ring.append(cell)
+			else:
+				middle.append(cell)
+	var spot := _first_standable(ring, stand_y, rng)
+	if spot != sentinel:
+		return spot
+	return _first_standable(middle, stand_y, rng)
+
+
+## The first cell of `cells` a chest fits on, scanned from a seeded offset so two rooms with the
+## same shape do not both put their chest in the same corner.
+func _first_standable(
+	cells: Array[Vector2i], stand_y: int, rng: RandomNumberGenerator
+) -> Vector3i:
+	var sentinel := Vector3i(2147483647, 2147483647, 2147483647)
+	if cells.is_empty():
+		return sentinel
+	var start := rng.randi_range(0, cells.size() - 1)
+	for i in range(cells.size()):
+		var cell: Vector2i = cells[(start + i) % cells.size()]
+		var stand := Vector3i(cell.x, stand_y, cell.y)
+		if not VoxelMaterial.is_solid(_brush.get_vox(stand + Vector3i(0, -1, 0))):
+			continue
+		if _brush.get_vox(stand) != VoxelMaterial.AIR:
+			continue
+		if _brush.get_vox(stand + Vector3i(0, 1, 0)) != VoxelMaterial.AIR:
+			continue
+		return stand
+	return sentinel
+
+
+func _district_at_coord(coord: Vector2i) -> DistrictInstance:
+	if _streamer == null:
+		return null
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
+		if inst != null and inst.coord == coord:
+			return inst
+	return null
+
+
+## Hand the player one gem from `coord`'s budget. False when that tile has none of that type left,
+## which is how chests and trees go quiet in a district that has already been picked clean.
+func grant_district_gem(coord: Vector2i, mat_id: int) -> bool:
+	var item_id := InventoryCatalog.item_id_for_gem(mat_id)
+	if item_id == "":
+		push_error("CityRoot.grant_district_gem: %d is not a gem" % mat_id)
+		return false
+	if not _economy.try_take(coord, mat_id):
+		return false
+	var leftover := _inventory.add(item_id, 1)
+	if leftover != 0:
+		push_error("CityRoot: inventory full — gem %s could not be stored" % item_id)
+	## No chime here: a chest pays several stones in one frame, and the caller plays one sound for
+	## the whole find. The card is what shows each stone.
+	if _loot_toast != null:
+		_loot_toast.add_item(item_id, 1)
+	return true
+
+
+## A chest was opened: the lid at the chest, and — if it actually paid — the haul flourish over the
+## card the grants have already filled in. The chest knows what happened; the audio and the HUD live
+## here, so this is where the two are put together.
+##
+## Called after the grants, so `gems_paid` is settled and the card can be named for what it was.
+func report_chest_opened(world_pos: Vector3, gems_paid: int) -> void:
+	if _audio != null:
+		_audio.play_chest_open(world_pos)
+	if _loot_toast == null:
+		return
+	if gems_paid <= 0:
+		## Worth saying: an open chest with nothing in it otherwise looks like a bug rather than
+		## like a district that has already been picked clean.
+		_loot_toast.show_message("The chest is empty")
+		return
+	_loot_toast.set_headline("Chest opened")
+	if _audio != null:
+		_audio.play_treasure_bling()
+
+
+func get_loot_toast() -> LootToast:
+	return _loot_toast
 
 
 func get_gem_count(mat_id: int) -> int:
@@ -1256,6 +1484,11 @@ func get_gem_counts() -> Dictionary:
 
 
 ## Remove one gem voxel and credit the inventory. Returns false if it is gone already.
+##
+## The ore comes out of the rock either way; whether it lands in the inventory is the district's
+## budget to answer. A tile whose sapphires are spent still has sapphire-coloured voxels in it
+## (the bake paints from the seed and knows nothing about the save) and clearing one now yields
+## nothing — which is what stops a hill from being farmed by walking away and coming back.
 func try_collect_gem_at(vox: Vector3i) -> bool:
 	if _tool == null:
 		return false
@@ -1267,6 +1500,8 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 	if item_id == "":
 		return false
 	_brush.set_vox(vox, VoxelMaterial.AIR)
+	if not try_take_district_gem(vox, mat_id):
+		return true
 	var leftover := _inventory.add(item_id, 1)
 	if leftover != 0:
 		push_error("CityRoot: inventory full — gem %s could not be stored" % item_id)
@@ -1274,6 +1509,8 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 		var local := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
 		var world := _terrain.to_global(local) if _terrain != null else local * VOXEL_SIZE
 		_audio.call("play_gem_pickup", world, mat_id)
+	if _loot_toast != null:
+		_loot_toast.add_item(item_id, 1)
 	return true
 
 
@@ -1302,18 +1539,6 @@ func _try_collect_nearby_gems() -> void:
 				var id := int(_tool.get_voxel(Vector3i(x, y, z)))
 				if VoxelMaterial.is_gem(id):
 					try_collect_gem_at(Vector3i(x, y, z))
-
-
-func adjust_player_score(delta: int) -> void:
-	var score := _player_score
-	if _infection != null and is_instance_valid(_infection) and _infection.has_method("get_player_score"):
-		score = int(_infection.call("get_player_score"))
-	score += delta
-	_player_score = score
-	if _infection != null and is_instance_valid(_infection):
-		_infection.player_score = score
-		if _infection.has_signal("player_score_changed"):
-			_infection.player_score_changed.emit(score)
 
 
 func get_player_position() -> Vector3:
@@ -1966,7 +2191,11 @@ func _regenerate() -> void:
 		_undead = null
 	_player_score = 0
 	_inventory.clear()
+	## Every district row belongs to the world being torn down. A load refills both from the save
+	## once the new walker is standing (`_restore_pending_character`).
+	_economy.clear()
 	_gem_pickup_accum = 0.0
+	_economy_accum = 0.0
 	_radar_cooldown_left = 0.0
 	_radar_reveal_left = 0.0
 	_clear_all_meteor_sites()
@@ -2144,6 +2373,10 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 			_walker.set_yaw(atan2(-look.x, -look.z))
 
 	_booting = false
+	## Roll the spawn tile's gem budget and pay for standing in it now, rather than up to half a
+	## second later — the HUD is about to be shown and a run always starts on an explored tile.
+	_economy_accum = 0.0
+	_tick_district_economy()
 	_set_hud_enabled(true)
 	if _loading_splash != null:
 		_loading_splash.call("hide_splash")
@@ -2349,6 +2582,8 @@ func _restore_pending_character() -> void:
 		return
 	GameSaveScript.apply_character(_walker, _pending_restore)
 	GameSaveScript.apply_inventory(_inventory, _pending_restore)
+	GameSaveScript.apply_districts(_economy, _pending_restore)
+	_player_score = GameSaveScript.saved_score(_pending_restore)
 	print(
 		"CityRoot: restored save at %s (seed %d)"
 		% [_walker.global_position, city_seed]
@@ -2389,7 +2624,9 @@ func list_named_saves() -> Array[Dictionary]:
 func write_quicksave(label: String = "Autosave") -> bool:
 	if not can_save_game():
 		return false
-	var data := GameSaveScript.capture(city_seed, _walker, _inventory, label)
+	var data := GameSaveScript.capture(
+		city_seed, _walker, _inventory, label, _economy, _player_score
+	)
 	if data.is_empty():
 		return false
 	if not GameSaveScript.write_quicksave(data):
@@ -2402,7 +2639,9 @@ func write_named_save(raw_name: String) -> bool:
 	if not can_save_game():
 		return false
 	var label := raw_name.strip_edges()
-	var data := GameSaveScript.capture(city_seed, _walker, _inventory, label)
+	var data := GameSaveScript.capture(
+		city_seed, _walker, _inventory, label, _economy, _player_score
+	)
 	if data.is_empty():
 		return false
 	return GameSaveScript.write_named(raw_name, data)
@@ -2420,7 +2659,10 @@ func load_named_save(raw_name: String) -> bool:
 ## the walker the rebuild spawns. Nothing tries to edit the live world into shape.
 func _start_load(data: Dictionary, what: String) -> bool:
 	if data.is_empty():
-		push_error("CityRoot: there is no readable save in '%s'" % what)
+		## `GameSave` has already said in the log why — an older format is a warning, a broken file
+		## is an error. Either way the menu reports it to the player, so this is not the place to
+		## decide which of the two happened.
+		push_warning("CityRoot: there is no readable save in '%s'" % what)
 		return false
 	if _booting:
 		push_warning("CityRoot: still booting — ignoring the load of '%s'" % what)
@@ -3244,7 +3486,6 @@ func undead_stomp_at(world_pos: Vector3, radius_m: float) -> void:
 	var removed := _carve_building_sphere_counted(local, radius_vox)
 	if removed <= 0:
 		return
-	adjust_player_score(-removed)
 	_notify_destruction(world_pos, 28.0 + radius_vox)
 
 
@@ -3324,7 +3565,6 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 	_brush.end_edit()
 	if removed <= 0:
 		return 0
-	adjust_player_score(-removed)
 	var world_hit := _terrain.to_global(
 		Vector3(float(hit.x) + 0.5, float(hit.y) + 0.5, float(hit.z) + 0.5)
 	)
@@ -3350,7 +3590,7 @@ func _damage_player_in_debris(world_hit: Vector3) -> void:
 	damage_player(DamageSourceScript.Id.GIANT_DEBRIS)
 
 
-## Minion bite: remove one nearby building voxel (−1 score). No cascade.
+## Minion bite: remove one nearby building voxel. No cascade.
 func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
 	if _terrain == null or _tool == null:
 		return false
@@ -3361,7 +3601,6 @@ func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
 	var carved := _brush.destroy_vox(vox)
 	if carved.is_empty():
 		return false
-	adjust_player_score(-carved.size())
 	var world := _terrain.to_global(Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5))
 	_notify_tetris_damage(carved)
 	_notify_destruction(world, 10.0)

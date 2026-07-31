@@ -31,6 +31,9 @@ var _meteor_crash_stream: AudioStream
 var _tendril_drone_stream: AudioStream
 var _tendril_tick_stream: AudioStream
 var _gem_pickup_stream: AudioStream
+## Chest lid and the flourish for a whole haul. No pack has either mood, so both are synthesized.
+var _chest_open_stream: AudioStream
+var _bling_stream: AudioStream
 ## Monster / fist melee — no Kenney pack for this mood, so always procedural.
 var _melee_swing_streams: Array[AudioStream] = []
 var _melee_hit_streams: Array[AudioStream] = []
@@ -47,6 +50,7 @@ var _debris_budget: float = 0.0
 var _ui_player: AudioStreamPlayer
 var _gem_players: Array[AudioStreamPlayer] = []
 var _gem_player_i: int = 0
+var _bling_player: AudioStreamPlayer
 var _whine_player: AudioStreamPlayer3D
 var _whine_follow: Node3D
 var _crash_player: AudioStreamPlayer3D
@@ -78,6 +82,10 @@ func _ready() -> void:
 		gp.bus = &"Master"
 		add_child(gp)
 		_gem_players.append(gp)
+	_bling_player = AudioStreamPlayer.new()
+	_bling_player.name = "TreasureBling"
+	_bling_player.bus = &"Master"
+	add_child(_bling_player)
 	_whine_player = _make_dedicated_player("MeteorWhine", 420.0, 18.0)
 	_crash_player = _make_dedicated_player("MeteorCrash", 720.0, 42.0)
 	_crash_player.attenuation_filter_cutoff_hz = 5000.0
@@ -161,6 +169,35 @@ func play_gem_pickup(_world_pos: Vector3, mat_id: int = -1) -> void:
 	p.pitch_scale = _gem_pickup_pitch(mat_id) * _rng.randf_range(0.985, 1.025)
 	p.volume_db = -5.5
 	p.play()
+
+
+## Latch and lid, at the chest. Positional: a chest is a thing in the room, and the player has just
+## clicked it, so it should sound like it is where he is looking.
+func play_chest_open(world_pos: Vector3) -> void:
+	if not enabled:
+		return
+	if _chest_open_stream == null:
+		return
+	var p := _next_player()
+	p.stream = _chest_open_stream
+	p.global_position = world_pos
+	p.pitch_scale = _rng.randf_range(0.94, 1.07)
+	p.volume_db = -4.0
+	p.play()
+
+
+## The haul flourish: a rising sparkle that plays once for a whole find, however many stones were
+## in it. Non-positional and its own voice, so it is never one of several pickup chimes fired in
+## the same frame beating against each other.
+func play_treasure_bling() -> void:
+	if not enabled:
+		return
+	if _bling_stream == null or _bling_player == null:
+		return
+	_bling_player.stream = _bling_stream
+	_bling_player.pitch_scale = _rng.randf_range(0.99, 1.01)
+	_bling_player.volume_db = -4.5
+	_bling_player.play()
 
 
 func play_laser_fire(world_pos: Vector3, character_scale: float = 1.0) -> void:
@@ -525,6 +562,8 @@ func _load_banks() -> void:
 	_tendril_drone_stream = _build_tendril_drone()
 	_tendril_tick_stream = _build_tendril_tick()
 	_gem_pickup_stream = _build_gem_pickup()
+	_chest_open_stream = _build_chest_open()
+	_bling_stream = _build_treasure_bling()
 	## Melee / orb / nibble — same: no pack for the mood, so synthesize a few variants.
 	_melee_swing_streams = [_build_melee_swing(0), _build_melee_swing(1), _build_melee_swing(2)]
 	_melee_hit_streams = [_build_melee_hit(0), _build_melee_hit(1), _build_melee_hit(2)]
@@ -718,6 +757,40 @@ func _build_gem_pickup() -> AudioStreamWAV:
 		var octave := sin(TAU * 1760.0 * t) * 0.45
 		var shimmer := sin(TAU * 2340.0 * t + sin(TAU * 40.0 * t) * 0.4) * 0.28 * exp(-t * 20.0)
 		return (ping * 0.85 + root * 0.55 + fifth + octave + shimmer) * env * 0.7
+	)
+
+
+func _build_chest_open() -> AudioStreamWAV:
+	## A latch knocking loose, then the lid creaking up: a wobbling scrape that climbs as it swings,
+	## over a short wooden thump. Kept dry and low so it reads as furniture, not as a chime.
+	return _synthesize(0.42, func(t: float, _i: int) -> float:
+		var knock := sin(TAU * 168.0 * t) * exp(-t * 44.0) * 0.7
+		var body := sin(TAU * 94.0 * t) * exp(-t * 24.0) * 0.45
+		var creak_env := smoothstep(0.03, 0.10, t) * (1.0 - smoothstep(0.24, 0.40, t))
+		var creak_hz := lerpf(430.0, 720.0, clampf((t - 0.03) / 0.28, 0.0, 1.0))
+		var creak := sin(TAU * creak_hz * t + sin(TAU * 26.0 * t) * 1.6) * 0.34 * creak_env
+		var grain := (_rng.randf() * 2.0 - 1.0) * 0.14 * creak_env
+		return (knock + body + creak + grain) * 0.8
+	)
+
+
+func _build_treasure_bling() -> AudioStreamWAV:
+	## Four notes up a major triad with a shimmer tail — deliberately longer and brighter than the
+	## single-nugget chime, so a haul does not sound like one more pebble off a wall.
+	var notes := PackedFloat32Array([1046.5, 1318.5, 1568.0, 2093.0])
+	return _synthesize(0.75, func(t: float, _i: int) -> float:
+		var sum := 0.0
+		for n in range(notes.size()):
+			var start := float(n) * 0.075
+			if t < start:
+				break
+			var lt := t - start
+			var env := smoothstep(0.0, 0.006, lt) * exp(-lt * 7.5)
+			sum += sin(TAU * notes[n] * lt) * env * 0.5
+			sum += sin(TAU * notes[n] * 2.0 * lt) * env * 0.15
+		var shimmer_env := smoothstep(0.0, 0.05, t) * exp(-t * 4.0)
+		var shimmer := sin(TAU * 3140.0 * t + sin(TAU * 33.0 * t) * 1.4) * 0.13 * shimmer_env
+		return (sum + shimmer) * 0.6
 	)
 
 

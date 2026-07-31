@@ -25,6 +25,9 @@ var _hit_coord: Vector2i = Vector2i.ZERO
 ## partitions (and the room beyond the door) can finish while the player is still outside.
 var _prime_vox: Vector3i = Vector3i.ZERO
 var _has_prime: bool = false
+## The room the last `_decorate` dressed, waiting to be read by whoever places the Node3D props
+## this class does not own (gem chests). Empty once read; see `take_furnished_room`.
+var _furnished: Dictionary = {}
 
 
 ## Ask the next ticks to work the storey under `world` — used when a street door opens
@@ -287,7 +290,24 @@ func _decorate(room: InteriorRoom) -> int:
 	dec.rng = _rng_for(room)
 	var placed := dec.decorate(room.to_volume(), room.purpose as RoomDecorator.Purpose)
 	room.decorated = true
+	_furnished = {
+		"coord": _hit_coord,
+		"rect": room.rect,
+		"floor_y": room.floor_y,
+		"air_h": room.air_h,
+		"purpose": int(room.purpose),
+		"seed": int(_rng_for(room).seed),
+	}
 	return placed
+
+
+## The room furnished by the last tick, or an empty dictionary when that tick furnished nothing.
+## Reading clears it: this hands one room to one caller, and a room dressed twice would be a
+## room with two chests in it.
+func take_furnished_room() -> Dictionary:
+	var out := _furnished
+	_furnished = {}
+	return out
 
 
 ## Stable per room so a re-streamed district (fresh flags) stamps the same kit again.

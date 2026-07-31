@@ -52,6 +52,7 @@ func _ready() -> void:
 	_check_footing()
 	await _check_round_trip()
 	_check_slots_are_separate()
+	_check_old_format_is_retired()
 	_wipe_scratch()
 	GameSaveScript.use_default_directory()
 	if GameSaveScript.saves_dir() != GameSaveScript.SAVES_DIR:
@@ -276,6 +277,50 @@ func _check_slots_are_separate() -> void:
 	if GameSaveScript.read_named(SLOT_NAME).is_empty():
 		_fail("FAIL deleting the quicksave took the named save with it")
 	print("OK the autosave slot and the named library are independent")
+
+
+# ---------------------------------------------------------------------------
+# An autosave from an older build
+# ---------------------------------------------------------------------------
+
+## Bumping `VERSION` strands the autosave of everyone already playing, and that is the *expected*
+## first launch after an update — not a fault to shout about. So the read refuses it, boot moves it
+## aside, and the next launch is quiet: no error, no slot in the Load list that cannot be loaded.
+func _check_old_format_is_retired() -> void:
+	var path := GameSaveScript.quicksave_path()
+	var stale := {"version": GameSaveScript.VERSION - 1, "city_seed": WORLD_SEED}
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		_fail("FAIL could not plant an old-format autosave")
+		return
+	file.store_string(JSON.stringify(stale, "\t"))
+	file.close()
+
+	if not GameSaveScript.has_quicksave():
+		_fail("FAIL the planted autosave is not there")
+		return
+	if not GameSaveScript.read_quicksave().is_empty():
+		_fail("FAIL a save from another build was read as if this build wrote it")
+		return
+	if not GameSaveScript.retire_quicksave():
+		_fail("FAIL the old autosave could not be moved aside")
+		return
+	if GameSaveScript.has_quicksave():
+		_fail("FAIL the old autosave is still in the slot, so the next boot trips over it again")
+		return
+	if not FileAccess.file_exists("%s.bak" % path):
+		_fail("FAIL the old autosave was thrown away rather than kept")
+		return
+	## The retired file must be invisible to the library, or the player gets a slot that refuses.
+	for entry: Dictionary in GameSaveScript.list_named():
+		if String(entry["name"]).contains(GameSaveScript.QUICKSAVE_NAME):
+			_fail("FAIL the retired autosave showed up in the Load list as '%s'" % entry["name"])
+			return
+	## Nothing to retire is not a failure — most boots have a save they can actually read.
+	if GameSaveScript.retire_quicksave():
+		_fail("FAIL retiring an empty slot reported that it moved something")
+		return
+	print("OK an autosave from an older build is refused, kept aside and out of the Load list")
 
 
 func _wipe_scratch() -> void:

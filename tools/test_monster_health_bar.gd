@@ -36,10 +36,6 @@ var _terrain: VoxelTerrain
 
 class TestCity:
 	extends CityRoot
-	var score: int = 0
-
-	func adjust_player_score(delta: int) -> void:
-		score += delta
 
 	func trigger_game_over(reason: String = "Converted by undead") -> void:
 		pass

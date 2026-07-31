@@ -202,7 +202,7 @@ func damage_unit(unit: UndeadUnit, source: DamageSource.Id) -> bool:
 		return false
 	if not unit.is_alive():
 		return false
-	_award(unit.apply_damage(source))
+	unit.apply_damage(source)
 	return true
 
 
@@ -216,7 +216,7 @@ func damage_units_in_sphere(center: Vector3, radius: float, source: DamageSource
 		var chest := u.global_position + Vector3(0.0, u.hit_half_height() * 0.85, 0.0)
 		if chest.distance_to(center) > radius + u.hit_radius():
 			continue
-		_award(u.apply_damage(source))
+		u.apply_damage(source)
 		hit += 1
 	return hit
 
@@ -268,11 +268,6 @@ func clear_invasion_units() -> void:
 	for c in get_children():
 		if str(c.name).begins_with("UndeadOrb"):
 			c.queue_free()
-
-
-func _award(score: int) -> void:
-	if _city != null and score != 0:
-		_city.adjust_player_score(score)
 
 
 func _on_unit_died(unit: UndeadUnit, _was_giant: bool) -> void:
