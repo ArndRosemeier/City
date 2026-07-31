@@ -2,6 +2,8 @@ use godot::prelude::*;
 use std::collections::HashMap;
 
 mod cascade_debris;
+mod hill_caves;
+mod hill_paint;
 mod mandelbrot;
 mod mandelbrot_api;
 mod materials;
@@ -170,6 +172,14 @@ impl NativeOfflineVoxelVolume {
             }
             None => 0,
         }
+    }
+
+    #[inline]
+    pub(crate) fn set_raw(&mut self, pos: Vector3i, mat: u8) {
+        let bp = block_pos(pos);
+        let data = self.ensure_block(bp);
+        let lp = Vector3i::new(pos.x - bp.0 * BLOCK, pos.y - bp.1 * BLOCK, pos.z - bp.2 * BLOCK);
+        data[index(lp)] = mat;
     }
 
     fn ensure_block(&mut self, bp: (i32, i32, i32)) -> &mut Vec<u8> {

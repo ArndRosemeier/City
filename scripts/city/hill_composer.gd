@@ -7,6 +7,8 @@
 class_name HillComposer
 extends RefCounted
 
+const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+
 var brush: CityBrush
 var rng: RandomNumberGenerator
 var ground_y: int = 6
@@ -14,6 +16,10 @@ var stamper: TreeStamper
 ## Land-use grid — road cells come from here instead of 400k voxel probes.
 var planner: DistrictPlanner
 var cell_size: int = 28
+## Prefer Rust paint + gems + cave carve when baking into an offline volume.
+## When true there is no GDScript fallback — failures assert so crashes are visible.
+## When false the original GDScript paths run (A/B / tools without a volume).
+var use_native_hill: bool = true
 
 
 func _stamper() -> TreeStamper:
@@ -108,6 +114,10 @@ var _shell_guard: bool = true
 ## World-voxel positions / material ids of gem ore placed this compose (for lights).
 var gem_positions: PackedVector3Array = PackedVector3Array()
 var gem_mats: PackedInt32Array = PackedInt32Array()
+## Daylight cave mouths in *district-local* XZ (for spawn at an entrance).
+var cave_mouths: PackedVector2Array = PackedVector2Array()
+## Summit the mouths were bored from (district-local XZ); used to stand outside.
+var cave_summit: Vector2i = Vector2i(-1, -1)
 
 ## Rock beds from the bottom of the stack upward, repeated all the way to the summits
 ## so every hill in the tile shows the same geology.
@@ -154,8 +164,12 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_limit_steps()
 	_report(summits)
 	_paint_meadow()
-	_paint_terrain()
-	_scatter_gems()
+	if use_native_hill:
+		_paint_terrain_native()
+		_scatter_gems_native()
+	else:
+		_paint_terrain()
+		_scatter_gems()
 	_carve_caves(summits)
 	_scatter_boulders()
 	_plant_trees(1.0)
@@ -169,7 +183,10 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	var summits := _pick_summits()
 	_build_heightfield(summits)
 	_limit_steps()
-	_paint_terrain()
+	if use_native_hill:
+		_paint_terrain_native()
+	else:
+		_paint_terrain()
 	_plant_trees(0.12)
 
 
@@ -218,6 +235,8 @@ func _begin(min_v: Vector3i, max_v: Vector3i, need_brush: bool = true) -> bool:
 	_cave_hi.fill(-1)
 	gem_positions = PackedVector3Array()
 	gem_mats = PackedInt32Array()
+	cave_mouths = PackedVector2Array()
+	cave_summit = Vector2i(-1, -1)
 	_shell_guard = true
 	_build_bed_dip()
 	return true
@@ -575,6 +594,8 @@ func _build_bed_dip() -> void:
 ## gets hollowed by the same pass. Summits only contribute their daylight mouths.
 func _carve_caves(summits: Array[Dictionary]) -> void:
 	var portals: Array[Vector2i] = []
+	cave_mouths = PackedVector2Array()
+	cave_summit = Vector2i(-1, -1)
 	for s: Dictionary in summits:
 		var sx := int(s["x"])
 		var sz := int(s["z"])
@@ -584,11 +605,119 @@ func _carve_caves(summits: Array[Dictionary]) -> void:
 		if mouths.is_empty():
 			continue
 		s["portal"] = mouths[0]
+		if cave_summit.x < 0:
+			cave_summit = Vector2i(_ox + sx, _oz + sz)
 		for mouth: Vector2i in mouths:
 			portals.append(mouth)
+			cave_mouths.append(Vector2(_ox + mouth.x, _oz + mouth.y))
 	if portals.is_empty():
 		return
-	_carve_cheese(portals)
+	if use_native_hill:
+		_carve_cheese_native(portals)
+	else:
+		_carve_cheese(portals)
+
+
+## Offline volume + loaded extension required. Asserts on failure (no GDScript fallback).
+func _native_hill() -> Object:
+	assert(use_native_hill)
+	assert(brush != null and brush.volume != null, "HillComposer: native hill needs offline volume")
+	CityVoxelNativeScript.require_loaded()
+	var native: Object = CityVoxelNativeScript.make_hill_caves()
+	assert(native != null, "HillComposer: NativeHillCaves missing")
+	return native
+
+
+func _paint_terrain_native() -> void:
+	var native := _native_hill()
+	var stats: Dictionary = native.call(
+		"paint_terrain",
+		brush.volume,
+		_ox,
+		_oz,
+		_w,
+		_d,
+		ground_y,
+		_height,
+		_band_mats,
+		_band_ends
+	) as Dictionary
+	assert(bool(stats.get("ok", false)), "HillComposer: native paint_terrain failed")
+	print(
+		"HillComposer: paint[native] columns=%d in %d ms"
+		% [int(stats.get("columns", 0)), int(stats.get("ms", 0))]
+	)
+
+
+func _scatter_gems_native() -> void:
+	var native := _native_hill()
+	var road_mask := PackedByteArray()
+	road_mask.resize(_w * _d)
+	for z in range(_d):
+		for x in range(_w):
+			road_mask[z * _w + x] = 1 if _is_road_cell(x, z) else 0
+	var seed_i: int = rng.randi()
+	var stats: Dictionary = native.call(
+		"scatter_gems",
+		brush.volume,
+		_ox,
+		_oz,
+		_w,
+		_d,
+		ground_y,
+		_height,
+		road_mask,
+		seed_i
+	) as Dictionary
+	assert(bool(stats.get("ok", false)), "HillComposer: native scatter_gems failed")
+	gem_positions = stats.get("positions", PackedVector3Array()) as PackedVector3Array
+	gem_mats = stats.get("mats", PackedInt32Array()) as PackedInt32Array
+	print(
+		"HillComposer: gem[native] clusters=%d voxels=%d in %d ms"
+		% [
+			int(stats.get("clusters", 0)),
+			int(stats.get("voxels", 0)),
+			int(stats.get("ms", 0)),
+		]
+	)
+
+
+func _carve_cheese_native(portals: Array[Vector2i]) -> void:
+	var native := _native_hill()
+	var portals_xz := PackedInt32Array()
+	portals_xz.resize(portals.size() * 2)
+	for i in range(portals.size()):
+		portals_xz[i * 2] = portals[i].x
+		portals_xz[i * 2 + 1] = portals[i].y
+	var seed_i: int = rng.randi()
+	var stats: Dictionary = native.call(
+		"carve_cheese",
+		brush.volume,
+		_ox,
+		_oz,
+		_w,
+		_d,
+		ground_y,
+		_height,
+		portals_xz,
+		seed_i
+	) as Dictionary
+	assert(bool(stats.get("ok", false)), "HillComposer: native carve_cheese failed")
+	print(
+		(
+			"HillComposer: cheese[native] chambers=%d links=%d mouths=%d swells=%d"
+			+ " core hollow=%.1f%% reachable=%.1f%% in %d ms"
+		)
+		% [
+			int(stats.get("chambers", 0)),
+			int(stats.get("links", 0)),
+			int(stats.get("mouths", 0)),
+			int(stats.get("swells", 0)),
+			float(stats.get("hollow", 0.0)) * 100.0,
+			float(stats.get("reachable", 0.0)) * 100.0,
+			int(stats.get("ms", 0)),
+		]
+	)
 
 
 ## Hollow the massif like swiss cheese: a jittered 3-D lattice of big chambers wired
@@ -927,10 +1056,23 @@ func _carve_mouths(portals: Array[Vector2i], nodes: Array[Dictionary]) -> void:
 		var inner := Vector3i(int(target["x"]), int(target["y"]), int(target["z"]))
 		var mouth := Vector3i(portal.x, ground_y + CAVE_CLEARANCE_RY + 1, portal.y)
 		var throat := _step_toward(mouth, inner, 14)
+		## Start on the meadow side of the portal so the opening reads as a hillside
+		## face, not a buried tube that never clears the skin.
+		var outer := _mouth_outer(portal, throat, 8)
 		_shell_guard = false
-		_carve_passage_segment(mouth, throat, CAVE_RADIUS + 1, 0)
+		_carve_passage_segment(outer, throat, CAVE_RADIUS + 1, 0)
 		_shell_guard = true
 		_carve_passage(throat, inner, CAVE_RADIUS + 1, true)
+
+
+## Step from the portal downhill (away from the inland throat) onto lower ground.
+func _mouth_outer(portal: Vector2i, throat: Vector3i, dist: int) -> Vector3i:
+	var dx := float(portal.x - throat.x)
+	var dz := float(portal.y - throat.z)
+	var run := maxf(sqrt(dx * dx + dz * dz), 1.0)
+	var x := clampi(portal.x + int(round(dx / run * float(dist))), 4, _w - 5)
+	var z := clampi(portal.y + int(round(dz / run * float(dist))), 4, _d - 5)
+	return Vector3i(x, ground_y + CAVE_CLEARANCE_RY + 1, z)
 
 
 func _nearest_node(portal: Vector2i, nodes: Array[Dictionary]) -> Dictionary:
@@ -1296,10 +1438,24 @@ func _is_cave_shellable(id: int) -> bool:
 func _carve_passage_slice(cx: int, cy: int, cz: int, rxz: int) -> void:
 	## Duck under a thin roof instead of letting the shell clamp shave the top off the
 	## tube: a shaved tube is a crawl space the walker cannot pass, i.e. a dead link.
-	var y := _clamp_cave_y(cx - _ox, cz - _oz, cy, CAVE_CLEARANCE_RY)
+	var lx := cx - _ox
+	var lz := cz - _oz
+	var y := cy
+	var ry := CAVE_CLEARANCE_RY
+	if _shell_guard:
+		y = _clamp_cave_y(lx, lz, cy, CAVE_CLEARANCE_RY)
+	else:
+		## Daylight mouth: previous code left the shell clamp on, so portals at
+		## CAVE_MOUTH_HEIGHT (~12) never broke the surface (carve top ~ deck+9).
+		## Clear from the walk deck through the turf into open air.
+		var surface := ground_y + _height_at(lx, lz)
+		var floor_y := ground_y + 1
+		var top := surface + 1
+		ry = maxi(CAVE_CLEARANCE_RY, int(ceil(float(top - floor_y) * 0.5)) + 1)
+		y = floor_y + ry
 	## Taller than wide so corridors stay walkable without becoming halls.
 	_carve_ellipsoid(
-		Vector3i(cx, y, cz), Vector3i(rxz, CAVE_CLEARANCE_RY, rxz), ground_y - CAVE_PIT_DEPTH
+		Vector3i(cx, y, cz), Vector3i(rxz, ry, rxz), ground_y - CAVE_PIT_DEPTH
 	)
 
 

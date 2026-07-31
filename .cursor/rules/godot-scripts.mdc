@@ -41,3 +41,5 @@ Expect `RESULT: OK`. Do not call the change done while these fail.
 ## New `class_name` scripts
 
 If another script types a variable as the new class (`var x: MyNewClass`), headless/editor may fail with `Could not find type "MyNewClass"` until the class cache refreshes. Prefer preload + `RefCounted`/`Node` typing for brand-new types, or run `test_scripts_compile` immediately after adding them.
+
+After **git pull** that brings new/renamed classes: refresh cache with `--import` (see `godot-class-cache-pull.mdc`).

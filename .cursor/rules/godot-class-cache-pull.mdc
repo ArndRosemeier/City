@@ -1,0 +1,36 @@
+---
+description: After git pull, refresh Godot class cache before trusting play/tests
+alwaysApply: true
+---
+
+# Godot class cache after pull
+
+`.godot/global_script_class_cache.cfg` maps `class_name` → script path. **Run/headless reads it; a stale cache after pull causes cascading `Could not find type "…"` / parse failures** — especially when the pull adds new `class_name` scripts used as typed fields elsewhere.
+
+This is **not** “old method bodies stick around.” Method edits load from disk. Cache pain is **type resolution** (new/renamed/moved `class_name`).
+
+## When you pull (or the user asks to pull)
+
+1. Run `git pull` as requested.
+2. If the pull touched any `*.gd` (or is large / unknown), **refresh the class cache** before diagnosing script errors or calling the game “broken”:
+
+```powershell
+.\tools\godot\Godot_v4.6-voxel_win64.exe --headless --path . --import
+```
+
+3. Smoke the compile sweep when scripts changed:
+
+```powershell
+powershell -File tools\run_test.ps1 test_scripts_compile
+```
+
+Expect `RESULT: OK`. If the user still sees ErrorOverlay floods, ask for the first `Could not find type` / file:line lines.
+
+## Do not confuse with
+
+- Normal logic edits to existing classes → restart play / re-run the feature test; no import required for cache reasons.
+- Missing sources / incomplete commits → verify paths with `git status` / preloads; import will not invent missing files.
+
+## Related
+
+New `class_name` wiring patterns (preload + `RefCounted` until cache is warm): see `godot-scripts.mdc`.

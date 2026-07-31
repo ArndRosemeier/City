@@ -2,6 +2,7 @@
 
 pub const AIR: i32 = 0;
 pub const BEDROCK: i32 = 1;
+pub const BRICK: i32 = 5;
 pub const PARK: i32 = 8;
 pub const GRAVEL: i32 = 15;
 pub const DIRT: i32 = 16;
@@ -22,6 +23,10 @@ pub const CAVE_FLOOR: i32 = 34;
 pub const GRAVE_SOIL: i32 = 37;
 pub const GRAVE_PATH: i32 = 38;
 pub const GEM_QUARTZ: i32 = 49;
+pub const GEM_AMBER: i32 = 50;
+pub const GEM_TOPAZ: i32 = 51;
+pub const GEM_SAPPHIRE: i32 = 52;
+pub const GEM_EMERALD: i32 = 53;
 pub const GEM_DIAMOND: i32 = 54;
 /// Castle ashlar. Ordinary built stone as far as native code is concerned: destructible
 /// and cascading, which the generic rules below already give it.
@@ -57,6 +62,14 @@ pub fn is_solid(id: i32) -> bool {
 
 pub fn is_gem(id: i32) -> bool {
     id >= GEM_QUARTZ && id <= GEM_DIAMOND
+}
+
+/// Rock the cave dresser may relabel as CAVE_WALL / CAVE_FLOOR.
+pub fn is_cave_shellable(id: i32) -> bool {
+    matches!(
+        id,
+        BEDROCK | STONE | BRICK | DIRT | GRAVEL | CAVE_WALL
+    )
 }
 
 pub fn is_destructible(id: i32) -> bool {

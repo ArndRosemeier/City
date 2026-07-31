@@ -11,9 +11,16 @@ const NAV_BAKE_CLASS := "NativeNavBake"
 const NAV_WORLD_CLASS := "NativeNavWorld"
 ## Deep Mandelbrot (HP reference + perturbation bake).
 const MANDELBROT_CLASS := "NativeMandelbrot"
+## Hill swiss-cheese cave carve (offline volume).
+const HILL_CAVES_CLASS := "NativeHillCaves"
 
 const REQUIRED_CLASSES: Array[String] = [
-	VOLUME_CLASS, DEBRIS_CLASS, NAV_BAKE_CLASS, NAV_WORLD_CLASS, MANDELBROT_CLASS
+	VOLUME_CLASS,
+	DEBRIS_CLASS,
+	NAV_BAKE_CLASS,
+	NAV_WORLD_CLASS,
+	MANDELBROT_CLASS,
+	HILL_CAVES_CLASS,
 ]
 
 
@@ -99,4 +106,13 @@ static func make_mandelbrot() -> Object:
 	if eng == null:
 		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % MANDELBROT_CLASS)
 		assert(false, "NativeMandelbrot instantiate failed")
+	return eng
+
+
+static func make_hill_caves() -> Object:
+	require_loaded()
+	var eng: Object = ClassDB.instantiate(HILL_CAVES_CLASS)
+	if eng == null:
+		push_error("CityVoxelNative: ClassDB.instantiate(%s) returned null" % HILL_CAVES_CLASS)
+		assert(false, "NativeHillCaves instantiate failed")
 	return eng

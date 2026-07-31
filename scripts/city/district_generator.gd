@@ -35,6 +35,9 @@ const ElevatorShaftScript := preload("res://scripts/city/elevator_shaft.gd")
 @export var voxel_size: float = 0.5
 ## Planner cell ≈ 14 m — street ROW / single lot. CORE towers merge 2×2–4×4 cells.
 @export var cell_size: int = 28
+## Hill paint + gems + caves via NativeHillCaves when baking offline. Off = GDScript path.
+## When on, native failures assert (no silent fallback).
+@export var use_native_hill: bool = true
 
 ## Real massing limits, from how actual cities size tall buildings.
 ##
@@ -84,6 +87,9 @@ var elevator_shafts: Array = []
 ## Hill gem ore (world voxel coords + material ids) collected during compose.
 var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
+## Daylight cave mouths (district-local XZ) + summit for outside-the-entrance spawn.
+var _hill_cave_mouths: PackedVector2Array = PackedVector2Array()
+var _hill_cave_summit: Vector2i = Vector2i(-1, -1)
 ## Castle plan from the compose pass; outlives the composer so the bake can hand it on.
 var _castle_layout: CastleLayout = null
 ## World voxel origin of this district tile (local paint stays 0..size).
@@ -155,6 +161,11 @@ func get_castle_layout() -> CastleLayout:
 	return _castle_layout
 
 
+## Daylight cave mouths (district-local XZ) from the hill compose pass.
+func get_hill_cave_mouths() -> PackedVector2Array:
+	return _hill_cave_mouths.duplicate()
+
+
 ## World-voxel gem ore placed by the hill compose pass (empty outside Hill districts).
 func get_hill_gems() -> Dictionary:
 	var positions := PackedVector3Array()
@@ -196,9 +207,12 @@ func _setup_composers() -> void:
 	_hill.ground_y = ground_thickness
 	_hill.planner = _planner
 	_hill.cell_size = cell_size
+	_hill.use_native_hill = use_native_hill
 	## Cleared each begin; filled by HillComposer.compose().
 	_hill_gem_positions = PackedVector3Array()
 	_hill_gem_mats = PackedInt32Array()
+	_hill_cave_mouths = PackedVector2Array()
+	_hill_cave_summit = Vector2i(-1, -1)
 
 	_graveyard = GraveyardComposerScript.new()
 	_graveyard.brush = _brush
@@ -526,6 +540,8 @@ func decorate_open_spaces() -> void:
 		_hill.compose(hmin, hmax)
 		_hill_gem_positions = _hill.gem_positions.duplicate()
 		_hill_gem_mats = _hill.gem_mats.duplicate()
+		_hill_cave_mouths = _hill.cave_mouths.duplicate()
+		_hill_cave_summit = _hill.cave_summit
 		return
 	var lg := _planner.large_graveyard
 	if lg.size.x > 0:
@@ -848,47 +864,62 @@ var last_spawn_yaw: float = NAN
 
 func find_spawn_world(tool: VoxelTool) -> Vector3:
 	## Feet slightly above the top of the ground voxel so we don't clip/tunnel.
-	## Headroom must clear the walker crown (~2.65 m ≈ 6 voxels at 0.5 m); the old
-	## 3-voxel check let hill-cave spawns start in crawl space.
+	## Headroom must clear the walker crown (~2.65 m ≈ 6 voxels at 0.5 m).
 	const HEADROOM_VOX := 6
 	last_spawn_yaw = NAN
-	_brush = CityBrushScript.new(tool, origin_vox)
+	## Prefer a live VoxelTool; otherwise keep an offline bake brush if present.
+	var owned_brush := false
+	if tool != null:
+		_brush = CityBrushScript.new(tool, origin_vox)
+		owned_brush = true
+	elif _brush == null or _brush.volume == null:
+		push_error("DistrictGenerator.find_spawn_world: need VoxelTool or offline volume")
+		return Vector3(INF, INF, INF)
 	var vs := voxel_size
 	var floor_top_y := float(ground_thickness + 1) * vs
 	var spawn_y := floor_top_y + 0.85
+	var spawn := Vector3(INF, INF, INF)
 	if theme != null and theme.id == DistrictTheme.FRACTAL:
-		var panel_spawn := _find_fractal_panel_spawn(spawn_y, HEADROOM_VOX)
-		if is_finite(panel_spawn.x):
-			_brush = null
-			return panel_spawn
-	var cx := size_x / 2
-	var cz := size_z / 2
-	for radius in range(0, maxi(size_x, size_z) / 2, 2):
-		for dz in range(-radius, radius + 1):
-			for dx in range(-radius, radius + 1):
-				if maxi(absi(dx), absi(dz)) != radius and radius > 0:
-					continue
-				var x := cx + dx
-				var z := cz + dz
-				if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
-					continue
-				var mat := _brush.get_vox(Vector3i(x, ground_thickness, z))
-				if not VoxelMaterial.is_walkable_surface(mat):
-					continue
-				if not _has_spawn_headroom(x, z, HEADROOM_VOX):
-					continue
-				_brush = null
-				return Vector3(
-					(float(origin_vox.x + x) + 0.5) * vs,
-					spawn_y,
-					(float(origin_vox.z + z) + 0.5) * vs
-				)
-	_brush = null
-	return Vector3(
-		(float(origin_vox.x + cx) + 0.5) * vs,
-		spawn_y,
-		(float(origin_vox.z + cz) + 0.5) * vs
-	)
+		spawn = _find_fractal_panel_spawn(spawn_y, HEADROOM_VOX)
+	elif theme != null and theme.id == DistrictTheme.HILL:
+		spawn = _find_hill_cave_mouth_spawn(spawn_y, HEADROOM_VOX)
+	if not is_finite(spawn.x):
+		var cx := size_x / 2
+		var cz := size_z / 2
+		spawn = Vector3(
+			(float(origin_vox.x + cx) + 0.5) * vs,
+			spawn_y,
+			(float(origin_vox.z + cz) + 0.5) * vs
+		)
+		for radius in range(0, maxi(size_x, size_z) / 2, 2):
+			var found := false
+			for dz in range(-radius, radius + 1):
+				for dx in range(-radius, radius + 1):
+					if maxi(absi(dx), absi(dz)) != radius and radius > 0:
+						continue
+					var x := cx + dx
+					var z := cz + dz
+					if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
+						continue
+					var mat := _brush.get_vox(Vector3i(x, ground_thickness, z))
+					if not VoxelMaterial.is_walkable_surface(mat):
+						continue
+					if not _has_spawn_headroom(x, z, HEADROOM_VOX):
+						continue
+					spawn = Vector3(
+						(float(origin_vox.x + x) + 0.5) * vs,
+						spawn_y,
+						(float(origin_vox.z + z) + 0.5) * vs
+					)
+					found = true
+					break
+				if found:
+					break
+			if found:
+				break
+	if owned_brush:
+		_brush = null
+	return spawn
 
 
 ## Stand outside the south Mandelbrot panel (facing it / plaza behind the glass).
@@ -926,6 +957,45 @@ func _find_fractal_panel_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
 					continue
 				## Walker forward is −Z at yaw 0; face +Z toward the south panel.
 				last_spawn_yaw = PI
+				return Vector3(
+					(float(origin_vox.x + x) + 0.5) * vs,
+					spawn_y,
+					(float(origin_vox.z + z) + 0.5) * vs
+				)
+	return Vector3(INF, INF, INF)
+
+
+## Stand on the meadow just outside a daylight cave mouth, facing into the entrance.
+func _find_hill_cave_mouth_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
+	if _hill_cave_mouths.is_empty() or _hill_cave_summit.x < 0:
+		return Vector3(INF, INF, INF)
+	var vs := voxel_size
+	var summit := Vector2(float(_hill_cave_summit.x), float(_hill_cave_summit.y))
+	for mi in range(_hill_cave_mouths.size()):
+		var mouth: Vector2 = _hill_cave_mouths[mi]
+		var outward := mouth - summit
+		if outward.length_squared() < 1.0:
+			outward = Vector2(0.0, 1.0)
+		outward = outward.normalized()
+		## Walk downhill from the mouth onto flat deck; stay outside the carved throat.
+		for dist in range(4, 36):
+			for side in [0, 1, -1, 2, -2]:
+				var lateral := Vector2(-outward.y, outward.x) * float(side)
+				var x := int(round(mouth.x + outward.x * float(dist) + lateral.x))
+				var z := int(round(mouth.y + outward.y * float(dist) + lateral.y))
+				if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
+					continue
+				var mat := _brush.get_vox(Vector3i(x, ground_thickness, z))
+				if not VoxelMaterial.is_walkable_surface(mat):
+					continue
+				if not _has_spawn_headroom(x, z, headroom_vox):
+					continue
+				## Face the mouth (walker forward is −Z at yaw 0).
+				var look_x := mouth.x - float(x)
+				var look_z := mouth.y - float(z)
+				if look_x * look_x + look_z * look_z < 0.25:
+					continue
+				last_spawn_yaw = atan2(-look_x, -look_z)
 				return Vector3(
 					(float(origin_vox.x + x) + 0.5) * vs,
 					spawn_y,

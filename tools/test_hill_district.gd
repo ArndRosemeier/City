@@ -184,12 +184,37 @@ func _ready() -> void:
 		_fail("FAIL diamond (%d) more common than quartz (%d)" % [diamond, quartz])
 		_quit()
 		return
-	var gems_payload: Dictionary = (res.get("generator") as DistrictGenerator).get_hill_gems()
+	var gen: DistrictGenerator = res.get("generator") as DistrictGenerator
+	var gems_payload: Dictionary = gen.get_hill_gems()
 	var gem_list: PackedVector3Array = gems_payload.get("positions", PackedVector3Array())
 	if gem_list.size() < 40:
 		_fail("FAIL hill gem registry empty (listed=%d)" % gem_list.size())
 		_quit()
 		return
+	var mouths := gen.get_hill_cave_mouths()
+	if mouths.is_empty():
+		_fail("FAIL no daylight cave mouths registered for spawn")
+		_quit()
+		return
+	var lit := _count_daylight_mouths(gen, mouths)
+	print("cave mouths=%d daylight=%d" % [mouths.size(), lit])
+	if lit <= 0:
+		_fail("FAIL cave mouths registered but none break daylight (sealed under shell)")
+		_quit()
+		return
+	var spawn := gen.find_spawn_world(null)
+	if not is_finite(spawn.x):
+		_fail("FAIL hill cave-mouth spawn not found")
+		_quit()
+		return
+	if not is_finite(float(gen.last_spawn_yaw)):
+		_fail("FAIL hill spawn yaw missing (should face the entrance)")
+		_quit()
+		return
+	print(
+		"spawn=(%.1f, %.1f, %.1f) yaw=%.2f"
+		% [spawn.x, spawn.y, spawn.z, float(gen.last_spawn_yaw)]
+	)
 
 	## Determinism: two bakes match theme + hill rect.
 	var res2: Dictionary = DistrictBakeJobScript.bake({
@@ -216,6 +241,66 @@ func _find_hill_coord() -> Vector2i:
 				if t.id == DistrictTheme.HILL:
 					return Vector2i(cx, cz)
 	return Vector2i(999, 999)
+
+
+## A mouth "daylights" when a nearby column is open from the walk deck through the
+## turf into sky — i.e. the hillside face actually has a hole, not a sealed tube.
+func _count_daylight_mouths(gen: DistrictGenerator, mouths: PackedVector2Array) -> int:
+	var vol: NativeOfflineVoxelVolume = gen.get_offline_volume()
+	if vol == null:
+		_fail("FAIL offline volume missing for mouth daylight check")
+		return 0
+	var deck := gen.ground_thickness
+	var lit := 0
+	for mi in range(mouths.size()):
+		var mouth: Vector2 = mouths[mi]
+		var mx := int(round(mouth.x))
+		var mz := int(round(mouth.y))
+		var ok := false
+		for dz in range(-3, 4):
+			for dx in range(-3, 4):
+				if _column_daylights_into_cave(vol, mx + dx, mz + dz, deck):
+					ok = true
+					break
+			if ok:
+				break
+		if ok:
+			lit += 1
+	return lit
+
+
+func _column_daylights_into_cave(
+	vol: NativeOfflineVoxelVolume, lx: int, lz: int, deck: int
+) -> bool:
+	## Walk deck must be air (tunnel floor / approach).
+	if int(vol.get_vox(Vector3i(lx, deck + 1, lz))) != VoxelMaterial.AIR:
+		return false
+	## Unbroken air up past where turf would sit, into open sky.
+	var air_run := 0
+	for y in range(deck + 1, deck + 40):
+		if int(vol.get_vox(Vector3i(lx, y, lz))) != VoxelMaterial.AIR:
+			return false
+		air_run += 1
+		## Once we have walker headroom + a bit, treat as open sky column.
+		if air_run >= 10:
+			break
+	if air_run < 10:
+		return false
+	## And somewhere beside this column, rock still roofs air (cave continues inland).
+	for side: Vector2i in [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2),
+		Vector2i(3, 0), Vector2i(-3, 0), Vector2i(0, 3), Vector2i(0, -3),
+	]:
+		var x := lx + side.x
+		var z := lz + side.y
+		if int(vol.get_vox(Vector3i(x, deck + 4, z))) != VoxelMaterial.AIR:
+			continue
+		for y in range(deck + 8, deck + 28):
+			var id := int(vol.get_vox(Vector3i(x, y, z)))
+			if id in ROCK_IDS:
+				return true
+	return false
 
 
 func _count_above_deck(blocks: Dictionary, ground_thickness: int) -> Dictionary:
