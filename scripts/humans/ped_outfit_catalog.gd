@@ -9,6 +9,8 @@ const FALLBACK_FEMALE := "res://assets/humans/female_base.glb"
 ## The nude bases carry the same skin material the outfit exporter writes.
 const FALLBACK_MALE_SKIN_MATERIAL := "male_skin"
 const FALLBACK_FEMALE_SKIN_MATERIAL := "female_skin"
+## Variant id the nude fallback reports, so a save can name it and get it back.
+const FALLBACK_VARIANT_ID := "fallback_nude"
 
 ## Every tag the exporter may write, mapped to the pool it feeds. A tag that is not registered
 ## here rejects the whole entry, so a newly invented hostile tag cannot reach any pool until it
@@ -91,6 +93,21 @@ static func pick(rng: RandomNumberGenerator, female: bool, faction: PedOutfit.Fa
 	if matching.is_empty():
 		return _fallback(rng, female, faction)
 	return _outfit_from(matching[rng.randi_range(0, matching.size() - 1)], rng)
+
+
+## The exact outfit a save named, with a deterministic skin the caller then overwrites with the
+## saved one. Null when the catalog no longer carries that id, which a restore reports rather than
+## papering over with a different look.
+static func by_variant_id(id: String, female: bool) -> PedOutfit:
+	ensure_loaded()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0
+	if id == FALLBACK_VARIANT_ID:
+		return _fallback(rng, female, PedOutfit.Faction.CIVILIAN)
+	for entry in _entries:
+		if String(entry["id"]) == id:
+			return _outfit_from(entry, rng)
+	return null
 
 
 static func _load(path: String) -> void:
@@ -221,7 +238,7 @@ static func _fallback(
 	var outfit := PedOutfit.new()
 	outfit.female = female
 	outfit.faction = faction
-	outfit.variant_id = "fallback_nude"
+	outfit.variant_id = FALLBACK_VARIANT_ID
 	outfit.scene_path = FALLBACK_FEMALE if female else FALLBACK_MALE
 	outfit.skin_material = (
 		FALLBACK_FEMALE_SKIN_MATERIAL if female else FALLBACK_MALE_SKIN_MATERIAL

@@ -116,6 +116,19 @@ func apply_damage_scaled(source: DamageSource.Id, scale: float) -> float:
 	return taken
 
 
+## Put the pool back where a save left it. A level outside the pool is a corrupt file rather than
+## something to accept quietly, so it is reported and then clamped into range.
+func set_current(value: float) -> void:
+	if not is_finite(value):
+		push_error("PlayerHealth.set_current: %f is not a level" % value)
+		return
+	if value < 0.0 or value > _maximum:
+		push_error("PlayerHealth.set_current: %f is outside 0..%f" % [value, _maximum])
+	_current = clampf(value, 0.0, _maximum)
+	_regen_block_sec = 0.0
+	changed.emit(_current, _maximum)
+
+
 ## Full restore after a chosen respawn — not gradual regen.
 func restore_full() -> void:
 	_current = _maximum

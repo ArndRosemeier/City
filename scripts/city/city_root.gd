@@ -41,6 +41,8 @@ const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
 const InteriorDecoratorScript := preload("res://scripts/city/interior_decorator.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
+const GameSaveScript := preload("res://scripts/city/game_save.gd")
+const GameMenuPanelScript := preload("res://scripts/city/game_menu_panel.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -78,9 +80,6 @@ var _streamer: CityStreamer
 var _walker: CityWalker
 var _hud: Label
 var _hud_layer: CanvasLayer
-## Proximity prompt when a hung door or elevator is in interact range ("E to open").
-var _interact_hint_layer: CanvasLayer
-var _interact_hint: Label
 ## Pooled floor selector, rebound to whichever elevator cabin the player is standing in.
 var _elevator_panel: ElevatorPanel
 ## False while the splash owns the screen (boot, district hop). Combined with is_modal_open()
@@ -123,6 +122,11 @@ var _player_score: int = 0
 var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
 var _inventory_panel: PlayerInventoryPanel
 var _monster_summon_panel: MonsterSummonPanel
+var _game_menu: GameMenuPanel
+## Save payload waiting to be poured into the next walker. Set before a regenerate (boot resume,
+## quickload, load) and cleared once the character is standing in the rebuilt world.
+var _pending_restore: Dictionary = {}
+var _autosave_accum: float = 0.0
 ## World aim captured when N opens the summon panel (before the mouse moves onto UI).
 var _summon_aim: Variant = null
 var _game_over: bool = false
@@ -138,6 +142,17 @@ const GEM_PICKUP_INTERVAL_SEC := 0.12
 const GEM_PICKUP_REACH_M := 1.35
 ## How close to a giant's fresh facade strip is close enough to be under it.
 const GIANT_DEBRIS_HURT_RADIUS_M := 6.0
+## Wall-clock seconds between autosaves once the world is playable.
+const AUTOSAVE_INTERVAL_SEC := 60.0
+## How far up a saved column the footing search looks for somewhere to stand. A character saved
+## inside a tunnel he dug comes back on the surface above it, because the tunnel is not saved. Tall
+## enough to clear a filled-in shaft from bedrock to street.
+const SAVE_FOOTING_UP_VOX := 48
+## And how far down, for a save the autosave timer caught mid-jump or mid-fall. Deliberately short:
+## a long downward reach would drop a character standing on a rooftop into the street.
+const SAVE_FOOTING_DOWN_VOX := 12
+## Body height the footing search must clear, in voxels (1.7 m capsule at 0.5 m voxels).
+const SAVE_FOOTING_HEIGHT_VOX := 4
 var _audio: CityAudio
 var _day_night: DayNightCycle
 var _settings_panel: CitySettingsPanel
@@ -160,7 +175,9 @@ func _ready() -> void:
 	add_to_group("city_root")
 	CityVoxelNativeScript.require_loaded()
 	print("CityRoot: city_voxel native ready (volume + cascade debris)")
+	var seed_forced := city_seed != SEED_RANDOM or _cli_int_flag("--city-seed=") != SEED_RANDOM
 	_resolve_seed()
+	_adopt_quicksave_at_boot(seed_forced)
 	_audio = CityAudioScript.new()
 	_audio.name = "CityAudio"
 	add_child(_audio)
@@ -180,6 +197,37 @@ func _resolve_seed() -> void:
 		rng.randomize()
 		city_seed = maxi(rng.randi() & 0x7fffffff, 1)
 	print("CityRoot: world seed %d (replay with --city-seed=%d)" % [city_seed, city_seed])
+
+
+## True when this city is the game rather than a fixture inside a test or screenshot scene. Only a
+## real session may resume an autosave or write one: a tool that boots a city to photograph a
+## district must not inherit somebody's run, and must not leave a save behind that the next launch
+## would resume into.
+## The main scene hangs directly off the viewport root; a fixture is a child of the tool scene that
+## built it. Deliberately not `current_scene`, which is still null while the main scene's _ready runs.
+func _is_game_session() -> bool:
+	var tree := get_tree()
+	return tree != null and get_parent() == tree.root
+
+
+## Boot resume. The quicksave carries the world seed, so the character wakes up in the city he left
+## rather than in a fresh one wearing his old inventory. A seed set in the scene, by a tool or with
+## --city-seed wins: those name a specific world, and honouring the save instead would make them
+## useless. `seed_forced` is read before _resolve_seed fills in a random one.
+func _adopt_quicksave_at_boot(seed_forced: bool) -> void:
+	if not _is_game_session():
+		return
+	if not GameSaveScript.has_quicksave():
+		return
+	if seed_forced:
+		print("CityRoot: a world seed was given, ignoring the autosave")
+		return
+	var data := GameSaveScript.read_quicksave()
+	if data.is_empty():
+		return
+	_pending_restore = data
+	city_seed = GameSaveScript.saved_seed(data)
+	print("CityRoot: resuming autosave in world seed %d" % city_seed)
 
 
 func _cli_int_flag(flag: String) -> int:
@@ -232,8 +280,16 @@ func _pick_spawn_district_random() -> Vector2i:
 	)
 
 
-## Resolves the spawn tile: CLI coord, --spawn-theme search, or seeded RNG. No start modal.
+## Resolves the spawn tile: a save being restored, CLI coord, --spawn-theme search, or seeded RNG.
+## No start modal.
 func _resolve_spawn_district() -> Vector2i:
+	if not _pending_restore.is_empty():
+		var saved := GameSaveScript.saved_position(_pending_restore)
+		if saved != Vector3.INF:
+			var coord := DistrictCoord.from_world(saved, VOXEL_SIZE)
+			spawn_theme_id = DistrictTheme.for_district(city_seed, coord).id
+			return coord
+
 	var forced: Variant = _cli_spawn_district()
 	if forced is Vector2i:
 		spawn_theme_id = DistrictTheme.for_district(city_seed, forced as Vector2i).id
@@ -352,11 +408,20 @@ func is_monster_summon_open() -> bool:
 	return _monster_summon_panel != null and bool(_monster_summon_panel.call("is_open"))
 
 
+func is_game_menu_open() -> bool:
+	return _game_menu != null and _game_menu.is_open()
+
+
 ## True while a panel of this root's owns the screen. The walker and the build bar read this to
 ## stop taking hotkeys, and the HUD band is hidden for as long as it holds. The walker's own
 ## character editor is not in here: nothing would tell us when it closes again.
 func is_modal_open() -> bool:
-	return is_settings_open() or is_inventory_open() or is_monster_summon_open()
+	return (
+		is_settings_open()
+		or is_inventory_open()
+		or is_monster_summon_open()
+		or is_game_menu_open()
+	)
 
 
 ## True while the splash covers the world — boot, a hop in flight, and the J picker. It is a
@@ -390,7 +455,8 @@ func _refresh_hud_visibility() -> void:
 			canvas.visible = show_hud
 	if _settings_panel != null:
 		_settings_panel.call(
-			"set_top_bar_visible", not is_inventory_open() and not is_monster_summon_open()
+			"set_top_bar_visible",
+			not is_inventory_open() and not is_monster_summon_open() and not is_game_menu_open()
 		)
 
 
@@ -461,30 +527,6 @@ func _build_hud() -> void:
 	_hud.text = "—"
 	_hud_layer.add_child(_hud)
 
-	## Own layer at the top of the HUD band so the action bar cannot cover it.
-	_interact_hint_layer = CanvasLayer.new()
-	_interact_hint_layer.name = "InteractHintLayer"
-	_interact_hint_layer.layer = UiLayers.HUD_MAX
-	_interact_hint_layer.visible = false
-	add_child(_interact_hint_layer)
-	_interact_hint = Label.new()
-	_interact_hint.name = "InteractHint"
-	_interact_hint.add_theme_font_size_override("font_size", 22)
-	_interact_hint.add_theme_color_override("font_color", Color(0.98, 0.95, 0.82, 0.98))
-	_interact_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-	_interact_hint.add_theme_constant_override("outline_size", 6)
-	_interact_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_interact_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_interact_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_interact_hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_interact_hint.offset_left = -200
-	_interact_hint.offset_right = 200
-	## Above the energy bar (bar top is -168); build strip sits lower still.
-	_interact_hint.offset_top = -214
-	_interact_hint.offset_bottom = -178
-	_interact_hint.visible = false
-	_interact_hint_layer.add_child(_interact_hint)
-
 	_tendril_hud = InfectionTendrilHudScript.new()
 	_tendril_hud.name = "InfectionTendrilHud"
 	add_child(_tendril_hud)
@@ -524,6 +566,18 @@ func _build_hud() -> void:
 		_settings_panel.spawn_meteors_toggled.connect(_on_spawn_meteors_toggled)
 	if _settings_panel.has_signal("undead_invasion_toggled"):
 		_settings_panel.undead_invasion_toggled.connect(_on_undead_invasion_toggled)
+	_settings_panel.game_menu_requested.connect(_on_game_menu_requested)
+
+	_game_menu = GameMenuPanelScript.new() as GameMenuPanel
+	_game_menu.name = "GameMenu"
+	add_child(_game_menu)
+	_game_menu.opened.connect(_on_game_menu_opened)
+	_game_menu.closed.connect(_on_game_menu_closed)
+	_game_menu.quicksave_requested.connect(_on_quicksave_requested)
+	_game_menu.quickload_requested.connect(_on_quickload_requested)
+	_game_menu.named_save_requested.connect(_on_named_save_requested)
+	_game_menu.named_load_requested.connect(_on_named_load_requested)
+	_game_menu.new_game_requested.connect(_on_new_game_requested)
 
 	_inventory_panel = PlayerInventoryPanelScript.new()
 	_inventory_panel.name = "PlayerInventory"
@@ -628,6 +682,8 @@ func _on_settings_opened() -> void:
 		_inventory_panel.call("close_panel")
 	if is_monster_summon_open():
 		_monster_summon_panel.call("close_panel")
+	if is_game_menu_open():
+		_game_menu.close_panel()
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -647,6 +703,8 @@ func _on_inventory_opened() -> void:
 		_settings_panel.call("close_panel")
 	if is_monster_summon_open():
 		_monster_summon_panel.call("close_panel")
+	if is_game_menu_open():
+		_game_menu.close_panel()
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -665,6 +723,8 @@ func _on_monster_summon_opened() -> void:
 		_settings_panel.call("close_panel")
 	if is_inventory_open():
 		_inventory_panel.call("close_panel")
+	if is_game_menu_open():
+		_game_menu.close_panel()
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -678,6 +738,71 @@ func _on_monster_summon_closed() -> void:
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
+
+
+func _on_game_menu_requested() -> void:
+	if _game_menu == null:
+		return
+	_game_menu.toggle_panel()
+
+
+func _on_game_menu_opened() -> void:
+	if is_settings_open():
+		_settings_panel.call("close_panel")
+	if is_inventory_open():
+		_inventory_panel.call("close_panel")
+	if is_monster_summon_open():
+		_monster_summon_panel.call("close_panel")
+	_refresh_hud_visibility()
+	if _game_over:
+		_game_menu.set_status("This run is over — load a save or start a new game.", true)
+	elif not can_save_game():
+		_game_menu.set_status("The world is still coming up — saving waits for it.", true)
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_game_menu_closed() -> void:
+	_refresh_hud_visibility()
+	if is_modal_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_quicksave_requested() -> void:
+	if write_quicksave("Quicksave"):
+		_game_menu.set_status("Saved to the autosave slot.")
+	else:
+		_game_menu.set_status("Quicksave failed — see the log.", true)
+	_game_menu.refresh()
+
+
+func _on_quickload_requested() -> void:
+	_game_menu.close_panel()
+	if not load_quicksave():
+		_game_menu.open_panel()
+		_game_menu.set_status("There is no readable autosave.", true)
+
+
+func _on_named_save_requested(save_name: String) -> void:
+	if write_named_save(save_name):
+		_game_menu.set_status("Saved as '%s'." % GameSaveScript.sanitize_name(save_name))
+	else:
+		_game_menu.set_status("Could not save '%s' — see the log." % save_name, true)
+	_game_menu.refresh()
+
+
+func _on_named_load_requested(save_name: String) -> void:
+	_game_menu.close_panel()
+	if not load_named_save(save_name):
+		_game_menu.open_panel()
+		_game_menu.set_status("Could not read '%s'." % save_name, true)
+
+
+func _on_new_game_requested() -> void:
+	_game_menu.close_panel()
+	start_new_game()
 
 
 func _on_monster_summon_requested(monster_id: String) -> void:
@@ -925,18 +1050,15 @@ func _process(delta: float) -> void:
 		and is_instance_valid(_walker)
 		and _streamer != null
 	):
-		_refresh_interact_hint()
 		_refresh_elevator_panel()
-	else:
-		if _interact_hint != null:
-			_interact_hint.visible = false
-		if _elevator_panel != null:
-			_elevator_panel.unbind()
+	elif _elevator_panel != null:
+		_elevator_panel.unbind()
 	if _gem_pickup_accum >= GEM_PICKUP_INTERVAL_SEC:
 		_gem_pickup_accum = 0.0
 		CityProfiler.begin("gem_pickup")
 		_try_collect_nearby_gems()
 		CityProfiler.end("gem_pickup")
+	_tick_autosave(delta)
 	if _radar_cooldown_left > 0.0:
 		_radar_cooldown_left = maxf(0.0, _radar_cooldown_left - delta)
 	if _radar_reveal_left > 0.0:
@@ -1931,6 +2053,16 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 		while not _has_solid_ground_at(spawn) and Time.get_ticks_msec() < ground_deadline:
 			await get_tree().process_frame
 		spawn = gen.find_spawn_world(_tool)
+	var restoring := not _pending_restore.is_empty()
+	if restoring:
+		var resumed := _footing_for_saved_position(_pending_restore)
+		if resumed == Vector3.INF:
+			push_warning(
+				"CityRoot: the saved position has no footing in the rebuilt world — "
+				+ "using the district spawn"
+			)
+		else:
+			spawn = resumed
 
 	_status.text = "Spawning player…"
 	_walker = CityWalkerScript.new() as CharacterBody3D
@@ -2001,7 +2133,11 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 	if is_instance_valid(spawn_viewer):
 		spawn_viewer.queue_free()
 
-	if not is_finite(float(gen.last_spawn_yaw)):
+	if restoring:
+		## After the body is standing: growing back to a saved size tests the space around it, and
+		## a walker still hanging above the ground would test the wrong space.
+		_restore_pending_character()
+	elif not is_finite(float(gen.last_spawn_yaw)):
 		var look: Vector3 = inst.call("world_aabb_center") - _walker.global_position
 		look.y = 0.0
 		if look.length_squared() > 0.01:
@@ -2180,6 +2316,158 @@ func _apply_spawn_yaw(walker: Node3D, gen: Object) -> void:
 		walker.call("set_yaw", yaw)
 	else:
 		walker.rotation.y = yaw
+
+
+# ---------------------------------------------------------------------------
+# Save / load
+# ---------------------------------------------------------------------------
+
+## Where a saved character can stand now. The world is rebuilt from the seed, so anything he had
+## dug out is filled in again: the search walks up his old column until the body fits.
+func _footing_for_saved_position(data: Dictionary) -> Vector3:
+	var saved := GameSaveScript.saved_position(data)
+	if saved == Vector3.INF:
+		return Vector3.INF
+	return GameSaveScript.first_free_footing(
+		_tool,
+		saved,
+		VOXEL_SIZE,
+		SAVE_FOOTING_HEIGHT_VOX,
+		SAVE_FOOTING_UP_VOX,
+		SAVE_FOOTING_DOWN_VOX
+	)
+
+
+## Pour the pending payload into the walker that just spawned, then forget it — a later regenerate
+## must build a fresh character rather than resurrect this one.
+func _restore_pending_character() -> void:
+	if _pending_restore.is_empty():
+		return
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot: the world came up without a walker to restore into")
+		_pending_restore = {}
+		return
+	GameSaveScript.apply_character(_walker, _pending_restore)
+	GameSaveScript.apply_inventory(_inventory, _pending_restore)
+	print(
+		"CityRoot: restored save at %s (seed %d)"
+		% [_walker.global_position, city_seed]
+	)
+	_pending_restore = {}
+	_autosave_accum = 0.0
+
+
+## True while there is a live character worth writing to disk. A finished run is not one: a save
+## holding a dead character would resume into a body with nothing left in the pool. Neither is a
+## walker that has left the tree: it still answers every question about itself except where it is
+## standing, which comes back as the world origin.
+func can_save_game() -> bool:
+	return (
+		not _booting
+		and not _game_over
+		and _walker != null
+		and is_instance_valid(_walker)
+		and _walker.is_inside_tree()
+	)
+
+
+## Last-moment autosave for an exit we chose, taken while the character is still in the world.
+func _autosave_on_exit() -> void:
+	if _is_game_session() and can_save_game():
+		write_quicksave("Autosave")
+
+
+func has_quicksave() -> bool:
+	return GameSaveScript.has_quicksave()
+
+
+func list_named_saves() -> Array[Dictionary]:
+	return GameSaveScript.list_named()
+
+
+## Autosave slot. `label` is only what the file reports about itself; the path is fixed.
+func write_quicksave(label: String = "Autosave") -> bool:
+	if not can_save_game():
+		return false
+	var data := GameSaveScript.capture(city_seed, _walker, _inventory, label)
+	if data.is_empty():
+		return false
+	if not GameSaveScript.write_quicksave(data):
+		return false
+	_autosave_accum = 0.0
+	return true
+
+
+func write_named_save(raw_name: String) -> bool:
+	if not can_save_game():
+		return false
+	var label := raw_name.strip_edges()
+	var data := GameSaveScript.capture(city_seed, _walker, _inventory, label)
+	if data.is_empty():
+		return false
+	return GameSaveScript.write_named(raw_name, data)
+
+
+func load_quicksave() -> bool:
+	return _start_load(GameSaveScript.read_quicksave(), "autosave")
+
+
+func load_named_save(raw_name: String) -> bool:
+	return _start_load(GameSaveScript.read_named(raw_name), raw_name)
+
+
+## Loading is a regenerate: the world follows from the saved seed, and the character is poured into
+## the walker the rebuild spawns. Nothing tries to edit the live world into shape.
+func _start_load(data: Dictionary, what: String) -> bool:
+	if data.is_empty():
+		push_error("CityRoot: there is no readable save in '%s'" % what)
+		return false
+	if _booting:
+		push_warning("CityRoot: still booting — ignoring the load of '%s'" % what)
+		return false
+	_pending_restore = data
+	city_seed = GameSaveScript.saved_seed(data)
+	print("CityRoot: loading '%s' (world seed %d)" % [what, city_seed])
+	_regenerate()
+	return true
+
+
+## A new game keeps the named library and drops only the autosave: the next boot must not resume
+## the run the player just walked away from.
+func start_new_game() -> void:
+	if _booting:
+		push_warning("CityRoot: still booting — ignoring New Game")
+		return
+	GameSaveScript.delete_quicksave()
+	_pending_restore = {}
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	city_seed = maxi(rng.randi() & 0x7fffffff, 1)
+	spawn_theme_id = -1
+	print("CityRoot: new game in world seed %d" % city_seed)
+	_regenerate()
+
+
+func _tick_autosave(delta: float) -> void:
+	if not _is_game_session() or not can_save_game() or _district_hopping:
+		return
+	_autosave_accum += delta
+	if _autosave_accum < AUTOSAVE_INTERVAL_SEC:
+		return
+	_autosave_accum = 0.0
+	write_quicksave("Autosave")
+
+
+## Closing the window is the most common way this game ends, so it saves there.
+##
+## NOTIFICATION_EXIT_TREE deliberately does not save. Teardown is depth-first, so by the time this
+## node hears about it the walker has already left the tree, and a detached Node3D reports its
+## global position as the world origin — that pass used to overwrite the good save written a moment
+## earlier with a character standing at (0, 0, 0). Deliberate quits save on their way out instead
+## (see the Esc handler), and the periodic autosave is the backstop for a hard kill.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_autosave_on_exit()
 
 
 func _has_solid_ground_at(world: Vector3) -> bool:
@@ -3826,87 +4114,6 @@ func _player_controls() -> PlayerControls:
 	return _settings_panel.get_player_controls()
 
 
-func _refresh_interact_hint() -> void:
-	if _interact_hint == null:
-		return
-	if _game_over or is_modal_open() or is_splash_open() or not _hud_enabled:
-		_interact_hint.visible = false
-		return
-	var target := _nearest_interact_target()
-	if target.is_empty():
-		_interact_hint.visible = false
-		return
-	var ctl := _player_controls()
-	var key := "E"
-	if ctl != null:
-		key = ctl.binding_label("interact")
-	var kind := str(target.get("kind", ""))
-	match kind:
-		"door":
-			var verb := "close" if str(target.get("verb", "")) == "Close" else "open"
-			_interact_hint.text = "%s to %s" % [key, verb]
-		"elevator":
-			_interact_hint.text = "%s to ride" % key
-		_:
-			_interact_hint.text = "%s to use" % key
-	_interact_hint.visible = true
-
-
-## Nearest hung door or elevator cabin within interact reach. Empty dict if none.
-## Keys: kind ("door"|"elevator"), verb, d2, plus kind-specific fields.
-func _nearest_interact_target() -> Dictionary:
-	if _walker == null or not is_instance_valid(_walker) or _streamer == null:
-		return {}
-	if _walker.is_elevator_riding():
-		return {}
-	var feet: Vector3 = _walker.global_position
-	var reach: float = float(CastleDoorPlacer.INTERACT_DISTANCE)
-	var best_d2 := reach * reach
-	var best := {}
-	for entry in _streamer.get_loaded_districts():
-		var inst: DistrictInstance = _as_district_instance(entry)
-		if inst == null:
-			continue
-		if inst.castle_doors != null and is_instance_valid(inst.castle_doors):
-			var door: CastleDoorPlacer.Hung = inst.castle_doors.nearest_door(feet, reach)
-			if door != null:
-				var d2: float = door.at.distance_squared_to(feet)
-				if d2 <= best_d2:
-					best_d2 = d2
-					var verb := "Close" if not door.closed else "Open"
-					best = {
-						"kind": "door",
-						"verb": verb,
-						"d2": d2,
-						"door": door,
-						"placer": inst.castle_doors,
-					}
-		var elev := _nearest_elevator_in_district(inst, feet, best_d2)
-		if not elev.is_empty() and float(elev.get("d2", INF)) <= best_d2:
-			best_d2 = float(elev["d2"])
-			best = elev
-	return best
-
-
-## Elevator candidate inside one district, or {} if none closer than `best_d2`.
-func _nearest_elevator_in_district(
-	inst: DistrictInstance, feet: Vector3, best_d2: float
-) -> Dictionary:
-	var at := _elevator_at_feet(inst, feet)
-	if at.is_empty() or float(at["d2"]) > best_d2:
-		return {}
-	var shaft: ElevatorShaft = at["shaft"] as ElevatorShaft
-	var from_i := int(at["from_i"])
-	return {
-		"kind": "elevator",
-		"verb": "Elevator",
-		"d2": float(at["d2"]),
-		"shaft": shaft,
-		"from_i": from_i,
-		"to": shaft.world_anchor(shaft.next_landing_index(from_i), VOXEL_SIZE),
-	}
-
-
 ## Closest cabin in `inst` whose footprint (plus a 1-cell apron) holds the feet at a
 ## landing. Keys: shaft, from_i (landing the player is on), d2. Empty when none.
 func _elevator_at_feet(inst: DistrictInstance, feet: Vector3) -> Dictionary:
@@ -3984,33 +4191,78 @@ func _on_elevator_floor_selected(landing_index: int) -> void:
 	_walker.begin_elevator_ride(shaft.world_anchor(landing_index, VOXEL_SIZE))
 
 
-func _try_interact_nearest() -> bool:
-	var target := _nearest_interact_target()
-	if target.is_empty():
+## Blaster-aim world interact: toggle the hung door under the aim ray, if any.
+## Elevator rides are Ui3D panel clicks only — not handled here.
+func try_interact_aim(origin: Vector3, aim_point: Vector3) -> bool:
+	if _streamer == null:
 		return false
-	match str(target.get("kind", "")):
-		"door":
-			var placer: CastleDoorPlacer = target.get("placer") as CastleDoorPlacer
-			var door: CastleDoorPlacer.Hung = target.get("door") as CastleDoorPlacer.Hung
-			if placer == null or door == null:
-				return false
-			var opening := door.closed
-			if not placer.toggle_door(door):
-				return false
-			## Opening onto an undecorated interior starts the JIT pipeline while the
-			## walker is still on the street — partitions (and the room beyond) finish
-			## before the first step inside.
-			if opening and not door.closed:
-				_prime_interior_beyond_door(door)
-			return true
-		"elevator":
-			if _walker == null:
-				return false
-			var dest: Vector3 = target.get("to", Vector3.ZERO) as Vector3
-			_walker.begin_elevator_ride(dest)
-			return true
-		_:
-			return false
+	var dir := aim_point - origin
+	if dir.length_squared() < 0.000001:
+		return false
+	dir = dir.normalized()
+	var max_dist: float = float(CastleDoorPlacer.INTERACT_DISTANCE)
+	var best_t := max_dist + 1.0
+	var best_door: CastleDoorPlacer.Hung = null
+	var best_placer: CastleDoorPlacer = null
+	for entry in _streamer.get_loaded_districts():
+		var inst: DistrictInstance = _as_district_instance(entry)
+		if inst == null or inst.castle_doors == null or not is_instance_valid(inst.castle_doors):
+			continue
+		var hit: Dictionary = inst.castle_doors.door_hit_along_ray(origin, dir, max_dist)
+		if hit.is_empty():
+			continue
+		var t: float = float(hit["t"])
+		if t >= best_t:
+			continue
+		best_t = t
+		best_door = hit["door"] as CastleDoorPlacer.Hung
+		best_placer = inst.castle_doors
+	## Closed doors are DOOR voxels — a plane miss that still lands on a plug counts.
+	if best_door == null:
+		var voxel_hit := _door_from_voxel_ray(origin, dir, max_dist)
+		if not voxel_hit.is_empty():
+			best_door = voxel_hit["door"] as CastleDoorPlacer.Hung
+			best_placer = voxel_hit["placer"] as CastleDoorPlacer
+	if best_door == null or best_placer == null:
+		return false
+	var opening := best_door.closed
+	if not best_placer.toggle_door(best_door):
+		return false
+	## Opening onto an undecorated interior starts the JIT pipeline while the
+	## walker is still on the street — partitions (and the room beyond) finish
+	## before the first step inside.
+	if opening and not best_door.closed:
+		_prime_interior_beyond_door(best_door)
+	return true
+
+
+## First DOOR voxel along the aim segment mapped back to its hung door.
+func _door_from_voxel_ray(origin: Vector3, dir: Vector3, max_dist: float) -> Dictionary:
+	var tip := origin + dir * max_dist
+	var solid := probe_solid_ray(origin, tip)
+	if solid.is_empty():
+		return {}
+	if int(solid.get("voxel_id", -1)) != VoxelMaterial.DOOR:
+		return {}
+	var dist: float = float(solid.get("distance", INF))
+	if dist > max_dist:
+		return {}
+	var point: Vector3 = solid["point"] as Vector3
+	## Step slightly into the hit so floor() lands inside the DOOR cell, not the face.
+	var inward := point + dir * (VOXEL_SIZE * 0.25)
+	var world_vox := Vector3i(
+		int(floor(inward.x / VOXEL_SIZE)),
+		int(floor(inward.y / VOXEL_SIZE)),
+		int(floor(inward.z / VOXEL_SIZE))
+	)
+	for entry in _streamer.get_loaded_districts():
+		var inst: DistrictInstance = _as_district_instance(entry)
+		if inst == null or inst.castle_doors == null or not is_instance_valid(inst.castle_doors):
+			continue
+		var door: CastleDoorPlacer.Hung = inst.castle_doors.door_at_voxel(world_vox)
+		if door != null:
+			return {"door": door, "placer": inst.castle_doors, "t": dist}
+	return {}
 
 
 ## Probe one cell past the inner face of the opening and ask InteriorDecorator to work
@@ -4046,6 +4298,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			_monster_summon_panel.close_panel()
 			get_viewport().set_input_as_handled()
 			return
+		if is_game_menu_open():
+			_game_menu.close_panel()
+			get_viewport().set_input_as_handled()
+			return
+		## Quitting from the keyboard never reaches the window manager, so this is the only chance
+		## to save while the walker is still standing in the world.
+		_autosave_on_exit()
 		get_tree().quit()
 		return
 	if ctl.matches_key_pressed(ek, "inventory"):
@@ -4082,12 +4341,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _day_night != null:
 			_day_night.toggle_day_night()
 		get_viewport().set_input_as_handled()
-		return
-	if ctl.matches_key_pressed(ek, "interact"):
-		if _game_over or is_modal_open() or is_splash_open():
-			return
-		if _try_interact_nearest():
-			get_viewport().set_input_as_handled()
 		return
 	## Shift+F8 recolours, bare F8 toggles — the modifier-carrying bind is tested first,
 	## because a bare bind matches with extra modifiers held.

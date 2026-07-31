@@ -9,6 +9,7 @@ const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
 const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
 const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
+const SignpostPlacerScript := preload("res://scripts/city/signpost_placer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
@@ -34,6 +35,8 @@ var crowd: CrowdDirector
 var vehicles: VehicleDirector
 var street_props: StreetPropPlacer
 var scale_pads: ScalePadPlacer
+## Fingerposts naming the four neighbours. Empty of posts on special tiles.
+var signposts: SignpostPlacer
 ## Mesh doors hung in the castle's openings. Null on every tile that is not a Castle.
 var castle_doors: CastleDoorPlacer
 ## Glowing plane + Mandelbrot panels. Null on every tile that is not Fractal.
@@ -132,6 +135,8 @@ func bind_camera(camera: Camera3D) -> void:
 		building_lod._camera = camera
 	if street_props != null and is_instance_valid(street_props):
 		street_props._camera = camera
+	if signposts != null and is_instance_valid(signposts):
+		signposts.set_camera(camera)
 	if castle_doors != null and is_instance_valid(castle_doors):
 		castle_doors.set_camera(camera)
 
@@ -222,6 +227,10 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		street_props.clear_props()
 		street_props.queue_free()
 	street_props = null
+	if signposts != null and is_instance_valid(signposts):
+		signposts.clear_posts()
+		signposts.queue_free()
+	signposts = null
 	if castle_doors != null and is_instance_valid(castle_doors):
 		castle_doors.clear_doors()
 		castle_doors.queue_free()
@@ -261,6 +270,10 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		street_props.clear_props()
 		street_props.queue_free()
 	street_props = null
+	if signposts != null and is_instance_valid(signposts):
+		signposts.clear_posts()
+		signposts.queue_free()
+	signposts = null
 	if castle_doors != null and is_instance_valid(castle_doors):
 		castle_doors.clear_doors()
 		castle_doors.queue_free()
@@ -482,6 +495,23 @@ func _stamp_detail_async() -> void:
 			_dseed
 		)
 		CityProfiler.end("stream_pads")
+		await get_tree().process_frame
+
+		CityProfiler.begin("stream_signposts")
+		signposts = SignpostPlacerScript.new()
+		signposts.name = "Signposts"
+		add_child(signposts)
+		signposts.place_from_planner(
+			generator.get_planner(),
+			generator.cell_size,
+			_voxel_size,
+			generator.ground_thickness,
+			origin_vox,
+			_world_seed,
+			coord,
+			camera
+		)
+		CityProfiler.end("stream_signposts")
 		await get_tree().process_frame
 
 	## Mesh doors + DOOR voxel barriers (castle layout and/or city lot façades).

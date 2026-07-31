@@ -13,6 +13,9 @@ extends Node3D
 ## 0 = full day (lamps off), 1 = full night (lamps at full energy).
 @export var night_factor: float = 0.0
 
+## Extra range a mesh keeps once it is already showing, so the draw-distance edge cannot chatter.
+const DRAW_HYSTERESIS_M := 10.0
+
 var _poles: Array[Node3D] = []
 var _props: Array[Node3D] = []
 var _omnis: Array[OmniLight3D] = []
@@ -293,37 +296,46 @@ func _process(delta: float) -> void:
 	CityProfiler.end("street_props")
 
 
+## Meshes are hidden by draw distance only: frustum culling belongs to the renderer, which does
+## it per frame against real bounds. Testing one point three metres up a lamp made the whole pole
+## wink out as soon as that point left the view — standing under it, or panning it off the screen
+## edge — which reads as flicker. The OmniLight budget still frustum-tests, because a lamp that
+## cannot be seen is the cheapest one to leave switched off.
 func _refresh_lights(_force: bool) -> void:
 	if _camera == null or not is_instance_valid(_camera):
 		return
 	var cam := _camera.global_position
-	var scored: Array = []
 	var pole_r2 := pole_draw_distance * pole_draw_distance
+	var pole_hide_r2 := (pole_draw_distance + DRAW_HYSTERESIS_M) * (pole_draw_distance + DRAW_HYSTERESIS_M)
 	var prop_r2 := prop_draw_distance * prop_draw_distance
+	var prop_hide_r2 := (prop_draw_distance + DRAW_HYSTERESIS_M) * (prop_draw_distance + DRAW_HYSTERESIS_M)
+	var activate_r2 := activate_distance * activate_distance
+	## Lamps only come on as night falls, so by day there is nothing to rank.
+	var lamps_on := night_factor > 0.18
+	var lamp_power := smoothstep(0.18, 0.75, night_factor)
+	## Only lamps that are in range *and* in view compete for the budget. Ranking every pole and
+	## then discarding the ones out of view spent the cap on lamps behind the camera and left the
+	## street ahead dark.
+	var candidates: Array = []
 	for i in range(_poles.size()):
 		var p: Node3D = _poles[i]
 		var d2 := p.global_position.distance_squared_to(cam)
-		var in_view := d2 <= pole_r2 and _camera.is_position_in_frustum(p.global_position + Vector3(0.0, 3.0, 0.0))
-		p.visible = in_view
-		scored.append({"i": i, "d2": d2})
+		p.visible = d2 <= (pole_hide_r2 if p.visible else pole_r2)
+		if (
+			lamps_on
+			and d2 <= activate_r2
+			and _camera.is_position_in_frustum(p.global_position + Vector3(0.0, 3.0, 0.0))
+		):
+			candidates.append({"i": i, "d2": d2})
 	for prop in _props:
 		if not is_instance_valid(prop):
 			continue
 		var pd2 := prop.global_position.distance_squared_to(cam)
-		prop.visible = pd2 <= prop_r2 and _camera.is_position_in_frustum(prop.global_position + Vector3(0.0, 0.5, 0.0))
-	scored.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["d2"]) < float(b["d2"]))
-	var limit := mini(max_omni_lights, scored.size())
-	var activate_r2 := activate_distance * activate_distance
-	## Lamps only come on as night falls.
-	var lamps_on := night_factor > 0.18
-	var lamp_power := smoothstep(0.18, 0.75, night_factor)
+		prop.visible = pd2 <= (prop_hide_r2 if prop.visible else prop_r2)
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["d2"]) < float(b["d2"]))
 	var active: Dictionary = {}
-	if lamps_on:
-		for k in range(limit):
-			var item: Dictionary = scored[k]
-			var idx := int(item["i"])
-			if float(item["d2"]) <= activate_r2 and _poles[idx].visible:
-				active[idx] = true
+	for k in range(mini(max_omni_lights, candidates.size())):
+		active[int((candidates[k] as Dictionary)["i"])] = true
 	for i in range(_omnis.size()):
 		var on := active.has(i)
 		_omnis[i].visible = on

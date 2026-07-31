@@ -61,6 +61,43 @@ func duplicate_props() -> BodyProportions:
 	return p
 
 
+## Flat name → value, for a save file. Every slider is listed explicitly so a renamed field is a
+## compile error here rather than a proportion that silently stops being saved.
+func to_dict() -> Dictionary[String, float]:
+	return {
+		"height": height,
+		"weight": weight,
+		"muscle": muscle,
+		"torso_length": torso_length,
+		"leg_length": leg_length,
+		"arm_length": arm_length,
+		"shoulder_width": shoulder_width,
+		"hip_width": hip_width,
+		"head_size": head_size,
+		"neck_length": neck_length,
+		"hand_size": hand_size,
+		"foot_size": foot_size,
+	}
+
+
+## Missing keys stay at the authored rest pose: an older save simply had fewer sliders.
+static func from_dict(data: Dictionary) -> BodyProportions:
+	var p := BodyProportions.new()
+	p.height = float(data.get("height", 0.0))
+	p.weight = float(data.get("weight", 0.0))
+	p.muscle = float(data.get("muscle", 0.0))
+	p.torso_length = float(data.get("torso_length", 0.0))
+	p.leg_length = float(data.get("leg_length", 0.0))
+	p.arm_length = float(data.get("arm_length", 0.0))
+	p.shoulder_width = float(data.get("shoulder_width", 0.0))
+	p.hip_width = float(data.get("hip_width", 0.0))
+	p.head_size = float(data.get("head_size", 0.0))
+	p.neck_length = float(data.get("neck_length", 0.0))
+	p.hand_size = float(data.get("hand_size", 0.0))
+	p.foot_size = float(data.get("foot_size", 0.0))
+	return p
+
+
 func reset() -> void:
 	height = 0.0
 	weight = 0.0

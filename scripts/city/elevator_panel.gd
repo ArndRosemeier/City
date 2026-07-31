@@ -4,7 +4,7 @@
 ## Ui3D quads face +Z while the readable side is −Z, which mirrors X for the viewer —
 ## so column 0 is authored on the high-UV (+X) side to appear on the viewer's left.
 ##
-## Fire the blaster at a button to ride there (see CityWalker._try_press_ui_3d). One
+## Fire the blaster at a button to ride there (see CityWalker._try_world_interact). One
 ## instance is pooled by CityRoot and rebound as the player moves between cabins.
 class_name ElevatorPanel
 extends "res://scripts/city/ui_3d.gd"

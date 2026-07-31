@@ -32,6 +32,56 @@ func slot_at(index: int) -> Dictionary:
 	return _slots[index].duplicate()
 
 
+## Slot-for-slot copy for a save file. Empty slots are written too, so loading restores where
+## things sat rather than repacking the grid.
+func slots_snapshot() -> Array:
+	var out: Array = []
+	out.resize(_slots.size())
+	for i in _slots.size():
+		var slot: Dictionary = _slots[i]
+		if slot.is_empty():
+			out[i] = {}
+		else:
+			out[i] = {"id": String(slot["id"]), "count": int(slot["count"])}
+	return out
+
+
+## Overwrite every slot from a saved snapshot. An entry naming an item this build no longer has is
+## dropped with an error: silently keeping the count would put an unusable stack in the grid.
+func restore_slots(rows: Array) -> void:
+	InventoryCatalog.ensure_loaded()
+	for i in _slots.size():
+		_slots[i] = {}
+	for i in mini(rows.size(), _slots.size()):
+		if typeof(rows[i]) != TYPE_DICTIONARY:
+			push_error("PlayerInventory.restore_slots: slot %d is not an object" % i)
+			continue
+		var row: Dictionary = rows[i]
+		if row.is_empty():
+			continue
+		var item_id := String(row.get("id", ""))
+		var count := int(row.get("count", 0))
+		if item_id.is_empty() and count == 0:
+			continue
+		var def := InventoryCatalog.item(item_id)
+		if def == null:
+			push_error("PlayerInventory.restore_slots: slot %d holds unknown '%s'" % [i, item_id])
+			continue
+		if count <= 0 or count > def.stack_max:
+			push_error(
+				"PlayerInventory.restore_slots: slot %d holds %d x %s (max %d)"
+				% [i, count, item_id, def.stack_max]
+			)
+			continue
+		_slots[i] = {"id": item_id, "count": count}
+	if rows.size() > _slots.size():
+		push_error(
+			"PlayerInventory.restore_slots: save has %d slots, this build has %d"
+			% [rows.size(), _slots.size()]
+		)
+	changed.emit()
+
+
 func count_of(item_id: String) -> int:
 	if item_id == "" or not InventoryCatalog.has_item(item_id):
 		push_error("PlayerInventory.count_of: unknown item '%s'" % item_id)

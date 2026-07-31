@@ -8,6 +8,8 @@ signal settings_applied(settings: Dictionary)
 signal controls_changed(controls: PlayerControls)
 signal spawn_meteors_toggled(enabled: bool)
 signal undead_invasion_toggled(enabled: bool)
+## The Game button shares this bar but belongs to CityRoot's save modal, not to this panel.
+signal game_menu_requested
 
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 
@@ -18,6 +20,7 @@ const CONFIG_VERSION := 2
 const CONTROLS_VERSION := 5
 
 var _btn: Button
+var _game_btn: Button
 var _top_bar: HBoxContainer
 var _spawn_meteors_check: CheckBox
 var _undead_invasion_check: CheckBox
@@ -200,6 +203,16 @@ func _build_ui() -> void:
 	_undead_invasion_check.button_pressed = false
 	_undead_invasion_check.toggled.connect(_on_undead_invasion_toggled)
 	_top_bar.add_child(_undead_invasion_check)
+
+	## Session lifecycle rides this bar but opens its own modal — see GameMenuPanel for why saving
+	## and loading are not a tab in here.
+	_game_btn = Button.new()
+	_game_btn.name = "GameButton"
+	_game_btn.text = "Game"
+	_game_btn.focus_mode = Control.FOCUS_NONE
+	_game_btn.custom_minimum_size = Vector2(96, 0)
+	_game_btn.pressed.connect(func() -> void: game_menu_requested.emit())
+	_top_bar.add_child(_game_btn)
 
 	_btn = Button.new()
 	_btn.name = "SettingsButton"

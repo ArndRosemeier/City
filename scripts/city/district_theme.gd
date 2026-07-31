@@ -36,6 +36,9 @@ var id: int = CORE_HIGHRISE
 var display_name: String = "Core High-Rise"
 ## One-line pitch for the district-type picker (J hop).
 var blurb: String = ""
+## How a tile of this theme wears its generated stem name, e.g. "%s-Hill" → "Anoha-Hill".
+## Exactly one "%s"; it may sit at either end so the theme word reads as prefix or suffix.
+var name_pattern: String = "%s"
 ## Walls for midrise / large buildings, and for low row housing.
 var wall_mats: PackedInt32Array = PackedInt32Array([VoxelMaterial.CONCRETE])
 var townhouse_mats: PackedInt32Array = PackedInt32Array([VoxelMaterial.BRICK])
@@ -176,6 +179,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		CORE_HIGHRISE:
 			t.display_name = "Core High-Rise"
 			t.blurb = "Downtown towers, dense streets, and the wildest skyline."
+			t.name_pattern = "%s Central"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.CONCRETE, VoxelMaterial.PLASTER, VoxelMaterial.METAL
 			])
@@ -205,6 +209,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		OLD_TOWN:
 			t.display_name = "Old Town"
 			t.blurb = "Brick lanes, clay roofs, and crooked medieval massing."
+			t.name_pattern = "Old %s"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.BRICK, VoxelMaterial.BRICK_DARK, VoxelMaterial.PLASTER,
 				VoxelMaterial.STONE
@@ -237,6 +242,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		WATERFRONT_INDUSTRIAL:
 			t.display_name = "Waterfront Industrial"
 			t.blurb = "Metal sheds, tanks, and gravel yards by the docks."
+			t.name_pattern = "Port %s"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.METAL_PLATE, VoxelMaterial.CONCRETE, VoxelMaterial.BRICK_DARK,
 				VoxelMaterial.METAL
@@ -270,6 +276,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		GARDEN_RESIDENTIAL:
 			t.display_name = "Garden Residential"
 			t.blurb = "Low housing, pocket parks, and calm leafy blocks."
+			t.name_pattern = "%s Gardens"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.PLASTER, VoxelMaterial.BRICK, VoxelMaterial.BRICK_DARK
 			])
@@ -301,6 +308,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		CIVIC_QUARTER:
 			t.display_name = "Civic Quarter"
 			t.blurb = "Stone monuments, grand plazas, and ceremonial streets."
+			t.name_pattern = "%s Square"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.STONE, VoxelMaterial.PLASTER, VoxelMaterial.CONCRETE
 			])
@@ -330,6 +338,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		HILL:
 			t.display_name = "Hill"
 			t.blurb = "One big hill, rock strata, caves — roads only at the edges."
+			t.name_pattern = "%s-Hill"
 			## Unused for massing (no lots), but keep a stone palette for any edge props.
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.STONE, VoxelMaterial.BRICK, VoxelMaterial.CONCRETE
@@ -361,6 +370,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		GRAVEYARD:
 			t.display_name = "Graveyard"
 			t.blurb = "An elevated churchyard, hedges and graves — roads only at the edges."
+			t.name_pattern = "%s Graves"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.GRAVE_STONE, VoxelMaterial.STONE, VoxelMaterial.BRICK_DARK
 			])
@@ -392,6 +402,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		LAKE:
 			t.display_name = "Lake"
 			t.blurb = "One big natural lake with wooded islands — roads only at the edges."
+			t.name_pattern = "Lake %s"
 			## No lots here either, but shore props still read from the palette.
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.STONE, VoxelMaterial.PLASTER, VoxelMaterial.BRICK
@@ -423,6 +434,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		CASTLE:
 			t.display_name = "Castle"
 			t.blurb = "A walled fortress on a plinth, reached by a causeway — roads only at the edges."
+			t.name_pattern = "Castle %s"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.CASTLE_BLOCK_MOSSY,
 				VoxelMaterial.STONE
@@ -456,6 +468,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		FRACTAL:
 			t.display_name = "Fractal"
 			t.blurb = "A glowing plaza with Mandelbrot walls — roads only at the edges."
+			t.name_pattern = "%s Anomaly"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.METAL, VoxelMaterial.GLASS_LIT, VoxelMaterial.CONCRETE
 			])
@@ -484,6 +497,7 @@ static func make(theme_id: int) -> DistrictTheme:
 		ARENA:
 			t.display_name = "Arena"
 			t.blurb = "A colosseum filling the tile — summon monsters into the pit from four walls."
+			t.name_pattern = "%s Arena"
 			t.wall_mats = PackedInt32Array([
 				VoxelMaterial.ARENA_SHELL, VoxelMaterial.CASTLE_BLOCK, VoxelMaterial.STONE
 			])
@@ -514,6 +528,21 @@ static func make(theme_id: int) -> DistrictTheme:
 		_:
 			push_error("DistrictTheme.make: unknown theme id %d" % theme_id)
 	return t
+
+
+## True for the landmark tiles that replace the street grid with one big feature: the
+## planner gives them edge stubs only (`road_density == 0`), so anything that decorates a
+## through-street — signposts most of all — has nothing to line up with here.
+static func is_special_id(theme_id: int) -> bool:
+	match theme_id:
+		HILL, GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA:
+			return true
+		_:
+			return false
+
+
+func is_special() -> bool:
+	return is_special_id(id)
 
 
 func wall_for(rng: RandomNumberGenerator, townhouse: bool) -> int:

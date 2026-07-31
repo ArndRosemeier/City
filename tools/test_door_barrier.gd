@@ -1,4 +1,5 @@
-## Headless: DOOR barriers block VoxelBoxMover when closed; open clears; interact binding exists.
+## Headless: DOOR barriers block VoxelBoxMover when closed; open clears the plug.
+## Aim-ray door pick lives in test_click_interact (needs autoloads for CastleDoorPlacer).
 ##
 ## Run: Godot --headless --path . -s res://tools/test_door_barrier.gd
 extends SceneTree
@@ -7,7 +8,6 @@ const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const DoorBarrierScript := preload("res://scripts/city/door_barrier.gd")
 const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library.gd")
 const AirGeneratorScript := preload("res://scripts/city/air_generator.gd")
-const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const VOXEL_SIZE := 0.5
 const ORIGIN := Vector3i(32, 4, 32)
 
@@ -20,7 +20,6 @@ var _brush: CityBrush
 func _initialize() -> void:
 	await _make_terrain()
 	_brush = CityBrushScript.new(_tool, Vector3i.ZERO)
-	_check_interact_binding()
 	_check_barrier_cells()
 	await _check_mover_block_and_open()
 	_check_toggle_no_orphan()
@@ -35,19 +34,6 @@ func _initialize() -> void:
 func _fail(msg: String) -> void:
 	push_error(msg)
 	_failed = true
-
-
-func _check_interact_binding() -> void:
-	var ctl: PlayerControls = PlayerControlsScript.new() as PlayerControls
-	var bind: Dictionary = ctl.get_binding("interact")
-	if int(bind.get("code", -1)) != int(KEY_E):
-		_fail("FAIL interact default is not KEY_E")
-		return
-	var label := ctl.binding_label("interact")
-	if label.is_empty():
-		_fail("FAIL interact binding_label empty")
-		return
-	print("  interact binding: %s" % label)
 
 
 func _make_doorway() -> CastleDoorway:

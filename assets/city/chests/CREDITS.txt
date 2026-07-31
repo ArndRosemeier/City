@@ -1,0 +1,12 @@
+﻿# Kenney Pirate Kit — chest (CC0)
+
+Source: https://kenney.nl/assets/pirate-kit
+OpenGameArt mirror: kenney_pirate-kit_2.1.zip
+Author: Kenney (www.kenney.nl)
+License: Creative Commons Zero (CC0 1.0)
+
+Vendored:
+- chest.glb — body + lid nodes; AnimationPlayer clips open / close / open-close
+- Textures/colormap.png — atlas the GLB references
+
+Full Pirate Kit is not imported. Verified by tools/test_chest_asset.tscn.

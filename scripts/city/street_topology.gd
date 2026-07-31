@@ -57,14 +57,12 @@ func build(
 	_validate()
 
 
+## Special tiles get edge stubs instead of a grid, so their pavement is expected to come in
+## disconnected pieces. Same set as `DistrictTheme.is_special`, and for the same reason.
 static func _theme_is_fragmented(planner: DistrictPlanner) -> bool:
 	if planner.theme == null:
 		return false
-	match planner.theme.id:
-		DistrictTheme.HILL, DistrictTheme.GRAVEYARD, DistrictTheme.LAKE, DistrictTheme.CASTLE, DistrictTheme.FRACTAL, DistrictTheme.ARENA:
-			return true
-		_:
-			return false
+	return planner.theme.is_special()
 
 
 func _validate() -> void:

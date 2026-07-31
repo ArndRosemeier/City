@@ -2,13 +2,13 @@
 ##
 ## Leaves are visual only (no mesh colliders). Closed state writes `VoxelMaterial.DOOR` through
 ## CityBrush so VoxelBoxMover and nav both block; open restores AIR via destroy_vox.
-## Player proximity + E toggles — camera no longer auto-opens.
+## Player toggles by aiming the blaster at the doorway (CityRoot.try_interact_aim).
 class_name CastleDoorPlacer
 extends Node3D
 
 const DoorBarrierScript := preload("res://scripts/city/door_barrier.gd")
 
-## Metres from the threshold for the Press-E hint / interact pick.
+## Metres along the aim ray for a doorway pick.
 const INTERACT_DISTANCE := 3.2
 ## Leaves are hidden past this. A castle carries sixty-odd doors and most of them are three
 ## storeys underground.
@@ -159,6 +159,39 @@ func nearest_door(world_pos: Vector3, max_dist: float = INTERACT_DISTANCE) -> Hu
 	return best
 
 
+## Closest hung door whose doorway plane the ray hits within `max_dist`.
+## Returns {} or {door: Hung, t: float} where t is metres along the ray.
+func door_hit_along_ray(
+	origin: Vector3, dir: Vector3, max_dist: float = INTERACT_DISTANCE
+) -> Dictionary:
+	if dir.length_squared() < 0.000001 or max_dist <= 0.0:
+		return {}
+	var d := dir.normalized()
+	var best: Hung = null
+	var best_t := max_dist
+	for door: Hung in _doors:
+		var t := _ray_doorway_t(origin, d, door, max_dist)
+		if t >= 0.0 and t <= best_t:
+			best_t = t
+			best = door
+	if best == null:
+		return {}
+	return {"door": best, "t": best_t}
+
+
+## Hung door owning a world voxel cell (closed DOOR plug), or null.
+func door_at_voxel(world_vox: Vector3i) -> Hung:
+	for door: Hung in _doors:
+		if door.doorway == null:
+			continue
+		var cells: Array[Vector3i] = DoorBarrierScript.barrier_cells(
+			door.doorway, door.origin_vox
+		)
+		if cells.has(world_vox):
+			return door
+	return null
+
+
 ## Toggle closed/open for one hung door. Returns true if state changed.
 func toggle_door(door: Hung) -> bool:
 	if door == null or door.doorway == null:
@@ -180,6 +213,38 @@ func set_door_closed(door: Hung, closed: bool) -> bool:
 		door.target = door.open_angle
 	door.closed = closed
 	return true
+
+
+## Ray vs doorway leaf plane. Returns metres along `dir`, or -1 if miss.
+func _ray_doorway_t(origin: Vector3, dir: Vector3, door: Hung, max_dist: float) -> float:
+	var dw: CastleDoorway = door.doorway
+	if dw == null or _vox <= 0.0:
+		return -1.0
+	var n := Vector3(float(dw.axis.x), 0.0, float(dw.axis.y))
+	if n.length_squared() < 0.000001:
+		return -1.0
+	n = n.normalized()
+	var denom := dir.dot(n)
+	if absf(denom) < 0.000001:
+		return -1.0
+	var t := (door.at - origin).dot(n) / denom
+	if t < 0.0 or t > max_dist:
+		return -1.0
+	var hit := origin + dir * t
+	var side_v := dw.side()
+	var side := Vector3(float(side_v.x), 0.0, float(side_v.y))
+	var local := hit - door.at
+	var along_side := local.dot(side)
+	var along_up := local.y
+	## Aim forgiveness past the clear — closed DOOR plugs are a full voxel thick.
+	const PAD := 0.2
+	var half_w := float(dw.width) * 0.5 * _vox + PAD
+	var h := float(maxi(dw.height, 1)) * _vox + PAD
+	if absf(along_side) > half_w:
+		return -1.0
+	if along_up < -PAD or along_up > h:
+		return -1.0
+	return t
 
 
 func _seal_all_closed() -> void:

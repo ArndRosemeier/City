@@ -20,6 +20,7 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/player_inventory_panel.gd", "layer": UiLayers.MODAL_INVENTORY},
 	{"path": "res://scripts/city/character_editor.gd", "layer": UiLayers.MODAL_CHARACTER_EDITOR},
 	{"path": "res://scripts/city/monster_summon_panel.gd", "layer": UiLayers.MODAL_MONSTER_SUMMON},
+	{"path": "res://scripts/city/game_menu_panel.gd", "layer": UiLayers.MODAL_GAME},
 	{"path": "res://scripts/city/loading_splash.gd", "layer": UiLayers.LOADING_SPLASH},
 ]
 
@@ -45,6 +46,7 @@ const MODALS: Array[int] = [
 	UiLayers.MODAL_INVENTORY,
 	UiLayers.MODAL_CHARACTER_EDITOR,
 	UiLayers.MODAL_MONSTER_SUMMON,
+	UiLayers.MODAL_GAME,
 ]
 
 const TAKEOVERS: Array[int] = [

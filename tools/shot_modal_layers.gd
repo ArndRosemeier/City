@@ -7,6 +7,10 @@
 ## last shot pushes the profiler overlay and an error report on top of an open modal, because
 ## the one thing a panel must never be able to do is hide a failure.
 ##
+## The Game modal is photographed the same way, and its buttons are then actually pressed against
+## the live city: a save panel that draws correctly and writes nothing is the failure that would
+## otherwise only surface when someone tried to load.
+##
 ## The J-hop district picker is photographed alongside them, at the top of its list and scrolled
 ## down to Castle. It is a takeover rather than a modal, but it is the surface that has actually
 ## run out of room: nine themes are taller than the window, and the last of them was laid out
@@ -22,6 +26,10 @@ const WALKER_TIMEOUT_MS := 120000
 const INVENTORY_PNG := "res://tools/modal_inventory.png"
 const SETTINGS_PNG := "res://tools/modal_settings.png"
 const DEBUG_PNG := "res://tools/modal_debug_above.png"
+const GAME_MENU_PNG := "res://tools/modal_game_menu.png"
+## Scratch slots for this run, so photographing the Game modal cannot touch a real autosave.
+const SHOT_SAVES_DIR := "user://shot_saves"
+const SHOT_SLOT_NAME := "shot_slot"
 const PICKER_TOP_PNG := "res://tools/district_picker_top.png"
 const PICKER_BOTTOM_PNG := "res://tools/district_picker_bottom.png"
 ## One stack per gem type, so the panel has something to show.
@@ -78,6 +86,10 @@ func _ready() -> void:
 	_check_modal_owns_screen("settings", settings.layer)
 	await _shoot(SETTINGS_PNG)
 
+	await _shoot_game_menu(city, settings)
+
+	settings.open_panel()
+	await _frames(20)
 	_check_debug_outranks(settings.layer)
 	await _frames(10)
 	await _shoot(DEBUG_PNG)
@@ -132,6 +144,60 @@ func _shoot_district_picker(city: CityRoot, walker: CityWalker) -> void:
 	await _frames(10)
 	if UiInputGate.gameplay_blocked(walker):
 		_fail("FAIL gameplay input stayed off after the picker closed")
+
+
+## The Game modal over a live city, and the one thing a screenshot cannot show: that the buttons
+## on it actually reach disk. Both writes go to a scratch folder — a screenshot run must not
+## overwrite the autosave of whoever plays on this machine.
+func _shoot_game_menu(city: CityRoot, settings: CitySettingsPanel) -> void:
+	if settings.get_node_or_null("TopBar/GameButton") == null:
+		_fail("FAIL there is no Game button on the top bar")
+		return
+	GameSave.use_directory(SHOT_SAVES_DIR)
+	var menu := city.get_node_or_null("GameMenu") as GameMenuPanel
+	if menu == null:
+		_fail("FAIL CityRoot built no GameMenu panel")
+		GameSave.use_default_directory()
+		return
+
+	settings.game_menu_requested.emit()
+	await _frames(20)
+	if not menu.is_open():
+		_fail("FAIL the Game button did not open the Game modal")
+	if not city.is_modal_open():
+		_fail("FAIL CityRoot does not count the open Game modal as a modal")
+	_check_modal_owns_screen("game", menu.layer)
+
+	if not city.write_quicksave("Shot"):
+		_fail("FAIL Quicksave over the live city wrote nothing")
+	if not city.write_named_save(SHOT_SLOT_NAME):
+		_fail("FAIL the named save over the live city wrote nothing")
+	menu.refresh()
+	await _frames(6)
+	if not city.has_quicksave():
+		_fail("FAIL the live city reports no quicksave right after writing one")
+	var names := PackedStringArray()
+	for entry: Dictionary in city.list_named_saves():
+		names.append(String(entry["name"]))
+	if not names.has(SHOT_SLOT_NAME):
+		_fail("FAIL the named save is not in the library: %s" % str(names))
+	await _shoot(GAME_MENU_PNG)
+
+	menu.close_panel()
+	await _frames(6)
+	if city.is_modal_open():
+		_fail("FAIL the Game modal stayed open")
+	_check_hud_returned()
+	_wipe_shot_saves()
+	GameSave.use_default_directory()
+
+
+func _wipe_shot_saves() -> void:
+	var dir := DirAccess.open(SHOT_SAVES_DIR)
+	if dir == null:
+		return
+	for file: String in dir.get_files():
+		DirAccess.remove_absolute("%s/%s" % [SHOT_SAVES_DIR, file])
 
 
 ## An open modal owns the screen: only the debug band may draw in front of it, and the HUD it

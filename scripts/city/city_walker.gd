@@ -475,6 +475,55 @@ func is_female() -> bool:
 	return _female
 
 
+func get_yaw() -> float:
+	return _yaw
+
+
+## The outfit as a save file records it: which catalogue variant, and the skin tone that was rolled
+## for this character. Both are needed — the variant alone re-rolls the skin on every load.
+func outfit_save_dict() -> Dictionary:
+	if _outfit == null:
+		return {}
+	return {"variant_id": _outfit.variant_id, "skin": _outfit.skin.to_html(false)}
+
+
+## Put a saved character back on: sex and outfit first (they rebuild the body), then proportions on
+## the new skeleton. A variant the catalogue has since dropped is reported and the pool picks again,
+## because refusing to load would cost the save over a cosmetic.
+func restore_look(
+	female: bool, props: BodyProportions, outfit_variant_id: String, skin: Color
+) -> void:
+	if props == null:
+		push_error("CityWalker.restore_look: no proportions in the save")
+		return
+	_proportions = props.duplicate_props()
+	if not outfit_variant_id.is_empty():
+		var saved := PedOutfitCatalogScript.by_variant_id(outfit_variant_id, female)
+		if saved == null:
+			push_error(
+				"CityWalker.restore_look: outfit '%s' is not in the catalogue any more"
+				% outfit_variant_id
+			)
+		else:
+			saved.skin = skin
+			_outfit = saved
+	_spawn_human(female)
+
+
+## Restore a saved energy level. Out-of-pool is a corrupt save, so it is reported before clamping.
+func set_energy_points(value: float) -> void:
+	if not is_finite(value):
+		push_error("CityWalker.set_energy_points: %f is not a level" % value)
+		return
+	if value < 0.0 or value > energy_max:
+		push_error("CityWalker.set_energy_points: %f is outside 0..%f" % [value, energy_max])
+	_energy = clampf(value, 0.0, energy_max)
+
+
+func set_health_points(value: float) -> void:
+	_health.set_current(value)
+
+
 func is_character_editor_open() -> bool:
 	return _editor != null and _editor.is_open()
 
@@ -492,6 +541,8 @@ func is_blocking_ui_open() -> bool:
 	if parent.has_method("is_inventory_open") and bool(parent.call("is_inventory_open")):
 		return true
 	if parent.has_method("is_monster_summon_open") and bool(parent.call("is_monster_summon_open")):
+		return true
+	if parent.has_method("is_game_menu_open") and bool(parent.call("is_game_menu_open")):
 		return true
 	if parent.has_method("is_splash_open") and bool(parent.call("is_splash_open")):
 		return true
@@ -3333,6 +3384,10 @@ func _start_charged_blast_at_cursor() -> void:
 	if _charged_blast != null and bool(_charged_blast.call("is_firing")):
 		_blast_charge = 0.0
 		return
+	## Same swallow as the blaster — never bomb a Ui3D panel or hung door.
+	if _try_world_interact():
+		_blast_charge = 0.0
+		return
 	if not try_spend_energy(energy_cost_blast):
 		_blast_charge = 0.0
 		return
@@ -3413,6 +3468,9 @@ func _start_laser_eyes_at_cursor() -> void:
 	if now < _laser_ready_at_msec:
 		return
 	if _eye_laser != null and bool(_eye_laser.call("is_firing")):
+		return
+	## Same swallow as the blaster — never carve a Ui3D panel or hung door.
+	if _try_world_interact():
 		return
 	if not try_spend_energy(energy_cost_laser):
 		return
@@ -3499,8 +3557,8 @@ func _is_beam_held() -> bool:
 func _fire_blaster_bolt() -> void:
 	if _camera == null:
 		return
-	## World Ui3D surfaces swallow the beam: never spawn a bolt or spend energy.
-	if _try_press_ui_3d():
+	## World interactables swallow the beam: never spawn a bolt or spend energy.
+	if _try_world_interact():
 		return
 	if not try_spend_energy(energy_cost_blaster):
 		return
@@ -3539,8 +3597,9 @@ func _fire_blaster_bolt() -> void:
 	bolt.call("fire", origin, aim_point, blaster_speed_mps, _effective_body_scale())
 
 
-## If the blaster aim ray hits a Ui3D surface, deliver the press and consume the shot.
-func _try_press_ui_3d() -> bool:
+## Pre-fire swallow: Ui3D panels, world_interact nodes, then hung doors via CityRoot.
+## Returns true when the shot was consumed (no energy, no bolt).
+func _try_world_interact() -> bool:
 	var shot := _blaster_shot_endpoints()
 	var origin: Vector3 = shot["origin"] as Vector3
 	var aim_point: Vector3 = shot["aim_point"] as Vector3
@@ -3549,19 +3608,26 @@ func _try_press_ui_3d() -> bool:
 		return false
 	dir = dir.normalized()
 	var to := origin + dir * laser_range_m
-	var query := PhysicsRayQueryParameters3D.create(origin, to)
-	query.collision_mask = 1
-	query.exclude = [get_rid()]
-	var hit := get_world_3d().direct_space_state.intersect_ray(query)
-	if hit.is_empty():
-		return false
-	var panel := _ui_3d_from_collider(hit.get("collider"))
-	if panel == null:
-		return false
-	if panel.has_method("press_at_world"):
-		return bool(panel.call("press_at_world", hit["position"] as Vector3))
-	if panel.has_method("mark_at_world"):
-		return bool(panel.call("mark_at_world", hit["position"] as Vector3))
+	var space := get_world_3d().direct_space_state
+	if space != null:
+		var query := PhysicsRayQueryParameters3D.create(origin, to)
+		query.collision_mask = 1
+		query.exclude = [get_rid()]
+		var hit := space.intersect_ray(query)
+		if not hit.is_empty():
+			var hit_pos: Vector3 = hit["position"] as Vector3
+			var panel := _ui_3d_from_collider(hit.get("collider"))
+			if panel != null:
+				if panel.has_method("press_at_world"):
+					return bool(panel.call("press_at_world", hit_pos))
+				if panel.has_method("mark_at_world"):
+					return bool(panel.call("mark_at_world", hit_pos))
+			var interact := _world_interact_from_collider(hit.get("collider"))
+			if interact != null and interact.has_method("interact_at_world"):
+				return bool(interact.call("interact_at_world", hit_pos))
+	var root := _city_root()
+	if root != null and root.has_method("try_interact_aim"):
+		return bool(root.call("try_interact_aim", origin, aim_point))
 	return false
 
 
@@ -3574,6 +3640,19 @@ func _ui_3d_from_collider(collider: Variant) -> Node:
 			or node.is_in_group("aim_panel")
 			or bool(node.has_meta("aim_panel"))
 		):
+			return node
+		node = node.get_parent()
+	return null
+
+
+## Chests and other clickables: group/meta `world_interact` + interact_at_world.
+func _world_interact_from_collider(collider: Variant) -> Node:
+	var node := collider as Node
+	while node != null:
+		if (
+			node.is_in_group("world_interact")
+			or bool(node.has_meta("world_interact"))
+		) and node.has_method("interact_at_world"):
 			return node
 		node = node.get_parent()
 	return null

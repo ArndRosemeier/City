@@ -28,6 +28,9 @@ const MODAL_SETTINGS := 20
 const MODAL_INVENTORY := 21
 const MODAL_CHARACTER_EDITOR := 22
 const MODAL_MONSTER_SUMMON := 23
+## Save / load / new game. Session lifecycle, kept out of Settings so graphics knobs and the
+## decision to throw the run away are never one mis-click apart.
+const MODAL_GAME := 24
 
 ## Whole-screen state changes, above any modal.
 const GAME_OVER := 40
