@@ -5,6 +5,8 @@
 ## split into four segments instead of one smooth track, and it is captioned with a heart. Two
 ## coloured rectangles of the same shape in the same place would be a UI bug that only shows up
 ## when someone dies while their energy was low.
+##
+## When the Minion power has a living ally, a thinner same-width bar sits above the player track.
 class_name PlayerHealthHud
 extends CanvasLayer
 
@@ -12,16 +14,24 @@ const CityMinimapScript := preload("res://scripts/city/city_minimap.gd")
 
 @export var bar_width_px: float = 240.0
 @export var bar_height_px: float = 26.0
+## Ally track — same width as the player bar, much shorter so it reads as a satellite strip.
+@export var minion_bar_height_px: float = 10.0
 ## Dividers drawn over the track. Four segments means one conversion orb is visibly a quarter.
 @export var segment_count: int = 4
 
 var _walker: Node
+var _minion: Node
+var _panel: PanelContainer
+var _minion_block: VBoxContainer
+var _minion_fill: ColorRect
+var _minion_label: Label
 var _fill: ColorRect
 var _pulse: ColorRect
 var _label: Label
 var _track_w: float = 240.0
 ## Latest fraction, so the near-death pulse has something to breathe against.
 var _fraction: float = 1.0
+var _minion_fraction: float = 0.0
 var _pulse_phase: float = 0.0
 
 ## Below this the bar pulses — the point where one more hit of anything ends the run.
@@ -31,8 +41,11 @@ const CRITICAL_FRACTION := 0.26
 ## HUD collision nobody notices until a screenshot.
 const MINIMAP_TOP_PX := -CityMinimapScript.MAP_SIZE_PX - 52.0
 const PANEL_HEIGHT_PX := 62.0
+## Extra panel height when the ally strip is showing (caption + thin track + separations).
+const MINION_PANEL_EXTRA_PX := 30.0
 const COLOR_HEALTHY := Color(0.86, 0.16, 0.24, 0.95)
 const COLOR_CRITICAL := Color(1.0, 0.55, 0.16, 0.98)
+const COLOR_MINION := Color(0.35, 0.78, 0.48, 0.95)
 
 
 func _ready() -> void:
@@ -43,16 +56,15 @@ func _ready() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	var panel := PanelContainer.new()
-	panel.name = "HealthPanel"
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	panel.offset_left = 14.0
+	_panel = PanelContainer.new()
+	_panel.name = "HealthPanel"
+	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_panel.offset_left = 14.0
 	## Exactly the track plus its two content margins, so the fill reaches the frame at full
 	## rather than leaving a permanent sliver of empty track nobody can spend.
-	panel.offset_right = 14.0 + bar_width_px + 20.0
-	panel.offset_top = MINIMAP_TOP_PX - PANEL_HEIGHT_PX - 8.0
-	panel.offset_bottom = MINIMAP_TOP_PX - 8.0
+	_panel.offset_right = 14.0 + bar_width_px + 20.0
+	_layout_panel(false)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.1, 0.03, 0.05, 0.84)
 	style.border_color = Color(0.55, 0.1, 0.16, 0.9)
@@ -68,13 +80,48 @@ func _ready() -> void:
 	style.content_margin_right = 10
 	style.content_margin_top = 6
 	style.content_margin_bottom = 6
-	panel.add_theme_stylebox_override("panel", style)
-	root.add_child(panel)
+	_panel.add_theme_stylebox_override("panel", style)
+	root.add_child(_panel)
 
 	var col := VBoxContainer.new()
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_theme_constant_override("separation", 4)
-	panel.add_child(col)
+	_panel.add_child(col)
+
+	_minion_block = VBoxContainer.new()
+	_minion_block.name = "MinionBlock"
+	_minion_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_minion_block.add_theme_constant_override("separation", 2)
+	_minion_block.visible = false
+	col.add_child(_minion_block)
+
+	_minion_label = Label.new()
+	_minion_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_minion_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_minion_label.add_theme_font_size_override("font_size", 11)
+	_minion_label.add_theme_color_override("font_color", Color(0.72, 0.95, 0.78, 0.95))
+	_minion_label.add_theme_color_override("font_outline_color", Color(0.02, 0.08, 0.03, 0.95))
+	_minion_label.add_theme_constant_override("outline_size", 2)
+	_minion_label.text = "MINION"
+	_minion_block.add_child(_minion_label)
+
+	var minion_track := Control.new()
+	minion_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	minion_track.custom_minimum_size = Vector2(bar_width_px, minion_bar_height_px)
+	_minion_block.add_child(minion_track)
+
+	var minion_back := ColorRect.new()
+	minion_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	minion_back.color = Color(0.06, 0.14, 0.08, 0.95)
+	minion_back.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	minion_track.add_child(minion_back)
+
+	_minion_fill = ColorRect.new()
+	_minion_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_minion_fill.color = COLOR_MINION
+	_minion_fill.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	_minion_fill.offset_right = bar_width_px
+	minion_track.add_child(_minion_fill)
 
 	_label = Label.new()
 	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -147,7 +194,33 @@ func bind_walker(walker: Node) -> void:
 	)
 
 
+## Show the thin ally strip above the player bar. Pass null to hide it.
+func bind_minion(unit: Node) -> void:
+	if _minion != null and is_instance_valid(_minion) and _minion.has_signal("health_changed"):
+		if _minion.is_connected("health_changed", _on_minion_health_changed):
+			_minion.disconnect("health_changed", _on_minion_health_changed)
+	_minion = unit
+	if _minion == null or not is_instance_valid(_minion):
+		_set_minion_visible(false)
+		return
+	if not _minion.has_signal("health_changed"):
+		push_error("PlayerHealthHud: minion %s has no health_changed signal" % _minion.name)
+		_set_minion_visible(false)
+		return
+	if not _minion.is_connected("health_changed", _on_minion_health_changed):
+		_minion.connect("health_changed", _on_minion_health_changed)
+	_set_minion_visible(true)
+	_on_minion_health_changed(
+		float(_minion.call("health")), float(_minion.call("health_max"))
+	)
+
+
+func clear_minion() -> void:
+	bind_minion(null)
+
+
 func clear_display() -> void:
+	clear_minion()
 	bind_walker(null)
 
 
@@ -166,6 +239,34 @@ func fill_fraction() -> float:
 	return _fill.offset_right / _track_w
 
 
+func minion_fill_fraction() -> float:
+	if _minion_fill == null or _track_w <= 0.0 or _minion_block == null or not _minion_block.visible:
+		return 0.0
+	return _minion_fill.offset_right / _track_w
+
+
+func minion_bar_visible() -> bool:
+	return _minion_block != null and _minion_block.visible
+
+
+func _set_minion_visible(show: bool) -> void:
+	if _minion_block != null:
+		_minion_block.visible = show
+	_layout_panel(show)
+	if not show:
+		_minion_fraction = 0.0
+		if _minion_fill != null:
+			_minion_fill.offset_right = 0.0
+
+
+func _layout_panel(with_minion: bool) -> void:
+	if _panel == null:
+		return
+	var height := PANEL_HEIGHT_PX + (MINION_PANEL_EXTRA_PX if with_minion else 0.0)
+	_panel.offset_top = MINIMAP_TOP_PX - height - 8.0
+	_panel.offset_bottom = MINIMAP_TOP_PX - 8.0
+
+
 func _on_health_changed(current: float, maximum: float) -> void:
 	if maximum <= 0.0:
 		push_error("PlayerHealthHud: a maximum of %f is not a pool" % maximum)
@@ -178,6 +279,17 @@ func _on_health_changed(current: float, maximum: float) -> void:
 		)
 	if _label != null:
 		_label.text = "♥ HEALTH  %d / %d" % [int(ceil(current)), int(round(maximum))]
+
+
+func _on_minion_health_changed(current: float, maximum: float) -> void:
+	if maximum <= 0.0:
+		push_error("PlayerHealthHud: minion maximum of %f is not a pool" % maximum)
+		return
+	_minion_fraction = clampf(current / maximum, 0.0, 1.0)
+	if _minion_fill != null:
+		_minion_fill.offset_right = _track_w * _minion_fraction
+	if _minion_label != null:
+		_minion_label.text = "MINION  %d / %d" % [int(ceil(current)), int(round(maximum))]
 
 
 func _process(delta: float) -> void:

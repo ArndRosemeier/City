@@ -40,7 +40,6 @@ const LootToastScript := preload("res://scripts/city/loot_toast.gd")
 const AbilityTrayScript := preload("res://scripts/city/ability_tray.gd")
 const PlayerLoadoutScript := preload("res://scripts/city/player_loadout.gd")
 const TrapProjectileScript := preload("res://scripts/city/trap_projectile.gd")
-const FollowMinionScript := preload("res://scripts/city/follow_minion.gd")
 const ArmedTrapScript := preload("res://scripts/city/armed_trap.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
@@ -102,7 +101,10 @@ var _status: Label
 var _loading_splash: LoadingSplash
 var _ability_tray: AbilityTray
 var _loadout: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
-var _minions: Array[FollowMinion] = []
+## Living ally from the Minion power. At most one; recast dismisses the previous.
+var _player_minion: UndeadUnit = null
+## Seconds left before the living ally is auto-dismissed.
+var _player_minion_life_left: float = 0.0
 var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
 var _boost_hud: CanvasLayer
@@ -906,12 +908,8 @@ func _cheat_actor_lines() -> PackedStringArray:
 	for key: Variant in monster_keys:
 		lines.append("  %s: %d" % [str(key), int(monster_counts[key])])
 
-	var minion_n := 0
-	for m in _minions:
-		if m != null and is_instance_valid(m):
-			minion_n += 1
-	if minion_n > 0:
-		lines.append("  follow minions: %d" % minion_n)
+	if _player_minion != null and is_instance_valid(_player_minion) and _player_minion.is_alive():
+		lines.append("  player minion: %s" % _cheat_monster_label(_player_minion))
 	return lines
 
 
@@ -1261,6 +1259,7 @@ func _process(delta: float) -> void:
 		_tick_district_economy()
 		CityProfiler.end("district_economy")
 	_tick_autosave(delta)
+	_tick_player_minion(delta)
 	if _radar_cooldown_left > 0.0:
 		_radar_cooldown_left = maxf(0.0, _radar_cooldown_left - delta)
 	if _radar_reveal_left > 0.0:
@@ -1568,22 +1567,83 @@ func _activate_grow_shrink(grow: bool) -> void:
 
 
 func _spawn_minion() -> void:
-	while _minions.size() > 0 and (
-		_minions[0] == null or not is_instance_valid(_minions[0])
-	):
-		_minions.remove_at(0)
-	if _minions.size() >= AbilityRegistry.MINION_MAX:
-		print("CityRoot: minion cap reached")
-		return
+	_prune_player_minion()
 	var def := AbilityRegistry.get_def(AbilityRegistry.ID_MINION)
 	if not _walker.try_spend_energy(def.energy_cost):
 		return
-	var m: FollowMinion = FollowMinionScript.new() as FollowMinion
-	m.name = "Minion%d" % _minions.size()
-	m.follow = _walker
-	add_child(m)
-	m.global_position = _walker.global_position + Vector3(1.2, 0.2, 0.0)
-	_minions.append(m)
+	var body_id := _roll_random_summon_id()
+	if body_id.is_empty():
+		push_error("CityRoot._spawn_minion: empty spawnable roster")
+		assert(false, "CityRoot: empty minion roster")
+		return
+	var stand := _walker.global_position + Vector3(1.2, 0.0, 0.0)
+	var unit := spawn_monster_at(body_id, stand)
+	if unit == null:
+		push_error("CityRoot._spawn_minion: spawn refused for '%s'" % body_id)
+		return
+	## Replace only after the new body exists so a failed spawn keeps the old ally.
+	_dismiss_player_minion()
+	unit.become_player_minion()
+	_player_minion = unit
+	_player_minion_life_left = AbilityRegistry.MINION_DURATION_SEC
+	if not unit.died.is_connected(_on_player_minion_died):
+		unit.died.connect(_on_player_minion_died)
+	_bind_player_minion_hud(unit)
+	print(
+		"CityRoot: player minion %s (human, half power, %.0fs)"
+		% [body_id, AbilityRegistry.MINION_DURATION_SEC]
+	)
+
+
+func _prune_player_minion() -> void:
+	if _player_minion == null:
+		return
+	if not is_instance_valid(_player_minion) or not _player_minion.is_alive():
+		_player_minion = null
+		_player_minion_life_left = 0.0
+		_clear_player_minion_hud()
+
+
+func _dismiss_player_minion() -> void:
+	_prune_player_minion()
+	if _player_minion == null:
+		return
+	var old := _player_minion
+	_player_minion = null
+	_player_minion_life_left = 0.0
+	_clear_player_minion_hud()
+	if old.died.is_connected(_on_player_minion_died):
+		old.died.disconnect(_on_player_minion_died)
+	despawn_undead_unit(old)
+
+
+func _on_player_minion_died(unit: UndeadUnit, _was_giant: bool) -> void:
+	if _player_minion == unit:
+		_player_minion = null
+		_player_minion_life_left = 0.0
+		_clear_player_minion_hud()
+
+
+func _bind_player_minion_hud(unit: UndeadUnit) -> void:
+	if _health_hud == null or not is_instance_valid(_health_hud):
+		return
+	_health_hud.call("bind_minion", unit)
+
+
+func _clear_player_minion_hud() -> void:
+	if _health_hud == null or not is_instance_valid(_health_hud):
+		return
+	_health_hud.call("clear_minion")
+
+
+func _tick_player_minion(delta: float) -> void:
+	_prune_player_minion()
+	if _player_minion == null:
+		return
+	_player_minion_life_left -= delta
+	if _player_minion_life_left <= 0.0:
+		print("CityRoot: player minion expired")
+		_dismiss_player_minion()
 
 
 func _throw_trap() -> void:
@@ -2796,10 +2856,7 @@ func _regenerate() -> void:
 	if _ability_tray != null and is_instance_valid(_ability_tray):
 		_ability_tray.queue_free()
 		_ability_tray = null
-	for m in _minions:
-		if m != null and is_instance_valid(m):
-			m.queue_free()
-	_minions.clear()
+	_dismiss_player_minion()
 	if _infection != null and is_instance_valid(_infection):
 		_infection.call("clear_all")
 		_infection.queue_free()
@@ -3460,6 +3517,15 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	var detached: Array = []
 	var column_max_y: Dictionary = {}  # Vector2i → int
 	const MAX_DEBRIS := 900
+	## One chip roll for the whole blast — same gate as blaster / laser / melee.
+	var allow_chip := _roll_carve_chip()
+	var center_mat := _brush.get_vox(Vector3i(cx, cy, cz)) if _brush != null else VoxelMaterial.AIR
+	var center_verdict := _carve_verdict(center_mat)
+	if (
+		center_verdict == CarveVerdict.REFUSE
+		or (center_verdict == CarveVerdict.CHIP and not allow_chip)
+	):
+		_flash_hardness_refuse(center_mat)
 	_brush.begin_edit()
 	for z in range(cz - r_i, cz + r_i + 1):
 		for y in range(cy - r_i, cy + r_i + 1):
@@ -3470,7 +3536,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 				var vox := Vector3i(x, y, z)
 				## Brush sees pending AIR from earlier furniture assembly clears.
 				var mat_id := _brush.get_vox(vox)
-				if not _carve_allowed(mat_id):
+				if not _carve_allowed(mat_id, allow_chip):
 					continue
 				var carved := _brush.destroy_vox(vox)
 				for entry in carved:
@@ -3560,28 +3626,58 @@ func _on_melee_strike(
 	apply_voxel_strike(origin, dir, max_range, float(_walker.get_character_scale()))
 
 
-## Shared voxel impact for player strikes and enemy projectiles. Indestructible solids
-## (arena shell, bedrock, LOS veil) stop the shot via solid probes but are not carved.
-## Returns true when at least one destructible / gem cell was resolved.
-## True when the player's current hardness tier may destroy this material (or chip it).
-func _carve_allowed(mat_id: int) -> bool:
-	if not VoxelMaterial.is_destructible(mat_id):
-		return false
+## Shared hardness gate for every player carve (blaster / laser / melee / charged blast / dig).
+## One path — duplicated checks used to flash "Too hard" for Exotic while silently swallowing
+## Reinforced chip misses, and the punch sphere re-rolled the chip chance after the ray won.
+enum CarveVerdict {
+	OK,
+	## One tier above the tool: slow chip when `allow_chip` is true for this strike.
+	CHIP,
+	## Two+ tiers above — unlock hardness; always toast.
+	REFUSE,
+	## Bedrock / arena shell / infection body — never yields, no toast.
+	IMMUNE,
+}
+
+## Chance a CHIP-tier cell yields when the strike has already committed to chipping.
+const CARVE_CHIP_CHANCE := 0.28
+
+
+## Classify `mat_id` against the player's hardness tier. No RNG — callers roll chip once.
+func _carve_verdict(mat_id: int) -> CarveVerdict:
+	if (
+		mat_id == VoxelMaterial.AIR
+		or mat_id == VoxelMaterial.WATER
+		or not VoxelMaterial.is_destructible(mat_id)
+	):
+		return CarveVerdict.IMMUNE
 	var need := int(VoxelMaterial.hardness(mat_id))
-	var have := _loadout.hardness_tier if _loadout != null else PlayerLoadout.HARDNESS_ROCK
+	if need == int(VoxelMaterial.Hardness.NEVER):
+		return CarveVerdict.IMMUNE
+	var have := _hardness_tier()
 	if need <= have:
-		return true
+		return CarveVerdict.OK
 	if need == have + 1:
-		## One tier above: slow chip, not a silent no-op.
-		return randf() < 0.28
-	return false
+		return CarveVerdict.CHIP
+	return CarveVerdict.REFUSE
+
+
+## True when this strike may destroy `mat_id`. `allow_chip` is the single per-strike roll.
+func _carve_allowed(mat_id: int, allow_chip: bool = false) -> bool:
+	match _carve_verdict(mat_id):
+		CarveVerdict.OK:
+			return true
+		CarveVerdict.CHIP:
+			return allow_chip
+		_:
+			return false
 
 
 func _hardness_tier() -> int:
 	return _loadout.hardness_tier if _loadout != null else PlayerLoadout.HARDNESS_ROCK
 
 
-## Brief refuse when the tool is two+ tiers below the target.
+## Toast when the tool cannot break this cell (chip miss or two+ tiers short).
 func _flash_hardness_refuse(mat_id: int) -> void:
 	var need := int(VoxelMaterial.hardness(mat_id))
 	print(
@@ -3590,6 +3686,11 @@ func _flash_hardness_refuse(mat_id: int) -> void:
 	)
 	if _loot_toast != null:
 		_loot_toast.show_message("Too hard")
+
+
+## One roll for the whole strike/blast — never re-roll per voxel.
+func _roll_carve_chip() -> bool:
+	return randf() < CARVE_CHIP_CHANCE
 
 
 func apply_voxel_strike(
@@ -3613,7 +3714,9 @@ func apply_voxel_strike(
 	var hit_vox := Vector3i(2147483647, 2147483647, 2147483647)
 	var found := false
 	var hit_gem := false
-	var have := _hardness_tier()
+	## Rolled at most once when the ray first meets a CHIP-tier cell.
+	var allow_chip := false
+	var chip_rolled := false
 	for i in range(1, steps + 1):
 		var p := local_origin + dir * (float(i) * step)
 		var v := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
@@ -3627,19 +3730,29 @@ func apply_voxel_strike(
 			found = true
 			hit_gem = true
 			break
-		var need := int(VoxelMaterial.hardness(id))
-		if need == int(VoxelMaterial.Hardness.NEVER) or not VoxelMaterial.is_destructible(id):
-			## Solid that never yields — stop the ray.
-			break
-		if need > have + 1:
-			_flash_hardness_refuse(id)
-			break
-		if need == have + 1 and randf() >= 0.28:
-			## Chip miss still stops the ray so we do not tunnel through.
-			break
-		hit_vox = v
-		found = true
-		break
+		var verdict := _carve_verdict(id)
+		match verdict:
+			CarveVerdict.IMMUNE:
+				## Solid that never yields — stop the ray.
+				break
+			CarveVerdict.REFUSE:
+				_flash_hardness_refuse(id)
+				break
+			CarveVerdict.CHIP:
+				if not chip_rolled:
+					allow_chip = _roll_carve_chip()
+					chip_rolled = true
+				if not allow_chip:
+					## Same toast as a full refuse — silent swallows looked like a dead blaster.
+					_flash_hardness_refuse(id)
+					break
+				hit_vox = v
+				found = true
+				break
+			CarveVerdict.OK:
+				hit_vox = v
+				found = true
+				break
 	if not found:
 		return false
 
@@ -3655,6 +3768,7 @@ func apply_voxel_strike(
 	var r2 := radius_vox * radius_vox
 	## Collect destructibles in the punch sphere, then clear. Cascade must use the TOP of the
 	## hole — starting from the bottom found only AIR (sphere already wiped the column).
+	## Reuse the ray's chip roll — never roll again per neighbour.
 	var detached: Array = []
 	var column_max_y: Dictionary = {}  # Vector2i → int
 	_brush.begin_edit()
@@ -3669,7 +3783,7 @@ func apply_voxel_strike(
 				if VoxelMaterial.is_gem(mat_id):
 					try_collect_gem_at(vox)
 					continue
-				if not _carve_allowed(mat_id):
+				if not _carve_allowed(mat_id, allow_chip):
 					continue
 				var carved := _brush.destroy_vox(vox)
 				for entry in carved:
@@ -4958,7 +5072,7 @@ func _carve_destructible_sphere(local_center: Vector3, radius_vox: float) -> voi
 
 
 func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float) -> int:
-	## Point carve only — skips infection body / meteor rock / bedrock / water.
+	## Point carve — same hardness gate as blaster / charged blast (used to ignore tier).
 	var removed := 0
 	var r_i := int(ceil(radius_vox)) + 1
 	var r2 := radius_vox * radius_vox
@@ -4966,6 +5080,14 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 	var cy := int(floor(local_center.y))
 	var cz := int(floor(local_center.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	var allow_chip := _roll_carve_chip()
+	var center_mat := _brush.get_vox(Vector3i(cx, cy, cz)) if _brush != null else VoxelMaterial.AIR
+	var center_verdict := _carve_verdict(center_mat)
+	if (
+		center_verdict == CarveVerdict.REFUSE
+		or (center_verdict == CarveVerdict.CHIP and not allow_chip)
+	):
+		_flash_hardness_refuse(center_mat)
 	_brush.begin_edit()
 	for z in range(cz - r_i, cz + r_i + 1):
 		for y in range(cy - r_i, cy + r_i + 1):
@@ -4975,7 +5097,7 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 					continue
 				var vox := Vector3i(x, y, z)
 				var mat_id := _brush.get_vox(vox)
-				if not VoxelMaterial.is_destructible(mat_id):
+				if not _carve_allowed(mat_id, allow_chip):
 					continue
 				removed += _brush.destroy_vox(vox).size()
 	_brush.end_edit()

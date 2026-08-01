@@ -87,6 +87,8 @@ const GROW_EPSILON := 0.05
 const DIG_OUT_MARGIN_CELLS := 1
 
 signal died(unit: UndeadUnit, was_giant: bool)
+## Emitted whenever the pool changes (hits, grow, player-minion rebinding).
+signal health_changed(current: float, maximum: float)
 
 var role: Role = Role.MAGE
 var state: State = State.IDLE
@@ -228,6 +230,37 @@ func is_hostile_to(other: UndeadUnit) -> bool:
 	if other == null or not is_instance_valid(other):
 		return false
 	return MonsterFactionScript.is_hostile(_faction, other.faction())
+
+
+## Player Minion power: same catalogue body, human allegiance, half size / HP / attack damage.
+func become_player_minion() -> void:
+	const MULT := 0.5
+	if not _alive:
+		push_error("UndeadUnit %s: become_player_minion on a dead body" % name)
+		assert(false, "UndeadUnit: dead minion")
+		return
+	if _entry == null or _combat == null:
+		push_error("UndeadUnit %s: become_player_minion before combat bind" % name)
+		assert(false, "UndeadUnit: no combat for minion")
+		return
+	_faction = int(MonsterFactionScript.Id.HUMAN)
+	var target_hp := _health_max * MULT
+	_combat.call("multiply_damage_mult", MULT)
+	character_scale = maxf(character_scale * MULT, 0.05)
+	var base := CreatureHealthScript.for_scale(_entry, character_scale)
+	if base <= 0.0:
+		push_error("UndeadUnit %s: minion scale has no health base" % name)
+		assert(false, "UndeadUnit: minion health base")
+		return
+	## Keep grow-pad HP math honest: hp_mult is whatever makes max HP == half the original pool
+	## at this scale (scale alone would only soft-reduce via GIANT_SCALE_EXPONENT).
+	_combat.call("set_hp_mult", target_hp / base)
+	_apply_scale()
+	if absf(_health_max - target_hp) > 0.05:
+		push_error(
+			"UndeadUnit %s: minion HP %.2f want %.2f"
+			% [name, _health_max, target_hp]
+		)
 
 
 func city() -> CityRoot:
@@ -398,6 +431,7 @@ func apply_damage_scaled(
 		log_node = tree.root.get_node_or_null("DamageLog")
 	if CreatureHealthScript.is_dead(_health):
 		_health = 0.0
+		health_changed.emit(_health, _health_max)
 		if log_node != null and log_node.has_method("record"):
 			log_node.call(
 				"record", attacker_label, body_name, source, taken, 0.0, _health_max, true
@@ -408,6 +442,7 @@ func apply_damage_scaled(
 		log_node.call(
 			"record", attacker_label, body_name, source, taken, _health, _health_max, false
 		)
+	health_changed.emit(_health, _health_max)
 	_update_health_bar()
 	_play_hit_reaction()
 	_promote_attacker_after_hit(source, attacker)
@@ -637,6 +672,7 @@ func _reset_health() -> void:
 		mult = float(_combat.call("hp_mult"))
 	_health_max = base * mult
 	_health = _health_max
+	health_changed.emit(_health, _health_max)
 
 
 ## Growing on a pad makes a body tougher as it happens rather than all at once when it finishes,
@@ -653,6 +689,7 @@ func _update_health_for_scale() -> void:
 	var kept := 1.0 if _health_max <= 0.0 else _health / _health_max
 	_health_max = next
 	_health = next * kept
+	health_changed.emit(_health, _health_max)
 
 
 func _apply_scale() -> void:
@@ -1015,8 +1052,10 @@ func _fire_orb(toward: Vector3) -> void:
 	var muzzle := global_position + Vector3(0.0, MUZZLE_BASE_M * _span_tall() * character_scale, 0.0)
 	## Prey aim point already includes chest height from LOS selection.
 	## Convert callback is invasion-only; arena mages still fire for player hit via city.
+	## Human-faction allies must not convert the player they fight beside.
+	var hits_player := MonsterFactionScript.is_hostile(_faction, HUMAN_FACTION)
 	if orb.has_method("launch"):
-		orb.call("launch", muzzle, toward, _invasion, _city)
+		orb.call("launch", muzzle, toward, _invasion, _city, hits_player)
 
 
 func _distance_to_player() -> float:

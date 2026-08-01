@@ -41,7 +41,10 @@ const TRAP_HOSTILE_SCORE := 25
 const BOOST_DURATION_SEC := 20.0
 const GROW_SHRINK_DURATION_SEC := 25.0
 const SHIELD_DRAIN_PER_SEC := 8.0
-const MINION_MAX := 2
+## One living ally at a time; recasting dismisses the previous body.
+const MINION_MAX := 1
+## Seconds a summoned ally stays before it is dismissed.
+const MINION_DURATION_SEC := 60.0
 
 
 class AbilityDef:
@@ -108,8 +111,8 @@ static func ensure_loaded() -> void:
 	)
 	_reg(
 		ID_MINION, "Minion", KIND_POWER,
-		{InventoryCatalog.ID_EMERALD: 4, InventoryCatalog.ID_QUARTZ: 12}, 15.0, true,
-		"Summon a follower"
+		{InventoryCatalog.ID_EMERALD: 4, InventoryCatalog.ID_QUARTZ: 12}, 40.0, true,
+		"Summon a half-strength ally (replaces the previous)"
 	)
 	_reg(
 		ID_DISTRICT_HOP, "District hop", KIND_POWER,

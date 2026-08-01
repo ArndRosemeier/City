@@ -14,13 +14,20 @@ var _director: Node
 ## CityRoot (or any host with projectile_obstacle_distance) for wall occlusion.
 var _obstacle_host: Node
 var _alive: bool = true
+## False for human-faction casters (player minions) — splash must not convert the ally player.
+var _hits_player: bool = true
 
 
 func launch(
-	from: Vector3, toward: Vector3, director: Node, obstacle_host: Node = null
+	from: Vector3,
+	toward: Vector3,
+	director: Node,
+	obstacle_host: Node = null,
+	hits_player: bool = true
 ) -> void:
 	_director = director
 	_obstacle_host = obstacle_host if obstacle_host != null else director
+	_hits_player = hits_player
 	global_position = from
 	var dir := toward - from
 	if dir.length_squared() < 0.0001:
@@ -97,6 +104,9 @@ func _physics_process(delta: float) -> void:
 			_die()
 			return
 	## Invasion director converts peds (+ player). Free / arena summons still kill the player.
+	## Ally (human-faction) orbs skip both — they only exist to pressure other monsters.
+	if not _hits_player:
+		return
 	if _director != null and _director.has_method("try_convert_ped_at"):
 		if bool(_director.call("try_convert_ped_at", global_position, CAPTURE_RADIUS_M)):
 			_die()

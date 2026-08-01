@@ -10,6 +10,7 @@ extends RefCounted
 
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
+const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const EyeLaserScript := preload("res://scripts/city/eye_laser_vfx.gd")
 const BlasterBoltScript := preload("res://scripts/city/blaster_bolt_vfx.gd")
 
@@ -71,6 +72,35 @@ func armor_mult() -> float:
 
 func hp_mult() -> float:
 	return float(_stats.get("hp_mult")) if _stats != null else 1.0
+
+
+## Multiply live attack damage (and the sync `attack_damage` table) by `mult`.
+func multiply_damage_mult(mult: float) -> void:
+	if _stats == null:
+		push_error("MonsterCombat.multiply_damage_mult: no stats")
+		assert(false, "MonsterCombat: no stats")
+		return
+	if mult <= 0.0:
+		push_error("MonsterCombat.multiply_damage_mult: non-positive %f" % mult)
+		assert(false, "MonsterCombat: bad damage mult")
+		return
+	var next := damage_mult() * mult
+	_stats.call("set_scalar", "damage_mult", next)
+	var attacks: PackedStringArray = _stats.get("attacks") as PackedStringArray
+	_stats.set("attack_damage", CombatTableScript.effective_attack_damages(attacks, next))
+
+
+## Replace hp_mult so `_reset_health` / grow pads keep a chosen max HP at the current scale.
+func set_hp_mult(value: float) -> void:
+	if _stats == null:
+		push_error("MonsterCombat.set_hp_mult: no stats")
+		assert(false, "MonsterCombat: no stats")
+		return
+	if value <= 0.0:
+		push_error("MonsterCombat.set_hp_mult: non-positive %f" % value)
+		assert(false, "MonsterCombat: bad hp mult")
+		return
+	_stats.call("set_scalar", "hp_mult", value)
 
 
 func speed_mult() -> float:
@@ -499,6 +529,8 @@ func _stop_charged_sfx() -> void:
 
 
 func _hurt_player(source: DamageSource.Id) -> void:
+	if not _hostile_to_player():
+		return
 	var city: Node = _unit.call("city") as Node
 	if city == null:
 		return
@@ -553,11 +585,23 @@ func _set_cooldown(attack_id: String) -> void:
 
 
 func _is_player_prey(prey: Vector3) -> bool:
+	if not _hostile_to_player():
+		return false
 	var city: Node = _unit.call("city") as Node
 	if city == null or not bool(city.call("is_player_alive")):
 		return false
 	var ppos: Vector3 = city.call("get_player_target_position") as Vector3
 	return _flat_distance(prey, ppos) <= 1.6
+
+
+## Same rule as hunting: a body only hurts the player when their factions differ.
+func _hostile_to_player() -> bool:
+	var city: Node = _unit.call("city") as Node
+	if city == null or not city.has_method("player_faction"):
+		return true
+	var mine: int = int(_unit.call("faction"))
+	var theirs: int = int(city.call("player_faction"))
+	return MonsterFactionScript.is_hostile(mine, theirs)
 
 
 func _flat_distance(a: Vector3, b: Vector3) -> float:

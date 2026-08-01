@@ -159,7 +159,32 @@ func _check_hardness_tiers() -> void:
 	loadout.mark_unlocked(AbilityRegistry.ID_HARDNESS_EXOTIC)
 	if loadout.hardness_tier < PlayerLoadout.HARDNESS_EXOTIC:
 		_fail("FAIL exotic unlock did not raise tier")
-	print("OK hardness material map and unlock tiers")
+
+	## One gate for blaster / blast / dig: Rock tool vs Reinforced is CHIP, vs Exotic is REFUSE.
+	## Chip misses must not silently swallow — callers toast via the same refuse path.
+	var city := TestCity.new()
+	add_child(city)
+	city._loadout = PlayerLoadoutScript.new() as PlayerLoadout
+	city._loadout.reset_adventure()
+	if int(city.call("_carve_verdict", VoxelMaterial.STONE)) != int(CityRoot.CarveVerdict.OK):
+		_fail("FAIL stone at Rock tier is not OK")
+	if int(city.call("_carve_verdict", VoxelMaterial.CONCRETE)) != int(CityRoot.CarveVerdict.CHIP):
+		_fail("FAIL concrete at Rock tier is not CHIP")
+	if int(city.call("_carve_verdict", VoxelMaterial.METEOR_ROCK)) != int(CityRoot.CarveVerdict.REFUSE):
+		_fail("FAIL meteor at Rock tier is not REFUSE")
+	if int(city.call("_carve_verdict", VoxelMaterial.BEDROCK)) != int(CityRoot.CarveVerdict.IMMUNE):
+		_fail("FAIL bedrock is not IMMUNE")
+	if bool(city.call("_carve_allowed", VoxelMaterial.CONCRETE, false)):
+		_fail("FAIL CHIP cell allowed without the strike chip roll")
+	if not bool(city.call("_carve_allowed", VoxelMaterial.CONCRETE, true)):
+		_fail("FAIL CHIP cell refused despite allow_chip")
+	if bool(city.call("_carve_allowed", VoxelMaterial.METEOR_ROCK, true)):
+		_fail("FAIL REFUSE cell allowed when chip is on")
+	city._loadout.mark_unlocked(AbilityRegistry.ID_HARDNESS_REINFORCED)
+	if int(city.call("_carve_verdict", VoxelMaterial.CONCRETE)) != int(CityRoot.CarveVerdict.OK):
+		_fail("FAIL concrete stays CHIP after Reinforced unlock")
+	city.queue_free()
+	print("OK hardness material map, unlock tiers, and unified carve gate")
 
 
 func _check_stomp_unbound() -> void:

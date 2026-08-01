@@ -96,6 +96,10 @@ func _ready() -> void:
 		_quit()
 		return
 	await _test_factions_and_mob_melee()
+	if _failed:
+		_quit()
+		return
+	await _test_player_minion_power()
 	_quit()
 
 
@@ -363,6 +367,145 @@ func _test_factions_and_mob_melee() -> void:
 	_despawn(undead_a)
 	_despawn(undead_b)
 	_despawn(beast)
+
+
+## Minion power: half-size human ally; recast dismisses the previous body; 60s lifetime + HUD.
+func _test_player_minion_power() -> void:
+	var walker := CityWalker.new()
+	walker.name = "MinionWalker"
+	add_child(walker)
+	walker.set_physics_process(false)
+	await get_tree().process_frame
+	_city.bind_player(walker)
+	walker.global_position = _w(Vector3i(60, 1, 20))
+	walker.set_energy_points(walker.energy_max)
+
+	var hud: CanvasLayer = PlayerHealthHud.new()
+	hud.name = "TestMinionHealthHud"
+	_city.add_child(hud)
+	await get_tree().process_frame
+	_city.set("_health_hud", hud)
+
+	var unit := _spawn(
+		UndeadUnit.Role.MINION, _w(Vector3i(62, 1, 20)), "kaykit/Skeleton_Warrior"
+	)
+	if unit == null:
+		walker.queue_free()
+		return
+	var full_hp := unit.health_max()
+	var full_dmg := float(unit.combat().call("damage_mult"))
+	var full_scale := unit.character_scale
+	unit.become_player_minion()
+	if unit.faction() != int(MonsterFaction.Id.HUMAN):
+		_fail("FAIL player minion faction is %d" % unit.faction())
+		_despawn(unit)
+		walker.queue_free()
+		return
+	if absf(unit.character_scale - full_scale * 0.5) > 0.001:
+		_fail("FAIL player minion scale %.3f want %.3f" % [unit.character_scale, full_scale * 0.5])
+		_despawn(unit)
+		walker.queue_free()
+		return
+	if absf(float(unit.combat().call("damage_mult")) - full_dmg * 0.5) > 0.001:
+		_fail(
+			"FAIL player minion damage_mult %.3f want %.3f"
+			% [float(unit.combat().call("damage_mult")), full_dmg * 0.5]
+		)
+		_despawn(unit)
+		walker.queue_free()
+		return
+	if absf(unit.health_max() - full_hp * 0.5) > HEALTH_EPS:
+		_fail("FAIL player minion HP %.2f want %.2f" % [unit.health_max(), full_hp * 0.5])
+		_despawn(unit)
+		walker.queue_free()
+		return
+	## Ally kit must not treat the human player as prey.
+	unit.set_combat_prey(walker.global_position)
+	var before_hp := walker.get_health()
+	if bool(unit.combat().call("try_attack_living", walker.global_position)):
+		## Melee may still "fire" at a point, but it must not drain the ally player.
+		pass
+	if walker.get_health() < before_hp - HEALTH_EPS:
+		_fail("FAIL human-faction minion damaged the player")
+		_despawn(unit)
+		walker.queue_free()
+		return
+	_despawn(unit)
+
+	if absf(AbilityRegistry.MINION_DURATION_SEC - 60.0) > 0.01:
+		_fail("FAIL MINION_DURATION_SEC is %.1f, want 60" % AbilityRegistry.MINION_DURATION_SEC)
+		walker.queue_free()
+		return
+
+	## Recast replaces: first body dies when the second spawns.
+	_city.call("_spawn_minion")
+	var first: UndeadUnit = _city.get("_player_minion") as UndeadUnit
+	if first == null or not is_instance_valid(first):
+		_fail("FAIL _spawn_minion did not track a living ally")
+		walker.queue_free()
+		return
+	if first.faction() != int(MonsterFaction.Id.HUMAN):
+		_fail("FAIL summoned minion faction is %d" % first.faction())
+		walker.queue_free()
+		return
+	if absf(first.character_scale - 0.5) > 0.001:
+		_fail("FAIL summoned minion scale %.3f want 0.5" % first.character_scale)
+		walker.queue_free()
+		return
+	if not bool(hud.call("minion_bar_visible")):
+		_fail("FAIL minion health bar stayed hidden after summon")
+		walker.queue_free()
+		return
+	if absf(float(hud.call("minion_fill_fraction")) - 1.0) > 0.01:
+		_fail(
+			"FAIL minion bar fill %.3f want 1.0" % float(hud.call("minion_fill_fraction"))
+		)
+		walker.queue_free()
+		return
+	var life_left := float(_city.get("_player_minion_life_left"))
+	if life_left < AbilityRegistry.MINION_DURATION_SEC - 0.05:
+		_fail("FAIL minion life left %.2f right after summon" % life_left)
+		walker.queue_free()
+		return
+	var first_id := first.get_instance_id()
+	walker.set_energy_points(walker.energy_max)
+	_city.call("_spawn_minion")
+	var second: UndeadUnit = _city.get("_player_minion") as UndeadUnit
+	if second == null or not is_instance_valid(second):
+		_fail("FAIL recast left no player minion")
+		walker.queue_free()
+		return
+	if second.get_instance_id() == first_id:
+		_fail("FAIL recast kept the same minion instance")
+		walker.queue_free()
+		return
+	await get_tree().process_frame
+	if is_instance_valid(first) and first.is_alive():
+		_fail("FAIL prior minion still alive after recast")
+		walker.queue_free()
+		return
+	if AbilityRegistry.MINION_MAX != 1:
+		_fail("FAIL MINION_MAX is %d, want 1" % AbilityRegistry.MINION_MAX)
+		walker.queue_free()
+		return
+	## Lifetime expiry dismisses the ally and hides the strip.
+	_city.set("_player_minion_life_left", 0.01)
+	_city.call("_tick_player_minion", 0.02)
+	await get_tree().process_frame
+	if _city.get("_player_minion") != null:
+		_fail("FAIL expired minion was not dismissed")
+		walker.queue_free()
+		return
+	if bool(hud.call("minion_bar_visible")):
+		_fail("FAIL minion bar still visible after expiry")
+		walker.queue_free()
+		return
+	print(
+		"player minion: human, half HP/dmg/scale, 60s life + HUD; recast replaced %d → %d"
+		% [first_id, second.get_instance_id()]
+	)
+	walker.queue_free()
+	hud.queue_free()
 
 
 ## Killing a body used to leave a freed Ref in the director list; blaster aim then crashed
