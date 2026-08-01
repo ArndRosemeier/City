@@ -24,6 +24,8 @@ const CASTLE := 13
 const FRACTAL := 14
 ## Colosseum reserve — no housing; built by ArenaComposer.
 const ARENA := 15
+## Monster Zoo reserve — no housing; fenced battlefield built by ZooComposer.
+const ZOO := 16
 
 
 static func is_road(tag: int) -> bool:
@@ -50,4 +52,5 @@ static func is_open_nature(tag: int) -> bool:
 		or tag == CASTLE
 		or tag == FRACTAL
 		or tag == ARENA
+		or tag == ZOO
 	)

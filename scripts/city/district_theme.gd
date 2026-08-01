@@ -27,7 +27,10 @@ const CASTLE := 8
 const FRACTAL := 9
 ## Outer-ring colosseum: edge stubs only, massive arena filling the tile.
 const ARENA := 10
-const COUNT := 11
+## Outer-ring monster zoo: fenced battlefield split into dice-rolled faction territories
+## that fight each other forever. Edge stubs only; one visitor gate.
+const ZOO := 11
+const COUNT := 12
 
 ## Districts within this many tiles of the world origin are always the high-rise core.
 const CORE_RING := 0
@@ -85,12 +88,12 @@ static func for_district(world_seed: int, coord: Vector2i) -> DistrictTheme:
 	elif ring == 2:
 		choices = PackedInt32Array([
 			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL,
-			GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA
+			GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA, ZOO
 		])
 	else:
 		choices = PackedInt32Array([
 			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GRAVEYARD,
-			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE, FRACTAL, ARENA,
+			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE, FRACTAL, ARENA, ZOO,
 		])
 	return make(choices[pick % choices.size()])
 
@@ -158,6 +161,9 @@ static func parse_theme_id(raw: String) -> int:
 		"arena": ARENA,
 		"colosseum": ARENA,
 		"coliseum": ARENA,
+		"zoo": ZOO,
+		"monsterzoo": ZOO,
+		"menagerie": ZOO,
 	}
 	if aliases.has(key):
 		return int(aliases[key])
@@ -525,6 +531,37 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.park_count = 0
 			t.road_density = 0.0
 			t.median_planting = false
+		ZOO:
+			t.display_name = "Monster Zoo"
+			t.blurb = "A fenced battlefield where six factions hold territory and never stop fighting."
+			t.name_pattern = "%s Menagerie"
+			## Old-town masonry: the houses scattered across the field are wrecked terraces,
+			## so the zoo borrows the terrace palette rather than inventing a second one.
+			t.wall_mats = PackedInt32Array([
+				VoxelMaterial.BRICK, VoxelMaterial.PLASTER, VoxelMaterial.BRICK_DARK
+			])
+			t.townhouse_mats = PackedInt32Array([
+				VoxelMaterial.BRICK, VoxelMaterial.PLASTER, VoxelMaterial.BRICK_DARK
+			])
+			t.roof_mats = PackedInt32Array([VoxelMaterial.ROOF_CLAY, VoxelMaterial.ROOF])
+			t.base_mat = VoxelMaterial.STONE
+			t.tower_shaft_mat = VoxelMaterial.ZOO_FENCE_FRAME
+			t.accent_mat = VoxelMaterial.ZOO_FENCE_LINE
+			t.band_mats = PackedInt32Array([VoxelMaterial.STONE, VoxelMaterial.BRICK_DARK])
+			t.sidewalk_mat = VoxelMaterial.GRAVEL
+			t.plaza_mat = VoxelMaterial.GRAVEL
+			t.plaza_inner_mat = VoxelMaterial.GRAVEL
+			t.intensity_bias = -0.5
+			t.height_scale = 0.0
+			t.tower_chance = 0.0
+			t.modern_chance = 0.0
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.0
+			t.cylinder_chance = 0.0
+			t.wild_chance = 0.0
+			t.park_count = 0
+			t.road_density = 0.0
+			t.median_planting = false
 		_:
 			push_error("DistrictTheme.make: unknown theme id %d" % theme_id)
 	return t
@@ -535,7 +572,7 @@ static func make(theme_id: int) -> DistrictTheme:
 ## through-street — signposts most of all — has nothing to line up with here.
 static func is_special_id(theme_id: int) -> bool:
 	match theme_id:
-		HILL, GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA:
+		HILL, GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA, ZOO:
 			return true
 		_:
 			return false

@@ -237,6 +237,35 @@ static func spawnable_ids() -> PackedStringArray:
 	return out
 
 
+## `spawn_ready` bodies of one faction string (`undead`, `beast`, …), sorted by id.
+## Empty is a content bug for any caller that spawns per faction, so it complains here
+## rather than letting a whole faction quietly stop showing up.
+static func spawnable_ids_for_faction(faction: String) -> PackedStringArray:
+	ensure_loaded()
+	var out := PackedStringArray()
+	for mid: String in spawnable_ids():
+		if faction_for(mid) == faction:
+			out.append(mid)
+	if out.is_empty():
+		push_error(
+			"CombatTable.spawnable_ids_for_faction: no spawn_ready body is '%s'" % faction
+		)
+	return out
+
+
+## Relative pick weight for random spawning. Bodies without the key weigh 1.
+static func spawn_weight_for(monster_id: String) -> float:
+	ensure_loaded()
+	if not _monsters.has(monster_id):
+		push_error("CombatTable.spawn_weight_for: unknown monster '%s'" % monster_id)
+		assert(false, "CombatTable: unknown monster for spawn weight")
+		return 0.0
+	var body: Dictionary = _monsters[monster_id]
+	if not body.has("spawn_weight"):
+		return 1.0
+	return _require_number(body["spawn_weight"], "monster '%s' spawn_weight" % monster_id)
+
+
 ## Cooldown a monster uses for `attack_id`. Prefers `monster_cooldown_s`, else `cooldown_s`.
 static func monster_attack_cooldown_s(attack_id: String) -> float:
 	var row := attack_def(attack_id)

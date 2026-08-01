@@ -12,6 +12,7 @@ const LakeComposerScript := preload("res://scripts/city/lake_composer.gd")
 const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
 const FractalComposerScript := preload("res://scripts/city/fractal_composer.gd")
 const ArenaComposerScript := preload("res://scripts/city/arena_composer.gd")
+const ZooComposerScript := preload("res://scripts/city/zoo_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CastleDoorwayScript := preload("res://scripts/city/castle_doorway.gd")
@@ -80,6 +81,7 @@ var _lake: LakeComposer
 var _castle: CastleComposer
 var _fractal: FractalComposer
 var _arena: ArenaComposer
+var _zoo: ZooComposer
 ## Survives end_generate so DistrictInstance can spawn MandelbrotArena.
 var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
@@ -112,6 +114,8 @@ var _tall_roofs: Array[Vector3i] = []
 var _castle_layout: CastleLayout = null
 ## Arena plan from the compose pass; outlives the composer for runtime boards/lifts.
 var _arena_layout: ArenaLayout = null
+## Zoo plan from the compose pass; outlives the composer for the forever-war controller.
+var _zoo_layout: ZooLayout = null
 ## World voxel origin of this district tile (local paint stays 0..size).
 var origin_vox: Vector3i = Vector3i.ZERO
 var district_coord: Vector2i = Vector2i.ZERO
@@ -184,6 +188,11 @@ func get_castle_layout() -> CastleLayout:
 ## The arena plan in *district-local* voxel coords, or null outside Arena districts.
 func get_arena_layout() -> ArenaLayout:
 	return _arena_layout
+
+
+## The zoo plan in *district-local* voxel coords, or null outside Monster Zoo districts.
+func get_zoo_layout() -> ZooLayout:
+	return _zoo_layout
 
 
 ## Daylight cave mouths (district-local XZ) from the hill compose pass.
@@ -319,6 +328,14 @@ func _setup_composers() -> void:
 	_arena.cell_size = cell_size
 	_arena_layout = null
 
+	_zoo = ZooComposerScript.new()
+	_zoo.brush = _brush
+	_zoo.rng = _rng
+	_zoo.ground_y = ground_thickness
+	_zoo.planner = _planner
+	_zoo.cell_size = cell_size
+	_zoo_layout = null
+
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
 	_grammar.rng = _rng
@@ -428,10 +445,11 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			_paint_street_cell(smin, smax, cx, cz, false)
 		LandUse.PLAZA:
 			_brush.fill_box(smin, smax, theme.plaza_mat)
-		LandUse.PARK, LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA:
+		LandUse.PARK, LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA, LandUse.ZOO:
 			## Lake tiles start as meadow; LakeComposer carves the basin into it. Castle
 			## tiles keep the meadow as the open field the fortress stands in. Arena
-			## tiles keep meadow under the colosseum approach.
+			## tiles keep meadow under the colosseum approach, and Zoo tiles keep it
+			## outside the fence — the battlefield inside is dirt the composer lays.
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		LandUse.FRACTAL:
 			## Meadow verge; FractalComposer stamps the centered glowing square.
@@ -464,7 +482,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA, LandUse.ZOO:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -480,7 +498,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA, LandUse.ZOO:
 			return
 		_:
 			pass
@@ -571,8 +589,20 @@ func decorate_open_spaces() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
-		or _fractal == null or _arena == null
+		or _fractal == null or _arena == null or _zoo == null
 	):
+		return
+	var lzoo := _planner.large_zoo
+	if lzoo.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 9)
+		var zmin := Vector3i(
+			lzoo.position.x * cell_size, ground_thickness, lzoo.position.y * cell_size
+		)
+		var zmax := Vector3i(
+			lzoo.end.x * cell_size, ground_thickness + 1, lzoo.end.y * cell_size
+		)
+		_zoo.compose(zmin, zmax)
+		_zoo_layout = _zoo.layout
 		return
 	var la := _planner.large_arena
 	if la.size.x > 0:
@@ -683,8 +713,22 @@ func decorate_open_spaces_far() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
-		or _fractal == null or _arena == null
+		or _fractal == null or _arena == null or _zoo == null
 	):
+		return
+	var lzoo := _planner.large_zoo
+	if lzoo.size.x > 0:
+		## Same feature seed as the near pass: the glowing ring has to stand in the same
+		## place on the walk-up as it did on the horizon.
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 9)
+		var zmin := Vector3i(
+			lzoo.position.x * cell_size, ground_thickness, lzoo.position.y * cell_size
+		)
+		var zmax := Vector3i(
+			lzoo.end.x * cell_size, ground_thickness + 1, lzoo.end.y * cell_size
+		)
+		_zoo.compose_far_sparse(zmin, zmax)
+		_zoo_layout = _zoo.layout
 		return
 	var la := _planner.large_arena
 	if la.size.x > 0:
@@ -793,6 +837,16 @@ func open_space_bounds() -> Array[AABB]:
 	var yh := 12.0
 	var ox := float(origin_vox.x)
 	var oz := float(origin_vox.z)
+	var lzoo := _planner.large_zoo
+	if lzoo.size.x > 0:
+		## Craters cut below the deck and the containment ring rises 8 m over it.
+		out.append(
+			AABB(
+				Vector3(ox + lzoo.position.x * cell_size, 0.0, oz + lzoo.position.y * cell_size),
+				Vector3(lzoo.size.x * cell_size, y0 + 40.0, lzoo.size.y * cell_size)
+			)
+		)
+		return out
 	var la := _planner.large_arena
 	if la.size.x > 0:
 		## Undercroft digs below the deck; the corner spires rise ~30 m over seating, so this
@@ -933,6 +987,7 @@ func end_generate() -> void:
 	_castle = null
 	_fractal = null
 	_arena = null
+	_zoo = null
 	_grammar = null
 
 
@@ -949,7 +1004,7 @@ func _paint_cell(cx: int, cz: int) -> void:
 			_paint_plaza_cell(min_v, max_v, cx, cz, _plaza)
 		LandUse.PARK:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
-		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA:
+		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA, LandUse.ZOO:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		LandUse.FRACTAL:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
@@ -1006,6 +1061,8 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 		spawn = _find_hill_cave_mouth_spawn(spawn_y, HEADROOM_VOX)
 	elif theme != null and theme.id == DistrictTheme.ARENA:
 		spawn = _find_arena_gate_spawn(spawn_y, HEADROOM_VOX)
+	elif theme != null and theme.id == DistrictTheme.ZOO:
+		spawn = _find_zoo_gate_spawn(spawn_y, HEADROOM_VOX)
 	elif theme != null and theme.id == DistrictTheme.CASTLE:
 		spawn = _find_castle_gate_spawn(HEADROOM_VOX)
 	if not is_finite(spawn.x):
@@ -1166,6 +1223,37 @@ func _find_arena_gate_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
 				spawn_y,
 				(float(origin_vox.z + z) + 0.5) * vs
 			)
+	return Vector3(INF, INF, INF)
+
+
+## Stand outside the zoo's one opening, facing the battlefield. The cloak gate is the first
+## thing in view, which is the point: you decide whether to be prey before you walk in.
+func _find_zoo_gate_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
+	if _zoo_layout == null or _zoo_layout.gate_rect.size.x <= 0:
+		return Vector3(INF, INF, INF)
+	var vs := voxel_size
+	var g := _zoo_layout.gate_rect
+	var gmid := Vector2(
+		float(g.position.x) + float(g.size.x) * 0.5,
+		float(g.position.y) + float(g.size.y) * 0.5
+	)
+	var inward := Vector2(float(_zoo_layout.gate_dir.x), float(_zoo_layout.gate_dir.y))
+	for dist in range(3, 24):
+		var x := int(round(gmid.x - inward.x * float(dist)))
+		var z := int(round(gmid.y - inward.y * float(dist)))
+		if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
+			continue
+		var mat := _brush.get_vox(Vector3i(x, ground_thickness, z))
+		if not VoxelMaterial.is_walkable_surface(mat):
+			continue
+		if not _has_spawn_headroom(x, z, headroom_vox):
+			continue
+		last_spawn_yaw = atan2(-inward.x, -inward.y)
+		return Vector3(
+			(float(origin_vox.x + x) + 0.5) * vs,
+			spawn_y,
+			(float(origin_vox.z + z) + 0.5) * vs
+		)
 	return Vector3(INF, INF, INF)
 
 

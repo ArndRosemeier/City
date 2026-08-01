@@ -7,7 +7,8 @@ recipe sites, and Mandelbrot spots.
 
 Combat validation uses tools/validate_combat_tables.py. Non-combat tabs use light
 schema checks in this module. The Monsters tab shows live EFFECTIVE STATS from
-combat_resolve (same rules as scripts/city/combat_table.gd). After combat changes,
+combat_resolve (same rules as scripts/city/combat_table.gd) and can run open-field
+1v1 duels via simulate_monster_duels (vs all / vs same tier). After combat changes,
 regenerate the sync golden with: python tools/sync_combat_resolve.py --write
 
 Run from repo root:
@@ -33,6 +34,7 @@ sys.path.insert(0, str(TOOLS))
 
 import gamedata_io as gd  # noqa: E402
 import gamedata_editor_panels as panels  # noqa: E402
+import simulate_monster_duels as duel_sim  # noqa: E402
 import validate_combat_tables as validate_mod  # noqa: E402
 
 GAMEDATA_PATH = gd.GAMEDATA_PATH
@@ -304,6 +306,11 @@ class GameDataEditor(tk.Tk):
         self._monster_list_modes: dict[str, tk.StringVar] = {}
         self._monster_list_checks: dict[str, Checklist] = {}
         self._monster_preview: tk.Text | None = None
+        self._monster_form_canvas: tk.Canvas | None = None
+        self._monster_paned: ttk.Panedwindow | None = None
+        self._monster_preview_wrap: ttk.Frame | None = None
+        self._monster_preview_expanded = False
+        self._monster_preview_toggle_btn: ttk.Button | None = None
         self._status = tk.StringVar(value="Ready")
 
         self._items_panel: panels.IdMapPanel | None = None
@@ -1279,38 +1286,83 @@ class GameDataEditor(tk.Tk):
     # --- Monsters tab ----------------------------------------------------------
 
     def _build_monsters_tab(self) -> None:
-        # Left: body list. Center: editable settings (scroll). Right: always-visible
-        # effective resolve panel (same rules as CombatTable / combat_resolve.py).
+        # Left: body list. Center: editable settings (scroll). Right: foldable
+        # effective-stats panel (hidden by default for horizontal room).
         outer = ttk.Panedwindow(self._tab_monsters, orient="horizontal")
         outer.pack(fill="both", expand=True)
+        self._monster_paned = outer
         left = ttk.Frame(outer, padding=4)
         center = ttk.Frame(outer, padding=4)
         preview_wrap = ttk.Frame(outer, padding=4)
+        self._monster_preview_wrap = preview_wrap
         outer.add(left, weight=1)
-        outer.add(center, weight=3)
-        outer.add(preview_wrap, weight=3)
+        outer.add(center, weight=4)
+        # preview_wrap is added only when expanded (folded by default).
 
         ttk.Label(left, text="Bodies (CreatureCatalog)").pack(anchor="w")
         self._monster_list = tk.Listbox(left, exportselection=False)
         self._monster_list.pack(fill="both", expand=True)
         self._monster_list.bind("<<ListboxSelect>>", self._on_monster_select)
 
+        # Scrollable form: vertical + horizontal so wide checklist rows don't clip.
         canvas = tk.Canvas(center, highlightthickness=0)
-        scroll = ttk.Scrollbar(center, orient="vertical", command=canvas.yview)
+        vscroll = ttk.Scrollbar(center, orient="vertical", command=canvas.yview)
+        hscroll = ttk.Scrollbar(center, orient="horizontal", command=canvas.xview)
         form = ttk.Frame(canvas)
-        form.bind(
-            "<Configure>",
-            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
         win = canvas.create_window((0, 0), window=form, anchor="nw")
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
-        scroll.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
+
+        def _sync_scrollregion(_event: object | None = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event: tk.Event) -> None:  # type: ignore[type-arg]
+            # Grow the form to at least the viewport width; allow wider content + h-scroll.
+            min_w = int(event.width)
+            req_w = int(form.winfo_reqwidth())
+            canvas.itemconfigure(win, width=max(min_w, req_w))
+            _sync_scrollregion()
+
+        form.bind("<Configure>", _sync_scrollregion)
+        canvas.configure(yscrollcommand=vscroll.set, xscrollcommand=hscroll.set)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event: tk.Event) -> None:  # type: ignore[type-arg]
+            delta = int(getattr(event, "delta", 0))
+            if delta == 0:
+                return
+            canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        center.rowconfigure(0, weight=1)
+        center.columnconfigure(0, weight=1)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vscroll.grid(row=0, column=1, sticky="ns")
+        hscroll.grid(row=1, column=0, sticky="ew")
+        self._monster_form_canvas = canvas
 
         ttk.Label(form, text="id").grid(row=0, column=0, sticky="w")
         self._monster_id_label = ttk.Label(form, text="")
         self._monster_id_label.grid(row=0, column=1, sticky="w")
+
+        duel_bar = ttk.Frame(form)
+        duel_bar.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self._monster_preview_toggle_btn = ttk.Button(
+            duel_bar,
+            text="Show effective stats",
+            command=self._toggle_monster_preview_pane,
+        )
+        self._monster_preview_toggle_btn.pack(side="left", padx=2)
+        ttk.Button(
+            duel_bar,
+            text="Duel vs all",
+            command=lambda: self._run_monster_duels(same_tier_only=False),
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            duel_bar,
+            text="Duel vs same tier",
+            command=lambda: self._run_monster_duels(same_tier_only=True),
+        ).pack(side="left", padx=2)
 
         ttk.Label(form, text="faction").grid(row=1, column=0, sticky="w", pady=2)
         faction_box = ttk.Combobox(
@@ -1351,7 +1403,7 @@ class GameDataEditor(tk.Tk):
         scalars = ttk.LabelFrame(
             form, text="Scalar overrides (blank = inherit merged max)", padding=4
         )
-        scalars.grid(row=7, column=0, columnspan=2, sticky="ew", pady=6)
+        scalars.grid(row=7, column=0, columnspan=3, sticky="ew", pady=6)
         for i, key in enumerate(SCALAR_KEYS):
             var = tk.StringVar()
             self._monster_scalar_vars[key] = var
@@ -1370,7 +1422,7 @@ class GameDataEditor(tk.Tk):
             ),
             padding=4,
         )
-        body_attacks.grid(row=8, column=0, columnspan=2, sticky="nsew", pady=6)
+        body_attacks.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=6)
         ttk.Label(
             body_attacks,
             text=(
@@ -1378,7 +1430,7 @@ class GameDataEditor(tk.Tk):
                 "(and any template specialty). Replace drops behaviour-derived attacks "
                 "and uses only the checked ids. Inherit = no body override."
             ),
-            wraplength=520,
+            wraplength=420,
         ).pack(anchor="w", pady=(0, 4))
         atk_modes = ttk.Frame(body_attacks)
         atk_modes.pack(anchor="w")
@@ -1410,15 +1462,16 @@ class GameDataEditor(tk.Tk):
             ),
             padding=4,
         )
-        lists.grid(row=9, column=0, columnspan=2, sticky="nsew", pady=6)
+        lists.grid(row=9, column=0, columnspan=3, sticky="nsew", pady=6)
+        # Stack vertically — side-by-side checklists overflow the center pane.
         other_list_keys = tuple(k for k in LIST_KEYS if k != "attacks")
         for i, key in enumerate(other_list_keys):
-            col = ttk.Frame(lists)
-            col.grid(row=0, column=i, sticky="nsew", padx=3)
-            ttk.Label(col, text=key).pack(anchor="w")
+            row = ttk.LabelFrame(lists, text=key, padding=4)
+            row.grid(row=i, column=0, sticky="ew", pady=4)
+            lists.columnconfigure(0, weight=1)
             mode = tk.StringVar(value="inherit")
             self._monster_list_modes[key] = mode
-            modes = ttk.Frame(col)
+            modes = ttk.Frame(row)
             modes.pack(anchor="w")
             for label, value in (
                 ("Inherit", "inherit"),
@@ -1431,14 +1484,15 @@ class GameDataEditor(tk.Tk):
                     value=value,
                     variable=mode,
                     command=self._on_monster_field_change,
-                ).pack(side="left")
-            check = Checklist(col, height=8)
+                ).pack(side="left", padx=(0, 8))
+            check = Checklist(row, height=6)
             check.pack(fill="both", expand=True)
             self._monster_list_checks[key] = check
             self._wire_checklist_monster_preview(check)
             mode.trace_add("write", self._on_monster_field_change)
 
         form.columnconfigure(1, weight=1)
+        form.columnconfigure(2, weight=0)
 
         preview = ttk.LabelFrame(
             preview_wrap,
@@ -1476,6 +1530,26 @@ class GameDataEditor(tk.Tk):
         )
         self._monster_preview.tag_configure("accent", foreground="#dcdcaa")
         self._monster_preview.tag_configure("muted", foreground="#808080")
+        self._monster_preview_expanded = False
+
+    def _toggle_monster_preview_pane(self) -> None:
+        paned = self._monster_paned
+        wrap = self._monster_preview_wrap
+        btn = self._monster_preview_toggle_btn
+        if paned is None or wrap is None or btn is None:
+            return
+        if self._monster_preview_expanded:
+            try:
+                paned.forget(wrap)
+            except tk.TclError:
+                pass
+            self._monster_preview_expanded = False
+            btn.configure(text="Show effective stats")
+        else:
+            paned.add(wrap, weight=3)
+            self._monster_preview_expanded = True
+            btn.configure(text="Hide effective stats")
+            self._update_monster_preview()
 
     def _on_monster_notes_modified(self, _event: object | None = None) -> None:
         assert self._monster_notes is not None
@@ -1882,6 +1956,83 @@ class GameDataEditor(tk.Tk):
             elif mode == "replace":
                 body[key] = selected
         return body
+
+    # --- duel sim (open-field 1v1) ---------------------------------------------
+
+    def _assemble_sim_root(self) -> dict[str, Any]:
+        """Current editor docs as a gamedata root (unsaved form values included)."""
+        self._flush_all_forms()
+        root = copy.deepcopy(self._gamedata_root) if self._gamedata_root else {}
+        root["schema_version"] = int(root.get("schema_version", gd.SCHEMA_VERSION))
+        root["attacks"] = copy.deepcopy(self.attacks_doc.get("attacks") or {})
+        root["behaviours"] = copy.deepcopy(
+            _behaviours_map(self.behaviours_doc)
+        )
+        root["templates"] = copy.deepcopy(self.table_doc.get("templates") or {})
+        root["monsters"] = copy.deepcopy(self.table_doc.get("monsters") or [])
+        return root
+
+    def _run_monster_duels(self, *, same_tier_only: bool) -> None:
+        if self._selected_monster is None:
+            messagebox.showinfo("Duel sim", "Select a monster first.", parent=self)
+            return
+        mid = self._selected_monster
+        try:
+            root = self._assemble_sim_root()
+            fighters, attack_rows = duel_sim.load_fighter_defs_from_root(root)
+            report = duel_sim.format_fighter_report(
+                mid,
+                fighters,
+                attack_rows,
+                duels=8,
+                same_tier_only=same_tier_only,
+            )
+        except (KeyError, TypeError, ValueError, RuntimeError, AssertionError) as exc:
+            messagebox.showerror("Duel sim failed", str(exc), parent=self)
+            return
+
+        scope = "same tier" if same_tier_only else "all others"
+        win = tk.Toplevel(self)
+        win.title(f"Duel sim — {mid} vs {scope}")
+        win.geometry("920x640")
+        win.minsize(640, 400)
+        bar = ttk.Frame(win, padding=6)
+        bar.pack(side="top", fill="x")
+        ttk.Label(
+            bar,
+            text=(
+                f"{mid}  |  open-field 1v1  |  8 duels/pair  |  "
+                "uses current (possibly unsaved) editor data"
+            ),
+        ).pack(side="left")
+        ttk.Button(bar, text="Close", command=win.destroy).pack(side="right")
+
+        text_frame = ttk.Frame(win, padding=(6, 0, 6, 6))
+        text_frame.pack(fill="both", expand=True)
+        text_frame.rowconfigure(0, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+        yscroll = ttk.Scrollbar(text_frame, orient="vertical")
+        xscroll = ttk.Scrollbar(text_frame, orient="horizontal")
+        out = tk.Text(
+            text_frame,
+            wrap="none",
+            font=("Consolas", 10),
+            background="#1e1e1e",
+            foreground="#e8e8e8",
+            insertbackground="#e8e8e8",
+            relief="flat",
+            padx=8,
+            pady=8,
+        )
+        out.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        yscroll.config(command=out.yview)
+        xscroll.config(command=out.xview)
+        out.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        out.insert("1.0", report)
+        out.configure(state="disabled")
+        self._status.set(f"Duel sim finished for {mid} ({scope})")
 
     # --- persistence / validation ---------------------------------------------
 
@@ -2493,6 +2644,24 @@ def _smoke_effective_attack_ids(preview: str) -> list[str]:
     return out
 
 
+def _smoke_assert_duel_buttons(app: GameDataEditor) -> None:
+    monsters = app.table_doc.get("monsters") or []
+    if not isinstance(monsters, list) or not monsters:
+        raise RuntimeError("smoke: no monsters loaded")
+    mid = str(monsters[0]["id"])
+    app._refresh_monster_list(mid)
+    app.update()
+    root = app._assemble_sim_root()
+    fighters, attack_rows = duel_sim.load_fighter_defs_from_root(root)
+    report = duel_sim.format_fighter_report(
+        mid, fighters, attack_rows, duels=2, same_tier_only=True
+    )
+    if "AGGREGATE" not in report:
+        raise RuntimeError("smoke: duel report missing AGGREGATE")
+    if mid not in report:
+        raise RuntimeError("smoke: duel report missing fighter id")
+
+
 def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
     assert app._items_panel is not None
     assert app._craft_panel is not None
@@ -2536,11 +2705,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             _smoke_assert_preview_live_refresh(app)
             _smoke_assert_noncombat_loaded(app)
+            _smoke_assert_duel_buttons(app)
         except (RuntimeError, KeyError, AssertionError, ValueError, TypeError) as exc:
             print(f"SMOKE_FAIL: {exc}", file=sys.stderr)
             app.destroy()
             return 1
-        print("SMOKE_OK: gamedata editor created; combat preview + non-combat tabs OK")
+        print(
+            "SMOKE_OK: gamedata editor created; combat preview + non-combat + duels OK"
+        )
         app.after(200, app.destroy)
     app.mainloop()
     return 0

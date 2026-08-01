@@ -183,6 +183,7 @@ func _summarize(coord: Vector2i, res: Dictionary) -> Dictionary:
 		"lake_cells": int(tags.get(LandUse.LAKE, 0)),
 		"castle_cells": int(tags.get(LandUse.CASTLE, 0)),
 		"arena_cells": int(tags.get(LandUse.ARENA, 0)),
+		"zoo_cells": int(tags.get(LandUse.ZOO, 0)),
 		"road_cells": int(tags.get(LandUse.ROAD, 0)) + int(tags.get(LandUse.AVENUE, 0)),
 		"lot_cells": (
 			int(tags.get(LandUse.CORE_LOT, 0))
@@ -300,6 +301,7 @@ func _check_parks(stats: Array) -> void:
 	var castles := 0
 	var fractals := 0
 	var arenas := 0
+	var zoos := 0
 	for s: Variant in stats:
 		var d: Dictionary = s
 		var m: Dictionary = d["walls"]
@@ -393,6 +395,19 @@ func _check_parks(stats: Array) -> void:
 				_fail("FAIL %s Arena district has no ARENA_SHELL mass" % d["coord"])
 				return
 			continue
+		if int(d["theme_id"]) == DistrictTheme.ZOO:
+			zoos += 1
+			if int(d["lot_cells"]) > 0:
+				_fail("FAIL %s Zoo district still has housing lots" % d["coord"])
+				return
+			if int(d["zoo_cells"]) <= 0:
+				_fail("FAIL %s Zoo district has no zoo cells" % d["coord"])
+				return
+			## The containment ring is the whole point — an unfenced zoo is a meadow.
+			if int(m[VoxelMaterial.ZOO_FENCE_LINE]) <= 0:
+				_fail("FAIL %s Zoo district has no energy line" % d["coord"])
+				return
+			continue
 		urban += 1
 		if int(m[VoxelMaterial.GRAVEL]) <= 0:
 			_fail("FAIL %s (%s) has no park paths" % [d["coord"], d["theme"]])
@@ -408,9 +423,9 @@ func _check_parks(stats: Array) -> void:
 	print(
 		(
 			"OK open space: parks on %d tiles (ponds %d), hills on %d, graveyards on %d,"
-			+ " lakes on %d, castles on %d, fractals on %d, arenas on %d"
+			+ " lakes on %d, castles on %d, fractals on %d, arenas on %d, zoos on %d"
 		)
-		% [urban, ponds, hills, graveyards, basins, castles, fractals, arenas]
+		% [urban, ponds, hills, graveyards, basins, castles, fractals, arenas, zoos]
 	)
 
 

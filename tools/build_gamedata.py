@@ -171,6 +171,7 @@ def _district_gems() -> dict:
             "graveyard": 22,
             "fractal": 20,
             "arena": 15,
+            "zoo": 12,
         },
         "rarity_weights": {
             "gem_quartz": 48,
@@ -364,6 +365,18 @@ def _recipe_sites() -> dict:
     }
 
 
+def _zoo() -> dict:
+    """Monster Zoo forever-war tuning: the war runs on these, not on player input."""
+    return {
+        "cloak_duration_sec": 120.0,
+        "plate_damage_interval_sec": 1.0,
+        "base_spawn_interval_sec": 14.0,
+        "spawn_pressure_k": 0.9,
+        "per_territory_cap": 2,
+        "district_alive_cap": 34,
+    }
+
+
 def main() -> int:
     if LEGACY_ATTACKS.is_file():
         attacks = _load(LEGACY_ATTACKS)["attacks"]
@@ -391,6 +404,7 @@ def main() -> int:
         "craft_recipes": _craft_recipes(),
         "build_recipes": _dump_build_recipes(),
         "district_gems": _district_gems(),
+        "zoo": _zoo(),
         "abilities": abilities,
         "ability_constants": ability_constants,
         "chest_loot": _chest_loot(),

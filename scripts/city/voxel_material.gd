@@ -121,12 +121,28 @@ const BRANCH_X := 254
 const BRANCH_Z := 255
 ## Darker underside foliage for landmark canopy depth (past the old 256 soft cap).
 const LEAVES_DARK := 256
+## Monster Zoo containment ring: dark structural posts, the red energy line inset in
+## them, and the tinted pane beside the line. All three are NEVER hardness — the zoo
+## is a quarantine, and a fence a blaster can open is not one.
+const ZOO_FENCE_FRAME := 257
+const ZOO_FENCE_LINE := 258
+const ZOO_FENCE_GLASS := 259
+## Home-turf plates, one per monster faction. Walkable ground that burns anyone whose
+## faction does not own it; the tint is the only way to read whose ground you are on.
+const ZOO_TURF_UNDEAD := 260
+const ZOO_TURF_INFERNAL := 261
+const ZOO_TURF_HORDE := 262
+const ZOO_TURF_BEAST := 263
+const ZOO_TURF_GROVE := 264
+const ZOO_TURF_ARCANE := 265
+const ZOO_TURF_FIRST := ZOO_TURF_UNDEAD
+const ZOO_TURF_LAST := ZOO_TURF_ARCANE
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
 ## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-const COUNT := 257
+const COUNT := 266
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -189,6 +205,7 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == GLASS_LIT
 		or id == TIMBER
 		or is_fractal_band(id)
+		or is_zoo_turf(id)
 	)
 
 
@@ -199,7 +216,7 @@ static func is_ground_surface(id: int) -> bool:
 		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL, FRACTAL_GLOW, FRACTAL_INTERIOR:
 			return true
 		_:
-			return false
+			return is_zoo_turf(id)
 
 
 ## Stone fill under the street deck — diggable, not pavement.
@@ -214,7 +231,7 @@ static func is_self_supporting_terrain(id: int) -> bool:
 		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR:
 			return true
 		_:
-			return is_fractal_band(id)
+			return is_fractal_band(id) or is_zoo_turf(id)
 
 
 static func is_building_fabric(id: int) -> bool:
@@ -225,7 +242,7 @@ static func is_building_fabric(id: int) -> bool:
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
 		_:
-			if is_fractal_band(id):
+			if is_fractal_band(id) or is_zoo_turf(id):
 				return false
 			return id > AIR and id < COUNT
 
@@ -286,6 +303,9 @@ static func hardness(id: int) -> Hardness:
 		return Hardness.NEVER
 	if id == BEDROCK or id == ARENA_SHELL or id == LOS_VEIL:
 		return Hardness.NEVER
+	if is_zoo_fence(id):
+		## Quarantine ring. A containment fence the player can cut is not containment.
+		return Hardness.NEVER
 	if is_gem(id):
 		## Collected, not carved — treated as never for carve checks.
 		return Hardness.NEVER
@@ -336,6 +356,32 @@ static func is_infection(id: int) -> bool:
 
 static func is_fractal_band(id: int) -> bool:
 	return id >= FRACTAL_BAND_FIRST and id <= FRACTAL_BAND_LAST
+
+
+## Containment ring voxels (posts, energy line, pane). None of them ever yield.
+static func is_zoo_fence(id: int) -> bool:
+	return id == ZOO_FENCE_FRAME or id == ZOO_FENCE_LINE or id == ZOO_FENCE_GLASS
+
+
+static func is_zoo_turf(id: int) -> bool:
+	return id >= ZOO_TURF_FIRST and id <= ZOO_TURF_LAST
+
+
+## Plate material for a faction index (MonsterFaction.Id order: undead … arcane).
+## HUMAN and SPECTATOR own no ground, so they have no plate.
+static func zoo_turf_for_faction_index(index: int) -> int:
+	if index < 0 or index > ZOO_TURF_LAST - ZOO_TURF_FIRST:
+		push_error("VoxelMaterial.zoo_turf_for_faction_index: no plate for faction %d" % index)
+		assert(false, "VoxelMaterial: faction owns no zoo turf")
+		return ZOO_TURF_UNDEAD
+	return ZOO_TURF_FIRST + index
+
+
+## Faction index that owns this plate, or -1 when `id` is not a plate.
+static func zoo_turf_faction_index(id: int) -> int:
+	if not is_zoo_turf(id):
+		return -1
+	return id - ZOO_TURF_FIRST
 
 
 static func fractal_band(index: int) -> int:
@@ -515,6 +561,25 @@ static func color(id: int) -> Color:
 		FRACTAL_INTERIOR:
 			## Mandelbrot set body — near-black, not the glowing deck.
 			return Color(0.04, 0.04, 0.06)
+		ZOO_FENCE_FRAME:
+			return Color(0.14, 0.13, 0.15)
+		ZOO_FENCE_LINE:
+			## The one saturated red in the district — the containment line reads at range.
+			return Color(0.95, 0.12, 0.16)
+		ZOO_FENCE_GLASS:
+			return Color(0.72, 0.24, 0.26, 0.36)
+		ZOO_TURF_UNDEAD:
+			return Color(0.36, 0.42, 0.40)
+		ZOO_TURF_INFERNAL:
+			return Color(0.52, 0.24, 0.18)
+		ZOO_TURF_HORDE:
+			return Color(0.46, 0.38, 0.20)
+		ZOO_TURF_BEAST:
+			return Color(0.34, 0.30, 0.22)
+		ZOO_TURF_GROVE:
+			return Color(0.26, 0.42, 0.26)
+		ZOO_TURF_ARCANE:
+			return Color(0.32, 0.28, 0.50)
 		_:
 			if is_room_prop(id):
 				return Color(0.55, 0.4, 0.26)

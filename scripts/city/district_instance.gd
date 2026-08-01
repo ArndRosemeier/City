@@ -14,6 +14,7 @@ const RecipePickupPlacerScript := preload("res://scripts/city/recipe_pickup_plac
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
+const ZooControllerScript := preload("res://scripts/city/zoo_controller.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -47,6 +48,8 @@ var castle_doors: CastleDoorPlacer
 var mandelbrot_arena: Node3D
 ## Summon boards + lifts + pit wipe. Null outside Arena districts.
 var arena_controller: ArenaController
+## Forever-war spawners + turf hazards + cloak gate. Null outside Monster Zoo districts.
+var zoo_controller: ZooController
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -106,12 +109,17 @@ func live_brush() -> CityBrush:
 	return _live_brush
 
 
-## False on Fractal / Arena — spectacle plazas stay empty of pedestrians, cars and lamps.
+## False on Fractal / Arena / Zoo — spectacle tiles stay empty of pedestrians, cars and lamps.
+## The zoo's only auto actors are the monsters its own stations keep pouring onto the field.
 func allows_auto_actors() -> bool:
 	if generator == null or generator.theme == null:
 		return true
 	var tid := generator.theme.id
-	return tid != DistrictTheme.FRACTAL and tid != DistrictTheme.ARENA
+	return (
+		tid != DistrictTheme.FRACTAL
+		and tid != DistrictTheme.ARENA
+		and tid != DistrictTheme.ZOO
+	)
 
 
 func configure(
@@ -260,6 +268,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	if arena_controller != null and is_instance_valid(arena_controller):
 		arena_controller.queue_free()
 	arena_controller = null
+	_clear_zoo_controller()
 	_topology = null
 	generator = null
 	_terrain_ref = terrain
@@ -311,6 +320,7 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	if arena_controller != null and is_instance_valid(arena_controller):
 		arena_controller.queue_free()
 	arena_controller = null
+	_clear_zoo_controller()
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
 		building_lod.queue_free()
@@ -560,6 +570,11 @@ func _stamp_detail_async() -> void:
 	CityProfiler.end("stream_arena_ui")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_zoo_war")
+	_spawn_zoo_controller(generator)
+	CityProfiler.end("stream_zoo_war")
+	await get_tree().process_frame
+
 	CityProfiler.begin("stream_impostors")
 	building_lod = BuildingImpostorLodScript.new()
 	building_lod.name = "BuildingImpostors"
@@ -777,6 +792,42 @@ func _spawn_arena_controller(gen: DistrictGenerator) -> void:
 		Callable(city, "alive_undead_units"),
 		Callable(city, "despawn_undead_unit")
 	)
+
+
+## Start this tile's forever war. Nothing here waits on the player: the stations begin
+## delivering bodies as soon as the district is live, and stop when it streams out.
+func _spawn_zoo_controller(gen: DistrictGenerator) -> void:
+	if gen == null:
+		return
+	var layout: ZooLayout = gen.get_zoo_layout()
+	if layout == null:
+		return
+	_clear_zoo_controller()
+	var city := _find_city_root()
+	if city == null:
+		push_error("DistrictInstance: the Monster Zoo needs CityRoot to run its war")
+		return
+	zoo_controller = ZooControllerScript.new() as ZooController
+	add_child(zoo_controller)
+	zoo_controller.setup(
+		layout,
+		origin_vox,
+		_voxel_size,
+		_dseed,
+		city,
+		Callable(self, "live_brush"),
+		Callable(city, "spawn_monster_at"),
+		Callable(city, "alive_undead_units"),
+		Callable(city, "despawn_undead_unit")
+	)
+
+
+## The war does not outlive its district: unloading takes the cloak and the bodies with it.
+func _clear_zoo_controller() -> void:
+	if zoo_controller != null and is_instance_valid(zoo_controller):
+		zoo_controller.shutdown()
+		zoo_controller.queue_free()
+	zoo_controller = null
 
 
 func _find_city_root() -> CityRoot:

@@ -67,8 +67,25 @@ pub const BRANCH_X: i32 = 254;
 pub const BRANCH_Z: i32 = 255;
 #[allow(dead_code)]
 pub const LEAVES_DARK: i32 = 256;
+/// Monster Zoo containment ring. Never yields, like the arena shell.
+pub const ZOO_FENCE_FRAME: i32 = 257;
+pub const ZOO_FENCE_LINE: i32 = 258;
+pub const ZOO_FENCE_GLASS: i32 = 259;
+/// Faction home-turf plates (undead … arcane). Soft ground: a blast craters them.
+pub const ZOO_TURF_FIRST: i32 = 260;
+pub const ZOO_TURF_LAST: i32 = 265;
 /// Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-pub const COUNT: i32 = 257;
+pub const COUNT: i32 = 266;
+
+#[inline]
+pub fn is_zoo_fence(id: i32) -> bool {
+    id == ZOO_FENCE_FRAME || id == ZOO_FENCE_LINE || id == ZOO_FENCE_GLASS
+}
+
+#[inline]
+pub fn is_zoo_turf(id: i32) -> bool {
+    id >= ZOO_TURF_FIRST && id <= ZOO_TURF_LAST
+}
 
 #[inline]
 pub fn is_wood(id: i32) -> bool {
@@ -100,6 +117,9 @@ pub fn is_destructible(id: i32) -> bool {
     if id == AIR || id == BEDROCK || id == WATER || id == ARENA_SHELL || id == LOS_VEIL {
         return false;
     }
+    if is_zoo_fence(id) {
+        return false;
+    }
     if id == METEOR_ROCK || id == INFECTION || is_gem(id) {
         return false;
     }
@@ -114,6 +134,7 @@ pub fn is_self_supporting_terrain(id: i32) -> bool {
         DIRT | GRAVEL | PARK | GRAVE_SOIL | GRAVE_PATH | FRACTAL_GLOW
     ) || (id >= FRACTAL_BAND_0 && id <= FRACTAL_BAND_15)
         || id == FRACTAL_INTERIOR
+        || is_zoo_turf(id)
 }
 
 /// Destructible voxels cascade unless they are soft self-supporting terrain.

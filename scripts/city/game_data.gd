@@ -22,6 +22,7 @@ const THEME_NAME_TO_ID: Dictionary = {
 	"castle": 8,
 	"fractal": 9,
 	"arena": 10,
+	"zoo": 11,
 }
 
 static var _loaded: bool = false
@@ -201,6 +202,31 @@ static func abilities() -> Dictionary:
 
 static func ability_constants() -> Dictionary:
 	return _section("ability_constants")
+
+
+# --- Monster Zoo ------------------------------------------------------------
+
+## Forever-war tuning: cloak length, plate damage cadence, spawn pressure and caps.
+static func zoo() -> Dictionary:
+	return _section("zoo")
+
+
+static func zoo_float(key: String) -> float:
+	var sec := zoo()
+	if not sec.has(key):
+		push_error("GameData.zoo_float: missing 'zoo.%s'" % key)
+		assert(false, "GameData: missing zoo constant")
+		return 0.0
+	return float(sec[key])
+
+
+static func zoo_int(key: String) -> int:
+	var sec := zoo()
+	if not sec.has(key):
+		push_error("GameData.zoo_int: missing 'zoo.%s'" % key)
+		assert(false, "GameData: missing zoo constant")
+		return 0
+	return int(sec[key])
 
 
 static func ability(id: String) -> Dictionary:

@@ -14,6 +14,7 @@ const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd"
 const PlayerHealthHudScript := preload("res://scripts/city/player_health_hud.gd")
 const PlayerBoostHudScript := preload("res://scripts/city/player_boost_hud.gd")
 const PlayerCompassHudScript := preload("res://scripts/city/player_compass_hud.gd")
+const ZooCloakHudScript := preload("res://scripts/city/zoo_cloak_hud.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
@@ -109,6 +110,8 @@ var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
 var _boost_hud: CanvasLayer
 var _compass_hud: PlayerCompassHud
+## Spectator cloak countdown. Only a Monster Zoo's controller ever puts it on screen.
+var _zoo_cloak_hud: CanvasLayer
 var _debris_root: Node3D
 var _cascade: NativeCascadeDebris
 var _gem_lights: GemLightDirector
@@ -596,6 +599,10 @@ func _build_hud() -> void:
 	_compass_hud = PlayerCompassHudScript.new() as PlayerCompassHud
 	_compass_hud.name = "PlayerCompassHud"
 	add_child(_compass_hud)
+
+	_zoo_cloak_hud = ZooCloakHudScript.new() as CanvasLayer
+	_zoo_cloak_hud.name = "ZooCloakHud"
+	add_child(_zoo_cloak_hud)
 
 	_undead_hud = UndeadInvasionHudScript.new()
 	_undead_hud.name = "UndeadInvasionHud"
@@ -2245,6 +2252,25 @@ func player_faction() -> int:
 	return MonsterFactionScript.Id.HUMAN
 
 
+## Put the player on another side. The Monster Zoo's spectator cloak is the only caller,
+## and it always hands HUMAN back when the cloak lapses.
+func set_player_combat_faction(id: int) -> void:
+	if _walker == null or not is_instance_valid(_walker):
+		return
+	_walker.set_combat_faction(id)
+
+
+## Spectator cloak countdown, driven by whichever Monster Zoo granted the cloak.
+func show_zoo_cloak(seconds_left: float) -> void:
+	if _zoo_cloak_hud != null and is_instance_valid(_zoo_cloak_hud):
+		_zoo_cloak_hud.call("show_countdown", seconds_left)
+
+
+func hide_zoo_cloak() -> void:
+	if _zoo_cloak_hud != null and is_instance_valid(_zoo_cloak_hud):
+		_zoo_cloak_hud.call("hide_countdown")
+
+
 ## Pedestrians are civilians, not authored bodies: they are human, all of them.
 func ped_faction() -> int:
 	return MonsterFactionScript.Id.HUMAN
@@ -2907,6 +2933,8 @@ func _regenerate() -> void:
 		_health_hud.call("clear_display")
 	if _boost_hud != null and is_instance_valid(_boost_hud):
 		_boost_hud.call("clear_display")
+	if _zoo_cloak_hud != null and is_instance_valid(_zoo_cloak_hud):
+		_zoo_cloak_hud.call("hide_countdown")
 	if _compass_hud != null and is_instance_valid(_compass_hud):
 		_compass_hud.clear_display()
 	if _undead_hud != null and is_instance_valid(_undead_hud):

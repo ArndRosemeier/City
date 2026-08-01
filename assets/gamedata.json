@@ -37393,7 +37393,8 @@
       "lake": 25,
       "graveyard": 22,
       "fractal": 20,
-      "arena": 15
+      "arena": 15,
+      "zoo": 12
     },
     "rarity_weights": {
       "gem_quartz": 48,
@@ -37403,6 +37404,14 @@
       "gem_emerald": 4,
       "gem_diamond": 2
     }
+  },
+  "zoo": {
+    "cloak_duration_sec": 120.0,
+    "plate_damage_interval_sec": 1.0,
+    "base_spawn_interval_sec": 14.0,
+    "spawn_pressure_k": 0.9,
+    "per_territory_cap": 2,
+    "district_alive_cap": 34
   },
   "abilities": {
     "blaster": {

@@ -46,6 +46,10 @@ enum Id {
 	MONSTER_BLASTER_MOB,
 	MONSTER_STOMP_MOB,
 	MONSTER_BLAST_MOB,
+	## Monster Zoo home turf burning whoever is standing on it and does not own it. No
+	## attacker exists — the ground did it — so nothing retaliates against a plate.
+	ZOO_PLATE,
+	ZOO_PLATE_MOB,
 }
 
 
@@ -68,6 +72,8 @@ static func all() -> Array[Id]:
 		Id.MONSTER_BLASTER_MOB,
 		Id.MONSTER_STOMP_MOB,
 		Id.MONSTER_BLAST_MOB,
+		Id.ZOO_PLATE,
+		Id.ZOO_PLATE_MOB,
 	]
 
 
@@ -115,6 +121,13 @@ static func amount(id: Id) -> float:
 				_attack_vs_player("charged_blast") if id == Id.MONSTER_BLAST
 				else _attack_vs_mob("charged_blast")
 			)
+		## Priced per tick, and the tick is about a second: standing on the wrong faction's
+		## core costs the player a fifth of their health a minute and kills a skeleton that
+		## refuses to move off it. Painful to loiter on, survivable to cross.
+		Id.ZOO_PLATE:
+			return 4.0
+		Id.ZOO_PLATE_MOB:
+			return 6.0
 	push_error("DamageSource: no amount defined for id %d" % int(id))
 	return 0.0
 
@@ -133,9 +146,9 @@ static func target(id: Id) -> Target:
 	match id:
 		Id.PLAYER_MELEE, Id.PLAYER_LASER, Id.PLAYER_BLASTER, Id.PLAYER_STOMP, Id.PLAYER_BLAST:
 			return Target.CREATURE
-		Id.MONSTER_MELEE_MOB, Id.MONSTER_LASER_MOB, Id.MONSTER_BLASTER_MOB, Id.MONSTER_STOMP_MOB, Id.MONSTER_BLAST_MOB:
+		Id.MONSTER_MELEE_MOB, Id.MONSTER_LASER_MOB, Id.MONSTER_BLASTER_MOB, Id.MONSTER_STOMP_MOB, Id.MONSTER_BLAST_MOB, Id.ZOO_PLATE_MOB:
 			return Target.CREATURE
-		Id.UNDEAD_ORB, Id.GIANT_DEBRIS, Id.MONSTER_MELEE, Id.MONSTER_LASER, Id.MONSTER_BLASTER, Id.MONSTER_STOMP, Id.MONSTER_BLAST:
+		Id.UNDEAD_ORB, Id.GIANT_DEBRIS, Id.MONSTER_MELEE, Id.MONSTER_LASER, Id.MONSTER_BLASTER, Id.MONSTER_STOMP, Id.MONSTER_BLAST, Id.ZOO_PLATE:
 			return Target.PLAYER
 	push_error("DamageSource: no target defined for id %d" % int(id))
 	return Target.CREATURE
@@ -187,6 +200,10 @@ static func source_name(id: Id) -> String:
 			return "monster stomp (mob)"
 		Id.MONSTER_BLAST_MOB:
 			return "monster charged blast (mob)"
+		Id.ZOO_PLATE:
+			return "zoo home turf"
+		Id.ZOO_PLATE_MOB:
+			return "zoo home turf (mob)"
 	push_error("DamageSource: no name for id %d" % int(id))
 	return "?"
 
@@ -208,7 +225,9 @@ static func death_reason(id: Id) -> String:
 			return "Crushed under a monster's stomp"
 		Id.MONSTER_BLAST:
 			return "Caught in a monster's charged blast"
-		Id.PLAYER_MELEE, Id.PLAYER_LASER, Id.PLAYER_BLASTER, Id.PLAYER_STOMP, Id.PLAYER_BLAST, Id.MONSTER_MELEE_MOB, Id.MONSTER_LASER_MOB, Id.MONSTER_BLASTER_MOB, Id.MONSTER_STOMP_MOB, Id.MONSTER_BLAST_MOB:
+		Id.ZOO_PLATE:
+			return "Burned down on hostile ground in the Monster Zoo"
+		Id.PLAYER_MELEE, Id.PLAYER_LASER, Id.PLAYER_BLASTER, Id.PLAYER_STOMP, Id.PLAYER_BLAST, Id.MONSTER_MELEE_MOB, Id.MONSTER_LASER_MOB, Id.MONSTER_BLASTER_MOB, Id.MONSTER_STOMP_MOB, Id.MONSTER_BLAST_MOB, Id.ZOO_PLATE_MOB:
 			push_error(
 				"DamageSource: %s cannot kill the player, so it has no death reason"
 				% source_name(id)

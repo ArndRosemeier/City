@@ -55,7 +55,7 @@ static func has_bespoke_shader(id: int) -> bool:
 	if VoxelMaterial.is_gem(id):
 		return true
 	match id:
-		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY:
+		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE:
 			return true
 		_:
 			return false
@@ -506,6 +506,41 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.weathering = 0.6
 			s.grime = 0.5
 			s.streaks = 0.35
+		VoxelMaterial.ZOO_FENCE_FRAME:
+			## Near-black painted steel posts — the line and the pane are the colour, the
+			## frame is only the thing they are strung on.
+			s.albedo_file = "wrought_iron.jpg"
+			s.normal_file = "wrought_iron_normal.jpg"
+			s.tile_meters = Vector2(0.5, 0.5)
+			s.tint = Color(0.58, 0.56, 0.62, 1.0)
+			s.roughness = 0.62
+			s.metallic = 0.25
+			s.normal_strength = 1.0
+			s.weathering = 0.4
+			s.grime = 0.45
+			s.grime_height = 6.0
+			s.streaks = 0.35
+		VoxelMaterial.ZOO_FENCE_GLASS:
+			## Dark red quarantine pane. Kept opaque enough that daylight does not bleach
+			## it into a white wall; the emissive line bands carry the glow.
+			s.kind = Kind.GLASS
+			s.albedo_file = "glass.jpg"
+			s.tile_meters = Vector2(4.0, 4.0)
+			s.tint = Color(0.55, 0.08, 0.10, 0.55)
+			s.roughness = 0.18
+			s.metallic = 0.05
+		VoxelMaterial.ZOO_TURF_UNDEAD:
+			_zoo_turf_spec(s, Color(0.62, 0.72, 0.70, 1.0))
+		VoxelMaterial.ZOO_TURF_INFERNAL:
+			_zoo_turf_spec(s, Color(0.92, 0.48, 0.36, 1.0))
+		VoxelMaterial.ZOO_TURF_HORDE:
+			_zoo_turf_spec(s, Color(0.86, 0.72, 0.38, 1.0))
+		VoxelMaterial.ZOO_TURF_BEAST:
+			_zoo_turf_spec(s, Color(0.70, 0.60, 0.44, 1.0))
+		VoxelMaterial.ZOO_TURF_GROVE:
+			_zoo_turf_spec(s, Color(0.48, 0.80, 0.48, 1.0))
+		VoxelMaterial.ZOO_TURF_ARCANE:
+			_zoo_turf_spec(s, Color(0.60, 0.54, 0.96, 1.0))
 		VoxelMaterial.DOOR:
 			## Closed doorway plug — timber, not masonry.
 			s.albedo_file = "wood.jpg"
@@ -524,6 +559,21 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.albedo_file = "plaster.jpg"
 			s.tint = Color(1, 0, 1, 1)
 	return s
+
+
+## Faction home turf: one packed-earth plate, retinted per owner. The tint is the whole
+## read — a player has to tell whose ground they stepped on before it starts burning.
+static func _zoo_turf_spec(s: VoxelSurfaceSpec, tint: Color) -> void:
+	s.albedo_file = "gravel.jpg"
+	s.normal_file = "gravel_normal.jpg"
+	s.tile_meters = Vector2(1.4, 1.4)
+	s.tint = tint
+	s.roughness = 0.9
+	s.normal_strength = 0.95
+	s.tint_variation = 0.12
+	s.patch_variation = 0.28
+	s.patch_meters = 2.2
+	s.weathering = 0.3
 
 
 ## Family tints for RoomPropCatalog meshes. Avoid metal.jpg — its authored tile pitch

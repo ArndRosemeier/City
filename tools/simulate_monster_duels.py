@@ -216,12 +216,22 @@ def attack_helpers(row: dict[str, Any], attack_id: str) -> AttackRow:
     )
 
 
-def load_fighter_defs() -> tuple[dict[str, FighterDef], dict[str, AttackRow]]:
-    root = gd.load_gamedata()
+def load_fighter_defs_from_root(
+    root: dict[str, Any],
+) -> tuple[dict[str, FighterDef], dict[str, AttackRow]]:
+    """Build fighter defs from an in-memory gamedata root (disk or editor draft)."""
     attacks_doc = root["attacks"]
     behaviours = root["behaviours"]
     templates = root["templates"]
     monsters = root["monsters"]
+    if not isinstance(attacks_doc, dict):
+        raise TypeError("gamedata attacks must be an object")
+    if not isinstance(behaviours, dict):
+        raise TypeError("gamedata behaviours must be an object")
+    if not isinstance(templates, dict):
+        raise TypeError("gamedata templates must be an object")
+    if not isinstance(monsters, list):
+        raise TypeError("gamedata monsters must be a list")
     catalog = parse_catalog_bodies()
     attack_rows = {
         aid: attack_helpers(row, aid)
@@ -230,6 +240,8 @@ def load_fighter_defs() -> tuple[dict[str, FighterDef], dict[str, AttackRow]]:
     }
     fighters: dict[str, FighterDef] = {}
     for mon in monsters:
+        if not isinstance(mon, dict):
+            raise TypeError("monster entry must be an object")
         mid = str(mon["id"])
         if mid not in catalog:
             raise KeyError(f"monster '{mid}' missing from creature_catalog.gd parse")
@@ -255,6 +267,10 @@ def load_fighter_defs() -> tuple[dict[str, FighterDef], dict[str, AttackRow]]:
             tags=tags,
         )
     return fighters, attack_rows
+
+
+def load_fighter_defs() -> tuple[dict[str, FighterDef], dict[str, AttackRow]]:
+    return load_fighter_defs_from_root(gd.load_gamedata())
 
 
 def monster_attack_range(attack_rows: dict[str, AttackRow], attack_id: str) -> float:
@@ -571,30 +587,44 @@ def fmt_pct(x: float) -> str:
     return f"{100.0 * x:5.1f}%"
 
 
-def print_fighter_report(
+def format_fighter_report(
     fighter_id: str,
     fighters: dict[str, FighterDef],
     attack_rows: dict[str, AttackRow],
-    duels: int,
-    start_dist: float,
-    dt: float,
-) -> None:
+    *,
+    duels: int = 10,
+    start_dist: float = 20.0,
+    dt: float = 1.0 / 30.0,
+    same_tier_only: bool = False,
+) -> str:
+    """Run duels for one fighter and return a text report (CLI + editor)."""
+    if fighter_id not in fighters:
+        raise KeyError(f"unknown fighter {fighter_id!r}")
     me = fighters[fighter_id]
+    opponents = [
+        oid
+        for oid in sorted(fighters)
+        if oid != fighter_id
+        and (not same_tier_only or fighters[oid].tier == me.tier)
+    ]
+    if not opponents:
+        scope = f"tier={me.tier}" if same_tier_only else "all"
+        return f"No opponents for {fighter_id} ({scope}).\n"
+
     rows: list[MatchupStats] = []
-    for oid in sorted(fighters):
-        if oid == fighter_id:
-            continue
+    for oid in opponents:
         rows.append(run_matchup(me, fighters[oid], attack_rows, duels, start_dist, dt))
     rows.sort(key=lambda r: (-r.a_score(), -r.a_win_rate(), r.b))
-    print(
-        f"\n=== {fighter_id}  tier={me.tier}  hp={me.hp_max:.1f}  "
-        f"dmg×{me.damage_mult:.2f}  spd×{me.speed_mult:.2f}  "
-        f"armor×{me.armor_mult:.2f}  templates={list(me.templates)} ==="
-    )
-    print(
+
+    scope = f"same tier ({me.tier})" if same_tier_only else "all others"
+    lines: list[str] = [
+        f"=== {fighter_id}  tier={me.tier}  hp={me.hp_max:.1f}  "
+        f"dmgx{me.damage_mult:.2f}  spdx{me.speed_mult:.2f}  "
+        f"armorx{me.armor_mult:.2f}  templates={list(me.templates)} ===",
+        f"Open-field 1v1 vs {scope}  |  {duels} duels/pair  |  start {start_dist:g}m",
         f"{'opponent':40s} {'tier':10s} {'W-L-D':9s} {'win%':7s} "
-        f"{'hp%|W':7s} {'score':7s} {'avg_s':6s}"
-    )
+        f"{'hp%|W':7s} {'score':7s} {'avg_s':6s}",
+    ]
     wins = losses = draws = 0
     score_sum = 0.0
     hp_sum = 0.0
@@ -608,7 +638,7 @@ def print_fighter_report(
             hp_sum += r.a_avg_hp_when_win()
             hp_n += 1
         opp = fighters[r.b]
-        print(
+        lines.append(
             f"{r.b:40s} {opp.tier:10s} "
             f"{r.a_wins:2d}-{r.b_wins:2d}-{r.draws:1d}  "
             f"{fmt_pct(r.a_win_rate())} {fmt_pct(r.a_avg_hp_when_win())} "
@@ -616,12 +646,40 @@ def print_fighter_report(
         )
     n_opp = len(rows)
     total = wins + losses + draws
-    print(
+    lines.append(
         f"\nAGGREGATE vs {n_opp} foes x {duels} duels: "
         f"W-L-D {wins}-{losses}-{draws}  "
         f"win%={fmt_pct(wins / total if total else 0)}  "
         f"mean_score={score_sum / n_opp if n_opp else 0:.3f}  "
         f"mean_hp%_when_win={fmt_pct(hp_sum / hp_n if hp_n else 0)}"
+    )
+    lines.append(
+        "score = win_rate * mean remaining HP fraction when this fighter wins"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def print_fighter_report(
+    fighter_id: str,
+    fighters: dict[str, FighterDef],
+    attack_rows: dict[str, AttackRow],
+    duels: int,
+    start_dist: float,
+    dt: float,
+    *,
+    same_tier_only: bool = False,
+) -> None:
+    print(
+        format_fighter_report(
+            fighter_id,
+            fighters,
+            attack_rows,
+            duels=duels,
+            start_dist=start_dist,
+            dt=dt,
+            same_tier_only=same_tier_only,
+        ),
+        end="",
     )
 
 

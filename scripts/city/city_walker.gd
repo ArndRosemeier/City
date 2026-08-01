@@ -284,8 +284,8 @@ var _live_blaster_bolts: Array[Node] = []
 var _energy: float = 100.0
 var _health := PlayerHealthScript.new()
 ## Whose side the player is on. Mobs hunt every faction but their own, so this is the one
-## thing standing between the player and the pedestrians they walk among. Deliberately has
-## no setter: a faction-change power would write it, and nothing else may.
+## thing standing between the player and the pedestrians they walk among. Only
+## `set_combat_faction` writes it, and only the zoo's spectator cloak calls that.
 var _combat_faction: int = MonsterFactionScript.Id.HUMAN
 var _blast_fire_token: int = 0
 var _blast_pending_aim: Vector3 = Vector3.ZERO
@@ -1009,9 +1009,21 @@ func _regen_energy(delta: float) -> void:
 		energy_changed.emit(_energy, energy_max)
 
 
-## MonsterFaction.Id the player fights as. Human, and only human, for now.
+## MonsterFaction.Id the player fights as. Human until something grants otherwise.
 func combat_faction() -> int:
 	return _combat_faction
+
+
+## Change whose side the player is on. The Monster Zoo's spectator cloak is the only thing
+## in the game that calls this; it restores HUMAN when the cloak runs out. A bad id here
+## would silently make the player un-huntable everywhere, so it is rejected rather than
+## clamped.
+func set_combat_faction(id: int) -> void:
+	if not MonsterFactionScript.all().has(id as MonsterFactionScript.Id):
+		push_error("CityWalker.set_combat_faction: %d is not a MonsterFaction.Id" % id)
+		assert(false, "CityWalker: bad combat faction")
+		return
+	_combat_faction = id
 
 
 func get_health() -> float:

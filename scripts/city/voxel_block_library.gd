@@ -64,6 +64,8 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			return _make_glass_cube(id)
 		VoxelMaterial.GLASS_LIT:
 			return _make_glass_cube(id)
+		VoxelMaterial.ZOO_FENCE_GLASS:
+			return _make_glass_cube(id)
 		VoxelMaterial.LOS_VEIL:
 			## Invisible walk-through volume that still counts as solid for LOS probes.
 			return _make_los_veil_model()
@@ -685,6 +687,7 @@ static var _fractal_band_mat_cache: Dictionary = {}  # band id → ShaderMateria
 static var _fractal_interior_mat: ShaderMaterial = null
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
+static var _zoo_fence_line_mat: ShaderMaterial = null
 
 
 ## Terrain block material. Everything except infection / meteor rock / Game Boy / gems
@@ -704,6 +707,8 @@ static func block_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
+	if id == VoxelMaterial.ZOO_FENCE_LINE:
+		return zoo_fence_line_material()
 	## Room props are authored meshes — grain follows the prop, not the street.
 	if VoxelMaterial.is_room_prop(id) or id == VoxelMaterial.PROP_FOOTPRINT:
 		return surface_material(id, true)
@@ -727,6 +732,8 @@ static func debris_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
+	if id == VoxelMaterial.ZOO_FENCE_LINE:
+		return zoo_fence_line_material()
 	return surface_material(id, true)
 
 
@@ -887,6 +894,26 @@ static func fractal_glow_material() -> ShaderMaterial:
 	mat.set_shader_parameter("metallic_base", 0.2)
 	mat.set_shader_parameter("roughness_base", 0.18)
 	_fractal_glow_mat = mat
+	return mat
+
+
+## Zoo containment line — the same emissive cube shader the fractal deck uses, pushed
+## hard into red. Slow pulse: this is a standing hazard, not a landmark that sparkles.
+static func zoo_fence_line_material() -> ShaderMaterial:
+	if _zoo_fence_line_mat != null:
+		return _zoo_fence_line_mat
+	var shader: Shader = load("res://assets/city/shaders/voxel_gem.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", VoxelMaterial.color(VoxelMaterial.ZOO_FENCE_LINE))
+	mat.set_shader_parameter("emission_color", Color(1.0, 0.08, 0.06))
+	mat.set_shader_parameter("emission_base", 3.6)
+	mat.set_shader_parameter("emission_peak", 7.5)
+	mat.set_shader_parameter("pulse_hz", 0.25)
+	mat.set_shader_parameter("sparkle_scale", 1.2)
+	mat.set_shader_parameter("metallic_base", 0.0)
+	mat.set_shader_parameter("roughness_base", 0.35)
+	_zoo_fence_line_mat = mat
 	return mat
 
 
