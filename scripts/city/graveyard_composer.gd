@@ -83,6 +83,9 @@ var _graves: int = 0
 var _crypt_lo: PackedInt32Array = PackedInt32Array()
 var _crypt_hi: PackedInt32Array = PackedInt32Array()
 var _chapel: Vector3i = Vector3i.ZERO
+## Side chambers of the catacombs in district-local voxels (x, floor Y, z). The hub under the
+## chapel stair is deliberately left out — the first room off the steps is not a find.
+var crypt_rooms: Array[Vector3i] = []
 
 
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -158,6 +161,7 @@ func _begin(min_v: Vector3i, max_v: Vector3i) -> bool:
 	_crypt_hi.resize(_w * _d)
 	_crypt_lo.fill(-1)
 	_crypt_hi.fill(-1)
+	crypt_rooms.clear()
 	_chapel = Vector3i(_w / 2, ground_y + YARD_RISE, _d / 2)
 	return true
 
@@ -1177,6 +1181,10 @@ func _carve_catacombs() -> void:
 			"kind": "chamber",
 		})
 	for room: Dictionary in rooms:
+		if str(room["kind"]) == "chamber":
+			crypt_rooms.append(
+				Vector3i(_ox + int(room["x"]), floor_y, _oz + int(room["z"]))
+			)
 		_carve_crypt_box(
 			int(room["x"]) - int(room["rx"]),
 			int(room["z"]) - int(room["rz"]),

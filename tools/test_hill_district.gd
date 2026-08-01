@@ -15,6 +15,9 @@ const ROCK_IDS: Array[int] = [
 	VoxelMaterial.CAVE_WALL,
 	VoxelMaterial.CAVE_FLOOR,
 ]
+## How far inland from a daylit column to look for roofed cave. Must exceed the rock shell the
+## carve leaves between a cavern and the hillside face (`HillComposer.CAVE_SHELL`, 6 voxels).
+const INLAND_REACH_VOX := 14
 const GEM_IDS: Array[int] = [
 	VoxelMaterial.GEM_QUARTZ,
 	VoxelMaterial.GEM_AMBER,
@@ -92,10 +95,7 @@ func _ready() -> void:
 		_quit()
 		return
 
-	var res: Dictionary = DistrictBakeJobScript.bake({
-		"coord": coord,
-		"world_seed": WORLD_SEED,
-	})
+	var res: Dictionary = DistrictBakeJobScript.bake(_bake_params(coord, dseed))
 	if not bool(res.get("ok", false)):
 		_fail("FAIL bake: %s" % res.get("error", "?"))
 		_quit()
@@ -170,10 +170,7 @@ func _ready() -> void:
 		)
 		_quit()
 		return
-	if gem_total < 40:
-		_fail("FAIL gem ore missing or too sparse (gems=%d)" % gem_total)
-		_quit()
-		return
+	var quota := _hill_gem_quota(dseed).size()
 	var quartz := int(counts.get(VoxelMaterial.GEM_QUARTZ, 0))
 	var diamond := int(counts.get(VoxelMaterial.GEM_DIAMOND, 0))
 	if quartz <= 0:
@@ -187,8 +184,20 @@ func _ready() -> void:
 	var gen: DistrictGenerator = res.get("generator") as DistrictGenerator
 	var gems_payload: Dictionary = gen.get_hill_gems()
 	var gem_list: PackedVector3Array = gems_payload.get("positions", PackedVector3Array())
-	if gem_list.size() < 40:
-		_fail("FAIL hill gem registry empty (listed=%d)" % gem_list.size())
+	if gem_list.size() != quota:
+		_fail("FAIL hill gem registry lists %d of its %d budgeted voxels" % [gem_list.size(), quota])
+		_quit()
+		return
+	## The ledger is the promise: a tile owes exactly this many gems, so every one of them has to
+	## be standing in the finished bake. A registry entry pointing at something else is ore the
+	## player can never dig, and the tile owes it forever.
+	var lost := _count_lost_gems(gen, gems_payload)
+	if lost > 0:
+		_fail("FAIL %d of %d budgeted gems did not survive the bake" % [lost, quota])
+		_quit()
+		return
+	if gem_total != quota:
+		_fail("FAIL hill holds %d gem voxels above the deck, budgeted %d" % [gem_total, quota])
 		_quit()
 		return
 	var mouths := gen.get_hill_cave_mouths()
@@ -217,10 +226,7 @@ func _ready() -> void:
 	)
 
 	## Determinism: two bakes match theme + hill rect.
-	var res2: Dictionary = DistrictBakeJobScript.bake({
-		"coord": coord,
-		"world_seed": WORLD_SEED,
-	})
+	var res2: Dictionary = DistrictBakeJobScript.bake(_bake_params(coord, dseed))
 	var p2: DistrictPlanner = res2["planner"]
 	if p2.large_hill != planner.large_hill:
 		_fail("FAIL hill rect not deterministic")
@@ -229,6 +235,22 @@ func _ready() -> void:
 
 	print("RESULT: OK")
 	_quit()
+
+
+## What a caller without a live `CityRoot` hands the bake, copied from `district_instance.gd`:
+## a hill paints exactly the gems its ledger still owes, so a bake given no quota paints none.
+## Passing it here is what keeps the ore assertions below about the scatter rather than about
+## whether anyone remembered to ask for ore.
+func _hill_gem_quota(dseed: int) -> PackedInt32Array:
+	return DistrictEconomy.flat_gem_list(DistrictEconomy.roll_budgets(DistrictTheme.HILL, dseed))
+
+
+func _bake_params(coord: Vector2i, dseed: int) -> Dictionary:
+	return {
+		"coord": coord,
+		"world_seed": WORLD_SEED,
+		"hill_gem_mats_to_place": _hill_gem_quota(dseed),
+	}
 
 
 func _find_hill_coord() -> Vector2i:
@@ -241,6 +263,36 @@ func _find_hill_coord() -> Vector2i:
 				if t.id == DistrictTheme.HILL:
 					return Vector2i(cx, cz)
 	return Vector2i(999, 999)
+
+
+## Walk the gem registry against the finished voxels and report what took the place of any gem
+## that is no longer there — the replacement material names the pass that ate it.
+func _count_lost_gems(gen: DistrictGenerator, gems_payload: Dictionary) -> int:
+	var vol: NativeOfflineVoxelVolume = gen.get_offline_volume()
+	if vol == null:
+		_fail("FAIL offline volume missing for the gem survival check")
+		return 0
+	var positions: PackedVector3Array = gems_payload.get("positions", PackedVector3Array())
+	var mats: PackedInt32Array = gems_payload.get("mats", PackedInt32Array())
+	if positions.size() != mats.size():
+		_fail("FAIL gem registry has %d positions and %d mats" % [positions.size(), mats.size()])
+		return 0
+	var lost := 0
+	var replaced: Dictionary = {}
+	## The registry speaks world voxels (it feeds ore lights); the offline volume is tile-local.
+	var origin := gen.origin_vox
+	for i in range(positions.size()):
+		var at := Vector3i(positions[i]) - origin
+		var found := int(vol.get_vox(at))
+		if found == int(mats[i]):
+			continue
+		lost += 1
+		replaced[found] = int(replaced.get(found, 0)) + 1
+		if lost <= 4:
+			print("lost gem %d at %s — now %d" % [int(mats[i]), str(at), found])
+	if lost > 0:
+		print("gems lost after painting: %d, replaced by %s" % [lost, str(replaced)])
+	return lost
 
 
 ## A mouth "daylights" when a nearby column is open from the walk deck through the
@@ -269,6 +321,17 @@ func _count_daylight_mouths(gen: DistrictGenerator, mouths: PackedVector2Array) 
 	return lit
 
 
+## Cardinal offsets from a daylit column, ordered nearest-first, reaching well past the shell.
+func _inland_probes() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for step in range(1, INLAND_REACH_VOX + 1):
+		out.append(Vector2i(step, 0))
+		out.append(Vector2i(-step, 0))
+		out.append(Vector2i(0, step))
+		out.append(Vector2i(0, -step))
+	return out
+
+
 func _column_daylights_into_cave(
 	vol: NativeOfflineVoxelVolume, lx: int, lz: int, deck: int
 ) -> bool:
@@ -286,12 +349,11 @@ func _column_daylights_into_cave(
 			break
 	if air_run < 10:
 		return false
-	## And somewhere beside this column, rock still roofs air (cave continues inland).
-	for side: Vector2i in [
-		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
-		Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2),
-		Vector2i(3, 0), Vector2i(-3, 0), Vector2i(0, 3), Vector2i(0, -3),
-	]:
+	## And somewhere further in, rock still roofs air (the cave continues inland and goes dark).
+	## The reach has to clear `HillComposer.CAVE_SHELL`: the carve deliberately leaves that much
+	## rock between a cavern and the hillside face, so anything roofed is at least that far in.
+	## Probing only a couple of voxels past the opening finds nothing but the daylit throat.
+	for side: Vector2i in _inland_probes():
 		var x := lx + side.x
 		var z := lz + side.y
 		if int(vol.get_vox(Vector3i(x, deck + 4, z))) != VoxelMaterial.AIR:

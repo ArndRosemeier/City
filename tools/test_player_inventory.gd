@@ -31,6 +31,24 @@ const EDGE_INSET_PX := 1.0
 const SETTLE_FRAMES := 8
 
 
+## Stands in for CityRoot so the panel can be shown a half-learned cookbook. The panel asks
+## whatever is in the "city_root" group these three questions and nothing else.
+class HalfLearnedCity:
+	extends Node
+
+	var recipes: PackedStringArray = PackedStringArray()
+	var schematics: PackedStringArray = PackedStringArray()
+
+	func knows_recipe(recipe_id: String) -> bool:
+		return recipes.has(recipe_id)
+
+	func knows_ability_schematic(ability_id: String) -> bool:
+		return schematics.has(ability_id)
+
+	func can_use_ability(_ability_id: String) -> bool:
+		return false
+
+
 ## Records what the engine reported while it was armed. Assertion noise from this test is
 ## kept out by only arming it around the panel build.
 class ErrorSink:
@@ -60,6 +78,7 @@ class ErrorSink:
 
 
 var _failed := false
+var _reference: Vector2 = Vector2.ZERO
 
 
 func _fail(msg: String) -> void:
@@ -72,8 +91,9 @@ func _ready() -> void:
 	_check_craft_and_stacking()
 	_check_gem_tallies()
 	_check_icons_spare_the_world_palette()
-	_check_gem_icons_have_their_own_cut()
+	_check_icons_have_their_own_cut()
 	await _check_panel_previews()
+	await _check_locked_recipes_stay_nameless()
 	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
 
@@ -196,35 +216,142 @@ func _check_icons_spare_the_world_palette() -> void:
 	print("OK %d gem icons copy the world palette without touching it" % _gem_materials().size())
 
 
-## Two gems that draw the same silhouette are two gems the player cannot tell apart, which is
-## exactly what six identical cubes were.
-func _check_gem_icons_have_their_own_cut() -> void:
-	var seen: Dictionary = {}  ## silhouette → the item that claimed it
-	for mat_id in _gem_materials():
-		var item_id := InventoryCatalog.item_id_for_gem(mat_id)
-		var icon := InventoryItemVisual.make_mesh(item_id)
-		if icon == null:
-			_fail("FAIL %s has no icon mesh" % item_id)
+## Two things that draw the same silhouette are two things the player cannot tell apart, which
+## is exactly what six identical cubes were. Items and power badges share one tally because they
+## share one column: a recipe row shows the badge of whatever it builds, so a stone and a power
+## can now sit a row apart. The sweep runs over the whole catalog and the whole registry rather
+## than the gems alone — an item added without an icon used to reach the panel and only fail
+## there, at the moment the player crafted it.
+func _check_icons_have_their_own_cut() -> void:
+	var seen: Dictionary = {}  ## silhouette → the thing that claimed it
+	var item_ids := InventoryCatalog.all_item_ids()
+	for item_id in item_ids:
+		_check_icon(item_id, InventoryItemVisual.make_mesh(item_id), seen)
+	var ability_ids := _badged_ability_ids()
+	for ability_id in ability_ids:
+		_check_icon(ability_id, AbilityIconVisual.make_mesh(ability_id), seen)
+	print("OK %d item icons and %d power badges, %d distinct cuts"
+		% [item_ids.size(), ability_ids.size(), seen.size()])
+
+
+## Everything the tray or the unlock list can show. Builds are placed in the world and have no
+## badge of their own.
+func _badged_ability_ids() -> PackedStringArray:
+	var out: PackedStringArray = PackedStringArray()
+	for def in AbilityRegistry.all_defs():
+		if def.kind == AbilityRegistry.KIND_BUILD:
 			continue
-		var verts: PackedVector3Array = icon.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-		var cut := "%s %v x%d" % [
-			icon.mesh.get_class(),
-			icon.mesh.get_aabb().size.snapped(Vector3.ONE * 0.001),
-			verts.size(),
-		]
-		if seen.has(cut):
-			_fail("FAIL %s and %s are cut the same: %s" % [seen[cut], item_id, cut])
-		seen[cut] = item_id
-		## The slot camera is placed to frame a sphere of bounding_radius(), so a cut that
-		## reaches past it is a clipped icon at whatever yaw turns the far corner forward.
-		var reach := 0.0
-		for v in verts:
-			reach = maxf(reach, v.length())
-		if reach > InventoryItemVisual.bounding_radius():
-			_fail("FAIL %s reaches %.3f, past the %.3f the slot camera frames"
-				% [item_id, reach, InventoryItemVisual.bounding_radius()])
+		out.append(def.id)
+	return out
+
+
+func _check_icon(id: String, icon: MeshInstance3D, seen: Dictionary) -> void:
+	if icon == null:
+		_fail("FAIL %s has no icon mesh" % id)
+		return
+	if icon.material_override == null:
+		_fail("FAIL %s has an icon mesh but no material" % id)
+	var arrays: Array = icon.mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	_check_solid_is_right_way_out(id, arrays)
+	var cut := _silhouette(icon.mesh, verts)
+	if seen.has(cut):
+		_fail("FAIL %s and %s are cut the same: %s" % [seen[cut], id, cut])
+	seen[cut] = id
+	## The slot camera is placed to frame a sphere of bounding_radius(), so a cut that reaches
+	## past it is a clipped icon at whatever yaw turns the far corner forward. The radius is
+	## derived from the full PREVIEW_SIZE cube, which the trap is, so its corners land exactly
+	## on the sphere — the tolerance is float noise, not slack.
+	var reach := 0.0
+	for v in verts:
+		reach = maxf(reach, v.length())
+	if reach > InventoryItemVisual.bounding_radius() + 0.0005:
+		_fail("FAIL %s reaches %.3f, past the %.3f the slot camera frames"
+			% [id, reach, InventoryItemVisual.bounding_radius()])
+	icon.free()
+
+
+## Box and vertex count alone would call two mirrored shapes the same cut, and the grow and
+## shrink badges are exactly that pair, so the positions themselves are folded in.
+func _silhouette(mesh: Mesh, verts: PackedVector3Array) -> String:
+	var fold := 0.0
+	for i in range(verts.size()):
+		var v := verts[i]
+		fold += (v.x * 3.7 + v.y * 11.3 + v.z * 29.1) * float(i + 1)
+	return "%s %v x%d #%d" % [
+		mesh.get_class(),
+		mesh.get_aabb().size.snapped(Vector3.ONE * 0.001),
+		verts.size(),
+		int(roundf(fold * 100.0)),
+	]
+
+
+## An icon wound the wrong way round is not an error anywhere — it is a slot that renders empty,
+## because every face the camera can see is culled.
+##
+## The test is the enclosed volume, which is positive for a solid wound outward and negative for
+## one turned inside out, plus a check that the shading normals agree with that winding. Both are
+## measured against a cut the panel is already known to draw, rather than against a hand-picked
+## sign convention: the badges are assembled from several primitives sitting away from the
+## origin, so "normals lean away from the middle" — true of a single gem — is not true of them.
+func _check_solid_is_right_way_out(id: String, arrays: Array) -> void:
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	if normals.size() != verts.size():
+		_fail("FAIL %s icon has %d normals for %d vertices" % [id, normals.size(), verts.size()])
+		return
+	var facing := _facing(arrays)
+	if absf(facing.x) < 1e-7:
+		_fail("FAIL %s icon encloses nothing — it is not a closed solid" % id)
+		return
+	var want := _reference_facing()
+	if signf(facing.x) != signf(want.x):
+		_fail("FAIL %s icon is wound inside out (volume %.5f)" % [id, facing.x])
+	if signf(facing.y) != signf(want.y) or absf(facing.y) < 0.5:
+		_fail("FAIL %s icon shades against its winding (agreement %.2f)" % [id, facing.y])
+
+
+## Signed volume of the surface and how well its normals agree with its winding.
+func _facing(arrays: Array) -> Vector2:
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	## Hand-built cuts hand back a plain vertex run with no index array at all.
+	var raw_index: Variant = arrays[Mesh.ARRAY_INDEX]
+	var index: PackedInt32Array = (
+		PackedInt32Array() if raw_index == null else raw_index as PackedInt32Array
+	)
+	var tri_count := (index.size() if index.size() > 0 else verts.size()) / 3
+	var volume := 0.0
+	var agree := 0.0
+	var counted := 0
+	for t in range(tri_count):
+		var i0 := index[t * 3] if index.size() > 0 else t * 3
+		var i1 := index[t * 3 + 1] if index.size() > 0 else t * 3 + 1
+		var i2 := index[t * 3 + 2] if index.size() > 0 else t * 3 + 2
+		var a := verts[i0]
+		var b := verts[i1]
+		var c := verts[i2]
+		volume += a.cross(b).dot(c) / 6.0
+		var face := (b - a).cross(c - a)
+		if face.length_squared() < 1e-12:
+			## Degenerate sliver, as a lathe or a cone leaves at its poles.
+			continue
+		var shaded := (normals[i0] + normals[i1] + normals[i2])
+		if shaded.length_squared() < 1e-12:
+			continue
+		agree += face.normalized().dot(shaded.normalized())
+		counted += 1
+	return Vector2(volume, 0.0 if counted == 0 else agree / float(counted))
+
+
+## The trap cube: the plainest icon in the panel and one the slot previews are already proven to
+## draw, so whichever way round it is wound is the way round the rest have to be.
+func _reference_facing() -> Vector2:
+	if _reference == Vector2.ZERO:
+		var icon := InventoryItemVisual.make_mesh(InventoryCatalog.ID_TRAP)
+		_reference = _facing(icon.mesh.surface_get_arrays(0))
 		icon.free()
-	print("OK %d gem icons, %d distinct cuts" % [_gem_materials().size(), seen.size()])
+	return _reference
 
 
 ## Builds the real panel over a stocked inventory and judges what each slot would draw.
@@ -269,8 +396,131 @@ func _check_panel_previews() -> void:
 		_check_slot(panel, i, mesh, world)
 	if filled != occupied:
 		_fail("FAIL %d slots previewed, expected %d" % [filled, occupied])
-	panel.close_panel()
+	_check_recipe_column_scrolls(panel)
+	await _check_close_button(panel)
+	if panel.is_open():
+		panel.close_panel()
 	print("OK %d slot previews framed by their own camera" % filled)
+
+
+## With no CityRoot the panel shows the whole cookbook — three crafts plus a schematic for every
+## gated power — which is taller than the modal. That column used to run off the bottom edge with
+## no way to reach the rows below the fold.
+func _check_recipe_column_scrolls(panel: PlayerInventoryPanel) -> void:
+	var scroll := panel.recipe_scroll()
+	var list := panel.recipe_list()
+	if scroll == null or list == null:
+		_fail("FAIL the recipe column has no scroller")
+		return
+	if list.get_parent() != scroll:
+		_fail("FAIL the recipe list is not inside the scroller")
+		return
+	var rows := list.get_child_count()
+	if rows < 4:
+		_fail("FAIL only %d recipe rows built; expected the full cookbook" % rows)
+		return
+	var content_h := list.size.y
+	var visible_h := scroll.size.y
+	if content_h <= visible_h:
+		## Nothing is hidden, so there is nothing to scroll to and no bar to demand.
+		print("OK recipe column fits: %d rows in %.0f px" % [rows, visible_h])
+		return
+	var bar := scroll.get_v_scroll_bar()
+	if bar == null or not bar.visible:
+		_fail("FAIL %d recipe rows overflow %.0f px with no scrollbar" % [rows, visible_h])
+		return
+	scroll.scroll_vertical = int(content_h)
+	var reached := float(scroll.scroll_vertical) + visible_h
+	if reached < content_h - 1.0:
+		_fail("FAIL scrolling reaches %.0f px of %.0f px of recipes" % [reached, content_h])
+	scroll.scroll_vertical = 0
+	print("OK %d recipe rows scroll: %.0f px of content in %.0f px" % [rows, content_h, visible_h])
+
+
+## A recipe the run has not found is a blank box, not a greyed-out row with its name still on
+## it: the column may say how much is left out there, never what it is. Checked against a
+## half-learned cookbook, because with no CityRoot the panel shows the whole book and a leak
+## would look exactly like the normal case.
+func _check_locked_recipes_stay_nameless() -> void:
+	var city := HalfLearnedCity.new()
+	city.name = "FakeCityRoot"
+	city.recipes.append(InventoryCatalog.RECIPE_TRAP)
+	city.schematics.append(AbilityRegistry.ID_LASER)
+	city.add_to_group("city_root")
+	add_child(city)
+
+	var panel := PlayerInventoryPanel.new()
+	panel.name = "HalfLearnedPanel"
+	add_child(panel)
+	panel.bind_inventory(PlayerInventory.new())
+	panel.open_panel()
+	for _i in range(SETTLE_FRAMES):
+		await get_tree().process_frame
+
+	var total := InventoryCatalog.craft_recipes().size() + AbilityRegistry.unlockable_defs().size()
+	var rows := panel.recipe_rows()
+	var locked := panel.locked_box_count()
+	if rows.size() != 2:
+		_fail("FAIL %d rows shown for a cookbook of 2 learned entries" % rows.size())
+	if locked != total - 2:
+		_fail("FAIL %d locked boxes for %d undiscovered recipes" % [locked, total - 2])
+	for row in rows:
+		if row.preview.current_mesh() == null:
+			_fail("FAIL learned row '%s' shows no badge" % row.id)
+
+	var shown := _column_text(panel.recipe_list())
+	for recipe in InventoryCatalog.craft_recipes():
+		if recipe.id == InventoryCatalog.RECIPE_TRAP:
+			continue
+		if shown.contains(recipe.display_name):
+			_fail("FAIL undiscovered recipe '%s' is named in the column" % recipe.display_name)
+	for def in AbilityRegistry.unlockable_defs():
+		if def.id == AbilityRegistry.ID_LASER:
+			continue
+		if shown.contains(def.display_name):
+			_fail("FAIL undiscovered power '%s' is named in the column" % def.display_name)
+	if not shown.contains("(locked)"):
+		_fail("FAIL nothing in the column says a recipe is missing")
+
+	panel.close_panel()
+	panel.queue_free()
+	city.queue_free()
+	await get_tree().process_frame
+	print("OK 2 learned rows with badges, %d nameless locked boxes" % locked)
+
+
+## Every scrap of text the recipe column draws, rows and headings alike.
+func _column_text(node: Node) -> String:
+	var out := ""
+	var label := node as Label
+	if label != null:
+		out += label.text + "\n"
+	for child in node.get_children():
+		out += _column_text(child)
+	return out
+
+
+## Esc and I still close the panel, but a player whose hand is on the mouse needs a target.
+func _check_close_button(panel: PlayerInventoryPanel) -> void:
+	var btn := panel.close_button()
+	if btn == null:
+		_fail("FAIL the panel has no close button")
+		return
+	if not btn.is_visible_in_tree():
+		_fail("FAIL the close button is not visible")
+		return
+	var frame := panel.panel_rect()
+	var at := btn.get_global_rect().get_center()
+	if at.x <= frame.get_center().x or at.y >= frame.get_center().y:
+		_fail("FAIL the close button sits at %s, not the top right of %s" % [at, frame])
+	btn.emit_signal("pressed")
+	await get_tree().process_frame
+	if panel.is_open():
+		_fail("FAIL pressing the close button left the panel open")
+		return
+	panel.open_panel()
+	await get_tree().process_frame
+	print("OK close button at the top right shuts the panel")
 
 
 func _check_slot(

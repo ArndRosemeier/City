@@ -12,6 +12,7 @@ const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd")
 const PlayerHealthHudScript := preload("res://scripts/city/player_health_hud.gd")
+const PlayerBoostHudScript := preload("res://scripts/city/player_boost_hud.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
@@ -48,6 +49,7 @@ const InteriorDecoratorScript := preload("res://scripts/city/interior_decorator.
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const GameSaveScript := preload("res://scripts/city/game_save.gd")
 const GameMenuPanelScript := preload("res://scripts/city/game_menu_panel.gd")
+const CheatPanelScript := preload("res://scripts/city/cheat_panel.gd")
 const DistrictEconomyScript := preload("res://scripts/city/district_economy.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
@@ -58,6 +60,9 @@ const WARMUP_FRAMES := 8
 const WARMUP_ALTITUDE_M := 4000.0
 ## How far from the world origin (in district tiles) the player may spawn.
 const SPAWN_DISTRICT_RING := 3
+## How far beside a recipe scroll the cheat teleport leaves the walker. Close enough to see and
+## click, far enough not to stand inside the prop.
+const CHEAT_RECIPE_STAND_OFF_M := 2.4
 ## District layouts hang off this seed plus the district's grid coordinate. Left at
 ## SEED_RANDOM every launch builds a different world; set a concrete value (in the
 ## scene, from code, or with --city-seed=N) to replay one exactly.
@@ -98,6 +103,7 @@ var _loadout: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 var _minions: Array[FollowMinion] = []
 var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
+var _boost_hud: CanvasLayer
 var _debris_root: Node3D
 var _cascade: NativeCascadeDebris
 var _gem_lights: GemLightDirector
@@ -137,6 +143,7 @@ var _inventory_panel: PlayerInventoryPanel
 var _loot_toast: LootToast
 var _monster_summon_panel: MonsterSummonPanel
 var _game_menu: GameMenuPanel
+var _cheat_panel: CheatPanel
 ## Save payload waiting to be poured into the next walker. Set before a regenerate (boot resume,
 ## quickload, load) and cleared once the character is standing in the rebuilt world.
 var _pending_restore: Dictionary = {}
@@ -442,6 +449,10 @@ func is_game_menu_open() -> bool:
 	return _game_menu != null and _game_menu.is_open()
 
 
+func is_cheat_open() -> bool:
+	return _cheat_panel != null and _cheat_panel.is_open()
+
+
 ## True while a panel of this root's owns the screen. The walker and the build bar read this to
 ## stop taking hotkeys, and the HUD band is hidden for as long as it holds. The walker's own
 ## character editor is not in here: nothing would tell us when it closes again.
@@ -451,6 +462,7 @@ func is_modal_open() -> bool:
 		or is_inventory_open()
 		or is_monster_summon_open()
 		or is_game_menu_open()
+		or is_cheat_open()
 	)
 
 
@@ -486,7 +498,10 @@ func _refresh_hud_visibility() -> void:
 	if _settings_panel != null:
 		_settings_panel.call(
 			"set_top_bar_visible",
-			not is_inventory_open() and not is_monster_summon_open() and not is_game_menu_open()
+			not is_inventory_open()
+			and not is_monster_summon_open()
+			and not is_game_menu_open()
+			and not is_cheat_open()
 		)
 
 
@@ -569,6 +584,10 @@ func _build_hud() -> void:
 	_health_hud.name = "PlayerHealthHud"
 	add_child(_health_hud)
 
+	_boost_hud = PlayerBoostHudScript.new() as CanvasLayer
+	_boost_hud.name = "PlayerBoostHud"
+	add_child(_boost_hud)
+
 	_undead_hud = UndeadInvasionHudScript.new()
 	_undead_hud.name = "UndeadInvasionHud"
 	add_child(_undead_hud)
@@ -608,6 +627,15 @@ func _build_hud() -> void:
 	_game_menu.named_save_requested.connect(_on_named_save_requested)
 	_game_menu.named_load_requested.connect(_on_named_load_requested)
 	_game_menu.new_game_requested.connect(_on_new_game_requested)
+
+	_cheat_panel = CheatPanelScript.new() as CheatPanel
+	_cheat_panel.name = "CheatPanel"
+	add_child(_cheat_panel)
+	_cheat_panel.opened.connect(_on_cheat_opened)
+	_cheat_panel.closed.connect(_on_cheat_closed)
+	_cheat_panel.fill_gems_requested.connect(_on_cheat_fill_gems)
+	_cheat_panel.fill_recipes_requested.connect(_on_cheat_fill_recipes)
+	_cheat_panel.teleport_nearest_recipe_requested.connect(_on_cheat_teleport_nearest_recipe)
 
 	_loot_toast = LootToastScript.new() as LootToast
 	_loot_toast.name = "LootToast"
@@ -713,12 +741,7 @@ func _roll_meteor_spawn_interval() -> void:
 	_meteor_spawn_interval_sec = randf_range(60.0, 180.0)
 
 func _on_settings_opened() -> void:
-	if is_inventory_open():
-		_inventory_panel.call("close_panel")
-	if is_monster_summon_open():
-		_monster_summon_panel.call("close_panel")
-	if is_game_menu_open():
-		_game_menu.close_panel()
+	_close_other_modals_except("settings")
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -726,7 +749,7 @@ func _on_settings_opened() -> void:
 
 func _on_settings_closed() -> void:
 	_refresh_hud_visibility()
-	if is_inventory_open() or is_monster_summon_open():
+	if is_modal_open():
 		return
 	## Free-cursor aim — never restore legacy mouse capture after a modal.
 	if _walker != null and is_instance_valid(_walker):
@@ -734,12 +757,7 @@ func _on_settings_closed() -> void:
 
 
 func _on_inventory_opened() -> void:
-	if is_settings_open():
-		_settings_panel.call("close_panel")
-	if is_monster_summon_open():
-		_monster_summon_panel.call("close_panel")
-	if is_game_menu_open():
-		_game_menu.close_panel()
+	_close_other_modals_except("inventory")
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -747,19 +765,14 @@ func _on_inventory_opened() -> void:
 
 func _on_inventory_closed() -> void:
 	_refresh_hud_visibility()
-	if is_settings_open() or is_monster_summon_open():
+	if is_modal_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
 
 
 func _on_monster_summon_opened() -> void:
-	if is_settings_open():
-		_settings_panel.call("close_panel")
-	if is_inventory_open():
-		_inventory_panel.call("close_panel")
-	if is_game_menu_open():
-		_game_menu.close_panel()
+	_close_other_modals_except("summon")
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -769,7 +782,7 @@ func _on_monster_summon_closed() -> void:
 	## Cancel clears a pending look-aim; confirm already consumed it in summon_monster_at_aim.
 	_summon_aim = null
 	_refresh_hud_visibility()
-	if is_settings_open() or is_inventory_open():
+	if is_modal_open():
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
@@ -782,12 +795,7 @@ func _on_game_menu_requested() -> void:
 
 
 func _on_game_menu_opened() -> void:
-	if is_settings_open():
-		_settings_panel.call("close_panel")
-	if is_inventory_open():
-		_inventory_panel.call("close_panel")
-	if is_monster_summon_open():
-		_monster_summon_panel.call("close_panel")
+	_close_other_modals_except("game")
 	_refresh_hud_visibility()
 	if _game_over:
 		_game_menu.set_status("This run is over — load a save or start a new game.", true)
@@ -803,6 +811,36 @@ func _on_game_menu_closed() -> void:
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
+
+
+func _on_cheat_opened() -> void:
+	_close_other_modals_except("cheat")
+	_refresh_hud_visibility()
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_cheat_closed() -> void:
+	_refresh_hud_visibility()
+	if is_modal_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+## One modal at a time. Each open handler used to list the others by hand, and the cheat panel
+## was about to be the fifth place that list had to be kept in sync.
+func _close_other_modals_except(keep: String) -> void:
+	if keep != "settings" and is_settings_open():
+		_settings_panel.call("close_panel")
+	if keep != "inventory" and is_inventory_open():
+		_inventory_panel.call("close_panel")
+	if keep != "summon" and is_monster_summon_open():
+		_monster_summon_panel.call("close_panel")
+	if keep != "game" and is_game_menu_open():
+		_game_menu.close_panel()
+	if keep != "cheat" and is_cheat_open():
+		_cheat_panel.close_panel()
 
 
 func _on_quicksave_requested() -> void:
@@ -990,6 +1028,9 @@ func _on_inventory_unlock_requested(ability_id: String) -> void:
 
 func _on_inventory_craft_requested(recipe_id: String) -> void:
 	if _inventory == null:
+		return
+	if not knows_recipe(recipe_id):
+		push_error("CityRoot: craft requested for unknown recipe '%s'" % recipe_id)
 		return
 	if not _inventory.craft(recipe_id):
 		push_error("CityRoot: craft failed for '%s'" % recipe_id)
@@ -1298,6 +1339,14 @@ func can_use_ability(ability_id: String) -> bool:
 	return _loadout != null and _loadout.is_unlocked(ability_id)
 
 
+func knows_recipe(recipe_id: String) -> bool:
+	return _loadout != null and _loadout.knows_recipe(recipe_id)
+
+
+func knows_ability_schematic(ability_id: String) -> bool:
+	return _loadout != null and _loadout.knows_ability_schematic(ability_id)
+
+
 func ability_for_mouse_action(action: String) -> String:
 	if _loadout == null:
 		return ""
@@ -1339,7 +1388,7 @@ func activate_ability(ability_id: String) -> void:
 		AbilityRegistry.ID_STOMP:
 			_walker.fire_stomp()
 		AbilityRegistry.ID_SHIELD:
-			_walker.set_shield_held(true)
+			_walker.toggle_shield()
 		AbilityRegistry.ID_GROW:
 			_activate_grow_shrink(true)
 		AbilityRegistry.ID_SHRINK:
@@ -1372,6 +1421,10 @@ func try_unlock_ability(ability_id: String) -> bool:
 		push_error("CityRoot.try_unlock_ability: '%s' has no unlock cost" % ability_id)
 		return false
 	if _loadout.is_unlocked(ability_id):
+		return false
+	## Gems alone no longer buy a power: the run has to have found the schematic for it.
+	if not _loadout.knows_ability_schematic(ability_id):
+		print("CityRoot: no schematic for '%s' yet" % def.display_name)
 		return false
 	for item_id: Variant in def.unlock_cost.keys():
 		var need := int(def.unlock_cost[item_id])
@@ -1425,16 +1478,43 @@ func _throw_trap() -> void:
 	if _inventory.count_of(InventoryCatalog.ID_TRAP) <= 0:
 		print("CityRoot: no traps in inventory")
 		return
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot._throw_trap: no walker")
+		return
+	## Same world-voxel aim as meteor / monster summon — cursor ray + destructibles, no agent magnet.
+	var aim: Dictionary = _walker.aim_world_at_cursor()
+	if not bool(aim.get("did_hit", false)):
+		print("CityRoot: trap throw cancelled — world aim missed")
+		return
 	if not _inventory.remove(InventoryCatalog.ID_TRAP, 1):
 		return
-	var origin := _walker.global_position + Vector3(0.0, 1.2, 0.0)
-	var aim := -_walker.global_transform.basis.z.normalized()
+	var origin := _walker.global_position + Vector3(0.0, 1.2 * maxf(_walker.character_scale, 0.5), 0.0)
+	var target: Vector3 = aim["point"] as Vector3
 	var proj: TrapProjectile = TrapProjectileScript.new() as TrapProjectile
 	proj.name = "TrapProjectile"
 	add_child(proj)
 	proj.global_position = origin
-	proj.linear_velocity = (aim + Vector3.UP * 0.55).normalized() * 14.0
+	proj.linear_velocity = _trap_throw_velocity(origin, target)
 	proj.landed.connect(_on_trap_landed)
+
+
+## Ballistic lob that lands near `target` under TrapProjectile's gravity_scale.
+func _trap_throw_velocity(origin: Vector3, target: Vector3) -> Vector3:
+	const GRAVITY_SCALE := 1.35
+	var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * GRAVITY_SCALE
+	var to := target - origin
+	var flat := Vector3(to.x, 0.0, to.z).length()
+	## Longer / higher aims get more airtime so the arc stays readable and the formula stays stable.
+	var flight := clampf(flat / 11.0, 0.4, 1.75)
+	if to.y > 2.0:
+		flight = maxf(flight, 0.55 + to.y * 0.08)
+	if to.length_squared() < 0.0001:
+		return Vector3.UP * 8.0
+	return Vector3(
+		to.x / flight,
+		(to.y + 0.5 * g * flight * flight) / flight,
+		to.z / flight
+	)
 
 
 func _on_trap_landed(trap: ArmedTrap) -> void:
@@ -1715,6 +1795,75 @@ func report_chest_opened(world_pos: Vector3, gems_paid: int) -> void:
 	_loot_toast.set_headline("Chest opened")
 	if _audio != null:
 		_audio.play_treasure_bling()
+
+
+## Gems handed out when the cookbook is already complete. Nothing cheap: the spot was worth a
+## scroll, so it stays worth the climb after the last recipe is known.
+const RECIPE_FALLBACK_GEMS: Array[int] = [VoxelMaterial.GEM_EMERALD, VoxelMaterial.GEM_DIAMOND]
+
+
+func is_recipe_site_looted(site_id: String) -> bool:
+	return _loadout != null and _loadout.is_recipe_site_looted(site_id)
+
+
+## A scroll was opened. This is the only place a recipe pickup decides what it was: one recipe
+## the run is still missing, or — once there are none left — a rare gem instead. Returns true
+## when the find paid anything at all.
+func collect_recipe_pickup(site_id: String, world_pos: Vector3) -> bool:
+	if _loadout == null:
+		push_error("CityRoot.collect_recipe_pickup: no loadout to learn into")
+		return false
+	if _loadout.is_recipe_site_looted(site_id):
+		return false
+	_loadout.mark_recipe_site_looted(site_id)
+	var missing := _loadout.missing_recipe_ids()
+	if missing.is_empty():
+		return _pay_recipe_fallback_gem(site_id, world_pos)
+	## Seeded by the site, so the same scroll always turns out to be the same recipe for a given
+	## run — reloading an autosave taken a step earlier cannot re-roll it into a better one.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(site_id) ^ int(city_seed)
+	var recipe_id := missing[rng.randi_range(0, missing.size() - 1)]
+	if not _loadout.learn_recipe(recipe_id):
+		push_error("CityRoot: recipe '%s' was already known" % recipe_id)
+		return false
+	var recipe := InventoryCatalog.recipe(recipe_id)
+	var label := recipe_id if recipe == null else recipe.display_name
+	if _audio != null:
+		_audio.play_chest_open(world_pos)
+		_audio.play_treasure_bling()
+	if _loot_toast != null:
+		## A chest can pay stones and a scroll in the same click. Resetting the card there would
+		## throw away the gems that were just put on it, so an open card is only renamed.
+		if _loot_toast.is_showing():
+			_loot_toast.set_headline("Recipe learned — %s" % label)
+		else:
+			_loot_toast.show_message("Recipe learned — %s" % label)
+	if _inventory_panel != null and _inventory_panel.has_method("rebuild_recipe_lists"):
+		_inventory_panel.call("rebuild_recipe_lists")
+	if _ability_tray != null:
+		_ability_tray.refresh()
+	print("CityRoot: learned recipe '%s' at %s" % [recipe_id, site_id])
+	return true
+
+
+## The cookbook is full, so the scroll pays a stone instead. Off-budget like a hill chest: the
+## district ledger is for what is buried in the tile, and this is a reward for standing here.
+func _pay_recipe_fallback_gem(site_id: String, world_pos: Vector3) -> bool:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(site_id) ^ int(city_seed)
+	var gem: int = RECIPE_FALLBACK_GEMS[rng.randi_range(0, RECIPE_FALLBACK_GEMS.size() - 1)]
+	var coord := DistrictCoord.from_world(world_pos, VOXEL_SIZE)
+	if not grant_district_gem(coord, gem, false):
+		push_error("CityRoot: recipe cache could not pay a gem at %s" % site_id)
+		return false
+	if _audio != null:
+		_audio.play_chest_open(world_pos)
+		_audio.play_treasure_bling()
+	if _loot_toast != null:
+		_loot_toast.set_headline("Recipe cache — nothing new to learn")
+	print("CityRoot: recipe cache at %s paid a gem instead" % site_id)
+	return true
 
 
 func get_loot_toast() -> LootToast:
@@ -2546,6 +2695,8 @@ func _regenerate() -> void:
 		_energy_hud.call("clear_display")
 	if _health_hud != null and is_instance_valid(_health_hud):
 		_health_hud.call("clear_display")
+	if _boost_hud != null and is_instance_valid(_boost_hud):
+		_boost_hud.call("clear_display")
 	if _undead_hud != null and is_instance_valid(_undead_hud):
 		_undead_hud.call("clear_display")
 	if _minimap != null and is_instance_valid(_minimap):
@@ -2733,6 +2884,8 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 		_energy_hud.call("bind_walker", _walker)
 	if _health_hud != null and is_instance_valid(_health_hud):
 		_health_hud.call("bind_walker", _walker)
+	if _boost_hud != null and is_instance_valid(_boost_hud):
+		_boost_hud.call("bind_walker", _walker)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
 		_apply_saved_controls()
@@ -3617,32 +3770,6 @@ func _pick_ground_ring_target(min_m: float, max_m: float) -> Vector3:
 			continue
 		return _terrain.to_global(Vector3(float(lx) + 0.5, float(found_y) + 0.95, float(lz) + 0.5))
 	return Vector3.INF
-
-
-func find_nearest_grow_pad(from: Vector3, max_dist: float) -> Node3D:
-	if _streamer == null:
-		return null
-	var best: Node3D = null
-	var best_d2 := max_dist * max_dist
-	var districts := _streamer.get_loaded_districts()
-	for entry in districts:
-		var inst := _as_district_instance(entry)
-		if inst == null or not is_instance_valid(inst) or inst.scale_pads == null:
-			continue
-		for pad in inst.scale_pads.get_children():
-			if pad == null or not is_instance_valid(pad):
-				continue
-			if not (pad is ScalePad):
-				continue
-			var sp := pad as ScalePad
-			if sp.kind != ScalePad.Kind.GROW:
-				continue
-			var d2 := Vector2(sp.global_position.x - from.x, sp.global_position.z - from.z).length_squared()
-			if d2 > best_d2:
-				continue
-			best_d2 = d2
-			best = sp
-	return best
 
 
 func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
@@ -4920,14 +5047,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	var ek := event as InputEventKey
 	if ek == null or not ek.pressed or ek.echo:
 		return
-	## Debug: Ctrl+Shift+F12 fills every gem stack to 99. Not remappable on purpose.
+	## Debug: Ctrl+Shift+F12 toggles the cheat modal. Not remappable on purpose.
 	if (
 		ek.keycode == KEY_F12
 		and ek.ctrl_pressed
 		and ek.shift_pressed
 		and not ek.alt_pressed
 	):
-		_cheat_fill_gems()
+		if _cheat_panel != null and not _booting and not is_splash_open():
+			_cheat_panel.toggle_panel()
 		get_viewport().set_input_as_handled()
 		return
 	var ctl := _player_controls()
@@ -4944,6 +5072,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if is_game_menu_open():
 			_game_menu.close_panel()
+			get_viewport().set_input_as_handled()
+			return
+		if is_cheat_open():
+			_cheat_panel.close_panel()
 			get_viewport().set_input_as_handled()
 			return
 		## Quitting from the keyboard never reaches the window manager, so this is the only chance
@@ -4998,9 +5130,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-## Top every gem type up to a full stack. Debug only — Ctrl+Shift+F12.
-func _cheat_fill_gems() -> void:
+func _on_cheat_fill_gems() -> void:
 	if _inventory == null:
+		_cheat_log("Fill gems failed: no inventory.")
 		push_error("CityRoot: cheat fill gems needs an inventory")
 		return
 	const TARGET := 99
@@ -5018,7 +5150,83 @@ func _cheat_fill_gems() -> void:
 			push_error("CityRoot: cheat could not fit %d × %s" % [left, item_id])
 		else:
 			filled += 1
-	print("CityRoot: cheat — %d gem types topped to %d" % [filled, TARGET])
+	var msg := "Filled %d gem type(s) to %d." % [filled, TARGET]
+	_cheat_log(msg)
+	print("CityRoot: cheat — %s" % msg)
+
+
+func _on_cheat_fill_recipes() -> void:
+	if _loadout == null:
+		_cheat_log("Fill recipes failed: no loadout.")
+		push_error("CityRoot: cheat fill recipes needs a loadout")
+		return
+	var before := _loadout.missing_recipe_ids().size()
+	_loadout.learn_every_recipe()
+	if _inventory_panel != null and _inventory_panel.has_method("rebuild_recipe_lists"):
+		_inventory_panel.call("rebuild_recipe_lists")
+	var after := _loadout.missing_recipe_ids().size()
+	var learned := before - after
+	var msg := (
+		"Cookbook already full." if learned <= 0
+		else "Learned %d recipe(s); %d still missing (should be 0)." % [learned, after]
+	)
+	_cheat_log(msg)
+	print("CityRoot: cheat — %s" % msg)
+
+
+func _on_cheat_teleport_nearest_recipe() -> void:
+	if _walker == null or not is_instance_valid(_walker):
+		_cheat_log("Teleport failed: no walker.")
+		return
+	if _streamer == null:
+		_cheat_log("Teleport failed: world not streaming yet.")
+		return
+	var best: RecipePickup = null
+	var best_dist := INF
+	var from := _walker.global_position
+	var scanned := 0
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
+		if inst == null or inst.recipe_pickups == null:
+			continue
+		if not is_instance_valid(inst.recipe_pickups):
+			continue
+		for pickup in inst.recipe_pickups.live_landmark_pickups():
+			scanned += 1
+			var d := from.distance_to(pickup.global_position)
+			if d < best_dist:
+				best_dist = d
+				best = pickup
+	if best == null:
+		_cheat_log(
+			"No landmark recipe scrolls in loaded districts (scanned %d; chests ignored)."
+			% scanned
+		)
+		return
+	var target := best.global_position
+	var flat := Vector3(target.x - from.x, 0.0, target.z - from.z)
+	if flat.length_squared() < 0.01:
+		flat = Vector3(CHEAT_RECIPE_STAND_OFF_M, 0.0, 0.0)
+	else:
+		flat = flat.normalized() * CHEAT_RECIPE_STAND_OFF_M
+	var stand := Vector3(target.x - flat.x, target.y + 0.35, target.z - flat.z)
+	_walker.velocity = Vector3.ZERO
+	_walker.global_position = stand
+	_walker.velocity = Vector3.ZERO
+	## Face the scroll so the first click after closing the panel lands on it.
+	var toward := target - stand
+	if _walker.has_method("set_yaw"):
+		_walker.call("set_yaw", atan2(-toward.x, -toward.z))
+	var msg := "Teleported to %s (%.1f m away)." % [best.site_id, best_dist]
+	_cheat_log(msg)
+	print("CityRoot: cheat — %s" % msg)
+	if _cheat_panel != null:
+		_cheat_panel.close_panel()
+
+
+func _cheat_log(line: String) -> void:
+	if _cheat_panel != null:
+		_cheat_panel.append_log(line)
 
 
 func _input(event: InputEvent) -> void:

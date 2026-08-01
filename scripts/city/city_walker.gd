@@ -33,6 +33,7 @@ const BodyProportionsScript := preload("res://scripts/humans/body_proportions.gd
 const EyeLaserVfxScript := preload("res://scripts/city/eye_laser_vfx.gd")
 const BlasterBoltVfxScript := preload("res://scripts/city/blaster_bolt_vfx.gd")
 const ChargedBlastVfxScript := preload("res://scripts/city/charged_blast_vfx.gd")
+const BoostAuraVfxScript := preload("res://scripts/city/boost_aura_vfx.gd")
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const VoxelBodyMotionScript := preload("res://scripts/city/voxel_body_motion.gd")
 const PlayerHealthScript := preload("res://scripts/city/player_health.gd")
@@ -253,6 +254,8 @@ var _boost_speed_left: float = 0.0
 var _boost_speed_mul: float = 1.0
 var _boost_regen_left: float = 0.0
 var _boost_regen_mul: float = 1.0
+## Soft shell VFX while a tonic timer is live (see boost_aura_vfx.gd).
+var _boost_aura: Node3D
 var _temp_scale_left: float = 0.0
 var _temp_scale_restore: float = 0.0
 ## Ability id last started from a mouse chord, so release stops the right hold.
@@ -634,6 +637,8 @@ func set_character_scale(value: float, silent: bool = false) -> void:
 		return
 	if _eye_laser != null and _eye_laser.has_method("set_character_scale"):
 		_eye_laser.call("set_character_scale", _effective_body_scale())
+	if _boost_aura != null and is_instance_valid(_boost_aura):
+		_boost_aura.call("set_body_scale", _effective_body_scale())
 	if not silent:
 		print("CityWalker scale=%.2f dig=%.2fm speed×%.2f" % [character_scale, get_dig_radius(), character_scale])
 
@@ -865,7 +870,7 @@ func begin_trap_hold(duration_sec: float) -> void:
 	velocity = Vector3.ZERO
 	_stop_blaster(false)
 	_blast_charging = false
-	_shield_held = false
+	set_shield_held(false)
 
 
 func is_trap_held() -> bool:
@@ -873,7 +878,21 @@ func is_trap_held() -> bool:
 
 
 func set_shield_held(on: bool) -> void:
+	if _shield_held == on:
+		return
 	_shield_held = on
+	_sync_boost_aura()
+
+
+## Press once to raise the ward, press again to drop it. Release must not turn it off — that
+## was the old hold-to-drain behaviour that emptied the bar the moment the key went up.
+func toggle_shield() -> void:
+	if _shield_held:
+		set_shield_held(false)
+		return
+	if _energy <= 0.0:
+		return
+	set_shield_held(true)
 
 
 func is_shield_held() -> bool:
@@ -883,11 +902,21 @@ func is_shield_held() -> bool:
 func begin_speed_boost(duration_sec: float, mul: float = 1.45) -> void:
 	_boost_speed_left = maxf(_boost_speed_left, duration_sec)
 	_boost_speed_mul = mul
+	_sync_boost_aura()
 
 
 func begin_regen_boost(duration_sec: float, mul: float = 2.5) -> void:
 	_boost_regen_left = maxf(_boost_regen_left, duration_sec)
 	_boost_regen_mul = mul
+	_sync_boost_aura()
+
+
+func speed_boost_left() -> float:
+	return _boost_speed_left
+
+
+func regen_boost_left() -> float:
+	return _boost_regen_left
 
 
 ## Temporary grow/shrink that reverts when the timer ends.
@@ -901,10 +930,14 @@ func begin_temp_scale(target_scale: float, duration_sec: float) -> void:
 func _tick_status_effects(delta: float) -> void:
 	if _trap_hold_left > 0.0:
 		_trap_hold_left = maxf(_trap_hold_left - delta, 0.0)
+	var speed_was := _boost_speed_left > 0.0
+	var regen_was := _boost_regen_left > 0.0
 	if _boost_speed_left > 0.0:
 		_boost_speed_left = maxf(_boost_speed_left - delta, 0.0)
 	if _boost_regen_left > 0.0:
 		_boost_regen_left = maxf(_boost_regen_left - delta, 0.0)
+	if speed_was != (_boost_speed_left > 0.0) or regen_was != (_boost_regen_left > 0.0):
+		_sync_boost_aura()
 	if _temp_scale_left > 0.0:
 		_temp_scale_left = maxf(_temp_scale_left - delta, 0.0)
 		if _temp_scale_left <= 0.0 and _temp_scale_restore > 0.0:
@@ -913,7 +946,34 @@ func _tick_status_effects(delta: float) -> void:
 	if _shield_held:
 		var drain := AbilityRegistry.SHIELD_DRAIN_PER_SEC * delta
 		if not try_spend_energy(drain):
-			_shield_held = false
+			set_shield_held(false)
+
+
+func _ensure_boost_aura() -> void:
+	if _boost_aura != null and is_instance_valid(_boost_aura):
+		return
+	_boost_aura = BoostAuraVfxScript.new() as Node3D
+	_boost_aura.name = "BoostAura"
+	add_child(_boost_aura)
+	_boost_aura.call("setup")
+	_boost_aura.call("set_body_scale", _effective_body_scale())
+
+
+func _sync_boost_aura() -> void:
+	var want_speed := _boost_speed_left > 0.0
+	var want_regen := _boost_regen_left > 0.0
+	var want_shield := _shield_held
+	if not want_speed and not want_regen and not want_shield:
+		if _boost_aura != null and is_instance_valid(_boost_aura):
+			_boost_aura.call("set_speed_active", false)
+			_boost_aura.call("set_regen_active", false)
+			_boost_aura.call("set_shield_active", false)
+		return
+	_ensure_boost_aura()
+	_boost_aura.call("set_body_scale", _effective_body_scale())
+	_boost_aura.call("set_speed_active", want_speed)
+	_boost_aura.call("set_regen_active", want_regen)
+	_boost_aura.call("set_shield_active", want_shield)
 
 
 func _regen_energy(delta: float) -> void:
@@ -1513,12 +1573,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				var beam_code := int(ctl.get_binding("beam").get("code", -1)) as Key
 				if ek.keycode == beam_code:
 					_release_mouse_ability("beam")
-					get_viewport().set_input_as_handled()
-					return
-			if _shield_held and str(ctl.get_binding("laser").get("device", "")) == "key":
-				var laser_code := int(ctl.get_binding("laser").get("code", -1)) as Key
-				if ek.keycode == laser_code:
-					_release_mouse_ability("laser")
 					get_viewport().set_input_as_handled()
 					return
 	if event is InputEventMouseMotion and _rmb_looking:
@@ -3598,7 +3652,9 @@ func _press_mouse_ability(action: String) -> void:
 		AbilityRegistry.ID_SHIELD:
 			_stop_blaster(false)
 			_blast_charging = false
-			set_shield_held(true)
+			## Toggle on press; release is ignored so the ward stays up until the next press.
+			toggle_shield()
+			_mouse_hold_ability = ""
 		_:
 			_activate_ability_id(ability_id)
 
@@ -3614,7 +3670,8 @@ func _release_mouse_ability(action: String) -> void:
 			if _blast_charging:
 				_release_charged_blast_at_cursor()
 		AbilityRegistry.ID_SHIELD:
-			set_shield_held(false)
+			## Toggle power — releasing the bind must not drop the ward.
+			pass
 	_mouse_hold_ability = ""
 
 

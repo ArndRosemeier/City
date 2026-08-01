@@ -27,12 +27,15 @@ var district_coord: Vector2i = Vector2i.ZERO
 var _rng := RandomNumberGenerator.new()
 var _anim: AnimationPlayer
 var _opened: bool = false
+## Kept past `build` so the recipe roll and the gem roll cannot drift apart.
+var _chest_seed: int = 0
 
 
 ## Stand a chest at `world_pos` facing `yaw`, drawing on `coord`'s budget. `chest_seed` fixes how
 ## many gems it holds, so the same room in the same world always holds the same chest.
 func build(coord: Vector2i, world_pos: Vector3, yaw: float, chest_seed: int) -> bool:
 	district_coord = coord
+	_chest_seed = chest_seed
 	_rng.seed = chest_seed
 	var packed := load(CHEST_SCENE_PATH) as PackedScene
 	if packed == null:
@@ -90,14 +93,31 @@ func interact_at_world(_world_pos: Vector3) -> bool:
 			break
 		if city.grant_district_gem(district_coord, gem, true):
 			paid += 1
+	## A chest is the one recipe site that is not a landmark, so it rolls rarely — but it rolls
+	## before the haul is reported, so a chest that pays a scroll names itself for the scroll.
+	var found_recipe := _try_pay_recipe(city)
 	## After the grants: each one has put its stone on the loot card, and the city plays the lid and
 	## the flourish over the finished haul.
-	city.report_chest_opened(global_position, paid)
+	if not found_recipe:
+		city.report_chest_opened(global_position, paid)
 	print(
 		"GemChest: district %s chest held %d gems, paid %d"
 		% [str(district_coord), wanted, paid]
 	)
 	return true
+
+
+## Rare bonus: the chest also held a sealed recipe. Seeded off the chest, so the same chest in
+## the same world either always holds one or never does.
+func _try_pay_recipe(city: CityRoot) -> bool:
+	var site := RecipePickupPlacer.site_id(
+		RecipePickupPlacer.SITE_CHEST, district_coord, _chest_seed
+	)
+	if city.is_recipe_site_looted(site):
+		return false
+	if not RecipePickupPlacer.should_place(RecipePickupPlacer.SITE_CHEST, _chest_seed):
+		return false
+	return city.collect_recipe_pickup(site, global_position)
 
 
 func _is_hill_district(city: CityRoot) -> bool:

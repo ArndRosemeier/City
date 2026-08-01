@@ -122,6 +122,10 @@ var gem_mats_to_place: PackedInt32Array = PackedInt32Array()
 var cave_mouths: PackedVector2Array = PackedVector2Array()
 ## Summit the mouths were bored from (district-local XZ); used to stand outside.
 var cave_summit: Vector2i = Vector2i(-1, -1)
+## Highest column of the massif: district-local X and Z in `x`/`z`, terrain height above the
+## deck in `y`. `x` is -1 when the tile grew no hill at all. This is the true peak of the
+## finished heightfield rather than a summit seed, so something standing on it is on the top.
+var summit_top: Vector3i = Vector3i(-1, 0, -1)
 
 ## Rock beds from the bottom of the stack upward, repeated all the way to the summits
 ## so every hill in the tile shows the same geology.
@@ -166,6 +170,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	var summits := _pick_summits()
 	_build_heightfield(summits)
 	_limit_steps()
+	_record_summit_top()
 	_report(summits)
 	_paint_meadow()
 	if use_native_hill:
@@ -187,6 +192,7 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	var summits := _pick_summits()
 	_build_heightfield(summits)
 	_limit_steps()
+	_record_summit_top()
 	if use_native_hill:
 		_paint_terrain_native()
 	else:
@@ -241,6 +247,7 @@ func _begin(min_v: Vector3i, max_v: Vector3i, need_brush: bool = true) -> bool:
 	gem_mats = PackedInt32Array()
 	cave_mouths = PackedVector2Array()
 	cave_summit = Vector2i(-1, -1)
+	summit_top = Vector3i(-1, 0, -1)
 	_shell_guard = true
 	_build_bed_dip()
 	return true
@@ -472,6 +479,21 @@ func _limit_steps() -> void:
 				if z2 < _d - 1:
 					v2 = mini(v2, _height[i2 + _w] + MAX_STEP)
 				_height[i2] = v2
+
+
+## Peak of the finished heightfield, in district-local columns. Run after `_limit_steps`, which
+## is free to shave the tallest column, so the seed summit is not necessarily the high point.
+func _record_summit_top() -> void:
+	summit_top = Vector3i(-1, 0, -1)
+	var best := 0
+	for z in range(_d):
+		var row := z * _w
+		for x in range(_w):
+			var h := _height[row + x]
+			if h <= best:
+				continue
+			best = h
+			summit_top = Vector3i(_ox + x, h, _oz + z)
 
 
 func _report(summits: Array[Dictionary]) -> void:
@@ -1428,7 +1450,12 @@ func _dress_cave_room(room: Dictionary) -> void:
 				continue
 			var qx := _ox + sx + rng.randi_range(-rx / 2, rx / 2)
 			var qz := _oz + sz + rng.randi_range(-rz / 2, rz / 2)
-			brush.column(qx, qz, cy - ry + 1, cy + ry - 1, VoxelMaterial.CAVE_WALL)
+			for y in range(cy - ry + 1, cy + ry - 1):
+				## Ore is budgeted: the tile owes exactly the gems embedded before the carve,
+				## so a pillar grows around a nugget rather than through it.
+				if VoxelMaterial.is_gem(brush.get_vox(Vector3i(qx, y, qz))):
+					continue
+				brush.set_vox(Vector3i(qx, y, qz), VoxelMaterial.CAVE_WALL)
 
 
 func _is_cave_shellable(id: int) -> bool:

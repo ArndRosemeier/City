@@ -18,6 +18,11 @@ var unlocks: Dictionary = {} ## ability_id → true
 var tray: Array[String] = []
 ## Highest hardness tier the player's tools may carve cleanly.
 var hardness_tier: int = HARDNESS_ROCK
+## recipe_id → true. Adventure learns these from world pickups; Sandbox knows the lot.
+var known_recipes: Dictionary = {}
+## site_id → true for every recipe pickup this run has already collected, so a district that
+## streams back in cannot pay the same landmark twice.
+var looted_recipe_sites: Dictionary = {}
 
 
 func _init() -> void:
@@ -34,6 +39,8 @@ func reset_sandbox() -> void:
 		unlocks[def.id] = true
 	tray = AbilityRegistry.default_sandbox_tray()
 	hardness_tier = HARDNESS_EXOTIC
+	learn_every_recipe()
+	looted_recipe_sites.clear()
 
 
 func reset_adventure() -> void:
@@ -43,6 +50,9 @@ func reset_adventure() -> void:
 		unlocks[id] = true
 	tray = AbilityRegistry.default_adventure_tray()
 	hardness_tier = HARDNESS_ROCK
+	## An Adventure cookbook starts empty: every craft and every power schematic is a find.
+	known_recipes.clear()
+	looted_recipe_sites.clear()
 
 
 func is_sandbox() -> bool:
@@ -59,6 +69,60 @@ func scores() -> bool:
 
 func uses_gem_budgets() -> bool:
 	return is_adventure()
+
+
+func learn_every_recipe() -> void:
+	known_recipes.clear()
+	for recipe_id in InventoryCatalog.all_recipe_ids():
+		known_recipes[recipe_id] = true
+
+
+func knows_recipe(recipe_id: String) -> bool:
+	if is_sandbox():
+		return true
+	return bool(known_recipes.get(recipe_id, false))
+
+
+## True when this call is what taught it — a second pickup of the same recipe reports false so
+## the caller can fall back to a gem.
+func learn_recipe(recipe_id: String) -> bool:
+	if not InventoryCatalog.has_recipe(recipe_id):
+		push_error("PlayerLoadout.learn_recipe: unknown recipe '%s'" % recipe_id)
+		return false
+	if bool(known_recipes.get(recipe_id, false)):
+		return false
+	known_recipes[recipe_id] = true
+	return true
+
+
+## Sorted, so picking "one of the missing" from a site seed lands on the same recipe every time
+## the same run re-rolls it.
+func missing_recipe_ids() -> Array[String]:
+	var out: Array[String] = []
+	if is_sandbox():
+		return out
+	for recipe_id in InventoryCatalog.all_recipe_ids():
+		if not bool(known_recipes.get(recipe_id, false)):
+			out.append(recipe_id)
+	return out
+
+
+## Does the player know how to build this power? Craft-gating only bites in Adventure.
+func knows_ability_schematic(ability_id: String) -> bool:
+	if is_sandbox():
+		return true
+	return knows_recipe(InventoryCatalog.schematic_id_for_ability(ability_id))
+
+
+func is_recipe_site_looted(site_id: String) -> bool:
+	return bool(looted_recipe_sites.get(site_id, false))
+
+
+func mark_recipe_site_looted(site_id: String) -> void:
+	if site_id.is_empty():
+		push_error("PlayerLoadout.mark_recipe_site_looted: empty site id")
+		return
+	looted_recipe_sites[site_id] = true
 
 
 func is_unlocked(ability_id: String) -> bool:
@@ -115,11 +179,23 @@ func to_save_dict() -> Dictionary:
 	var tray_copy: Array[String] = []
 	for i in range(AbilityRegistry.SLOT_COUNT):
 		tray_copy.append(slot_at(i))
+	var recipe_list: Array[String] = []
+	for key: Variant in known_recipes.keys():
+		if bool(known_recipes[key]):
+			recipe_list.append(str(key))
+	recipe_list.sort()
+	var site_list: Array[String] = []
+	for key: Variant in looted_recipe_sites.keys():
+		if bool(looted_recipe_sites[key]):
+			site_list.append(str(key))
+	site_list.sort()
 	return {
 		"mode": mode,
 		"unlocks": unlock_list,
 		"tray": tray_copy,
 		"hardness_tier": hardness_tier,
+		"recipes": recipe_list,
+		"recipe_sites": site_list,
 	}
 
 
@@ -151,6 +227,18 @@ func load_save_dict(data: Dictionary) -> void:
 			AbilityRegistry.default_sandbox_tray() if is_sandbox()
 			else AbilityRegistry.default_adventure_tray()
 		)
+	known_recipes.clear()
+	var raw_recipes: Variant = data.get("recipes", [])
+	if typeof(raw_recipes) == TYPE_ARRAY:
+		for entry: Variant in raw_recipes as Array:
+			known_recipes[str(entry)] = true
+	if is_sandbox():
+		learn_every_recipe()
+	looted_recipe_sites.clear()
+	var raw_sites: Variant = data.get("recipe_sites", [])
+	if typeof(raw_sites) == TYPE_ARRAY:
+		for entry: Variant in raw_sites as Array:
+			looted_recipe_sites[str(entry)] = true
 	hardness_tier = clampi(
 		int(data.get("hardness_tier", HARDNESS_ROCK)), HARDNESS_ROCK, HARDNESS_EXOTIC
 	)

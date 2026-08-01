@@ -40,6 +40,13 @@ const ElevatorShaftScript := preload("res://scripts/city/elevator_shaft.gd")
 ## When on, native failures assert (no silent fallback).
 @export var use_native_hill: bool = true
 
+## A roof has to be this far above its lot base before it counts as a climb worth rewarding:
+## 30 m, which is well past the town-lot ceiling and into the core towers.
+const TALL_ROOF_MIN_VOX := 60
+## Roofs offered a recipe roll per tile. Beyond the tallest few, a rooftop scroll stops being
+## a reason to look up and becomes litter.
+const TALL_ROOF_CANDIDATES := 6
+
 ## Real massing limits, from how actual cities size tall buildings.
 ##
 ## Floor plate: an occupiable tower runs 500–700 m² (economy residential) up to
@@ -94,6 +101,13 @@ var hill_gem_mats_to_place: PackedInt32Array = PackedInt32Array()
 ## Daylight cave mouths (district-local XZ) + summit for outside-the-entrance spawn.
 var _hill_cave_mouths: PackedVector2Array = PackedVector2Array()
 var _hill_cave_summit: Vector2i = Vector2i(-1, -1)
+## Landmark spots that survive the bake so recipe scrolls can be stood on them at stream time.
+var _hill_summit_top: Vector3i = Vector3i(-1, 0, -1)
+var _lake_island_crowns: Array[Vector3i] = []
+var _park_gazebo: Vector3i = Vector3i(-1, 0, -1)
+var _fractal_niche: Vector3i = Vector3i(-1, 0, -1)
+var _crypt_rooms: Array[Vector3i] = []
+var _tall_roofs: Array[Vector3i] = []
 ## Castle plan from the compose pass; outlives the composer so the bake can hand it on.
 var _castle_layout: CastleLayout = null
 ## Arena plan from the compose pass; outlives the composer for runtime boards/lifts.
@@ -177,6 +191,42 @@ func get_hill_cave_mouths() -> PackedVector2Array:
 	return _hill_cave_mouths.duplicate()
 
 
+## Peak of the hill in district-local voxels (x, height above deck, z). `x` is -1 outside Hill
+## districts and on tiles whose hill never rose.
+func get_hill_summit_top() -> Vector3i:
+	return _hill_summit_top
+
+
+## Crown of every lake island in district-local voxels (x, height above deck, z). Empty outside
+## Lake districts.
+func get_lake_island_crowns() -> Array[Vector3i]:
+	return _lake_island_crowns.duplicate()
+
+
+## Deck of the rare park gazebo in district-local voxels (x, deck Y, z). `x` is -1 when this
+## tile's park did not roll one.
+func get_park_gazebo() -> Vector3i:
+	return _park_gazebo
+
+
+## Sheltered spiral-end ledge on the fractal deck in district-local voxels (x, floor Y, z).
+## `x` is -1 outside Fractal districts and when the surface holds no such pocket.
+func get_fractal_niche() -> Vector3i:
+	return _fractal_niche
+
+
+## Catacomb side chambers in district-local voxels (x, floor Y, z). Empty outside Graveyard.
+func get_crypt_rooms() -> Array[Vector3i]:
+	return _crypt_rooms.duplicate()
+
+
+## Roofs of this tile's tallest buildings in district-local voxels (x, roof surface Y, z),
+## tallest first. Only rect-shell lots report one — round archetypes paint no storey plates,
+## so there is no recorded surface up there to stand anything on.
+func get_tall_roofs() -> Array[Vector3i]:
+	return _tall_roofs.duplicate()
+
+
 ## World-voxel gem ore placed by the hill compose pass (empty outside Hill districts).
 func get_hill_gems() -> Dictionary:
 	var positions := PackedVector3Array()
@@ -225,6 +275,12 @@ func _setup_composers() -> void:
 	_hill_gem_mats = PackedInt32Array()
 	_hill_cave_mouths = PackedVector2Array()
 	_hill_cave_summit = Vector2i(-1, -1)
+	_hill_summit_top = Vector3i(-1, 0, -1)
+	_lake_island_crowns = []
+	_park_gazebo = Vector3i(-1, 0, -1)
+	_fractal_niche = Vector3i(-1, 0, -1)
+	_crypt_rooms = []
+	_tall_roofs = []
 
 	_graveyard = GraveyardComposerScript.new()
 	_graveyard.brush = _brush
@@ -541,6 +597,7 @@ func decorate_open_spaces() -> void:
 		)
 		_fractal.compose(fmin, fmax)
 		_fractal_world_bounds = _compute_fractal_glow_world_bounds()
+		_fractal_niche = _fractal.last_niche
 		return
 	var lc := _planner.large_castle
 	if lc.size.x > 0:
@@ -564,6 +621,7 @@ func decorate_open_spaces() -> void:
 			ll.end.x * cell_size, ground_thickness + 1, ll.end.y * cell_size
 		)
 		_lake.compose(lmin, lmax)
+		_lake_island_crowns = _lake.island_crowns()
 		return
 	var lh := _planner.large_hill
 	if lh.size.x > 0:
@@ -575,6 +633,7 @@ func decorate_open_spaces() -> void:
 		_hill_gem_mats = _hill.gem_mats.duplicate()
 		_hill_cave_mouths = _hill.cave_mouths.duplicate()
 		_hill_cave_summit = _hill.cave_summit
+		_hill_summit_top = _hill.summit_top
 		return
 	var lg := _planner.large_graveyard
 	if lg.size.x > 0:
@@ -586,6 +645,7 @@ func decorate_open_spaces() -> void:
 			lg.end.x * cell_size, ground_thickness + 1, lg.end.y * cell_size
 		)
 		_graveyard.compose(gmin_gy, gmax_gy)
+		_crypt_rooms = _graveyard.crypt_rooms.duplicate()
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
@@ -606,6 +666,7 @@ func decorate_open_spaces() -> void:
 		var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
 		var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
 		_park.compose_large(pmin, pmax)
+		_park_gazebo = _park.gazebo_center
 	## Pocket parks: the streamed path never called _paint_park_cell, so every square
 	## outside the large park stayed an empty lawn rectangle.
 	var pocket_i := 0
@@ -649,6 +710,7 @@ func decorate_open_spaces_far() -> void:
 		)
 		_fractal.compose_far_sparse(fmin, fmax)
 		_fractal_world_bounds = _compute_fractal_glow_world_bounds()
+		_fractal_niche = _fractal.last_niche
 		return
 	var lc := _planner.large_castle
 	if lc.size.x > 0:
@@ -733,11 +795,13 @@ func open_space_bounds() -> Array[AABB]:
 	var oz := float(origin_vox.z)
 	var la := _planner.large_arena
 	if la.size.x > 0:
-		## Undercroft digs below the deck; walls rise above seating.
+		## Undercroft digs below the deck; the corner spires rise ~30 m over seating, so this
+		## box has to be tall enough for them or their tops are written outside the editable
+		## region and the arena loses its silhouette.
 		out.append(
 			AABB(
 				Vector3(ox + la.position.x * cell_size, 0.0, oz + la.position.y * cell_size),
-				Vector3(la.size.x * cell_size, y0 + 40.0, la.size.y * cell_size)
+				Vector3(la.size.x * cell_size, y0 + 90.0, la.size.y * cell_size)
 			)
 		)
 		return out
@@ -1362,10 +1426,40 @@ func _paint_lot(
 			% [zone, cx, cz]
 		)
 	_record_building_impostor(grammar.impostor_parts, zone)
+	_record_tall_roof(grammar)
 	var building := _record_building_interior(bmin, bmax, cx, cz, zone, grammar)
 	_record_lot_doorways(grammar)
 	_record_elevator_shaft(bmin, bmax, grammar, building)
 	grammar.max_height = saved
+
+
+## Note the roof of a lot tall enough that getting onto it is an achievement. The top storey
+## plate is what gets recorded rather than `built_height_vox`: the reported height includes
+## spires and aerials, and a scroll hovering level with an aerial is a scroll nobody can reach.
+func _record_tall_roof(grammar: BuildingGrammar) -> void:
+	if grammar.built_height_vox < TALL_ROOF_MIN_VOX:
+		return
+	if grammar.storey_plates.is_empty():
+		return
+	var top: StoreyPlate = grammar.storey_plates[0]
+	for plate: StoreyPlate in grammar.storey_plates:
+		if plate.floor_y > top.floor_y:
+			top = plate
+	var rect := top.rect
+	if rect.size.x < 5 or rect.size.y < 5:
+		## A parapet-less sliver of roof is somewhere to fall off, not somewhere to land.
+		return
+	var spot := Vector3i(
+		rect.position.x + rect.size.x / 2,
+		top.floor_y + top.air_h + 2,
+		rect.position.y + rect.size.y / 2
+	)
+	## Tallest first, so the district only ever offers scrolls to the roofs worth climbing.
+	## Every lot on a tile shares one deck, so the absolute roof Y ranks them directly.
+	var at := _tall_roofs.size()
+	while at > 0 and _tall_roofs[at - 1].y < spot.y:
+		at -= 1
+	_tall_roofs.insert(at, spot)
 
 
 ## One InteriorRoom per walkable storey of a lot (world voxels), indexed under every

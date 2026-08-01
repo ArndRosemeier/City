@@ -16,6 +16,8 @@ const WALKER_TIMEOUT_MS := 120000
 const PANEL_PNG := "res://tools/inventory_panel.png"
 const SLOT_PNG := "res://tools/inventory_slot_quartz.png"
 const GEMS_PNG := "res://tools/inventory_gems.png"
+const BADGES_PNG := "res://tools/inventory_recipe_badges.png"
+const LOCKED_PNG := "res://tools/inventory_panel_undiscovered.png"
 ## The six gems are near-identical in colour in pairs, so they are judged against each other
 ## rather than one at a time. Magnified, never redrawn larger: the question is what the panel
 ## draws at 64 px.
@@ -28,6 +30,10 @@ const GEM_TALLIES: Array[int] = [7, 3, 11, 2, 40, 1]
 const TRAP_COST := 5
 ## Opaque pixels an icon must have drawn in its 64 x 64 target to count as visible.
 const MIN_OPAQUE_PX := 200
+## Share of a recipe badge's target that must be drawn. Judged as a fraction because the row
+## targets are half the width of a slot's, and low because the openwork badges — the portal
+## ring, the tetromino — are mostly the gaps between their own parts.
+const MIN_BADGE_FRAC := 0.06
 ## How far the drawn icon's centre of mass may sit from the middle of its target.
 const MAX_CENTROID_OFF_PX := 4.0
 ## A transparent slot background must stay transparent: the city leaking in shows up here.
@@ -71,6 +77,12 @@ func _ready() -> void:
 	await _shoot(PANEL_PNG)
 	_save_slot(panel, 0, SLOT_PNG)
 	_save_gem_strip(panel, _gem_materials().size(), GEMS_PNG)
+	if not _save_recipe_badges(panel, BADGES_PNG):
+		get_tree().quit(1)
+		return
+	if not await _shoot_undiscovered_column(city, panel):
+		get_tree().quit(1)
+		return
 
 	print("RESULT: OK")
 	get_tree().quit(0)
@@ -193,6 +205,69 @@ func _save_gem_strip(panel: PlayerInventoryPanel, count: int, path: String) -> v
 	)
 	strip.save_png(path)
 	print("SAVED %s" % path)
+
+
+## The column as an Adventure run first sees it: nothing learned, so every recipe is a blank
+## box. Shot from the real loadout rather than a stub, because "how many boxes and what do they
+## say" is exactly what a fresh Adventure start is.
+func _shoot_undiscovered_column(city: CityRoot, panel: PlayerInventoryPanel) -> bool:
+	city.get_loadout().reset_adventure()
+	panel.rebuild_recipe_lists()
+	await _frames(6)
+	var rows := panel.recipe_rows()
+	var locked := panel.locked_box_count()
+	var total := InventoryCatalog.craft_recipes().size() + AbilityRegistry.unlockable_defs().size()
+	if not rows.is_empty():
+		push_error("FAIL an empty cookbook still listed %d recipes by name" % rows.size())
+		return false
+	if locked != total:
+		push_error("FAIL %d locked boxes for a cookbook of %d recipes" % [locked, total])
+		return false
+	await _shoot(LOCKED_PNG)
+	print("locked column: %d blank boxes" % locked)
+	return true
+
+
+## Every badge the recipe column drew, in one row. A row shows what it builds, and a badge that
+## came out as a speck or as nothing at all is invisible in the panel shot at 38 px — the same
+## blind spot the slot strip exists to cover.
+func _save_recipe_badges(panel: PlayerInventoryPanel, path: String) -> bool:
+	var rows := panel.recipe_rows()
+	if rows.is_empty():
+		push_error("FAIL the recipe column built no rows")
+		return false
+	var cell := int(PlayerInventoryPanel.ROW_ICON_PX)
+	var sheet := Image.create_empty(cell * rows.size(), cell, false, Image.FORMAT_RGBA8)
+	sheet.fill(SLOT_BACKDROP)
+	var ok := true
+	for i in rows.size():
+		var row := rows[i]
+		var img := row.preview.viewport().get_texture().get_image()
+		if img == null:
+			push_error("FAIL recipe row '%s' has no render target" % row.id)
+			return false
+		var opaque := 0
+		for y in range(img.get_height()):
+			for x in range(img.get_width()):
+				if img.get_pixel(x, y).a >= 0.5:
+					opaque += 1
+		var covered := float(opaque) / float(img.get_width() * img.get_height())
+		if covered < MIN_BADGE_FRAC:
+			push_error(
+				"FAIL badge for '%s' covered %.1f%% of its %dx%d target"
+				% [row.id, covered * 100.0, img.get_width(), img.get_height()]
+			)
+			ok = false
+		img.convert(Image.FORMAT_RGBA8)
+		sheet.blend_rect(img, Rect2i(Vector2i.ZERO, img.get_size()), Vector2i(cell * i, 0))
+	sheet.resize(
+		sheet.get_width() * GEM_STRIP_ZOOM,
+		sheet.get_height() * GEM_STRIP_ZOOM,
+		Image.INTERPOLATE_NEAREST
+	)
+	sheet.save_png(path)
+	print("SAVED %s (%d badges)" % [path, rows.size()])
+	return ok
 
 
 func _await_walker(city: CityRoot) -> CityWalker:

@@ -16,11 +16,13 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/undead_invasion_hud.gd", "layer": UiLayers.HUD_UNDEAD},
 	{"path": "res://scripts/city/city_minimap.gd", "layer": UiLayers.HUD_MINIMAP},
 	{"path": "res://scripts/city/player_energy_hud.gd", "layer": UiLayers.HUD_ENERGY},
+	{"path": "res://scripts/city/player_boost_hud.gd", "layer": UiLayers.HUD_BOOST},
 	{"path": "res://scripts/city/city_settings_panel.gd", "layer": UiLayers.MODAL_SETTINGS},
 	{"path": "res://scripts/city/player_inventory_panel.gd", "layer": UiLayers.MODAL_INVENTORY},
 	{"path": "res://scripts/city/character_editor.gd", "layer": UiLayers.MODAL_CHARACTER_EDITOR},
 	{"path": "res://scripts/city/monster_summon_panel.gd", "layer": UiLayers.MODAL_MONSTER_SUMMON},
 	{"path": "res://scripts/city/game_menu_panel.gd", "layer": UiLayers.MODAL_GAME},
+	{"path": "res://scripts/city/cheat_panel.gd", "layer": UiLayers.MODAL_CHEAT},
 	{"path": "res://scripts/city/loading_splash.gd", "layer": UiLayers.LOADING_SPLASH},
 ]
 
@@ -39,6 +41,9 @@ const HUD: Array[int] = [
 	UiLayers.HUD_MINIMAP,
 	UiLayers.HUD_ENERGY,
 	UiLayers.HUD_ACTION_BAR,
+	UiLayers.HUD_HEALTH,
+	UiLayers.HUD_LOOT,
+	UiLayers.HUD_BOOST,
 ]
 
 const MODALS: Array[int] = [
@@ -47,6 +52,7 @@ const MODALS: Array[int] = [
 	UiLayers.MODAL_CHARACTER_EDITOR,
 	UiLayers.MODAL_MONSTER_SUMMON,
 	UiLayers.MODAL_GAME,
+	UiLayers.MODAL_CHEAT,
 ]
 
 const TAKEOVERS: Array[int] = [

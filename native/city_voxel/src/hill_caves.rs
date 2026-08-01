@@ -1171,6 +1171,11 @@ impl<'a> Ctx<'a> {
                 let y1 = cy + ry - 1;
                 if y0 < y1 {
                     for y in y0..y1 {
+                        // Ore is budgeted: the tile owes exactly the gems that were embedded
+                        // before the carve, so a pillar grows around a nugget, not through it.
+                        if materials::is_gem(self.get(qx, y, qz)) {
+                            continue;
+                        }
                         self.set(qx, y, qz, materials::CAVE_WALL);
                     }
                 }

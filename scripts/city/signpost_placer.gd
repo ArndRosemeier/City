@@ -107,8 +107,8 @@ func _pick_sites(
 			break
 		var wx := oxw + (float(cell.x) + 0.5) * float(cell_size) * voxel_size
 		var wz := ozw + (float(cell.y) + 0.5) * float(cell_size) * voxel_size
-		## Curb corner opposite the one ScalePadPlacer uses, so a post and a pad sharing a
-		## cell end up on opposite sides of the junction instead of inside each other.
+		## Alternating curb corner, so two posts on neighbouring cells sit on opposite sides
+		## of the junction instead of crowding the same one.
 		var ox := -3.4 if (cell.x % 2) == 0 else 3.4
 		var oz := -3.4 if (cell.y % 2) == 0 else 3.4
 		var pos := Vector3(wx + ox, gy, wz + oz)

@@ -163,6 +163,10 @@ func can_craft(recipe_id: String) -> bool:
 	var recipe := InventoryCatalog.recipe(recipe_id)
 	if recipe == null:
 		return false
+	if recipe.kind != InventoryCatalog.RECIPE_KIND_CRAFT:
+		## Schematics are knowledge, not a bench job — they yield no item to put in a slot.
+		push_error("PlayerInventory.can_craft: '%s' is not a craft recipe" % recipe_id)
+		return false
 	for item_id in recipe.inputs.keys():
 		var need := int(recipe.inputs[item_id])
 		if count_of(String(item_id)) < need:

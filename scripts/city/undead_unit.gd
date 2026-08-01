@@ -14,7 +14,7 @@ class_name UndeadUnit
 extends CharacterBody3D
 
 enum Role { MAGE, MINION, GIANT }
-enum State { IDLE, SEEK_PED, CAST, NIBBLE, SEEK_PAD, GROWING, STOMP, SCRAPE, DEAD }
+enum State { IDLE, SEEK_PED, CAST, NIBBLE, GROWING, STOMP, SCRAPE, DEAD }
 
 const OrbScript := preload("res://scripts/city/undead_orb_projectile.gd")
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
@@ -47,7 +47,6 @@ const ORB_STANDOFF_FRACTION := 0.92
 const MAGE_CLOSE_IN_M := 2.5
 ## Chase / cast acquire range — give up if the target gets farther than this.
 const MAGE_PURSUE_RANGE_M := 40.0
-const PAD_SEEK_RANGE_M := 75.0
 const GIANT_SCALE_TARGET := 10.0
 const GROW_LOG_RATE := 0.55
 ## Peel a facade strip this often while working on a wall.
@@ -84,10 +83,6 @@ const FALL_GRAVITY := 28.0
 ## Ground speed below which the body is treated as standing still for animation.
 const MOVE_ANIM_EPS_MPS := 0.15
 const FACE_LERP_RATE := 10.0
-## Fraction of a ScalePad's radius that counts as standing on it.
-const PAD_REACH_FRACTION := 0.85
-## Drifting this far past the pad edge sends the body back to walking onto it.
-const PAD_DRIFT_SLACK_M := 1.1
 ## Growth is done once the scale is within this of the target.
 const GROW_EPSILON := 0.05
 ## Extra cells carved beyond the profile footprint when a giant digs itself out, so the
@@ -117,7 +112,6 @@ var _cast_cd: float = 0.0
 var _scrape_cd: float = 0.0
 var _alive: bool = true
 var _yaw: float = 0.0
-var _target_pad: ScalePad
 var _retarget_cd: float = 0.0
 var _current_anim: String = ""
 var _anim_clips: PackedStringArray = PackedStringArray()
@@ -889,35 +883,12 @@ func on_facade_in_reach(point: Vector3, working: State) -> void:
 	state = working
 
 
-func on_pad_in_reach() -> void:
-	state = State.GROWING
-	_play_action(CreatureClips.Action.IDLE)
-
-
 ## The ladder abandoned a goal — GOAL_UNREACHABLE or TRAPPED, both already reported by
 ## NavAgent. Drop whatever the goal was about so the next one is picked from scratch.
 func on_goal_failed(_goal: NavGoal, _ladder_state: NavLadder.State) -> void:
 	_facade_target = Vector3.INF
-	if state == State.SEEK_PAD:
-		abandon_pad()
-	elif state == State.NIBBLE or state == State.SCRAPE:
+	if state == State.NIBBLE or state == State.SCRAPE:
 		state = State.STOMP if role == Role.GIANT else State.SEEK_PED
-
-
-func target_pad() -> ScalePad:
-	if _target_pad != null and is_instance_valid(_target_pad):
-		return _target_pad
-	return null
-
-
-## The pad went away with its district.
-func abandon_pad() -> void:
-	_target_pad = null
-	state = State.SEEK_PED
-
-
-func pad_reach(pad: ScalePad) -> float:
-	return pad.pad_radius * PAD_REACH_FRACTION
 
 
 ## How far out from building fabric this body wants to stand while working on it: inside bite
@@ -982,7 +953,7 @@ func tick(delta: float) -> void:
 		and _invasion.has_method("wants_giant_candidate")
 		and bool(_invasion.call("wants_giant_candidate", self))
 	):
-		_begin_pad_seek()
+		_begin_growth()
 
 	match state:
 		State.CAST:
@@ -993,7 +964,7 @@ func tick(delta: float) -> void:
 			_tick_growing(delta)
 		State.SCRAPE:
 			_tick_scrape()
-		State.IDLE, State.SEEK_PED, State.SEEK_PAD, State.STOMP, State.DEAD:
+		State.IDLE, State.SEEK_PED, State.STOMP, State.DEAD:
 			## Walking states: corridor plus table-driven strikes when prey is close.
 			if state == State.SEEK_PED or state == State.STOMP:
 				_tick_combat_strikes()
@@ -1013,14 +984,14 @@ func _tick_combat_strikes() -> void:
 	_combat.call("try_attack_living", _combat_prey)
 
 
-func _begin_pad_seek() -> void:
-	if state == State.SEEK_PAD or state == State.GROWING or state == State.STOMP:
+## The director has picked this body to become the invasion's giant. It swells where it stands:
+## the glowing grow pads it used to walk to are gone, and having to escort a candidate to a
+## street fixture was the one part of an invasion the player could trivially defuse.
+func _begin_growth() -> void:
+	if state == State.GROWING or state == State.STOMP:
 		return
-	var pad := _city.find_nearest_grow_pad(global_position, PAD_SEEK_RANGE_M) as ScalePad
-	if pad == null:
-		return
-	_target_pad = pad
-	state = State.SEEK_PAD
+	state = State.GROWING
+	_play_action(CreatureClips.Action.IDLE)
 	_restart_goal()
 
 
@@ -1067,18 +1038,6 @@ func _tick_nibble() -> void:
 
 
 func _tick_growing(delta: float) -> void:
-	var pad := target_pad()
-	if pad == null:
-		abandon_pad()
-		_restart_goal()
-		return
-	var d := Vector2(
-		global_position.x - pad.global_position.x, global_position.z - pad.global_position.z
-	).length()
-	if d > pad_reach(pad) + PAD_DRIFT_SLACK_M:
-		state = State.SEEK_PAD
-		_restart_goal()
-		return
 	character_scale = minf(GIANT_SCALE_TARGET, character_scale * exp(GROW_LOG_RATE * delta))
 	_apply_scale()
 	if character_scale < GIANT_SCALE_TARGET - GROW_EPSILON:
@@ -1090,7 +1049,6 @@ func _become_giant() -> void:
 	character_scale = GIANT_SCALE_TARGET
 	role = Role.GIANT
 	state = State.STOMP
-	_target_pad = null
 	_apply_scale()
 	## A giant is a different body to the field: it re-registers on the giant profile.
 	_rebuild_nav()

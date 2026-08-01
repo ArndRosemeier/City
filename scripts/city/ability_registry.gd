@@ -94,7 +94,7 @@ static func ensure_loaded() -> void:
 	_reg(
 		ID_SHIELD, "Shield", KIND_POWER,
 		{InventoryCatalog.ID_SAPPHIRE: 5, InventoryCatalog.ID_TOPAZ: 4}, 0.0, true,
-		"Hold to drain energy and blunt hits"
+		"Toggle — drains energy while up and blunts hits"
 	)
 	_reg(
 		ID_GROW, "Grow", KIND_POWER,
@@ -123,7 +123,7 @@ static func ensure_loaded() -> void:
 	)
 	_reg(
 		ID_USE_TRAP, "Throw trap", KIND_CONSUMABLE, {}, 0.0, false,
-		"Lob a hold trap from inventory"
+		"Aim at a world voxel and lob a hold trap there"
 	)
 	_reg(
 		ID_USE_BOOST_SPEED, "Speed boost", KIND_CONSUMABLE, {}, 0.0, false,

@@ -8,6 +8,11 @@ var ground_y: int = 1
 var stamper: TreeStamper
 var garden: GardenComposer
 
+## District-local centre of the rare gazebo: X and Z in `x`/`z`, the deck's walk surface Y in
+## `y`. `x` is -1 until a park rolls one. Read by the generator so a recipe scroll can be stood
+## under the roof; the district resets it before each compose.
+var gazebo_center: Vector3i = Vector3i(-1, 0, -1)
+
 
 ## Main promenade / loop path width in voxels (0.5 m each).
 const PROMENADE_W := 5
@@ -19,6 +24,20 @@ const LOOP_INSET := 7
 const FORMAL_SIDE_MIN := GardenComposer.PARTERRE_MIN
 const FORMAL_SIDE_MAX := 34
 const FORMAL_INSET := LOOP_INSET + LOOP_W + 2
+
+## A bandstand of a gazebo: rare enough that finding one is an event, and never in a pocket
+## green — this wants a park with room to walk up to it.
+const GAZEBO_CHANCE_PCT := 18
+## Half-width of the deck (11×11 footprint) and how far its corners are chamfered off.
+const GAZEBO_HALF := 5
+const GAZEBO_CHAMFER := 2
+## Deck step, column height above the deck, and the pitch of the little roof.
+const GAZEBO_DECK_RISE := 1
+const GAZEBO_COLUMN_H := 6
+const GAZEBO_ROOF_H := 4
+## Smallest park that can hold one with a walkable ring left around it.
+const GAZEBO_PARK_MIN := 46
+const GAZEBO_INSET := LOOP_INSET + LOOP_W + 3
 
 
 func _stamper() -> TreeStamper:
@@ -49,6 +68,7 @@ func compose_large(min_v: Vector3i, max_v: Vector3i) -> void:
 	_flower_beds(min_v, max_v)
 	_benches(min_v, max_v, promenade, along_x)
 	_formal_quarter(min_v, max_v)
+	_gazebo(min_v, max_v)
 
 
 func compose_pocket(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -457,6 +477,86 @@ func _formal_quarter(min_v: Vector3i, max_v: Vector3i) -> void:
 			Rect2i(at.x, at.y, side, side), ground_y, GardenComposer.Style.PARTERRE
 		)
 		return
+
+
+## A rare stone bandstand on the lawn. Rolled once per large park and skipped outright when the
+## park is small or the good ground is already spoken for by the pond, promenade or parterre.
+func _gazebo(min_v: Vector3i, max_v: Vector3i) -> void:
+	if gazebo_center.x >= 0:
+		## One to a district. A second would make the first stop being a landmark.
+		return
+	if max_v.x - min_v.x < GAZEBO_PARK_MIN or max_v.z - min_v.z < GAZEBO_PARK_MIN:
+		return
+	if rng.randi_range(1, 100) > GAZEBO_CHANCE_PCT:
+		return
+	var side := GAZEBO_HALF * 2 + 1
+	for _try in range(12):
+		var x0 := rng.randi_range(
+			min_v.x + GAZEBO_INSET, maxi(min_v.x + GAZEBO_INSET, max_v.x - GAZEBO_INSET - side)
+		)
+		var z0 := rng.randi_range(
+			min_v.z + GAZEBO_INSET, maxi(min_v.z + GAZEBO_INSET, max_v.z - GAZEBO_INSET - side)
+		)
+		if not _area_is_lawn(x0, z0, side, side):
+			continue
+		_build_gazebo(Vector2i(x0 + GAZEBO_HALF, z0 + GAZEBO_HALF))
+		return
+
+
+func _build_gazebo(centre: Vector2i) -> void:
+	var deck_y := ground_y + GAZEBO_DECK_RISE
+	var rim: Array[Vector2i] = []
+	for dz in range(-GAZEBO_HALF, GAZEBO_HALF + 1):
+		for dx in range(-GAZEBO_HALF, GAZEBO_HALF + 1):
+			## Chamfered corners: a square bandstand looks like a shed, an octagon looks built.
+			if absi(dx) + absi(dz) > GAZEBO_HALF * 2 - GAZEBO_CHAMFER:
+				continue
+			var x := centre.x + dx
+			var z := centre.y + dz
+			brush.fill_box(
+				Vector3i(x, ground_y, z), Vector3i(x + 1, deck_y + 1, z + 1), VoxelMaterial.STONE
+			)
+			brush.set_vox(Vector3i(x, deck_y, z), VoxelMaterial.TILES)
+			if maxi(absi(dx), absi(dz)) == GAZEBO_HALF:
+				rim.append(Vector2i(dx, dz))
+	## One step on the south face, so the deck is walked onto rather than jumped onto.
+	for sx in range(-1, 2):
+		brush.set_vox(
+			Vector3i(centre.x + sx, ground_y, centre.y + GAZEBO_HALF + 1), VoxelMaterial.STONE
+		)
+	var column_top := deck_y + GAZEBO_COLUMN_H
+	for offset: Vector2i in rim:
+		## Columns on the rim's straight runs only — the chamfers stay open as entrances.
+		if absi(offset.x) == GAZEBO_HALF and absi(offset.y) == GAZEBO_HALF:
+			continue
+		if (absi(offset.x) + absi(offset.y)) % 2 == 1:
+			continue
+		brush.fill_box(
+			Vector3i(centre.x + offset.x, deck_y + 1, centre.y + offset.y),
+			Vector3i(centre.x + offset.x + 1, column_top + 1, centre.y + offset.y + 1),
+			VoxelMaterial.STONE
+		)
+	_build_gazebo_roof(centre, column_top)
+	gazebo_center = Vector3i(centre.x, deck_y, centre.y)
+
+
+## Stepped clay cone over the columns, narrowing a ring at a time to a finial.
+func _build_gazebo_roof(centre: Vector2i, column_top: int) -> void:
+	var y := column_top + 1
+	var half := GAZEBO_HALF
+	for step in range(GAZEBO_ROOF_H):
+		for dz in range(-half, half + 1):
+			for dx in range(-half, half + 1):
+				if absi(dx) + absi(dz) > half * 2 - GAZEBO_CHAMFER:
+					continue
+				brush.set_vox(
+					Vector3i(centre.x + dx, y, centre.y + dz), VoxelMaterial.ROOF_CLAY
+				)
+		y += 1
+		half -= 1
+		if half < 1:
+			break
+	brush.set_vox(Vector3i(centre.x, y, centre.y), VoxelMaterial.METAL)
 
 
 func _is_plantable(x: int, z: int) -> bool:

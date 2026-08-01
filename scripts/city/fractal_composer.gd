@@ -21,6 +21,9 @@ var last_glow_min: Vector3i = Vector3i.ZERO
 var last_glow_max: Vector3i = Vector3i.ZERO
 ## Viewing deck Y (inclusive solid row) after the last compose; -1 if none.
 var last_view_y: int = -1
+## Sheltered dead end at the top of the spiral ramp (district-local x, floor Y, z). `x` is -1
+## when the surface search found no such pocket.
+var last_niche: Vector3i = Vector3i(-1, 0, -1)
 
 ## One planner cell of meadow between road stubs and the glowing square.
 const GRASS_MARGIN_CELLS := 1
@@ -40,6 +43,29 @@ const STAIR_RUN := 1
 const EDGE_INSET_VOX := 2
 const MAT_VIEW := VoxelMaterial.GLASS
 
+## A single-turn spiral ramp on the deck, walled on both flanks and capped at the top.
+##
+## The plaza used to be a flat square under a cross on stilts: nowhere on it was sheltered, and
+## nowhere on it was worth walking to. The ramp gives the tile a ground-level destination, and
+## its capped head is the one place on the deck that matches the niche shape below.
+const SPIRAL_RADIUS := 14
+## Ring cells walked per voxel of rise. One full turn is 8 × radius cells.
+const SPIRAL_RISE_EVERY := 4
+## Half-width of the walkable tread, measured off the ring line.
+const SPIRAL_TREAD_HALF := 1
+## Flank walls sit one cell outside the tread on both sides.
+const SPIRAL_WALL_OFFSET := 2
+const MAT_SPIRAL := VoxelMaterial.FRACTAL_INTERIOR
+
+## What counts as a hiding place: three cardinal neighbours standing at least this much higher,
+## and the fourth exactly one voxel lower — the way in. The walls are built a voxel taller than
+## the threshold so a wall that a bake rounds down by one still reads as a wall.
+const NICHE_WALL_RISE := 4
+const NICHE_WALL_H := NICHE_WALL_RISE + 1
+const NICHE_STEP_DOWN := 1
+## How far above the deck the surface scan starts looking for the topmost solid voxel.
+const NICHE_SCAN_HEIGHT := 48
+
 
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	last_min = min_v
@@ -47,6 +73,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	last_glow_min = Vector3i.ZERO
 	last_glow_max = Vector3i.ZERO
 	last_view_y = -1
+	last_niche = Vector3i(-1, 0, -1)
 	if brush == null or planner == null:
 		push_error("FractalComposer.compose: brush/planner missing")
 		return
@@ -83,6 +110,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	last_glow_min = Vector3i(gx0, y0, gz0)
 	last_glow_max = Vector3i(gx1, y1, gz1)
 	_build_viewing_cross()
+	_build_spiral_ramp()
 	print(
 		"FractalComposer: glow square %dx%d at %s .. %s (reserve %dx%d margin=%d view_y=%d)"
 		% [side, side, str(last_glow_min), str(last_glow_max), width, depth, margin, last_view_y]
@@ -135,6 +163,145 @@ func _build_viewing_cross() -> void:
 	_build_side_stair_x(north_z, cx + run_needed, -1, deck_y, top_y, gx0, gx1)
 	_build_side_stair_z(west_x, cz - run_needed, +1, deck_y, top_y, gz0, gz1)
 	_build_side_stair_z(east_x, cz + run_needed, -1, deck_y, top_y, gz0, gz1)
+
+
+## One turn of walled ramp on the deck, sitting in a quadrant clear of the edge stair strips.
+## The search for the niche runs afterwards over the finished voxels rather than assuming where
+## the head ended up, so a ramp that gets clipped simply yields no niche instead of a scroll
+## floating in the open.
+func _build_spiral_ramp() -> void:
+	var gx0 := last_glow_min.x
+	var gz0 := last_glow_min.z
+	var gx1 := last_glow_max.x
+	var gz1 := last_glow_max.z
+	var extent := SPIRAL_RADIUS + SPIRAL_WALL_OFFSET
+	var span := extent * 2 + 1
+	if gx1 - gx0 < span + EDGE_INSET_VOX * 6 or gz1 - gz0 < span + EDGE_INSET_VOX * 6:
+		return
+	var cx := (gx0 + gx1) / 2
+	var cz := (gz0 + gz1) / 2
+	var off := mini(gx1 - gx0, gz1 - gz0) / 5
+	## Clamped well inside the glow edge: the four climbing stairs run in bands hard against it.
+	var lo_x := gx0 + extent + EDGE_INSET_VOX * 3
+	var hi_x := gx1 - extent - EDGE_INSET_VOX * 3 - 1
+	var lo_z := gz0 + extent + EDGE_INSET_VOX * 3
+	var hi_z := gz1 - extent - EDGE_INSET_VOX * 3 - 1
+	var centre := Vector2i(clampi(cx - off, lo_x, hi_x), clampi(cz - off, lo_z, hi_z))
+	var ring := _ring_cells(centre, SPIRAL_RADIUS)
+	if ring.size() < SPIRAL_RISE_EVERY * 4:
+		return
+	var deck_y := ground_y
+	var heights: PackedInt32Array = PackedInt32Array()
+	heights.resize(ring.size())
+	for i in range(ring.size()):
+		heights[i] = deck_y + 1 + i / SPIRAL_RISE_EVERY
+	## The head has to stand exactly one voxel over the cell behind it, or the way in reads as
+	## level ground and the pocket no longer matches what the search is looking for.
+	heights[ring.size() - 1] = heights[ring.size() - 2] + 1
+	for i in range(ring.size()):
+		_build_ramp_cell(centre, ring[i], heights[i], deck_y)
+	## Cap across the path just past the head, turning the last tread into a dead end.
+	var head: Vector2i = ring[ring.size() - 1]
+	var head_y: int = heights[ring.size() - 1]
+	_build_ramp_cap(centre, head, ring[0], head_y)
+	last_niche = _find_niche(
+		centre.x - extent, centre.y - extent, centre.x + extent + 1, centre.y + extent + 1, deck_y
+	)
+
+
+## Cells of a square ring, walked anticlockwise from one corner. 8 × radius of them.
+func _ring_cells(centre: Vector2i, radius: int) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for x in range(centre.x - radius, centre.x + radius):
+		out.append(Vector2i(x, centre.y - radius))
+	for z in range(centre.y - radius, centre.y + radius):
+		out.append(Vector2i(centre.x + radius, z))
+	for x in range(centre.x + radius, centre.x - radius, -1):
+		out.append(Vector2i(x, centre.y + radius))
+	for z in range(centre.y + radius, centre.y - radius, -1):
+		out.append(Vector2i(centre.x - radius, z))
+	return out
+
+
+## Tread plus the solid wedge under it plus both flank walls, for one cell of the ring.
+func _build_ramp_cell(centre: Vector2i, cell: Vector2i, y: int, deck_y: int) -> void:
+	var normal := _ring_normal(centre, cell)
+	for k in range(-SPIRAL_TREAD_HALF, SPIRAL_TREAD_HALF + 1):
+		var p := cell + normal * k
+		brush.fill_box(
+			Vector3i(p.x, deck_y + 1, p.y), Vector3i(p.x + 1, y + 1, p.y + 1), MAT_SPIRAL
+		)
+	for side: int in [-1, 1]:
+		var w := cell + normal * (SPIRAL_WALL_OFFSET * side)
+		brush.fill_box(
+			Vector3i(w.x, deck_y + 1, w.y),
+			Vector3i(w.x + 1, y + NICHE_WALL_H + 1, w.y + 1),
+			MAT_SPIRAL
+		)
+
+
+## Wall shut across the tread one cell past the head. `behind` is the ring's first cell, which
+## is where the run would carry on into if it were not stopped here.
+func _build_ramp_cap(centre: Vector2i, head: Vector2i, behind: Vector2i, head_y: int) -> void:
+	var travel := behind - head
+	if travel == Vector2i.ZERO:
+		travel = Vector2i(1, 0)
+	travel = Vector2i(signi(travel.x), signi(travel.y))
+	var normal := _ring_normal(centre, head)
+	var at := head + travel
+	for k in range(-SPIRAL_WALL_OFFSET, SPIRAL_WALL_OFFSET + 1):
+		var p := at + normal * k
+		brush.fill_box(
+			Vector3i(p.x, head_y + 1, p.y),
+			Vector3i(p.x + 1, head_y + NICHE_WALL_H + 1, p.y + 1),
+			MAT_SPIRAL
+		)
+
+
+## Outward unit step from the ring centre for a ring cell: the axis the cell is furthest out on.
+func _ring_normal(centre: Vector2i, cell: Vector2i) -> Vector2i:
+	var dx := cell.x - centre.x
+	var dz := cell.y - centre.y
+	if absi(dx) >= absi(dz):
+		return Vector2i(signi(dx), 0)
+	return Vector2i(0, signi(dz))
+
+
+## Topmost solid voxel of a column, or -1 when the column is empty over the deck.
+func _surface_y(x: int, z: int, deck_y: int) -> int:
+	for y in range(deck_y + NICHE_SCAN_HEIGHT, deck_y - 1, -1):
+		if brush.get_vox(Vector3i(x, y, z)) != VoxelMaterial.AIR:
+			return y
+	return -1
+
+
+## The first column in the box that is walled on three sides and stepped down on the fourth.
+## Ties are broken by height so the search prefers the top of the ramp over anything lower that
+## happens to match.
+func _find_niche(x0: int, z0: int, x1: int, z1: int, deck_y: int) -> Vector3i:
+	var best := Vector3i(-1, 0, -1)
+	for z in range(z0 + 1, z1 - 1):
+		for x in range(x0 + 1, x1 - 1):
+			var here := _surface_y(x, z, deck_y)
+			if here <= deck_y:
+				continue
+			if here <= best.y:
+				continue
+			var walls := 0
+			var ways_in := 0
+			for step: Vector2i in [
+				Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
+			]:
+				var there := _surface_y(x + step.x, z + step.y, deck_y)
+				if there < 0:
+					continue
+				if there - here >= NICHE_WALL_RISE:
+					walls += 1
+				elif here - there == NICHE_STEP_DOWN:
+					ways_in += 1
+			if walls == 3 and ways_in == 1:
+				best = Vector3i(x, here, z)
+	return best
 
 
 func _fill_view_circle(cx: int, cz: int, y: int, radius: int) -> void:

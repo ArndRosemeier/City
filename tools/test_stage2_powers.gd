@@ -1,4 +1,4 @@
-## Stage 2: play modes, tray/unlocks, hardness tiers, traps, and GameSave v3 loadout.
+## Stage 2: play modes, tray/unlocks, hardness tiers, traps, and the GameSave loadout block.
 ##
 ## Run: powershell -File tools\run_test.ps1 test_stage2_powers
 extends Node
@@ -103,6 +103,10 @@ func _check_modes_and_unlocks() -> void:
 		_fail("FAIL unlock should refuse when gems are short")
 	city._inventory.add(InventoryCatalog.ID_QUARTZ, 20)
 	city._inventory.add(InventoryCatalog.ID_TOPAZ, 10)
+	## Gems are no longer enough on their own: the run has to have found the schematic.
+	if city.try_unlock_ability(AbilityRegistry.ID_LASER):
+		_fail("FAIL unlock should refuse without the laser schematic")
+	adv.learn_recipe(InventoryCatalog.schematic_id_for_ability(AbilityRegistry.ID_LASER))
 	if not city.try_unlock_ability(AbilityRegistry.ID_LASER):
 		_fail("FAIL unlock laser with enough gems")
 	if not adv.is_unlocked(AbilityRegistry.ID_LASER):
@@ -216,7 +220,7 @@ func _check_save_loadout_round_trip() -> void:
 	if restored.hardness_tier < PlayerLoadout.HARDNESS_REINFORCED:
 		_fail("FAIL restored hardness tier")
 	walker.queue_free()
-	print("OK GameSave v3 loadout round-trip")
+	print("OK GameSave v%d loadout round-trip" % GameSaveScript.VERSION)
 
 
 func _check_trap_holds_ped_and_scores() -> void:

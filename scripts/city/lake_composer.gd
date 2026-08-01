@@ -93,6 +93,32 @@ var _seeds: PackedByteArray = PackedByteArray()
 var _islands: Array[Dictionary] = []
 
 
+## Crown of every island in district-local voxels: X and Z in `x`/`z`, the land height above the
+## deck in `y`. The stamped dome jitters, so the crown is re-read from the finished height field
+## rather than taken from the island's nominal rise.
+func island_crowns() -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	for island: Dictionary in _islands:
+		var cx := int(island["x"])
+		var cz := int(island["z"])
+		var radius := int(island["r"])
+		var best := 0
+		var best_x := cx
+		var best_z := cz
+		for z in range(maxi(cz - radius, 0), mini(cz + radius + 1, _d)):
+			for x in range(maxi(cx - radius, 0), mini(cx + radius + 1, _w)):
+				var h := _island_h[z * _w + x]
+				if h <= best:
+					continue
+				best = h
+				best_x = x
+				best_z = z
+		if best <= 0:
+			continue
+		out.append(Vector3i(_ox + best_x, best, _oz + best_z))
+	return out
+
+
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	if not _begin(min_v, max_v):
 		return

@@ -8,9 +8,9 @@ const OfflineVolumeCommitterScript := preload("res://scripts/city/offline_volume
 const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
 const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
-const ScalePadPlacerScript := preload("res://scripts/city/scale_pad_placer.gd")
 const SignpostPlacerScript := preload("res://scripts/city/signpost_placer.gd")
 const GemChestPlacerScript := preload("res://scripts/city/gem_chest_placer.gd")
+const RecipePickupPlacerScript := preload("res://scripts/city/recipe_pickup_placer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
@@ -35,11 +35,12 @@ var generator: DistrictGenerator
 var crowd: CrowdDirector
 var vehicles: VehicleDirector
 var street_props: StreetPropPlacer
-var scale_pads: ScalePadPlacer
 ## Fingerposts naming the four neighbours. Empty of posts on special tiles.
 var signposts: SignpostPlacer
 ## Gem chests placed as this tile's rooms get furnished. Created on the first chest.
 var gem_chests: GemChestPlacer
+## Recipe scrolls standing on this tile's landmarks. Null until the tile streams in full.
+var recipe_pickups: RecipePickupPlacer
 ## Mesh doors hung in the castle's openings. Null on every tile that is not a Castle.
 var castle_doors: CastleDoorPlacer
 ## Glowing plane + Mandelbrot panels. Null on every tile that is not Fractal.
@@ -105,7 +106,7 @@ func live_brush() -> CityBrush:
 	return _live_brush
 
 
-## False on Fractal / Arena — spectacle plazas stay empty of pedestrians, cars, lamps, pads.
+## False on Fractal / Arena — spectacle plazas stay empty of pedestrians, cars and lamps.
 func allows_auto_actors() -> bool:
 	if generator == null or generator.theme == null:
 		return true
@@ -248,6 +249,10 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		gem_chests.clear_chests()
 		gem_chests.queue_free()
 	gem_chests = null
+	if recipe_pickups != null and is_instance_valid(recipe_pickups):
+		recipe_pickups.clear_pickups()
+		recipe_pickups.queue_free()
+	recipe_pickups = null
 	if castle_doors != null and is_instance_valid(castle_doors):
 		castle_doors.clear_doors()
 		castle_doors.queue_free()
@@ -295,6 +300,10 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		gem_chests.clear_chests()
 		gem_chests.queue_free()
 	gem_chests = null
+	if recipe_pickups != null and is_instance_valid(recipe_pickups):
+		recipe_pickups.clear_pickups()
+		recipe_pickups.queue_free()
+	recipe_pickups = null
 	if castle_doors != null and is_instance_valid(castle_doors):
 		castle_doors.clear_doors()
 		castle_doors.queue_free()
@@ -464,7 +473,7 @@ func _stamp_detail_async() -> void:
 	await get_tree().process_frame
 
 	## Fractal is a quiet plaza: edge roads exist for world continuity, but no crowd,
-	## traffic, lamps, or scale pads spawn on this tile.
+	## traffic or lamps spawn on this tile.
 	var day_night := get_tree().get_first_node_in_group(&"day_night")
 	if allows_auto_actors():
 		CityProfiler.begin("stream_crowd")
@@ -503,21 +512,6 @@ func _stamp_detail_async() -> void:
 		CityProfiler.end("stream_props")
 		await get_tree().process_frame
 
-		CityProfiler.begin("stream_pads")
-		scale_pads = ScalePadPlacerScript.new()
-		scale_pads.name = "ScalePads"
-		add_child(scale_pads)
-		scale_pads.place_from_planner(
-			generator.get_planner(),
-			generator.cell_size,
-			_voxel_size,
-			generator.ground_thickness,
-			origin_vox,
-			_dseed
-		)
-		CityProfiler.end("stream_pads")
-		await get_tree().process_frame
-
 		CityProfiler.begin("stream_signposts")
 		signposts = SignpostPlacerScript.new()
 		signposts.name = "Signposts"
@@ -547,6 +541,13 @@ func _stamp_detail_async() -> void:
 	if not lot_doorways.is_empty():
 		castle_doors.hang_lot_doorways(lot_doorways, _voxel_size, camera, door_brush)
 	CityProfiler.end("stream_castle_doors")
+	await get_tree().process_frame
+
+	## Recipe scrolls stand on landmarks, and two of those landmarks — the fractal deck and the
+	## arena spires — live on tiles that spawn no auto actors at all. Placed outside that block.
+	CityProfiler.begin("stream_recipes")
+	_place_recipe_pickups(generator, origin_vox)
+	CityProfiler.end("stream_recipes")
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_fractal_ui")
@@ -580,6 +581,165 @@ func _stamp_detail_async() -> void:
 	CityProfiler.set_counter("stream_phase", 0)
 	ready_to_play.emit(self)
 	print("DistrictInstance ready %s seed=%d" % [str(coord), _dseed])
+
+
+## Stand this tile's recipe scrolls. Landmarks are offered to the placer in descending order of
+## how much of a climb they were, because the per-district cap trims from the end.
+func _place_recipe_pickups(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	if gen == null:
+		return
+	if recipe_pickups != null and is_instance_valid(recipe_pickups):
+		recipe_pickups.clear_pickups()
+		recipe_pickups.queue_free()
+	recipe_pickups = RecipePickupPlacerScript.new() as RecipePickupPlacer
+	recipe_pickups.name = "RecipePickups"
+	add_child(recipe_pickups)
+	_place_castle_tower_recipe(gen, origin_vox)
+	_place_arena_tower_recipe(gen, origin_vox)
+	_place_hill_summit_recipe(gen, origin_vox)
+	_place_gazebo_recipe(gen, origin_vox)
+	_place_fractal_niche_recipe(gen, origin_vox)
+	_place_lake_island_recipe(gen, origin_vox)
+	_place_crypt_recipe(gen, origin_vox)
+	_place_roof_recipes(gen, origin_vox)
+
+
+## One tower per castle, chosen by the tile seed, so the climb is a different turret each world.
+func _place_castle_tower_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var layout := gen.get_castle_layout()
+	if layout == null or layout.towers.is_empty():
+		return
+	var index := absi(_dseed) % layout.towers.size()
+	var tower: CastleTower = layout.towers[index]
+	## Two voxels over the shaft top clears the merlon ring that sits at top_y + 1.
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_CASTLE_TOWER,
+		coord,
+		index,
+		_landmark_world(tower.center, tower.top_y + 2, origin_vox),
+		_dseed ^ 0x0CA57
+	)
+
+
+func _place_arena_tower_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var layout := gen.get_arena_layout()
+	if layout == null or layout.corner_spires.is_empty():
+		return
+	var index := absi(_dseed) % layout.corner_spires.size()
+	var spire: Vector3i = layout.corner_spires[index]
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_ARENA_TOWER,
+		coord,
+		index,
+		_landmark_world(Vector2i(spire.x, spire.z), spire.y + 1, origin_vox),
+		_dseed ^ 0x0A2E4
+	)
+
+
+func _place_hill_summit_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var summit := gen.get_hill_summit_top()
+	if summit.x < 0:
+		return
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_HILL_SUMMIT,
+		coord,
+		0,
+		_landmark_world(
+			Vector2i(summit.x, summit.z), gen.ground_thickness + summit.y + 1, origin_vox
+		),
+		_dseed ^ 0x51117
+	)
+
+
+func _place_gazebo_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var gazebo := gen.get_park_gazebo()
+	if gazebo.x < 0:
+		return
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_GAZEBO,
+		coord,
+		0,
+		_landmark_world(Vector2i(gazebo.x, gazebo.z), gazebo.y, origin_vox),
+		_dseed ^ 0x6A2E0
+	)
+
+
+func _place_fractal_niche_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var niche := gen.get_fractal_niche()
+	if niche.x < 0:
+		return
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_FRACTAL_NICHE,
+		coord,
+		0,
+		_landmark_world(Vector2i(niche.x, niche.z), niche.y + 1, origin_vox),
+		_dseed ^ 0x0F2AC
+	)
+
+
+## The tallest island only. A lake can hold three, and a scroll on each would turn a rare find
+## into a rowing route.
+func _place_lake_island_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var crowns := gen.get_lake_island_crowns()
+	if crowns.is_empty():
+		return
+	var best := 0
+	for i in range(crowns.size()):
+		if crowns[i].y > crowns[best].y:
+			best = i
+	var crown := crowns[best]
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_LAKE_ISLAND,
+		coord,
+		best,
+		_landmark_world(
+			Vector2i(crown.x, crown.z), gen.ground_thickness + crown.y + 1, origin_vox
+		),
+		_dseed ^ 0x15AD5
+	)
+
+
+## One chamber of the catacombs, chosen by the tile seed. Off the hub, so it is a room the
+## player has to walk the halls to find.
+func _place_crypt_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var rooms := gen.get_crypt_rooms()
+	if rooms.is_empty():
+		return
+	var index := absi(_dseed) % rooms.size()
+	var room := rooms[index]
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_CRYPT,
+		coord,
+		index,
+		_landmark_world(Vector2i(room.x, room.z), room.y, origin_vox),
+		_dseed ^ 0x0C297
+	)
+
+
+## The tallest handful of roofs each get their own long-odds roll.
+func _place_roof_recipes(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var roofs := gen.get_tall_roofs()
+	for i in range(mini(roofs.size(), DistrictGenerator.TALL_ROOF_CANDIDATES)):
+		if recipe_pickups.at_capacity():
+			return
+		var roof := roofs[i]
+		recipe_pickups.try_place(
+			RecipePickupPlacer.SITE_ROOFTOP,
+			coord,
+			i,
+			_landmark_world(Vector2i(roof.x, roof.z), roof.y, origin_vox),
+			(_dseed ^ 0x0400F) + i * 7919
+		)
+
+
+## District-local voxel column + voxel Y to a world point in the middle of that column, lifted
+## clear of the surface it stands on so the scroll reads as floating rather than half-sunk.
+func _landmark_world(column: Vector2i, y: int, origin_vox: Vector3i) -> Vector3:
+	return Vector3(
+		(float(column.x) + float(origin_vox.x) + 0.5) * _voxel_size,
+		(float(y) + float(origin_vox.y)) * _voxel_size + 0.5,
+		(float(column.y) + float(origin_vox.z) + 0.5) * _voxel_size
+	)
 
 
 func _spawn_mandelbrot_arena(gen: DistrictGenerator) -> void:

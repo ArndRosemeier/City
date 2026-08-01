@@ -1,5 +1,5 @@
 ## What one undead wants next: living prey by combat-table weights, a facade when buildings
-## are weighted, a grow pad when the director asks, and a wander when the city offers none.
+## are weighted, and a wander when the city offers none.
 ##
 ## One provider per body, because the answer comes out of that body's role, its state and
 ## what the city can see around it. NavAgent asks whenever a goal ends; `retarget` exists
@@ -12,7 +12,6 @@ extends NavGoalProvider
 const TAG_HUNT := &"hunt"
 const TAG_NIBBLE := &"nibble"
 const TAG_DEMOLISH := &"demolish"
-const TAG_PAD := &"pad"
 const TAG_WANDER := &"wander"
 
 ## How far prey may drift before the corridor is rebuilt for where it is now.
@@ -122,8 +121,6 @@ func next_goal(_request: NavGoalRequest) -> NavGoal:
 	match _unit.state:
 		UndeadUnit.State.SEEK_PED:
 			return _hunt_or_chew()
-		UndeadUnit.State.SEEK_PAD:
-			return _pad()
 		UndeadUnit.State.STOMP:
 			return _demolish()
 		UndeadUnit.State.IDLE, UndeadUnit.State.CAST, UndeadUnit.State.GROWING:
@@ -159,8 +156,6 @@ func goal_reached(_request: NavGoalRequest, goal: NavGoal) -> void:
 			_unit.on_facade_in_reach(_facade, UndeadUnit.State.NIBBLE)
 		TAG_DEMOLISH:
 			_unit.on_facade_in_reach(_facade, UndeadUnit.State.SCRAPE)
-		TAG_PAD:
-			_unit.on_pad_in_reach()
 		TAG_WANDER:
 			pass
 		_:
@@ -462,15 +457,6 @@ func _approach_point(fabric: Vector3) -> Vector3:
 	if out.length_squared() < 0.0001:
 		return fabric
 	return fabric + out.normalized() * _unit.facade_standoff_m()
-
-
-func _pad() -> NavGoal:
-	var pad := _unit.target_pad()
-	if pad == null:
-		## The pad streamed out with its district; hunting is the default again.
-		_unit.abandon_pad()
-		return _hunt_or_chew()
-	return _tagged(NavGoal.use_target(pad, _unit.pad_reach(pad)), TAG_PAD)
 
 
 func _wander() -> NavGoal:

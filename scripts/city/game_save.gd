@@ -26,7 +26,9 @@ const FILE_SUFFIX := ".json"
 ## Bump when the payload changes shape in a way an older file cannot satisfy.
 ## 2 added `districts` (per-tile gem budgets + explored) and `score`.
 ## 3 added `mode`, `unlocks`, `tray`, `hardness_tier` (Stage 2 loadout).
-const VERSION := 3
+## 4 added `recipes` and `recipe_sites`: a v3 Adventure save has no cookbook, and silently
+##   handing it an empty one would strip crafts the player had already earned.
+const VERSION := 4
 const NAME_MAX_LENGTH := 48
 
 ## Where slots live. A round-trip test points this at a scratch folder, because the alternative is
@@ -256,7 +258,7 @@ static func capture(
 	if loadout != null:
 		loadout_data = loadout.to_save_dict()
 	else:
-		## Tools without a loadout still write a sandbox default so v3 readers stay happy.
+		## Tools without a loadout still write a sandbox default so v4 readers stay happy.
 		var fallback := PlayerLoadout.new()
 		fallback.reset_sandbox()
 		loadout_data = fallback.to_save_dict()
@@ -280,6 +282,8 @@ static func capture(
 		"unlocks": loadout_data.get("unlocks", []),
 		"tray": loadout_data.get("tray", []),
 		"hardness_tier": int(loadout_data.get("hardness_tier", PlayerLoadout.HARDNESS_ROCK)),
+		"recipes": loadout_data.get("recipes", []),
+		"recipe_sites": loadout_data.get("recipe_sites", []),
 	}
 
 
@@ -300,6 +304,8 @@ static func apply_loadout(loadout: PlayerLoadout, data: Dictionary) -> void:
 		"unlocks": data.get("unlocks", []),
 		"tray": data.get("tray", []),
 		"hardness_tier": data.get("hardness_tier", PlayerLoadout.HARDNESS_ROCK),
+		"recipes": data.get("recipes", []),
+		"recipe_sites": data.get("recipe_sites", []),
 	})
 
 

@@ -27,6 +27,9 @@ var board_mounts: Array[Dictionary] = []
 var lift_pads: Array[Vector2i] = []
 ## Leftover meadow forest plots (district-local XZ), between gravel roads.
 var forest_plots: Array[Rect2i] = []
+## Crown of each spindly corner spire: district-local X and Z in `x`/`z`, the top solid Y of the
+## crown platform in `y`. Four entries on a built arena.
+var corner_spires: Array[Vector3i] = []
 
 
 ## Clear air volume above the sand for decorate / wipe (lift pads stay clear).

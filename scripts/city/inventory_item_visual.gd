@@ -1,4 +1,4 @@
-## Builds the small tilted solid used as an inventory icon (gem or trap).
+## Builds the small tilted solid used as an inventory icon (gem, trap or tonic).
 ##
 ## Every gem used to be the same cube, so quartz and diamond — two near-white stones in a
 ## palette that is shared with the ore in the hills — were the same 64 px blob. The palette
@@ -15,6 +15,16 @@ const ICON_EMISSION_SCALE := 0.22
 ## World sparkle is sized for metre-wide ore bodies; over a half-metre icon it is one flat
 ## blotch, which costs the cut its facets.
 const ICON_SPARKLE_SCALE := 14.0
+
+## Tonic glass. The two are told apart the same way the stones are — by build first, tint
+## second — so a slot never depends on the player remembering which colour did what.
+## Speed is orange so it does not steal the cyan shell the shield ward uses in the world.
+const TONIC_SPEED_COLOR := Color(0.98, 0.55, 0.16)
+const TONIC_REGEN_COLOR := Color(0.46, 0.94, 0.55)
+## Soft ward blue — also the world aura while the shield power is up.
+const SHIELD_AURA_COLOR := Color(0.36, 0.86, 1.0)
+## Sides on a lathed bottle. Enough to read as blown glass at 64 px, few enough to stay cheap.
+const TONIC_SIDES := 12
 
 static var _icon_mat_cache: Dictionary = {}  ## VoxelMaterial.GEM_* → ShaderMaterial
 
@@ -47,6 +57,8 @@ static func make_mesh(item_id: String) -> MeshInstance3D:
 static func _shape_for(def: InventoryCatalog.ItemDef) -> Mesh:
 	if def.is_trap:
 		return _block(Vector3.ONE * PREVIEW_SIZE)
+	if def.is_boost:
+		return _flask_for(def.id)
 	match def.gem_mat_id:
 		VoxelMaterial.GEM_QUARTZ:
 			return _column(6, 0.21, PREVIEW_SIZE)
@@ -117,9 +129,102 @@ static func _bipyramid(sides: int, radius: float, height: float) -> ArrayMesh:
 	return st.commit()
 
 
+## A drinkable is a bottle, never a stone: the icon has to say "consumable" before it says which
+## one. Profiles are `(radius, height)` as fractions of PREVIEW_SIZE, bottom-to-top, revolved
+## around Y — a slim vial for speed, a round-bellied flask for regen.
+static func _flask_for(item_id: String) -> Mesh:
+	match item_id:
+		InventoryCatalog.ID_BOOST_SPEED:
+			return _lathe([
+				Vector2(0.00, -0.50),
+				Vector2(0.17, -0.50),
+				Vector2(0.18, -0.20),
+				Vector2(0.13, 0.02),
+				Vector2(0.10, 0.34),
+				Vector2(0.14, 0.43),
+				Vector2(0.00, 0.50),
+			])
+		InventoryCatalog.ID_BOOST_REGEN:
+			return _lathe([
+				Vector2(0.00, -0.50),
+				Vector2(0.22, -0.48),
+				Vector2(0.30, -0.26),
+				Vector2(0.28, -0.02),
+				Vector2(0.13, 0.14),
+				Vector2(0.11, 0.38),
+				Vector2(0.16, 0.45),
+				Vector2(0.00, 0.50),
+			])
+	push_error("InventoryItemVisual: tonic '%s' has no bottle profile" % item_id)
+	return null
+
+
+## Revolve a profile around Y. Smooth-shaded, unlike the stones: facets are what makes a cut
+## stone read as cut, and the same facets would make blown glass read as another mineral.
+static func _lathe(profile: Array[Vector2]) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in TONIC_SIDES:
+		var a0 := TAU * float(i) / float(TONIC_SIDES)
+		var a1 := TAU * float(i + 1) / float(TONIC_SIDES)
+		for k in range(profile.size() - 1):
+			var lo := profile[k]
+			var hi := profile[k + 1]
+			var lo0 := _lathe_point(lo, a0)
+			var lo1 := _lathe_point(lo, a1)
+			var hi0 := _lathe_point(hi, a0)
+			var hi1 := _lathe_point(hi, a1)
+			## Front faces wind clockwise seen from outside, as on the cut stones above. A ring
+			## of radius zero is a pole, where one of the two triangles collapses to a line.
+			if lo.x > 0.0:
+				st.add_vertex(hi0)
+				st.add_vertex(lo0)
+				st.add_vertex(lo1)
+			if hi.x > 0.0:
+				st.add_vertex(hi0)
+				st.add_vertex(lo1)
+				st.add_vertex(hi1)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _lathe_point(rim: Vector2, angle: float) -> Vector3:
+	return Vector3(
+		cos(angle) * rim.x * PREVIEW_SIZE,
+		rim.y * PREVIEW_SIZE,
+		sin(angle) * rim.x * PREVIEW_SIZE
+	)
+
+
+## Lit glass with a little inner glow, so a tonic stays legible on the dark slot without the
+## cave-ore shader the stones share.
+static func tonic_material(item_id: String) -> StandardMaterial3D:
+	var colour := _tonic_colour(item_id)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = colour
+	mat.metallic = 0.15
+	mat.roughness = 0.16
+	mat.emission_enabled = true
+	mat.emission = colour
+	mat.emission_energy_multiplier = 0.45
+	return mat
+
+
+static func _tonic_colour(item_id: String) -> Color:
+	match item_id:
+		InventoryCatalog.ID_BOOST_SPEED:
+			return TONIC_SPEED_COLOR
+		InventoryCatalog.ID_BOOST_REGEN:
+			return TONIC_REGEN_COLOR
+	push_error("InventoryItemVisual: tonic '%s' has no colour" % item_id)
+	return Color.MAGENTA
+
+
 static func _material_for(def: InventoryCatalog.ItemDef) -> Material:
 	if def.is_trap:
 		return trap_material()
+	if def.is_boost:
+		return tonic_material(def.id)
 	if def.gem_mat_id >= 0:
 		return gem_icon_material(def.gem_mat_id)
 	push_error("InventoryItemVisual: item '%s' has no material mapping" % def.id)

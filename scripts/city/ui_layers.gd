@@ -23,6 +23,8 @@ const HUD_HEALTH := 16
 ## The loot card. Top of the HUD band: it is transient and sits over the bars for a second or two,
 ## and a find the player cannot see is the whole thing this surface exists to fix.
 const HUD_LOOT := 17
+## Active tonic chips (speed / regen). Above the bars, below loot so a find still owns the eye.
+const HUD_BOOST := 18
 const HUD_MAX := 19
 
 ## Panels that own the screen while open. Above every HUD surface, below every takeover.
@@ -34,6 +36,10 @@ const MODAL_MONSTER_SUMMON := 23
 ## Save / load / new game. Session lifecycle, kept out of Settings so graphics knobs and the
 ## decision to throw the run away are never one mis-click apart.
 const MODAL_GAME := 24
+## Debug fill / teleport panel. A modal rather than a debug overlay so it owns the cursor and
+## the HUD the same way Inventory does — dumping a probe into a translucent layer over play
+## left the mouse stuck in freelook.
+const MODAL_CHEAT := 25
 
 ## Whole-screen state changes, above any modal.
 const GAME_OVER := 40

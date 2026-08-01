@@ -65,7 +65,7 @@ func refresh() -> void:
 		_hint.text = (
 			"Sandbox · all powers"
 			if _loadout.is_sandbox()
-			else "Adventure · unlock powers with gems"
+			else "Adventure · find recipes, then spend gems"
 		)
 
 
