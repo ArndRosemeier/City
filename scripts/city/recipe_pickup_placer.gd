@@ -20,6 +20,8 @@ const SITE_FRACTAL_PEAK := 5
 const SITE_CRYPT := 6
 const SITE_ROOFTOP := 7
 const SITE_CHEST := 8
+## One of the Monster Zoo gazebo roofs (summon stations + battlefield bandstands).
+const SITE_ZOO_GAZEBO := 9
 
 const GameDataScript := preload("res://scripts/city/game_data.gd")
 
@@ -50,6 +52,8 @@ static func site_kind_name(kind: int) -> String:
 			return "roof"
 		SITE_CHEST:
 			return "chest"
+		SITE_ZOO_GAZEBO:
+			return "zoo-gazebo"
 		_:
 			push_error("RecipePickupPlacer.site_kind_name: unknown kind %d" % kind)
 			return "unknown"

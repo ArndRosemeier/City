@@ -613,6 +613,7 @@ func _place_recipe_pickups(gen: DistrictGenerator, origin_vox: Vector3i) -> void
 	_place_arena_tower_recipe(gen, origin_vox)
 	_place_hill_summit_recipe(gen, origin_vox)
 	_place_gazebo_recipe(gen, origin_vox)
+	_place_zoo_gazebo_recipe(gen, origin_vox)
 	## Fractal recipes come from lock-on Create → peak (MandelbrotArena), not stream-time.
 	_place_lake_island_recipe(gen, origin_vox)
 	_place_crypt_recipe(gen, origin_vox)
@@ -676,6 +677,28 @@ func _place_gazebo_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
 		0,
 		_landmark_world(Vector2i(gazebo.x, gazebo.z), gazebo.y, origin_vox),
 		_dseed ^ 0x6A2E0
+	)
+
+
+## Monster Zoo: one district-level roll, then a single roof among summon stations and
+## battlefield gazebos. Not 50% per gazebo — that would carpet the field in scrolls.
+func _place_zoo_gazebo_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var layout := gen.get_zoo_layout()
+	if layout == null or layout.gazebo_roof_vox.is_empty():
+		return
+	var site_seed := _dseed ^ 0x2006A
+	if not RecipePickupPlacer.should_place(RecipePickupPlacer.SITE_ZOO_GAZEBO, site_seed):
+		return
+	var pick := RandomNumberGenerator.new()
+	pick.seed = _dseed ^ 0x2006B
+	var index := pick.randi() % layout.gazebo_roof_vox.size()
+	var roof: Vector3i = layout.gazebo_roof_vox[index]
+	recipe_pickups.try_place(
+		RecipePickupPlacer.SITE_ZOO_GAZEBO,
+		coord,
+		index,
+		_landmark_world(Vector2i(roof.x, roof.z), roof.y + 1, origin_vox),
+		site_seed
 	)
 
 

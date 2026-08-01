@@ -33,6 +33,8 @@ var seed_xz: Array[Vector2i] = []
 var seed_faction: PackedInt32Array = PackedInt32Array()
 ## Spawn pad centre for each seed (x, floor Y, z).
 var spawner_vox: Array[Vector3i] = []
+## Roof peaks of summon stations and battlefield gazebos (x, peak Y, z) — recipe sites.
+var gazebo_roof_vox: Array[Vector3i] = []
 ## Nominal reach of one territory in voxels — the plate density falloff radius.
 var seed_radius_vox: int = 0
 
@@ -90,13 +92,14 @@ func spawner_world(index: int, district_origin: Vector3i, voxel_size: float) -> 
 
 func describe() -> String:
 	return (
-		"zoo fence=%s field=%s deck_y=%d gate=%s territories=%d seed_r=%d grid=%s"
+		"zoo fence=%s field=%s deck_y=%d gate=%s territories=%d gazebo_roofs=%d seed_r=%d grid=%s"
 		% [
 			fence_rect,
 			field_rect,
 			deck_y,
 			gate_rect,
 			territory_count(),
+			gazebo_roof_vox.size(),
 			seed_radius_vox,
 			owner_size,
 		]

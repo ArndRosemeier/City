@@ -269,12 +269,25 @@ func _check_site_ids_and_chances() -> void:
 		_fail("FAIL rooftops should be a long shot")
 	if RecipePickupPlacer.chance_pct(RecipePickupPlacer.SITE_CHEST) >= 50:
 		_fail("FAIL chest bonus should be a long shot")
+	if RecipePickupPlacer.chance_pct(RecipePickupPlacer.SITE_ZOO_GAZEBO) != 50:
+		_fail(
+			"FAIL zoo-gazebo chance is %d, want 50"
+			% RecipePickupPlacer.chance_pct(RecipePickupPlacer.SITE_ZOO_GAZEBO)
+		)
+	if RecipePickupPlacer.site_kind_name(RecipePickupPlacer.SITE_ZOO_GAZEBO) != "zoo-gazebo":
+		_fail("FAIL SITE_ZOO_GAZEBO name is wrong")
 	var hits := 0
 	for seed_i in range(200):
 		if RecipePickupPlacer.should_place(RecipePickupPlacer.SITE_ROOFTOP, seed_i * 7919):
 			hits += 1
 	if hits == 0 or hits > 60:
 		_fail("FAIL rooftop roll landed %d/200 times" % hits)
+	var zoo_hits := 0
+	for seed_i in range(200):
+		if RecipePickupPlacer.should_place(RecipePickupPlacer.SITE_ZOO_GAZEBO, seed_i * 7919):
+			zoo_hits += 1
+	if zoo_hits < 60 or zoo_hits > 140:
+		_fail("FAIL zoo-gazebo roll landed %d/200 times (want ~50%%)" % zoo_hits)
 	print("OK site ids are stable and unique, chances behave")
 
 

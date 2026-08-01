@@ -61,8 +61,12 @@ const PLATE_GLOW := 2
 const PLATE_RIM := 1
 const PLATE_FOOT := PLATE_GLOW + PLATE_RIM * 2
 ## One pad per this many square voxels of field, then thinned by distance to the seed.
-const PLATE_PER_AREA := 2200
+const PLATE_PER_AREA := 1100
 const PLATE_CORE_BIAS := 1.8
+## Chance a successful pad also gets a gem sitting on the glowing 2×2.
+const PLATE_GEM_CHANCE := 0.06
+## Hard stop so pad gems cannot drown the district's modest zoo gem budget.
+const PLATE_GEM_CAP := 12
 
 ## Battlefield scatter budgets, as one prop per this many square voxels of field. The
 ## reserve is most of a district — a fixed count would leave a 350 m field with a dozen
@@ -716,6 +720,8 @@ func _build_gazebo(cx: int, cz: int) -> void:
 	brush.fill_disk(cx, cz, post_top + 2, 3, VoxelMaterial.ROOF_CLAY)
 	brush.fill_disk(cx, cz, post_top + 3, 1, VoxelMaterial.ROOF_CLAY)
 	brush.end_edit()
+	## Peak clay tip — may later be scarred away; recipe placement still uses the recorded top.
+	layout.gazebo_roof_vox.append(Vector3i(cx, post_top + 3, cz))
 
 
 func _scatter_trees() -> int:
@@ -909,6 +915,7 @@ func _stamp_turf_plates() -> void:
 	var radius := float(maxi(layout.seed_radius_vox, 1))
 	var want := _budget(PLATE_PER_AREA)
 	var stamped := 0
+	var gems := 0
 	var tries := want * 50
 	brush.begin_edit()
 	while stamped < want and tries > 0:
@@ -936,10 +943,12 @@ func _stamp_turf_plates() -> void:
 		):
 			continue
 		stamped += 1
+		if gems < PLATE_GEM_CAP and _maybe_place_pad_gem(x0, z0):
+			gems += 1
 	brush.end_edit()
 	print(
-		"ZooComposer: %d short turf pads over %d territories (seed radius %d vox)"
-		% [stamped, layout.territory_count(), layout.seed_radius_vox]
+		"ZooComposer: %d short turf pads (%d gems) over %d territories (seed radius %d vox)"
+		% [stamped, gems, layout.territory_count(), layout.seed_radius_vox]
 	)
 
 
@@ -971,6 +980,22 @@ func _place_turf_pad(x0: int, z0: int, turf: int) -> bool:
 				brush.set_vox(Vector3i(x, top, z), VoxelMaterial.ZOO_PLATE_RIM)
 			else:
 				brush.set_vox(Vector3i(x, top, z), turf)
+	return true
+
+
+## Occasional gem on the glowing centre — sits in the air cell above the pad, never replaces turf.
+func _maybe_place_pad_gem(x0: int, z0: int) -> bool:
+	if rng.randf() >= PLATE_GEM_CHANCE:
+		return false
+	var gx := x0 + PLATE_RIM
+	var gz := z0 + PLATE_RIM
+	var top := _surface_y(gx, gz)
+	if top < 0:
+		return false
+	var above := Vector3i(gx, top + 1, gz)
+	if brush.get_vox(above) != VoxelMaterial.AIR:
+		return false
+	brush.set_vox(above, VoxelMaterial.pick_gem(rng))
 	return true
 
 
@@ -1075,3 +1100,4 @@ func _build_summon_roof(centre: Vector2i, column_top: int, turf: int) -> void:
 		if half < 1:
 			break
 	brush.set_vox(Vector3i(centre.x, y, centre.y), turf)
+	layout.gazebo_roof_vox.append(Vector3i(centre.x, y, centre.y))

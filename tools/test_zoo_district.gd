@@ -213,12 +213,25 @@ func _check_voxels(blocks: Dictionary, layout: ZooLayout, deck: int) -> bool:
 	if glass_n < 500:
 		_fail("FAIL not enough fence glass (%d)" % glass_n)
 		return false
-	if rim_n < 200:
+	if rim_n < 400:
 		_fail("FAIL short plates have almost no rim (%d)" % rim_n)
 		return false
-	if plate_n < 80:
+	if plate_n < 160:
 		_fail("FAIL home-turf pads barely stamped (%d turf voxels)" % plate_n)
 		return false
+	## Recipe sites need recorded peaks for summon stations + battlefield bandstands.
+	if layout.gazebo_roof_vox.size() < layout.spawner_vox.size():
+		_fail(
+			"FAIL gazebo roof list %d shorter than summon stations %d"
+			% [layout.gazebo_roof_vox.size(), layout.spawner_vox.size()]
+		)
+		return false
+	print("gazebo roof peaks recorded: %d" % layout.gazebo_roof_vox.size())
+	## Faction pads may hide gems in the air cell above the glowing 2×2.
+	var gem_n := 0
+	for mat_id in range(VoxelMaterial.GEM_QUARTZ, VoxelMaterial.GEM_DIAMOND + 1):
+		gem_n += int(above.get(mat_id, 0))
+	print("gems above the deck (pad toppers + any other): %d" % gem_n)
 
 	## The gate is the one hole: air all the way up through the ring line.
 	var gate_mid_x := layout.gate_rect.position.x + layout.gate_rect.size.x / 2
