@@ -678,6 +678,11 @@ func _simulate_agents(delta: float) -> void:
 		var ped := _agents[i]
 		if ped == null or ped.dead:
 			continue
+		## Thrown hold traps freeze any actor — skip sim until the meta expires.
+		if ped.is_trap_held():
+			ped.velocity = Vector3.ZERO
+			ped.owed_delta = 0.0
+			continue
 		_update_flee(ped)
 		_sync_speed(ped)
 		_ensure_collider(ped, observer)

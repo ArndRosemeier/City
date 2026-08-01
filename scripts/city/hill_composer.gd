@@ -27,6 +27,8 @@ func _stamper() -> TreeStamper:
 		stamper = TreeStamper.new()
 		stamper.brush = brush
 		stamper.rng = rng
+		## Ore on hills comes only from the district gem quota, not tree crowns.
+		stamper.allow_canopy_gems = false
 	return stamper
 
 ## Flat verge kept beside every road and along the tile seam before the ground climbs.
@@ -114,6 +116,8 @@ var _shell_guard: bool = true
 ## World-voxel positions / material ids of gem ore placed this compose (for lights).
 var gem_positions: PackedVector3Array = PackedVector3Array()
 var gem_mats: PackedInt32Array = PackedInt32Array()
+## Exact gems to paint this bake: district constant, or constant minus harvested. Empty = none.
+var gem_mats_to_place: PackedInt32Array = PackedInt32Array()
 ## Daylight cave mouths in *district-local* XZ (for spawn at an entrance).
 var cave_mouths: PackedVector2Array = PackedVector2Array()
 ## Summit the mouths were bored from (district-local XZ); used to stand outside.
@@ -166,10 +170,10 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_paint_meadow()
 	if use_native_hill:
 		_paint_terrain_native()
-		_scatter_gems_native()
 	else:
 		_paint_terrain()
-		_scatter_gems()
+	## Budget owns the count: paint exactly the remaining list, never a host-estimate ghost vein.
+	_scatter_gems_from_quota()
 	_carve_caves(summits)
 	_scatter_boulders()
 	_plant_trees(1.0)
@@ -1500,26 +1504,18 @@ func _carve_ellipsoid(center: Vector3i, radii: Vector3i, floor_min_y: int) -> vo
 				_cave_hi[row + lx] = maxi(_cave_hi[row + lx], y)
 
 
-## Embed gem ore in solid rock before caves open. Carve skips gem voxels so nuggets
-## stick into chambers; buried ones stay excavatable.
-func _scatter_gems() -> void:
-	var host_estimate := 0
-	for z in range(_d):
-		var row := z * _w
-		for x in range(_w):
-			if _is_road_cell(x, z):
-				continue
-			var h := _height[row + x]
-			if h < GEM_SURFACE_MARGIN + 4:
-				continue
-			## Interior band only — below the shell / meadow skin.
-			host_estimate += maxi(h - GEM_SURFACE_MARGIN * 2, 0)
-	var seeds := clampi(host_estimate / GEM_VOXELS_PER_CLUSTER, 0, GEM_CLUSTER_CAP)
-	if seeds <= 0:
+## Embed exactly `gem_mats_to_place` in solid rock before caves open. Carve skips gem voxels
+## so nuggets stick into chambers; buried ones stay excavatable.
+func _scatter_gems_from_quota() -> void:
+	gem_positions = PackedVector3Array()
+	gem_mats = PackedInt32Array()
+	var quota := gem_mats_to_place.size()
+	if quota <= 0:
 		return
 	var placed := 0
 	var tries := 0
-	while placed < seeds and tries < seeds * 12:
+	var max_tries := maxi(quota * 24, 64)
+	while placed < quota and tries < max_tries:
 		tries += 1
 		var x := rng.randi_range(2, _w - 3)
 		var z := rng.randi_range(2, _d - 3)
@@ -1531,16 +1527,20 @@ func _scatter_gems() -> void:
 		if y_hi <= y_lo:
 			continue
 		var y := rng.randi_range(y_lo, y_hi)
-		var wx := _ox + x
-		var wz := _oz + z
-		var host := brush.get_vox(Vector3i(wx, y, wz))
-		if not _is_gem_host(host):
+		var cursor := Vector3i(_ox + x, y, _oz + z)
+		if not _is_gem_host(brush.get_vox(cursor)):
 			continue
-		var gem := VoxelMaterial.pick_gem(rng)
-		var cluster := 1 + rng.randi() % 4
-		_place_gem_cluster(Vector3i(wx, y, wz), gem, cluster)
+		var gem := int(gem_mats_to_place[placed])
+		brush.set_vox(cursor, gem)
+		gem_positions.append(Vector3(float(cursor.x), float(cursor.y), float(cursor.z)))
+		gem_mats.append(gem)
 		placed += 1
-	print("HillComposer: gem clusters=%d voxels=%d" % [placed, gem_positions.size()])
+	if placed < quota:
+		push_error(
+			"HillComposer: only placed %d of %d budgeted gem voxels after %d tries"
+			% [placed, quota, tries]
+		)
+	print("HillComposer: gem voxels=%d (quota %d)" % [gem_mats.size(), quota])
 
 
 func _is_gem_host(id: int) -> bool:

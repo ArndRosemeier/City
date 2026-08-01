@@ -12,8 +12,12 @@ const ID_SAPPHIRE := "gem_sapphire"
 const ID_EMERALD := "gem_emerald"
 const ID_DIAMOND := "gem_diamond"
 const ID_TRAP := "trap"
+const ID_BOOST_SPEED := "boost_speed"
+const ID_BOOST_REGEN := "boost_regen"
 
 const RECIPE_TRAP := "trap_from_quartz"
+const RECIPE_BOOST_SPEED := "boost_speed_craft"
+const RECIPE_BOOST_REGEN := "boost_regen_craft"
 
 
 class ItemDef:
@@ -25,6 +29,8 @@ class ItemDef:
 	var gem_mat_id: int = -1
 	## True for craft outputs that use the inward-pulse trap look.
 	var is_trap: bool = false
+	## Drinkable temporary boost.
+	var is_boost: bool = false
 
 
 class Recipe:
@@ -60,14 +66,18 @@ static func ensure_loaded() -> void:
 	trap.stack_max = STACK_DEFAULT
 	trap.is_trap = true
 	_items[ID_TRAP] = trap
+	_register_boost(ID_BOOST_SPEED, "Speed tonic")
+	_register_boost(ID_BOOST_REGEN, "Regen tonic")
 
-	var recipe := Recipe.new()
-	recipe.id = RECIPE_TRAP
-	recipe.display_name = "Trap"
-	recipe.inputs = {ID_QUARTZ: 5}
-	recipe.output_id = ID_TRAP
-	recipe.output_count = 1
-	_recipes[RECIPE_TRAP] = recipe
+	_register_recipe(RECIPE_TRAP, "Trap", {ID_QUARTZ: 5}, ID_TRAP, 1)
+	_register_recipe(
+		RECIPE_BOOST_SPEED, "Speed tonic",
+		{ID_AMBER: 3, ID_QUARTZ: 4}, ID_BOOST_SPEED, 1
+	)
+	_register_recipe(
+		RECIPE_BOOST_REGEN, "Regen tonic",
+		{ID_TOPAZ: 3, ID_AMBER: 2}, ID_BOOST_REGEN, 1
+	)
 
 
 static func _register_gem(item_id: String, display_name: String, mat_id: int) -> void:
@@ -76,6 +86,30 @@ static func _register_gem(item_id: String, display_name: String, mat_id: int) ->
 	item.display_name = display_name
 	item.gem_mat_id = mat_id
 	_items[item_id] = item
+
+
+static func _register_boost(item_id: String, display_name: String) -> void:
+	var item := ItemDef.new()
+	item.id = item_id
+	item.display_name = display_name
+	item.is_boost = true
+	_items[item_id] = item
+
+
+static func _register_recipe(
+	recipe_id: String,
+	display_name: String,
+	inputs: Dictionary,
+	output_id: String,
+	output_count: int
+) -> void:
+	var recipe := Recipe.new()
+	recipe.id = recipe_id
+	recipe.display_name = display_name
+	recipe.inputs = inputs
+	recipe.output_id = output_id
+	recipe.output_count = output_count
+	_recipes[recipe_id] = recipe
 
 
 static func item(item_id: String) -> ItemDef:

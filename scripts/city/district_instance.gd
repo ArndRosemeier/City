@@ -658,6 +658,18 @@ func _bake_on_worker() -> Dictionary:
 		"nav_solidity": nav.solidity_tables(),
 		"nav_link_params": nav.link_params(),
 	}
+	var theme := DistrictTheme.for_district(_world_seed, coord)
+	if bake_quality != "far" and theme.id == DistrictTheme.HILL:
+		var city := _find_city_root()
+		if city != null and city.has_method("hill_gem_paint_list"):
+			params["hill_gem_mats_to_place"] = city.call("hill_gem_paint_list", coord)
+		else:
+			## Tools without a CityRoot still get the unvisited constant.
+			params["hill_gem_mats_to_place"] = DistrictEconomy.flat_gem_list(
+				DistrictEconomy.roll_budgets(
+					DistrictTheme.HILL, DistrictCoord.district_seed(_world_seed, coord)
+				)
+			)
 	var mutex := Mutex.new()
 	var state := {"done": false, "payload": {}}
 	CityProfiler.add_counter("bake_tasks", 1)

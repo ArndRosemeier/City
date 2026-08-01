@@ -20,7 +20,7 @@ const ACTION_META: Array[Dictionary] = [
 	{"id": "fire", "label": "Charged blast (Alt+LMB)", "group": "Combat"},
 	{"id": "laser", "label": "Eye laser (Ctrl+LMB)", "group": "Combat"},
 	{"id": "beam", "label": "Blaster beam (LMB)", "group": "Combat"},
-	{"id": "stomp", "label": "Stomp (Q)", "group": "Combat"},
+	{"id": "stomp", "label": "Stomp (tray only)", "group": "Combat"},
 	{"id": "character_editor", "label": "Character editor", "group": "Character"},
 	{"id": "inventory", "label": "Inventory", "group": "Character"},
 	{"id": "sound_toggle", "label": "Sound on/off", "group": "Character"},
@@ -104,7 +104,8 @@ static func default_binding(action_id: String) -> Dictionary:
 		"beam":
 			return _mouse(MOUSE_BUTTON_LEFT)
 		"stomp":
-			return _key(KEY_Q)
+			## Tray-assignable only — no default key (was Q).
+			return _key(KEY_NONE)
 		"character_editor":
 			return _key(KEY_C)
 		"inventory":
@@ -313,6 +314,9 @@ func _matches_key_event(event: InputEventKey, action_id: String) -> bool:
 					return true
 		return false
 	var code := int(b.get("code", 0)) as Key
+	if code == KEY_NONE:
+		## Unbound action (e.g. stomp is tray-only).
+		return false
 	var hit := event.keycode == code or event.physical_keycode == code
 	if not hit and ALIASES.has(action_id):
 		for alt_code in ALIASES[action_id]:

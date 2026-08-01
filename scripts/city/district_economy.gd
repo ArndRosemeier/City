@@ -4,8 +4,8 @@
 ## Districts are never serialised. `CityStreamer` throws a tile's voxels away when the bubble
 ## moves off it and bakes it again from the seed on return, so "remember which nuggets were
 ## dug" is not a thing this game can do. A per-type remaining count is, and it buys the same
-## outcome: strip a hill's diamonds and they stay gone, because the *budget* is what pays out,
-## not the ore the bake happens to paint.
+## outcome: strip a hill's diamonds and they stay gone, because the *budget* is what the next
+## bake paints — not a second ledger fighting the voxels.
 ##
 ## The budget is rolled **once**, the first time a coord is created in a run, and only ever
 ## decremented afterwards. A tile the player has never loaded is not in the save at all.
@@ -27,12 +27,11 @@ const GEM_IDS: Array[int] = [
 const GEM_KEYS: Array[String] = ["q", "a", "t", "s", "e", "d"]
 const EXPLORED_KEY := "explored"
 
-## Gems a non-hill tile may ever yield, by `DistrictTheme` id. Split across types by the global
-## rarity curve, so a tile with a big total is not a tile with easy diamonds.
-##
-## Hill is absent on purpose: it is the mine, and its budget is the ore the bake actually painted
-## (see `budgets_from_gem_mats`). Reading this table for a hill is a bug, not a fallback.
+## Gems a tile may ever yield, by `DistrictTheme` id. Split across types by the global rarity
+## curve. Hills are the mine — a larger constant — and the bake paints exactly whatever is
+## still remaining (constant minus harvested).
 const THEME_TOTALS: Dictionary[int, int] = {
+	DistrictTheme.HILL: 100,
 	DistrictTheme.CASTLE: 40,
 	DistrictTheme.CORE_HIGHRISE: 35,
 	DistrictTheme.OLD_TOWN: 30,
@@ -73,13 +72,10 @@ static func gem_slot(gem_mat: int) -> int:
 # Rolling a first-create budget
 # ---------------------------------------------------------------------------
 
-## Budget for a non-hill tile: `THEME_TOTALS` picks drawn off the global rarity curve, seeded by
-## the district so the same coord in the same world always owes the same gems.
+## `THEME_TOTALS` picks drawn off the global rarity curve, seeded by the district so the same
+## coord in the same world always owes the same gems.
 static func roll_budgets(theme_id: int, district_seed: int) -> Dictionary[int, int]:
 	var out := _empty_budget()
-	if theme_id == DistrictTheme.HILL:
-		push_error("DistrictEconomy.roll_budgets: hills budget from their own ore, not the table")
-		return out
 	if not THEME_TOTALS.has(theme_id):
 		push_error("DistrictEconomy.roll_budgets: theme %d has no gem total" % theme_id)
 		return out
@@ -91,16 +87,13 @@ static func roll_budgets(theme_id: int, district_seed: int) -> Dictionary[int, i
 	return out
 
 
-## Budget for a hill: exactly the ore the compose pass painted. Most of it is buried in rock the
-## player has to dig for, which is the point — the mine's budget is the ore body, not surface loot.
-static func budgets_from_gem_mats(mats: PackedInt32Array) -> Dictionary[int, int]:
-	var out := _empty_budget()
-	for i in range(mats.size()):
-		var gem := int(mats[i])
-		if not out.has(gem):
-			push_error("DistrictEconomy: painted ore %d is not a gem" % gem)
-			continue
-		out[gem] = out[gem] + 1
+## Flat mat-id list matching a budget — one entry per gem voxel the hill bake should paint.
+static func flat_gem_list(budgets: Dictionary[int, int]) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for gem in GEM_IDS:
+		var n := int(budgets.get(gem, 0))
+		for _i in range(n):
+			out.append(gem)
 	return out
 
 
@@ -155,6 +148,14 @@ func remaining_total(coord: Vector2i) -> int:
 	return n
 
 
+## One mat id per gem still owed — the exact list a hill bake should paint.
+func remaining_flat_list(coord: Vector2i) -> PackedInt32Array:
+	var budgets := _empty_budget()
+	for gem in GEM_IDS:
+		budgets[gem] = remaining(coord, gem)
+	return flat_gem_list(budgets)
+
+
 ## Spend one gem of `gem_mat` from `coord`. False when that type is spent (or the tile has no
 ## row yet, which means nothing has been rolled for it and it owes nothing).
 func try_take(coord: Vector2i, gem_mat: int) -> bool:
@@ -171,6 +172,15 @@ func try_take(coord: Vector2i, gem_mat: int) -> bool:
 		return false
 	row[GEM_KEYS[slot]] = left - 1
 	return true
+
+
+## Spend one gem of any remaining type. Used when a visible voxel's type was already drained
+## (e.g. a chest spent that slot) so the next bake still shrinks by one.
+func try_take_any(coord: Vector2i) -> bool:
+	for gem in GEM_IDS:
+		if try_take(coord, gem):
+			return true
+	return false
 
 
 ## A gem type this tile can still pay, drawn off the rarity curve across only what is left.

@@ -247,6 +247,16 @@ var _action_anim: String = ""
 var _action_names: PackedStringArray = PackedStringArray()
 var _melee_strike_token: int = 0
 var _stomp_token: int = 0
+var _trap_hold_left: float = 0.0
+var _shield_held: bool = false
+var _boost_speed_left: float = 0.0
+var _boost_speed_mul: float = 1.0
+var _boost_regen_left: float = 0.0
+var _boost_regen_mul: float = 1.0
+var _temp_scale_left: float = 0.0
+var _temp_scale_restore: float = 0.0
+## Ability id last started from a mouse chord, so release stops the right hold.
+var _mouse_hold_ability: String = ""
 var _stomp_ready_at_msec: int = 0
 var _shake_trauma: float = 0.0
 var _stuck_timer: float = 0.0
@@ -849,11 +859,70 @@ func try_spend_energy(cost: float) -> bool:
 	return true
 
 
+## Frozen by a hold trap — no locomotion or combat until it expires.
+func begin_trap_hold(duration_sec: float) -> void:
+	_trap_hold_left = maxf(_trap_hold_left, duration_sec)
+	velocity = Vector3.ZERO
+	_stop_blaster(false)
+	_blast_charging = false
+	_shield_held = false
+
+
+func is_trap_held() -> bool:
+	return _trap_hold_left > 0.0
+
+
+func set_shield_held(on: bool) -> void:
+	_shield_held = on
+
+
+func is_shield_held() -> bool:
+	return _shield_held
+
+
+func begin_speed_boost(duration_sec: float, mul: float = 1.45) -> void:
+	_boost_speed_left = maxf(_boost_speed_left, duration_sec)
+	_boost_speed_mul = mul
+
+
+func begin_regen_boost(duration_sec: float, mul: float = 2.5) -> void:
+	_boost_regen_left = maxf(_boost_regen_left, duration_sec)
+	_boost_regen_mul = mul
+
+
+## Temporary grow/shrink that reverts when the timer ends.
+func begin_temp_scale(target_scale: float, duration_sec: float) -> void:
+	if _temp_scale_left <= 0.0:
+		_temp_scale_restore = character_scale
+	set_character_scale(target_scale, false)
+	_temp_scale_left = maxf(_temp_scale_left, duration_sec)
+
+
+func _tick_status_effects(delta: float) -> void:
+	if _trap_hold_left > 0.0:
+		_trap_hold_left = maxf(_trap_hold_left - delta, 0.0)
+	if _boost_speed_left > 0.0:
+		_boost_speed_left = maxf(_boost_speed_left - delta, 0.0)
+	if _boost_regen_left > 0.0:
+		_boost_regen_left = maxf(_boost_regen_left - delta, 0.0)
+	if _temp_scale_left > 0.0:
+		_temp_scale_left = maxf(_temp_scale_left - delta, 0.0)
+		if _temp_scale_left <= 0.0 and _temp_scale_restore > 0.0:
+			set_character_scale(_temp_scale_restore, false)
+			_temp_scale_restore = 0.0
+	if _shield_held:
+		var drain := AbilityRegistry.SHIELD_DRAIN_PER_SEC * delta
+		if not try_spend_energy(drain):
+			_shield_held = false
+
+
 func _regen_energy(delta: float) -> void:
 	if _game_over_locked or _energy >= energy_max:
 		return
 	## 1/s at scale 1; scale N → 1 energy every N seconds (never faster than base).
 	var rate := energy_regen_per_sec / maxf(character_scale, 1.0)
+	if _boost_regen_left > 0.0:
+		rate *= _boost_regen_mul
 	var prev := _energy
 	_energy = minf(_energy + rate * delta, energy_max)
 	if not is_equal_approx(prev, _energy):
@@ -891,7 +960,10 @@ func take_damage(source: DamageSource.Id) -> float:
 func take_damage_scaled(source: DamageSource.Id, scale: float) -> float:
 	if _game_over_locked:
 		return 0.0
-	var taken := _health.apply_damage_scaled(source, scale)
+	var hit_scale := scale
+	if _shield_held:
+		hit_scale *= 0.35
+	var taken := _health.apply_damage_scaled(source, hit_scale)
 	if taken > 0.0 and not _health.is_depleted():
 		_play_hit_reaction()
 	return taken
@@ -1396,7 +1468,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			if ctl.matches_key_pressed(ek, "tetris"):
-				_request_tetris_machine()
+				## Legacy T key: only fires when the ability is unlocked (and usually tray-bound).
+				_activate_ability_id(AbilityRegistry.ID_TETRIS)
 				get_viewport().set_input_as_handled()
 				return
 			if ctl.matches_key_pressed(ek, "aim_panel"):
@@ -1412,46 +1485,40 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			if ctl.matches_key_pressed(ek, "district_hop"):
-				_request_district_hop()
+				_activate_ability_id(AbilityRegistry.ID_DISTRICT_HOP)
 				get_viewport().set_input_as_handled()
 				return
+			## Combat keys are tray slots now — Q/stomp and the mouse chords resolve through
+			## CityRoot's loadout. Legacy key binds for laser/beam/fire still map to mouse slots.
 			if ctl.matches_key_pressed(ek, "laser"):
-				_stop_blaster(false)
-				_blast_charging = false
-				_blast_charge = 0.0
-				_start_laser_eyes_at_cursor()
+				_press_mouse_ability("laser")
 				get_viewport().set_input_as_handled()
 				return
 			if ctl.matches_key_pressed(ek, "beam"):
-				_blast_charging = false
-				_blast_charge = 0.0
-				_begin_blaster_hold()
-				get_viewport().set_input_as_handled()
-				return
-			if ctl.matches_key_pressed(ek, "stomp"):
-				_stop_blaster(false)
-				_blast_charging = false
-				_blast_charge = 0.0
-				_start_stomp()
+				_press_mouse_ability("beam")
 				get_viewport().set_input_as_handled()
 				return
 			if ctl.matches_key_pressed(ek, "fire"):
-				_stop_blaster(false)
-				_begin_charged_blast_hold()
+				_press_mouse_ability("fire")
 				get_viewport().set_input_as_handled()
 				return
 		if not ek.pressed:
-			## Release charged blast when fire is a key bind.
 			if _blast_charging and str(ctl.get_binding("fire").get("device", "")) == "key":
 				var code := int(ctl.get_binding("fire").get("code", -1)) as Key
 				if ek.keycode == code:
-					_release_charged_blast_at_cursor()
+					_release_mouse_ability("fire")
 					get_viewport().set_input_as_handled()
 					return
 			if _blaster_holding and str(ctl.get_binding("beam").get("device", "")) == "key":
 				var beam_code := int(ctl.get_binding("beam").get("code", -1)) as Key
 				if ek.keycode == beam_code:
-					_stop_blaster(false)
+					_release_mouse_ability("beam")
+					get_viewport().set_input_as_handled()
+					return
+			if _shield_held and str(ctl.get_binding("laser").get("device", "")) == "key":
+				var laser_code := int(ctl.get_binding("laser").get("code", -1)) as Key
+				if ek.keycode == laser_code:
+					_release_mouse_ability("laser")
 					get_viewport().set_input_as_handled()
 					return
 	if event is InputEventMouseMotion and _rmb_looking:
@@ -1499,26 +1566,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			)
 			if combat.is_empty():
 				return
-			match combat:
-				"laser":
-					_stop_blaster(false)
-					_blast_charging = false
-					_blast_charge = 0.0
-					_start_laser_eyes_at_cursor()
-				"beam":
-					_blast_charging = false
-					_blast_charge = 0.0
-					_begin_blaster_hold()
-				"fire":
-					_stop_blaster(false)
-					_begin_charged_blast_hold()
+			_press_mouse_ability(combat)
 			get_viewport().set_input_as_handled()
-		elif beam_btn and _blaster_holding:
-			_stop_blaster(false)
+		elif beam_btn:
+			_release_mouse_ability("beam")
 			get_viewport().set_input_as_handled()
-		elif fire_btn and _blast_charging:
-			_release_charged_blast_at_cursor()
+		elif fire_btn:
+			_release_mouse_ability("fire")
 			get_viewport().set_input_as_handled()
+		else:
+			var laser_bind := ctl.get_binding("laser")
+			var laser_btn := (
+				str(laser_bind.get("device", "")) == "mouse"
+				and int(mb.button_index) == int(laser_bind.get("code", -2))
+			)
+			if laser_btn:
+				_release_mouse_ability("laser")
+				get_viewport().set_input_as_handled()
 
 
 func _set_rmb_looking(on: bool) -> void:
@@ -1606,6 +1670,10 @@ func _physics_elevator_ride(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_tick_status_effects(delta)
+	if _trap_hold_left > 0.0:
+		velocity = Vector3.ZERO
+		return
 	_regen_energy(delta)
 	_regen_health(delta)
 	if is_elevator_riding():
@@ -1698,6 +1766,8 @@ func _physics_process(delta: float) -> void:
 		_voxel_motion.call("set_collide_with_water", not _swimming)
 	var sprinting := ctl.is_key_held("sprint") and not _swimming
 	var speed := walk_speed * SWIM_SPEED_FACTOR if _swimming else (sprint_speed if sprinting else walk_speed)
+	if _boost_speed_left > 0.0:
+		speed *= _boost_speed_mul
 	speed *= character_scale
 	_moving = wish.length_squared() > 0.0001
 	if exiting_pool:
@@ -3461,6 +3531,118 @@ func _fire_charged_blast_projectile() -> void:
 		)
 
 
+func _city_root() -> CityRoot:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var nodes := tree.get_nodes_in_group("city_root")
+	if nodes.is_empty():
+		return null
+	return nodes[0] as CityRoot
+
+
+func _ability_for_mouse(action: String) -> String:
+	var city := _city_root()
+	if city == null:
+		match action:
+			"beam":
+				return AbilityRegistry.ID_BLASTER
+			"laser":
+				return AbilityRegistry.ID_LASER
+			"fire":
+				return AbilityRegistry.ID_CHARGED_BLAST
+			_:
+				return ""
+	return city.ability_for_mouse_action(action)
+
+
+func _can_use(ability_id: String) -> bool:
+	var city := _city_root()
+	if city == null:
+		return true
+	return city.can_use_ability(ability_id)
+
+
+func _activate_ability_id(ability_id: String) -> void:
+	var city := _city_root()
+	if city != null:
+		city.activate_ability(ability_id)
+		return
+	match ability_id:
+		AbilityRegistry.ID_TETRIS:
+			_request_tetris_machine()
+		AbilityRegistry.ID_DISTRICT_HOP:
+			_request_district_hop()
+
+
+func _press_mouse_ability(action: String) -> void:
+	if _trap_hold_left > 0.0 or _game_over_locked:
+		return
+	var ability_id := _ability_for_mouse(action)
+	if ability_id.is_empty() or not _can_use(ability_id):
+		return
+	_mouse_hold_ability = ability_id
+	match ability_id:
+		AbilityRegistry.ID_BLASTER:
+			_blast_charging = false
+			_blast_charge = 0.0
+			_begin_blaster_hold()
+		AbilityRegistry.ID_LASER:
+			_stop_blaster(false)
+			_blast_charging = false
+			_blast_charge = 0.0
+			_start_laser_eyes_at_cursor()
+		AbilityRegistry.ID_CHARGED_BLAST:
+			_stop_blaster(false)
+			_begin_charged_blast_hold()
+		AbilityRegistry.ID_SHIELD:
+			_stop_blaster(false)
+			_blast_charging = false
+			set_shield_held(true)
+		_:
+			_activate_ability_id(ability_id)
+
+
+func _release_mouse_ability(action: String) -> void:
+	var ability_id := _mouse_hold_ability
+	if ability_id.is_empty():
+		ability_id = _ability_for_mouse(action)
+	match ability_id:
+		AbilityRegistry.ID_BLASTER:
+			_stop_blaster(false)
+		AbilityRegistry.ID_CHARGED_BLAST:
+			if _blast_charging:
+				_release_charged_blast_at_cursor()
+		AbilityRegistry.ID_SHIELD:
+			set_shield_held(false)
+	_mouse_hold_ability = ""
+
+
+## Public entry points for the ability tray (CityRoot.activate_ability).
+func fire_laser_at_cursor() -> void:
+	_start_laser_eyes_at_cursor()
+
+
+func fire_stomp() -> void:
+	_start_stomp()
+
+
+func begin_charged_blast() -> void:
+	_begin_charged_blast_hold()
+
+
+func begin_blaster() -> void:
+	_begin_blaster_hold()
+
+
+func request_tetris() -> void:
+	_request_tetris_machine()
+
+
+func request_district_hop() -> void:
+	_request_district_hop()
+
+
 func _start_laser_eyes_at_cursor() -> void:
 	if _camera == null:
 		return
@@ -3687,15 +3869,6 @@ func _on_blaster_impact(hit_point: Vector3, direction: Vector3, shot_origin: Vec
 	melee_strike_requested.emit(
 		origin, dir, maxf(2.5, character_scale * 2.0), DamageSourceScript.Id.PLAYER_BLASTER
 	)
-
-
-func _city_root() -> Node:
-	var n: Node = get_parent()
-	while n != null:
-		if n.has_method("resolve_laser_aim") and n.has_method("apply_laser_agent_hit"):
-			return n
-		n = n.get_parent()
-	return null
 
 
 func _start_melee_punch() -> void:

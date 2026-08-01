@@ -25,7 +25,8 @@ const QUICKSAVE_NAME := "quicksave"
 const FILE_SUFFIX := ".json"
 ## Bump when the payload changes shape in a way an older file cannot satisfy.
 ## 2 added `districts` (per-tile gem budgets + explored) and `score`.
-const VERSION := 2
+## 3 added `mode`, `unlocks`, `tray`, `hardness_tier` (Stage 2 loadout).
+const VERSION := 3
 const NAME_MAX_LENGTH := 48
 
 ## Where slots live. A round-trip test points this at a scratch folder, because the alternative is
@@ -232,7 +233,8 @@ static func capture(
 	inventory: PlayerInventory,
 	display_name: String,
 	economy: DistrictEconomy = null,
-	score: int = 0
+	score: int = 0,
+	loadout: PlayerLoadout = null
 ) -> Dictionary:
 	if walker == null or not is_instance_valid(walker):
 		push_error("GameSave.capture: there is no walker to save")
@@ -250,6 +252,14 @@ static func capture(
 	if props == null:
 		push_error("GameSave.capture: the walker has no proportions")
 		return {}
+	var loadout_data := {}
+	if loadout != null:
+		loadout_data = loadout.to_save_dict()
+	else:
+		## Tools without a loadout still write a sandbox default so v3 readers stay happy.
+		var fallback := PlayerLoadout.new()
+		fallback.reset_sandbox()
+		loadout_data = fallback.to_save_dict()
 	return {
 		"version": VERSION,
 		"display_name": display_name,
@@ -266,6 +276,10 @@ static func capture(
 		"inventory": inventory.slots_snapshot(),
 		"score": score,
 		"districts": {} if economy == null else economy.to_save_dict(),
+		"mode": str(loadout_data.get("mode", PlayerLoadout.MODE_SANDBOX)),
+		"unlocks": loadout_data.get("unlocks", []),
+		"tray": loadout_data.get("tray", []),
+		"hardness_tier": int(loadout_data.get("hardness_tier", PlayerLoadout.HARDNESS_ROCK)),
 	}
 
 
@@ -275,6 +289,18 @@ static func saved_seed(data: Dictionary) -> int:
 
 static func saved_score(data: Dictionary) -> int:
 	return int(data.get("score", 0))
+
+
+static func apply_loadout(loadout: PlayerLoadout, data: Dictionary) -> void:
+	if loadout == null:
+		push_error("GameSave.apply_loadout: no loadout")
+		return
+	loadout.load_save_dict({
+		"mode": data.get("mode", PlayerLoadout.MODE_SANDBOX),
+		"unlocks": data.get("unlocks", []),
+		"tray": data.get("tray", []),
+		"hardness_tier": data.get("hardness_tier", PlayerLoadout.HARDNESS_ROCK),
+	})
 
 
 ## Pour the saved district rows back into the live economy. A save with no rows is a run that

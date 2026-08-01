@@ -5,6 +5,7 @@ extends CanvasLayer
 signal opened
 signal closed
 signal craft_requested(recipe_id: String)
+signal unlock_requested(ability_id: String)
 
 const SLOT_PX := 72.0
 const GRID_COLS := 5
@@ -328,6 +329,26 @@ func _rebuild_craft_list() -> void:
 		btn.pressed.connect(_on_craft_pressed.bind(recipe.id))
 		_craft_box.add_child(btn)
 		_craft_buttons[recipe.id] = btn
+	var unlock_title := Label.new()
+	unlock_title.text = "Unlock"
+	unlock_title.add_theme_font_size_override("font_size", 16)
+	_craft_box.add_child(unlock_title)
+	for def in AbilityRegistry.unlockable_defs():
+		var ubtn := Button.new()
+		ubtn.focus_mode = Control.FOCUS_NONE
+		ubtn.text = _unlock_button_text(def)
+		ubtn.pressed.connect(_on_unlock_pressed.bind(def.id))
+		_craft_box.add_child(ubtn)
+		_craft_buttons["unlock:%s" % def.id] = ubtn
+
+
+func _unlock_button_text(def: AbilityRegistry.AbilityDef) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	for item_id in def.unlock_cost.keys():
+		parts.append(
+			"%d %s" % [int(def.unlock_cost[item_id]), InventoryCatalog.display_name(String(item_id))]
+		)
+	return "%s\n(%s)" % [def.display_name, ", ".join(parts)]
 
 
 func _recipe_button_text(recipe: InventoryCatalog.Recipe) -> String:
@@ -353,6 +374,10 @@ func _on_slot_pressed(index: int) -> void:
 
 func _on_craft_pressed(recipe_id: String) -> void:
 	craft_requested.emit(recipe_id)
+
+
+func _on_unlock_pressed(ability_id: String) -> void:
+	unlock_requested.emit(ability_id)
 
 
 func _refresh() -> void:
@@ -392,17 +417,49 @@ func _refresh_slot(index: int) -> void:
 
 
 func _refresh_craft_buttons() -> void:
-	for recipe_id in _craft_buttons.keys():
-		var btn: Button = _craft_buttons[recipe_id]
-		var can := _inventory != null and _inventory.can_craft(String(recipe_id))
+	for key: Variant in _craft_buttons.keys():
+		var btn: Button = _craft_buttons[key]
+		var id := String(key)
+		if id.begins_with("unlock:"):
+			var ability_id := id.substr(7)
+			var def := AbilityRegistry.get_def(ability_id)
+			var already := _is_ability_unlocked(ability_id)
+			var can_unlock := def != null and not already and _can_afford_unlock(def)
+			btn.disabled = already or not can_unlock
+			if def != null:
+				btn.text = (
+					"%s\n(unlocked)" % def.display_name if already else _unlock_button_text(def)
+				)
+			btn.modulate = Color(1, 1, 1) if can_unlock else Color(0.65, 0.65, 0.7)
+			continue
+		var can := _inventory != null and _inventory.can_craft(id)
 		btn.disabled = not can
-		var recipe := InventoryCatalog.recipe(String(recipe_id))
+		var recipe := InventoryCatalog.recipe(id)
 		if recipe != null:
 			btn.text = _recipe_button_text(recipe)
-			if can:
-				btn.modulate = Color(1, 1, 1)
-			else:
-				btn.modulate = Color(0.65, 0.65, 0.7)
+			btn.modulate = Color(1, 1, 1) if can else Color(0.65, 0.65, 0.7)
+
+
+func _can_afford_unlock(def: AbilityRegistry.AbilityDef) -> bool:
+	if _inventory == null:
+		return false
+	for item_id: Variant in def.unlock_cost.keys():
+		if _inventory.count_of(str(item_id)) < int(def.unlock_cost[item_id]):
+			return false
+	return true
+
+
+func _is_ability_unlocked(ability_id: String) -> bool:
+	var tree := get_tree()
+	if tree == null:
+		return false
+	var nodes := tree.get_nodes_in_group("city_root")
+	if nodes.is_empty():
+		return false
+	var city := nodes[0]
+	if city != null and city.has_method("can_use_ability"):
+		return bool(city.call("can_use_ability", ability_id))
+	return false
 
 
 func _refresh_slot_styles() -> void:

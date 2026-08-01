@@ -13,9 +13,10 @@ signal quicksave_requested
 signal quickload_requested
 signal named_save_requested(save_name: String)
 signal named_load_requested(save_name: String)
-signal new_game_requested
+signal new_game_requested(mode: String)
 
 const GameSaveScript := preload("res://scripts/city/game_save.gd")
+const PlayerLoadoutScript := preload("res://scripts/city/player_loadout.gd")
 
 const PANEL_WIDTH := 560.0
 const PANEL_HEIGHT := 560.0
@@ -29,7 +30,8 @@ var _panel: PanelContainer
 var _quickload_btn: Button
 var _save_btn: Button
 var _load_btn: Button
-var _new_btn: Button
+var _new_sandbox_btn: Button
+var _new_adventure_btn: Button
 var _name_field: LineEdit
 var _list: ItemList
 var _status: Label
@@ -237,13 +239,21 @@ func _build_ui() -> void:
 	_load_btn.pressed.connect(_on_load_pressed)
 	bottom.add_child(_load_btn)
 
-	_new_btn = Button.new()
-	_new_btn.name = "NewGameButton"
-	_new_btn.text = "New Game"
-	_new_btn.focus_mode = Control.FOCUS_NONE
-	_new_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_new_btn.pressed.connect(_on_new_game_pressed)
-	bottom.add_child(_new_btn)
+	_new_sandbox_btn = Button.new()
+	_new_sandbox_btn.name = "NewSandboxButton"
+	_new_sandbox_btn.text = "New Sandbox"
+	_new_sandbox_btn.focus_mode = Control.FOCUS_NONE
+	_new_sandbox_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_new_sandbox_btn.pressed.connect(_on_new_sandbox_pressed)
+	bottom.add_child(_new_sandbox_btn)
+
+	_new_adventure_btn = Button.new()
+	_new_adventure_btn.name = "NewAdventureButton"
+	_new_adventure_btn.text = "New Adventure"
+	_new_adventure_btn.focus_mode = Control.FOCUS_NONE
+	_new_adventure_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_new_adventure_btn.pressed.connect(_on_new_adventure_pressed)
+	bottom.add_child(_new_adventure_btn)
 
 	var close_btn := Button.new()
 	close_btn.text = "Close"
@@ -309,7 +319,8 @@ func _disarm_buttons() -> void:
 	_armed = ""
 	_quickload_btn.text = "Quickload"
 	_load_btn.text = "Load"
-	_new_btn.text = "New Game"
+	_new_sandbox_btn.text = "New Sandbox"
+	_new_adventure_btn.text = "New Adventure"
 
 
 func _on_quicksave_pressed() -> void:
@@ -351,13 +362,23 @@ func _on_load_pressed() -> void:
 	named_load_requested.emit(name)
 
 
-func _on_new_game_pressed() -> void:
-	if not _arm("new", _new_btn, "New Game", "New Game — confirm?"):
+func _on_new_sandbox_pressed() -> void:
+	if not _arm("new_sandbox", _new_sandbox_btn, "New Sandbox", "Sandbox — confirm?"):
 		set_status(
-			"A new game drops the autosave and builds a new city. Press again to confirm.", true
+			"Sandbox: all powers, no score. Drops the autosave. Press again to confirm.", true
 		)
 		return
-	new_game_requested.emit()
+	new_game_requested.emit(PlayerLoadout.MODE_SANDBOX)
+
+
+func _on_new_adventure_pressed() -> void:
+	if not _arm("new_adventure", _new_adventure_btn, "New Adventure", "Adventure — confirm?"):
+		set_status(
+			"Adventure: blaster start, gem unlocks, score on. Drops the autosave. Press again.",
+			true
+		)
+		return
+	new_game_requested.emit(PlayerLoadout.MODE_ADVENTURE)
 
 
 func _on_name_changed(_text: String) -> void:

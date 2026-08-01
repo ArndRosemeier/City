@@ -89,6 +89,8 @@ var elevator_shafts: Array = []
 ## Hill gem ore (world voxel coords + material ids) collected during compose.
 var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
+## Exact remaining gems for the next hill compose (constant or constant − harvested).
+var hill_gem_mats_to_place: PackedInt32Array = PackedInt32Array()
 ## Daylight cave mouths (district-local XZ) + summit for outside-the-entrance spawn.
 var _hill_cave_mouths: PackedVector2Array = PackedVector2Array()
 var _hill_cave_summit: Vector2i = Vector2i(-1, -1)
@@ -217,6 +219,7 @@ func _setup_composers() -> void:
 	_hill.planner = _planner
 	_hill.cell_size = cell_size
 	_hill.use_native_hill = use_native_hill
+	_hill.gem_mats_to_place = hill_gem_mats_to_place
 	## Cleared each begin; filled by HillComposer.compose().
 	_hill_gem_positions = PackedVector3Array()
 	_hill_gem_mats = PackedInt32Array()

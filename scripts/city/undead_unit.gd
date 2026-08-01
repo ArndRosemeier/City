@@ -168,6 +168,7 @@ func setup(
 	p_body_id: String = "",
 	invasion: Node = null
 ) -> void:
+	add_to_group("undead")
 	role = p_role
 	_body_id = p_body_id
 	_roster = roster
@@ -937,10 +938,27 @@ func _physics_process(delta: float) -> void:
 
 ## One frame of behaviour and navigation. Public so a headless test can step a body on a
 ## fixed delta instead of at whatever rate the physics server happens to run.
+func begin_trap_hold(duration_sec: float) -> void:
+	set_meta("trap_hold_until", Time.get_ticks_msec() + int(maxf(duration_sec, 0.0) * 1000.0))
+	velocity = Vector3.ZERO
+
+
+func is_trap_held() -> bool:
+	if not has_meta("trap_hold_until"):
+		return false
+	if Time.get_ticks_msec() < int(get_meta("trap_hold_until")):
+		return true
+	remove_meta("trap_hold_until")
+	return false
+
+
 func tick(delta: float) -> void:
 	if not _alive:
 		return
 	if not _city.is_player_alive():
+		return
+	if is_trap_held():
+		velocity = Vector3.ZERO
 		return
 	CityProfiler.begin("undead_unit")
 	_cast_cd = maxf(0.0, _cast_cd - delta)

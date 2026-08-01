@@ -5,10 +5,8 @@
 ## `CityWalker._try_world_interact`), which is why the body sits on collision layer 1 and the node
 ## carries the `world_interact` group. A chest is a thing you would never want to shoot.
 ##
-## The chest owns no gems of its own. Every nugget comes out of `DistrictEconomy` through
-## `CityRoot.grant_district_gem`, so a district that has already been mined out hands over an
-## open, empty chest instead of another handful — and the loot does not survive a re-stream as a
-## second payout, because the budget does not.
+## Town chests spend the district gem budget. Hill chests do not — cave ore owns that ledger so
+## the bake can paint exactly what is left; a hill chest is a small free haul instead.
 class_name GemChest
 extends Node3D
 
@@ -75,14 +73,22 @@ func interact_at_world(_world_pos: Vector3) -> bool:
 		return true
 	var wanted := _rng.randi_range(GEMS_MIN, GEMS_MAX)
 	var paid := 0
+	## Hills: cave ore owns the district budget (bake paints remaining). Chests there are a
+	## separate toy haul so opening one cannot ghost out topaz still sitting in the rock.
+	var hill_chest := _is_hill_district(city)
 	var economy := city.get_economy()
 	for _i in range(wanted):
-		## Draw only from what this tile still owes, so scarcity shows up as smaller hauls of
-		## commoner gems rather than as chests that mysteriously pay nothing.
-		var gem := economy.pick_available(district_coord, _rng)
+		var gem: int
+		if hill_chest:
+			gem = VoxelMaterial.pick_gem(_rng)
+			if city.grant_district_gem(district_coord, gem, false):
+				paid += 1
+			continue
+		## Other themes: draw only from what this tile still owes.
+		gem = economy.pick_available(district_coord, _rng)
 		if gem == VoxelMaterial.AIR:
 			break
-		if city.grant_district_gem(district_coord, gem):
+		if city.grant_district_gem(district_coord, gem, true):
 			paid += 1
 	## After the grants: each one has put its stone on the loot card, and the city plays the lid and
 	## the flourish over the finished haul.
@@ -92,6 +98,12 @@ func interact_at_world(_world_pos: Vector3) -> bool:
 		% [str(district_coord), wanted, paid]
 	)
 	return true
+
+
+func _is_hill_district(city: CityRoot) -> bool:
+	if city == null:
+		return false
+	return city.get_loaded_district_theme_id(district_coord) == DistrictTheme.HILL
 
 
 func _play_open() -> void:

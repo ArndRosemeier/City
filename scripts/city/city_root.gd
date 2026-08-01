@@ -10,7 +10,6 @@ const DistrictInstanceScript := preload("res://scripts/city/district_instance.gd
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
-const PlayerActionBarScript := preload("res://scripts/city/player_action_bar.gd")
 const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd")
 const PlayerHealthHudScript := preload("res://scripts/city/player_health_hud.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
@@ -36,6 +35,11 @@ const GemLightDirectorScript := preload("res://scripts/city/gem_light_director.g
 const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
 const PlayerInventoryPanelScript := preload("res://scripts/city/player_inventory_panel.gd")
 const LootToastScript := preload("res://scripts/city/loot_toast.gd")
+const AbilityTrayScript := preload("res://scripts/city/ability_tray.gd")
+const PlayerLoadoutScript := preload("res://scripts/city/player_loadout.gd")
+const TrapProjectileScript := preload("res://scripts/city/trap_projectile.gd")
+const FollowMinionScript := preload("res://scripts/city/follow_minion.gd")
+const ArmedTrapScript := preload("res://scripts/city/armed_trap.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
@@ -89,7 +93,9 @@ var _elevator_panel: ElevatorPanel
 var _hud_enabled: bool = false
 var _status: Label
 var _loading_splash: LoadingSplash
-var _action_bar: PlayerActionBar
+var _ability_tray: AbilityTray
+var _loadout: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
+var _minions: Array[FollowMinion] = []
 var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
 var _debris_root: Node3D
@@ -134,6 +140,9 @@ var _game_menu: GameMenuPanel
 ## Save payload waiting to be poured into the next walker. Set before a regenerate (boot resume,
 ## quickload, load) and cleared once the character is standing in the rebuilt world.
 var _pending_restore: Dictionary = {}
+## Theme forced for the next fresh spawn (e.g. Adventure → Old Town). Consumed in
+## `_resolve_spawn_district`. -1 = unset. CLI flags still win over this.
+var _pending_spawn_theme_id: int = -1
 var _autosave_accum: float = 0.0
 ## World aim captured when N opens the summon panel (before the mouse moves onto UI).
 var _summon_aim: Variant = null
@@ -148,6 +157,8 @@ const RADAR_COOLDOWN_SEC := 30.0
 const RADAR_REVEAL_SEC := 12.0
 const GEM_PICKUP_INTERVAL_SEC := 0.12
 const GEM_PICKUP_REACH_M := 1.35
+## Hill ore is painted as tiny 6-neighbour clumps; one strike / walk-up takes the whole clump.
+const GEM_CLUSTER_MAX := 24
 ## Seconds between district budget / explore sweeps. Only fires when a tile finishes baking or
 ## the player crosses a tile line, so it can be lazy.
 const ECONOMY_TICK_SEC := 0.5
@@ -294,22 +305,27 @@ func _pick_spawn_district_random() -> Vector2i:
 	)
 
 
-## Resolves the spawn tile: a save being restored, CLI coord, --spawn-theme search, or seeded RNG.
-## No start modal.
+## Resolves the spawn tile: a save being restored, CLI coord, --spawn-theme search,
+## a pending theme (Adventure Old Town), or seeded RNG. No start modal.
 func _resolve_spawn_district() -> Vector2i:
 	if not _pending_restore.is_empty():
 		var saved := GameSaveScript.saved_position(_pending_restore)
 		if saved != Vector3.INF:
 			var coord := DistrictCoord.from_world(saved, VOXEL_SIZE)
 			spawn_theme_id = DistrictTheme.for_district(city_seed, coord).id
+			_pending_spawn_theme_id = -1
 			return coord
 
 	var forced: Variant = _cli_spawn_district()
 	if forced is Vector2i:
 		spawn_theme_id = DistrictTheme.for_district(city_seed, forced as Vector2i).id
+		_pending_spawn_theme_id = -1
 		return forced as Vector2i
 
 	var theme_id := _cli_spawn_theme()
+	if theme_id < 0 and _pending_spawn_theme_id >= 0:
+		theme_id = _pending_spawn_theme_id
+	_pending_spawn_theme_id = -1
 	if theme_id >= 0:
 		spawn_theme_id = theme_id
 		var coord := DistrictTheme.find_coord_for_theme(city_seed, theme_id)
@@ -604,6 +620,7 @@ func _build_hud() -> void:
 	_inventory_panel.opened.connect(_on_inventory_opened)
 	_inventory_panel.closed.connect(_on_inventory_closed)
 	_inventory_panel.craft_requested.connect(_on_inventory_craft_requested)
+	_inventory_panel.unlock_requested.connect(_on_inventory_unlock_requested)
 
 	_monster_summon_panel = MonsterSummonPanelScript.new()
 	_monster_summon_panel.name = "MonsterSummon"
@@ -818,9 +835,9 @@ func _on_named_load_requested(save_name: String) -> void:
 		_game_menu.set_status("Could not read '%s'." % save_name, true)
 
 
-func _on_new_game_requested() -> void:
+func _on_new_game_requested(mode: String) -> void:
 	_game_menu.close_panel()
-	start_new_game()
+	start_new_game(mode)
 
 
 func _on_monster_summon_requested(monster_id: String) -> void:
@@ -964,6 +981,13 @@ func summon_monster_at_aim(body_id: String) -> UndeadUnit:
 	return unit
 
 
+func _on_inventory_unlock_requested(ability_id: String) -> void:
+	if not try_unlock_ability(ability_id):
+		return
+	if _inventory_panel != null and _inventory_panel.has_method("_refresh"):
+		_inventory_panel.call("_refresh")
+
+
 func _on_inventory_craft_requested(recipe_id: String) -> void:
 	if _inventory == null:
 		return
@@ -983,8 +1007,8 @@ func _on_controls_changed(controls: PlayerControls) -> void:
 		return
 	if _walker != null and is_instance_valid(_walker):
 		_walker.set_controls(controls)
-	if _action_bar != null and is_instance_valid(_action_bar):
-		_action_bar.set_controls(controls)
+	if _ability_tray != null and is_instance_valid(_ability_tray):
+		_ability_tray.set_controls(controls)
 	CityProfiler.set_controls(controls)
 	DamageLog.set_controls(controls)
 
@@ -1119,9 +1143,14 @@ func _process(delta: float) -> void:
 			radar = "  Radar: %.0fs" % _radar_cooldown_left
 		else:
 			radar = "  Radar: ready (U)"
-		_hud.text = "%d FPS%s  Score: %d%s" % [
-			Engine.get_frames_per_second(), clock, _player_score, radar
-		]
+		if _loadout != null and _loadout.scores():
+			_hud.text = "%d FPS%s  Score: %d%s" % [
+				Engine.get_frames_per_second(), clock, _player_score, radar
+			]
+		else:
+			_hud.text = "%d FPS%s  Sandbox%s" % [
+				Engine.get_frames_per_second(), clock, radar
+			]
 
 
 func _create_terrain() -> void:
@@ -1261,6 +1290,186 @@ func get_player_score() -> int:
 	return _player_score
 
 
+func get_loadout() -> PlayerLoadout:
+	return _loadout
+
+
+func can_use_ability(ability_id: String) -> bool:
+	return _loadout != null and _loadout.is_unlocked(ability_id)
+
+
+func ability_for_mouse_action(action: String) -> String:
+	if _loadout == null:
+		return ""
+	var slot := AbilityRegistry.mouse_slot_for_action(action)
+	if slot < 0:
+		return ""
+	return _loadout.slot_at(slot)
+
+
+func _on_ability_requested(ability_id: String) -> void:
+	activate_ability(ability_id)
+
+
+func _on_tray_assign_changed() -> void:
+	## Tray binds are part of the save; mark the next autosave sooner by zeroing the accumulator.
+	_autosave_accum = maxf(_autosave_accum, AUTOSAVE_INTERVAL_SEC - 5.0)
+
+
+## Fire a tray ability: builds, weapons, powers, consumables.
+func activate_ability(ability_id: String) -> void:
+	if ability_id.is_empty() or _walker == null or not is_instance_valid(_walker):
+		return
+	if _game_over or not is_player_alive():
+		return
+	var def := AbilityRegistry.get_def(ability_id)
+	if def == null:
+		push_error("CityRoot.activate_ability: unknown '%s'" % ability_id)
+		return
+	if not can_use_ability(ability_id):
+		print("CityRoot: '%s' is locked — unlock it with gems" % def.display_name)
+		return
+	match ability_id:
+		AbilityRegistry.ID_BLASTER:
+			_walker.begin_blaster()
+		AbilityRegistry.ID_LASER:
+			_walker.fire_laser_at_cursor()
+		AbilityRegistry.ID_CHARGED_BLAST:
+			_walker.begin_charged_blast()
+		AbilityRegistry.ID_STOMP:
+			_walker.fire_stomp()
+		AbilityRegistry.ID_SHIELD:
+			_walker.set_shield_held(true)
+		AbilityRegistry.ID_GROW:
+			_activate_grow_shrink(true)
+		AbilityRegistry.ID_SHRINK:
+			_activate_grow_shrink(false)
+		AbilityRegistry.ID_MINION:
+			_spawn_minion()
+		AbilityRegistry.ID_DISTRICT_HOP:
+			_walker.request_district_hop()
+		AbilityRegistry.ID_TETRIS:
+			_walker.request_tetris()
+		AbilityRegistry.ID_USE_TRAP:
+			_throw_trap()
+		AbilityRegistry.ID_USE_BOOST_SPEED:
+			_drink_boost(InventoryCatalog.ID_BOOST_SPEED)
+		AbilityRegistry.ID_USE_BOOST_REGEN:
+			_drink_boost(InventoryCatalog.ID_BOOST_REGEN)
+		_:
+			if def.kind == AbilityRegistry.KIND_BUILD:
+				_on_build_chosen(ability_id)
+			else:
+				push_error("CityRoot.activate_ability: no verb for '%s'" % ability_id)
+
+
+func try_unlock_ability(ability_id: String) -> bool:
+	var def := AbilityRegistry.get_def(ability_id)
+	if def == null:
+		push_error("CityRoot.try_unlock_ability: unknown '%s'" % ability_id)
+		return false
+	if def.unlock_cost.is_empty():
+		push_error("CityRoot.try_unlock_ability: '%s' has no unlock cost" % ability_id)
+		return false
+	if _loadout.is_unlocked(ability_id):
+		return false
+	for item_id: Variant in def.unlock_cost.keys():
+		var need := int(def.unlock_cost[item_id])
+		if _inventory.count_of(str(item_id)) < need:
+			print("CityRoot: cannot afford unlock '%s'" % def.display_name)
+			return false
+	for item_id: Variant in def.unlock_cost.keys():
+		var need := int(def.unlock_cost[item_id])
+		if not _inventory.remove(str(item_id), need):
+			push_error("CityRoot: unlock spend failed for '%s'" % item_id)
+			return false
+	_loadout.mark_unlocked(ability_id)
+	if _ability_tray != null:
+		_ability_tray.refresh()
+	print("CityRoot: unlocked %s" % def.display_name)
+	return true
+
+
+func _activate_grow_shrink(grow: bool) -> void:
+	if not _walker.try_spend_energy(AbilityRegistry.get_def(
+		AbilityRegistry.ID_GROW if grow else AbilityRegistry.ID_SHRINK
+	).energy_cost):
+		return
+	var target := (
+		minf(_walker.get_character_scale() * 1.45, _walker.scale_max) if grow
+		else maxf(_walker.get_character_scale() / 1.45, _walker.scale_min)
+	)
+	_walker.begin_temp_scale(target, AbilityRegistry.GROW_SHRINK_DURATION_SEC)
+
+
+func _spawn_minion() -> void:
+	while _minions.size() > 0 and (
+		_minions[0] == null or not is_instance_valid(_minions[0])
+	):
+		_minions.remove_at(0)
+	if _minions.size() >= AbilityRegistry.MINION_MAX:
+		print("CityRoot: minion cap reached")
+		return
+	var def := AbilityRegistry.get_def(AbilityRegistry.ID_MINION)
+	if not _walker.try_spend_energy(def.energy_cost):
+		return
+	var m: FollowMinion = FollowMinionScript.new() as FollowMinion
+	m.name = "Minion%d" % _minions.size()
+	m.follow = _walker
+	add_child(m)
+	m.global_position = _walker.global_position + Vector3(1.2, 0.2, 0.0)
+	_minions.append(m)
+
+
+func _throw_trap() -> void:
+	if _inventory.count_of(InventoryCatalog.ID_TRAP) <= 0:
+		print("CityRoot: no traps in inventory")
+		return
+	if not _inventory.remove(InventoryCatalog.ID_TRAP, 1):
+		return
+	var origin := _walker.global_position + Vector3(0.0, 1.2, 0.0)
+	var aim := -_walker.global_transform.basis.z.normalized()
+	var proj: TrapProjectile = TrapProjectileScript.new() as TrapProjectile
+	proj.name = "TrapProjectile"
+	add_child(proj)
+	proj.global_position = origin
+	proj.linear_velocity = (aim + Vector3.UP * 0.55).normalized() * 14.0
+	proj.landed.connect(_on_trap_landed)
+
+
+func _on_trap_landed(trap: ArmedTrap) -> void:
+	if trap == null:
+		return
+	trap.triggered.connect(_on_trap_triggered)
+
+
+func _on_trap_triggered(victim: Node3D) -> void:
+	if victim == null or not _loadout.scores():
+		return
+	## Hostile = undead unit. Peds and the player do not pay.
+	var is_hostile := victim.is_in_group("undead")
+	if not is_hostile and victim.get_script() != null:
+		is_hostile = String(victim.get_script().resource_path).ends_with("undead_unit.gd")
+	if is_hostile:
+		_player_score += AbilityRegistry.TRAP_HOSTILE_SCORE
+		print(
+			"CityRoot: trapped a hostile (+%d, score %d)"
+			% [AbilityRegistry.TRAP_HOSTILE_SCORE, _player_score]
+		)
+
+
+func _drink_boost(item_id: String) -> void:
+	if _inventory.count_of(item_id) <= 0:
+		print("CityRoot: no %s in inventory" % item_id)
+		return
+	if not _inventory.remove(item_id, 1):
+		return
+	if item_id == InventoryCatalog.ID_BOOST_SPEED:
+		_walker.begin_speed_boost(AbilityRegistry.BOOST_DURATION_SEC)
+	elif item_id == InventoryCatalog.ID_BOOST_REGEN:
+		_walker.begin_regen_boost(AbilityRegistry.BOOST_DURATION_SEC)
+
+
 ## Roll a budget for every tile the run has just reached, and pay exploration for the tile the
 ## player is standing in. Both happen once per coord, ever, and both are cheap enough to sweep.
 func _tick_district_economy() -> void:
@@ -1270,11 +1479,18 @@ func _tick_district_economy() -> void:
 		var inst := _as_district_instance(entry)
 		if inst == null or not inst.is_ready or inst.generator == null:
 			continue
-		_ensure_district_row(inst)
+		if _loadout.uses_gem_budgets():
+			_ensure_district_row(inst)
 	if _game_over or _walker == null or not is_instance_valid(_walker):
+		return
+	if not _loadout.scores():
 		return
 	var here := DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE)
 	if not _economy.has_row(here):
+		## Sandbox skipped rows; Adventure always ensures above. Still explore-mark if a row exists.
+		if _loadout.uses_gem_budgets():
+			return
+		## Adventure-less path shouldn't score; already returned.
 		return
 	if _economy.mark_explored(here):
 		_player_score += DistrictEconomy.EXPLORE_SCORE
@@ -1284,19 +1500,17 @@ func _tick_district_economy() -> void:
 		)
 
 
-## First create of a coord in this run: fix what it will ever pay out. Hills budget from the ore
-## the bake painted; every other theme rolls its table total off the global rarity curve.
+## First create of a coord in this run: fix what it will ever pay out from the theme constant.
+## Hills use the same table; the bake paints exactly whatever is still remaining.
 func _ensure_district_row(inst: DistrictInstance) -> void:
+	if inst == null or inst.generator == null or inst.generator.theme == null:
+		return
 	if _economy.has_row(inst.coord):
 		return
 	var theme_id: int = inst.generator.theme.id
-	var budgets: Dictionary[int, int]
-	if theme_id == DistrictTheme.HILL:
-		budgets = DistrictEconomy.budgets_from_gem_mats(inst.hill_gem_mats)
-	else:
-		budgets = DistrictEconomy.roll_budgets(
-			theme_id, DistrictCoord.district_seed(city_seed, inst.coord)
-		)
+	var budgets := DistrictEconomy.roll_budgets(
+		theme_id, DistrictCoord.district_seed(city_seed, inst.coord)
+	)
 	_economy.ensure_row(inst.coord, budgets)
 	print(
 		"CityRoot: district %s (%s) owes %d gems"
@@ -1304,15 +1518,46 @@ func _ensure_district_row(inst: DistrictInstance) -> void:
 	)
 
 
-## Spend one gem of `mat_id` from the district that holds `world_vox`. False when that tile is
-## out of that type — the ore is still there to dig, it simply stops paying.
+## Gems a hill bake should paint: the district constant, or that minus already harvested.
+## Called on the main thread before the worker starts so the ledger and voxels stay one thing.
+func hill_gem_paint_list(coord: Vector2i) -> PackedInt32Array:
+	var dseed := DistrictCoord.district_seed(city_seed, coord)
+	if _loadout == null or not _loadout.uses_gem_budgets():
+		## Sandbox: always the full mine.
+		return DistrictEconomy.flat_gem_list(
+			DistrictEconomy.roll_budgets(DistrictTheme.HILL, dseed)
+		)
+	if not _economy.has_row(coord):
+		_economy.ensure_row(coord, DistrictEconomy.roll_budgets(DistrictTheme.HILL, dseed))
+		print(
+			"CityRoot: district %s (Hill) owes %d gems"
+			% [str(coord), _economy.remaining_total(coord)]
+		)
+	return _economy.remaining_flat_list(coord)
+
+
+## Spend one gem of `mat_id` from the district that holds `world_vox`.
 func try_take_district_gem(world_vox: Vector3i, mat_id: int) -> bool:
+	var coord := _district_coord_for_vox(world_vox)
+	_ensure_economy_at_coord(coord)
+	return _economy.try_take(coord, mat_id)
+
+
+func _district_coord_for_vox(world_vox: Vector3i) -> Vector2i:
 	var world := Vector3(
 		(float(world_vox.x) + 0.5) * VOXEL_SIZE,
 		(float(world_vox.y) + 0.5) * VOXEL_SIZE,
 		(float(world_vox.z) + 0.5) * VOXEL_SIZE
 	)
-	return _economy.try_take(DistrictCoord.from_world(world, VOXEL_SIZE), mat_id)
+	return DistrictCoord.from_world(world, VOXEL_SIZE)
+
+
+func _ensure_economy_at_coord(coord: Vector2i) -> void:
+	if not _loadout.uses_gem_budgets():
+		return
+	var inst := _district_at_coord(coord)
+	if inst != null and inst.is_ready:
+		_ensure_district_row(inst)
 
 
 ## A room was just furnished, so it may get a chest. The decorator paints voxels and nothing else,
@@ -1423,15 +1668,25 @@ func _district_at_coord(coord: Vector2i) -> DistrictInstance:
 	return null
 
 
-## Hand the player one gem from `coord`'s budget. False when that tile has none of that type left,
-## which is how chests and trees go quiet in a district that has already been picked clean.
-func grant_district_gem(coord: Vector2i, mat_id: int) -> bool:
+## Theme id for a currently loaded district, or -1 when that tile is not in memory.
+func get_loaded_district_theme_id(coord: Vector2i) -> int:
+	var inst := _district_at_coord(coord)
+	if inst == null or inst.generator == null or inst.generator.theme == null:
+		return -1
+	return inst.generator.theme.id
+
+
+## Hand the player one gem. When `from_budget` is true, spends the district ledger (town chests /
+## canopy). Hill cave ore uses the ledger only when voxels are collected — chests pass false.
+func grant_district_gem(coord: Vector2i, mat_id: int, from_budget: bool = true) -> bool:
 	var item_id := InventoryCatalog.item_id_for_gem(mat_id)
 	if item_id == "":
 		push_error("CityRoot.grant_district_gem: %d is not a gem" % mat_id)
 		return false
-	if not _economy.try_take(coord, mat_id):
-		return false
+	if from_budget and _loadout.uses_gem_budgets():
+		_ensure_economy_at_coord(coord)
+		if not _economy.try_take(coord, mat_id):
+			return false
 	var leftover := _inventory.add(item_id, 1)
 	if leftover != 0:
 		push_error("CityRoot: inventory full — gem %s could not be stored" % item_id)
@@ -1483,40 +1738,120 @@ func get_gem_counts() -> Dictionary:
 	return out
 
 
-## Remove one gem voxel and credit the inventory. Returns false if it is gone already.
+## Pull a gem vein: the struck/touched cell plus every same-type neighbour in the local cluster.
+## Feedback matches chests — one loot card + treasure bling for the whole haul.
 ##
-## The ore comes out of the rock either way; whether it lands in the inventory is the district's
-## budget to answer. A tile whose sapphires are spent still has sapphire-coloured voxels in it
-## (the bake paints from the seed and knows nothing about the save) and clearing one now yields
-## nothing — which is what stops a hill from being farmed by walking away and coming back.
+## A visible gem always pays. Anti-farm is "the next bake only paints what is still remaining",
+## not "refuse a voxel that is sitting in front of you".
 func try_collect_gem_at(vox: Vector3i) -> bool:
-	if _tool == null:
+	var cluster := _gem_cluster_at(vox)
+	if cluster.is_empty():
 		return false
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	var mat_id := int(_tool.get_voxel(vox))
-	if not VoxelMaterial.is_gem(mat_id):
-		return false
-	var item_id := InventoryCatalog.item_id_for_gem(mat_id)
-	if item_id == "":
-		return false
-	_brush.set_vox(vox, VoxelMaterial.AIR)
-	if not try_take_district_gem(vox, mat_id):
-		return true
-	var leftover := _inventory.add(item_id, 1)
-	if leftover != 0:
-		push_error("CityRoot: inventory full — gem %s could not be stored" % item_id)
-	if _audio != null and _audio.has_method("play_gem_pickup"):
-		var local := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
-		var world := _terrain.to_global(local) if _terrain != null else local * VOXEL_SIZE
-		_audio.call("play_gem_pickup", world, mat_id)
-	if _loot_toast != null:
-		_loot_toast.add_item(item_id, 1)
+	var paid := 0
+	var pitch_mat := -1
+	for cell: Vector3i in cluster:
+		var credited_mat := _collect_gem_voxel(cell)
+		if credited_mat >= 0:
+			paid += 1
+			if pitch_mat < 0:
+				pitch_mat = credited_mat
+	var local := Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+	var world := _terrain.to_global(local) if _terrain != null else local * VOXEL_SIZE
+	report_gem_haul(world, paid, pitch_mat)
 	return true
 
 
-## Walk-up pickup: any gem within arm's reach of the chest is taken.
+## Same flourish as a chest haul: one card headline and one bling for every stone already stacked
+## on the toast. Cave ore also plays the gem chime once so a dug vein still sings.
+func report_gem_haul(world_pos: Vector3, gems_paid: int, mat_id: int = -1) -> void:
+	if gems_paid <= 0:
+		return
+	if _loot_toast != null:
+		_loot_toast.set_headline("Gems found")
+	if _audio == null:
+		return
+	_audio.play_gem_pickup(world_pos, mat_id)
+	_audio.play_treasure_bling()
+
+
+## Clear one visible gem cell and credit inventory. Always pays; the ledger tracks harvest so the
+## next hill bake paints fewer. Returns the gem material id, or -1 if the cell was not a gem.
+func _collect_gem_voxel(vox: Vector3i) -> int:
+	var mat_id := _gem_id_at(vox)
+	if not VoxelMaterial.is_gem(mat_id):
+		return -1
+	var item_id := InventoryCatalog.item_id_for_gem(mat_id)
+	if item_id == "":
+		return -1
+	if _brush == null and _tool == null:
+		return -1
+	_clear_gem_voxel(vox)
+	if _loadout != null and _loadout.uses_gem_budgets():
+		var coord := _district_coord_for_vox(vox)
+		_ensure_economy_at_coord(coord)
+		## Visible always pays. Prefer the matching type; if a chest already spent that slot,
+		## burn any remaining so the next hill bake still shrinks.
+		if not _economy.try_take(coord, mat_id):
+			_economy.try_take_any(coord)
+	var leftover := _inventory.add(item_id, 1)
+	if leftover != 0:
+		push_error("CityRoot: inventory full — gem %s could not be stored" % item_id)
+	if _loot_toast != null:
+		_loot_toast.add_item(item_id, 1)
+	return mat_id
+
+
+func _clear_gem_voxel(vox: Vector3i) -> void:
+	if _brush != null:
+		_brush.set_vox(vox, VoxelMaterial.AIR)
+	elif _tool != null:
+		_tool.channel = VoxelBuffer.CHANNEL_TYPE
+		_tool.set_voxel(vox, VoxelMaterial.AIR)
+
+
+func _gem_id_at(vox: Vector3i) -> int:
+	if _brush != null:
+		return _brush.get_vox(vox)
+	if _tool == null:
+		return VoxelMaterial.AIR
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	return int(_tool.get_voxel(vox))
+
+
+## 6-connected same-type gem cells around `origin`, capped so a pathologically huge paint cannot
+## wipe a whole hillside in one click.
+func _gem_cluster_at(origin: Vector3i) -> Array[Vector3i]:
+	var start_id := _gem_id_at(origin)
+	if not VoxelMaterial.is_gem(start_id):
+		return []
+	var out: Array[Vector3i] = []
+	var seen: Dictionary = {}
+	var queue: Array[Vector3i] = [origin]
+	seen[origin] = true
+	var dirs: Array[Vector3i] = [
+		Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
+		Vector3i(0, 1, 0), Vector3i(0, -1, 0),
+		Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+	]
+	while not queue.is_empty() and out.size() < GEM_CLUSTER_MAX:
+		var p: Vector3i = queue.pop_front()
+		out.append(p)
+		for d: Vector3i in dirs:
+			var n: Vector3i = p + d
+			if seen.has(n):
+				continue
+			if _gem_id_at(n) != start_id:
+				continue
+			seen[n] = true
+			queue.append(n)
+	return out
+
+
+## Walk-up pickup: any gem within arm's reach of the chest is taken (whole local cluster).
 func _try_collect_nearby_gems() -> void:
-	if _tool == null or _terrain == null or not is_player_alive():
+	if _terrain == null or not is_player_alive():
+		return
+	if _brush == null and _tool == null:
 		return
 	var scale := 1.0
 	if _walker.has_method("get_character_scale"):
@@ -1529,16 +1864,15 @@ func _try_collect_nearby_gems() -> void:
 	var cx := int(floor(local.x))
 	var cy := int(floor(local.y))
 	var cz := int(floor(local.z))
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	for z in range(cz - r_vox, cz + r_vox + 1):
 		for y in range(cy - r_vox, cy + r_vox + 1):
 			for x in range(cx - r_vox, cx + r_vox + 1):
 				var center := Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
 				if center.distance_squared_to(local) > r2 + 0.0001:
 					continue
-				var id := int(_tool.get_voxel(Vector3i(x, y, z)))
-				if VoxelMaterial.is_gem(id):
-					try_collect_gem_at(Vector3i(x, y, z))
+				var cell := Vector3i(x, y, z)
+				if VoxelMaterial.is_gem(_gem_id_at(cell)):
+					try_collect_gem_at(cell)
 
 
 func get_player_position() -> Vector3:
@@ -2177,9 +2511,13 @@ func _regenerate() -> void:
 		_streamer.call("clear_all")
 		_streamer.queue_free()
 		_streamer = null
-	if _action_bar != null and is_instance_valid(_action_bar):
-		_action_bar.queue_free()
-		_action_bar = null
+	if _ability_tray != null and is_instance_valid(_ability_tray):
+		_ability_tray.queue_free()
+		_ability_tray = null
+	for m in _minions:
+		if m != null and is_instance_valid(m):
+			m.queue_free()
+	_minions.clear()
 	if _infection != null and is_instance_valid(_infection):
 		_infection.call("clear_all")
 		_infection.queue_free()
@@ -2382,11 +2720,12 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 		_loading_splash.call("hide_splash")
 	elif _status != null:
 		_status.visible = false
-	_action_bar = PlayerActionBarScript.new()
-	_action_bar.name = "PlayerActionBar"
-	add_child(_action_bar)
-	_action_bar.setup(_walker)
-	_action_bar.build_requested.connect(_on_build_chosen)
+	_ability_tray = AbilityTrayScript.new() as AbilityTray
+	_ability_tray.name = "AbilityTray"
+	add_child(_ability_tray)
+	_ability_tray.setup(_walker, _loadout)
+	_ability_tray.ability_requested.connect(_on_ability_requested)
+	_ability_tray.assign_changed.connect(_on_tray_assign_changed)
 	## It joins the HUD band after the band was last refreshed, so it would otherwise stay up
 	## over a panel opened while the spawn district was still baking.
 	_refresh_hud_visibility()
@@ -2583,10 +2922,16 @@ func _restore_pending_character() -> void:
 	GameSaveScript.apply_character(_walker, _pending_restore)
 	GameSaveScript.apply_inventory(_inventory, _pending_restore)
 	GameSaveScript.apply_districts(_economy, _pending_restore)
+	GameSaveScript.apply_loadout(_loadout, _pending_restore)
 	_player_score = GameSaveScript.saved_score(_pending_restore)
+	if not _loadout.scores():
+		_player_score = 0
+	if _ability_tray != null:
+		_ability_tray.bind_loadout(_loadout)
+		_ability_tray.refresh()
 	print(
-		"CityRoot: restored save at %s (seed %d)"
-		% [_walker.global_position, city_seed]
+		"CityRoot: restored save at %s (seed %d, mode %s)"
+		% [_walker.global_position, city_seed, _loadout.mode]
 	)
 	_pending_restore = {}
 	_autosave_accum = 0.0
@@ -2625,7 +2970,7 @@ func write_quicksave(label: String = "Autosave") -> bool:
 	if not can_save_game():
 		return false
 	var data := GameSaveScript.capture(
-		city_seed, _walker, _inventory, label, _economy, _player_score
+		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout
 	)
 	if data.is_empty():
 		return false
@@ -2640,7 +2985,7 @@ func write_named_save(raw_name: String) -> bool:
 		return false
 	var label := raw_name.strip_edges()
 	var data := GameSaveScript.capture(
-		city_seed, _walker, _inventory, label, _economy, _player_score
+		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout
 	)
 	if data.is_empty():
 		return false
@@ -2675,18 +3020,28 @@ func _start_load(data: Dictionary, what: String) -> bool:
 
 
 ## A new game keeps the named library and drops only the autosave: the next boot must not resume
-## the run the player just walked away from.
-func start_new_game() -> void:
+## the run the player just walked away from. `mode` is sandbox or adventure.
+func start_new_game(mode: String = PlayerLoadout.MODE_SANDBOX) -> void:
 	if _booting:
 		push_warning("CityRoot: still booting — ignoring New Game")
 		return
 	GameSaveScript.delete_quicksave()
 	_pending_restore = {}
+	if mode == PlayerLoadout.MODE_ADVENTURE:
+		_loadout.reset_adventure()
+		## Adventure always boots in Old Town so the first district matches the mode pitch.
+		_pending_spawn_theme_id = DistrictTheme.OLD_TOWN
+	else:
+		_loadout.reset_sandbox()
+		_pending_spawn_theme_id = -1
+	_player_score = 0
+	_inventory.clear()
+	_economy.clear()
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	city_seed = maxi(rng.randi() & 0x7fffffff, 1)
 	spawn_theme_id = -1
-	print("CityRoot: new game in world seed %d" % city_seed)
+	print("CityRoot: new %s game in world seed %d" % [_loadout.mode, city_seed])
 	_regenerate()
 
 
@@ -2825,7 +3180,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 				var vox := Vector3i(x, y, z)
 				## Brush sees pending AIR from earlier furniture assembly clears.
 				var mat_id := _brush.get_vox(vox)
-				if not VoxelMaterial.is_destructible(mat_id):
+				if not _carve_allowed(mat_id):
 					continue
 				var carved := _brush.destroy_vox(vox)
 				for entry in carved:
@@ -2918,6 +3273,35 @@ func _on_melee_strike(
 ## Shared voxel impact for player strikes and enemy projectiles. Indestructible solids
 ## (arena shell, bedrock, LOS veil) stop the shot via solid probes but are not carved.
 ## Returns true when at least one destructible / gem cell was resolved.
+## True when the player's current hardness tier may destroy this material (or chip it).
+func _carve_allowed(mat_id: int) -> bool:
+	if not VoxelMaterial.is_destructible(mat_id):
+		return false
+	var need := int(VoxelMaterial.hardness(mat_id))
+	var have := _loadout.hardness_tier if _loadout != null else PlayerLoadout.HARDNESS_ROCK
+	if need <= have:
+		return true
+	if need == have + 1:
+		## One tier above: slow chip, not a silent no-op.
+		return randf() < 0.28
+	return false
+
+
+func _hardness_tier() -> int:
+	return _loadout.hardness_tier if _loadout != null else PlayerLoadout.HARDNESS_ROCK
+
+
+## Brief refuse when the tool is two+ tiers below the target.
+func _flash_hardness_refuse(mat_id: int) -> void:
+	var need := int(VoxelMaterial.hardness(mat_id))
+	print(
+		"CityRoot: too hard (need tier %d, have %d) — unlock hardness"
+		% [need, _hardness_tier()]
+	)
+	if _loot_toast != null:
+		_loot_toast.show_message("Too hard")
+
+
 func apply_voxel_strike(
 	origin: Vector3, direction: Vector3, max_range_m: float, character_scale: float
 ) -> bool:
@@ -2939,19 +3323,30 @@ func apply_voxel_strike(
 	var hit_vox := Vector3i(2147483647, 2147483647, 2147483647)
 	var found := false
 	var hit_gem := false
+	var have := _hardness_tier()
 	for i in range(1, steps + 1):
 		var p := local_origin + dir * (float(i) * step)
 		var v := Vector3i(int(floor(p.x)), int(floor(p.y)), int(floor(p.z)))
 		if found and v == hit_vox:
 			continue
 		var id := int(_tool.get_voxel(v))
+		if id == VoxelMaterial.AIR or id == VoxelMaterial.WATER:
+			continue
 		if VoxelMaterial.is_gem(id):
 			hit_vox = v
 			found = true
 			hit_gem = true
 			break
-		if not VoxelMaterial.is_destructible(id):
-			continue
+		var need := int(VoxelMaterial.hardness(id))
+		if need == int(VoxelMaterial.Hardness.NEVER) or not VoxelMaterial.is_destructible(id):
+			## Solid that never yields — stop the ray.
+			break
+		if need > have + 1:
+			_flash_hardness_refuse(id)
+			break
+		if need == have + 1 and randf() >= 0.28:
+			## Chip miss still stops the ray so we do not tunnel through.
+			break
 		hit_vox = v
 		found = true
 		break
@@ -2984,7 +3379,7 @@ func apply_voxel_strike(
 				if VoxelMaterial.is_gem(mat_id):
 					try_collect_gem_at(vox)
 					continue
-				if not VoxelMaterial.is_destructible(mat_id):
+				if not _carve_allowed(mat_id):
 					continue
 				var carved := _brush.destroy_vox(vox)
 				for entry in carved:
@@ -4525,6 +4920,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	var ek := event as InputEventKey
 	if ek == null or not ek.pressed or ek.echo:
 		return
+	## Debug: Ctrl+Shift+F12 fills every gem stack to 99. Not remappable on purpose.
+	if (
+		ek.keycode == KEY_F12
+		and ek.ctrl_pressed
+		and ek.shift_pressed
+		and not ek.alt_pressed
+	):
+		_cheat_fill_gems()
+		get_viewport().set_input_as_handled()
+		return
 	var ctl := _player_controls()
 	if ctl == null:
 		return
@@ -4591,6 +4996,29 @@ func _unhandled_input(event: InputEvent) -> void:
 	if ctl.matches_key_pressed(ek, "nav_overlay"):
 		print("CityRoot: nav overlay %s" % ("on" if _nav_overlay.toggle() else "off"))
 		get_viewport().set_input_as_handled()
+
+
+## Top every gem type up to a full stack. Debug only — Ctrl+Shift+F12.
+func _cheat_fill_gems() -> void:
+	if _inventory == null:
+		push_error("CityRoot: cheat fill gems needs an inventory")
+		return
+	const TARGET := 99
+	var filled := 0
+	for mat_id in range(VoxelMaterial.GEM_QUARTZ, VoxelMaterial.GEM_DIAMOND + 1):
+		var item_id := InventoryCatalog.item_id_for_gem(mat_id)
+		if item_id.is_empty():
+			continue
+		var have := _inventory.count_of(item_id)
+		var need := TARGET - have
+		if need <= 0:
+			continue
+		var left := _inventory.add(item_id, need)
+		if left != 0:
+			push_error("CityRoot: cheat could not fit %d × %s" % [left, item_id])
+		else:
+			filled += 1
+	print("CityRoot: cheat — %d gem types topped to %d" % [filled, TARGET])
 
 
 func _input(event: InputEvent) -> void:

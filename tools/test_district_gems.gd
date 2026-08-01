@@ -66,13 +66,14 @@ func _ready() -> void:
 	GameSaveScript.use_directory(SCRATCH_DIR)
 	_wipe_scratch()
 	_check_roll_is_deterministic()
-	_check_hill_budget_is_its_own_ore()
+	_check_hill_is_constant_minus_harvested()
 	_check_take_depletes_and_then_refuses()
 	_check_revisit_keeps_the_ledger()
 	_check_explore_pays_once()
 	_check_chest_chance_is_stable()
 	await _check_furnished_room_hands_over_a_spot()
 	await _check_chest_pays_until_the_tile_is_empty()
+	await _check_cave_cluster_collects_together()
 	await _check_save_round_trip()
 	_wipe_scratch()
 	GameSaveScript.use_default_directory()
@@ -119,30 +120,29 @@ func _check_roll_is_deterministic() -> void:
 	print("OK an old town owes %d gems, %d quartz to %d diamond" % [total, quartz, diamond])
 
 
-## Hills are the mine, and their budget is the ore the bake painted rather than a table figure —
-## most of it buried where only digging finds it.
-func _check_hill_budget_is_its_own_ore() -> void:
-	var mats := PackedInt32Array([
-		VoxelMaterial.GEM_QUARTZ,
-		VoxelMaterial.GEM_QUARTZ,
-		VoxelMaterial.GEM_DIAMOND,
-		VoxelMaterial.GEM_SAPPHIRE,
-		VoxelMaterial.GEM_QUARTZ,
-	])
-	var budgets := DistrictEconomy.budgets_from_gem_mats(mats)
-	if int(budgets[VoxelMaterial.GEM_QUARTZ]) != 3:
-		_fail("FAIL a hill with three quartz nuggets owes %d" % budgets[VoxelMaterial.GEM_QUARTZ])
+## Hills seed the theme constant; after harvest the bake list is that constant minus taken gems.
+func _check_hill_is_constant_minus_harvested() -> void:
+	var want := int(DistrictEconomy.THEME_TOTALS[DistrictTheme.HILL])
+	var budgets := DistrictEconomy.roll_budgets(
+		DistrictTheme.HILL, DistrictCoord.district_seed(WORLD_SEED, COORD)
+	)
+	var flat := DistrictEconomy.flat_gem_list(budgets)
+	if flat.size() != want:
+		_fail("FAIL an unvisited hill rolls %d gems, want %d" % [flat.size(), want])
 		return
-	if int(budgets[VoxelMaterial.GEM_DIAMOND]) != 1:
-		_fail("FAIL a hill with one diamond owes %d" % budgets[VoxelMaterial.GEM_DIAMOND])
+	var eco := DistrictEconomyScript.new() as DistrictEconomy
+	eco.ensure_row(COORD, budgets)
+	if not eco.try_take(COORD, VoxelMaterial.GEM_QUARTZ):
+		## Quartz is almost always present; if this seed rolled none, burn any type.
+		var any := eco.pick_available(COORD, RandomNumberGenerator.new())
+		if any == VoxelMaterial.AIR or not eco.try_take(COORD, any):
+			_fail("FAIL could not harvest one gem from a fresh hill")
+			return
+	var left := eco.remaining_flat_list(COORD)
+	if left.size() != want - 1:
+		_fail("FAIL after one harvest the bake list is %d, want %d" % [left.size(), want - 1])
 		return
-	if int(budgets[VoxelMaterial.GEM_EMERALD]) != 0:
-		_fail("FAIL a hill with no emerald owes %d" % budgets[VoxelMaterial.GEM_EMERALD])
-		return
-	if int(budgets[VoxelMaterial.GEM_TOPAZ]) != 0:
-		_fail("FAIL a hill with no topaz owes %d" % budgets[VoxelMaterial.GEM_TOPAZ])
-		return
-	print("OK a hill owes exactly the ore its bake painted")
+	print("OK a hill paints the constant, then constant minus harvested")
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +360,8 @@ func _check_chest_pays_until_the_tile_is_empty() -> void:
 	city.set_process(false)
 	city.set_physics_process(false)
 	await get_tree().process_frame
+	## Budgets only deplete in Adventure; Sandbox is an infinite toybox.
+	city.get_loadout().reset_adventure()
 
 	var eco := city.get_economy()
 	var stocked: Dictionary[int, int] = {VoxelMaterial.GEM_QUARTZ: 40}
@@ -444,6 +446,45 @@ func _check_chest_pays_until_the_tile_is_empty() -> void:
 	_free_chest_case(city, district)
 
 
+## One strike on a cave nugget must clear the whole same-type neighbour clump, leave a different
+## vein alone, and credit every stone — the same "one find, one haul" feel as a chest.
+func _check_cave_cluster_collects_together() -> void:
+	var city := TestCity.new()
+	city.name = "ClusterCity"
+	add_child(city)
+	city.set_process(false)
+	city.set_physics_process(false)
+	await get_tree().process_frame
+	var brush: CityBrush = CityBrushScript.new() as CityBrush
+	brush.use_offline_volume()
+	city.bind_test_brush(brush)
+	brush.set_vox(Vector3i(10, 10, 10), VoxelMaterial.GEM_QUARTZ)
+	brush.set_vox(Vector3i(11, 10, 10), VoxelMaterial.GEM_QUARTZ)
+	brush.set_vox(Vector3i(12, 10, 10), VoxelMaterial.GEM_QUARTZ)
+	brush.set_vox(Vector3i(20, 10, 10), VoxelMaterial.GEM_AMBER)
+	var inv := city.get_inventory()
+	inv.clear()
+	if not city.try_collect_gem_at(Vector3i(11, 10, 10)):
+		_fail("FAIL striking a cave gem did nothing")
+		city.queue_free()
+		return
+	if inv.count_of(InventoryCatalog.ID_QUARTZ) != 3:
+		_fail(
+			"FAIL cluster paid %d quartz, want 3"
+			% inv.count_of(InventoryCatalog.ID_QUARTZ)
+		)
+	if brush.get_vox(Vector3i(10, 10, 10)) != VoxelMaterial.AIR:
+		_fail("FAIL cluster neighbour was left in the rock")
+	if brush.get_vox(Vector3i(12, 10, 10)) != VoxelMaterial.AIR:
+		_fail("FAIL cluster far end was left in the rock")
+	if brush.get_vox(Vector3i(20, 10, 10)) != VoxelMaterial.GEM_AMBER:
+		_fail("FAIL a separate amber vein was swept up with the quartz")
+	if inv.count_of(InventoryCatalog.ID_AMBER) != 0:
+		_fail("FAIL amber from another vein landed in the haul")
+	print("OK a cave gem strike takes the whole local cluster")
+	city.queue_free()
+
+
 ## Unloading a tile is `destroy_and_clear`, and it has to take the chests with it — a chest left
 ## behind would be a clickable payout floating in a district that no longer exists.
 func _free_chest_case(city: TestCity, district: DistrictInstance) -> void:
@@ -481,9 +522,10 @@ func _check_save_round_trip() -> void:
 		COORD, DistrictEconomy.roll_budgets(DistrictTheme.CASTLE, WORLD_SEED)
 	)
 	eco.ensure_row(
-		OTHER_COORD, DistrictEconomy.budgets_from_gem_mats(
-			PackedInt32Array([VoxelMaterial.GEM_EMERALD, VoxelMaterial.GEM_EMERALD])
-		)
+		OTHER_COORD,
+		{
+			VoxelMaterial.GEM_EMERALD: 2,
+		} as Dictionary[int, int]
 	)
 	eco.try_take(COORD, VoxelMaterial.GEM_QUARTZ)
 	eco.mark_explored(COORD)

@@ -14,6 +14,8 @@ const CANOPY_GEM_SHELL_MIN := 0.72
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
+## Hills paint gems from the district quota only; canopy ore there would desync the ledger.
+var allow_canopy_gems: bool = true
 
 
 func plant_random(x: int, y0: int, z: int) -> void:
@@ -247,6 +249,8 @@ func _canopy(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
 ## Occasionally swap one outer leaf for a gem. The rarity curve is the city-wide one, so the
 ## tree that has anything at all is most often holding quartz.
 func _maybe_hide_gem(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
+	if not allow_canopy_gems:
+		return
 	if rng.randf() >= CANOPY_GEM_CHANCE:
 		return
 	for _attempt in range(12):

@@ -64,6 +64,22 @@ var last_pos: Vector3 = Vector3.ZERO
 var owed_delta: float = 0.0
 
 
+## Hold-trap freeze: CrowdDirector skips nav while this is in the future.
+func begin_trap_hold(duration_sec: float) -> void:
+	set_meta("trap_hold_until", Time.get_ticks_msec() + int(maxf(duration_sec, 0.0) * 1000.0))
+	velocity = Vector3.ZERO
+	state = State.STAY
+
+
+func is_trap_held() -> bool:
+	if not has_meta("trap_hold_until"):
+		return false
+	if Time.get_ticks_msec() < int(get_meta("trap_hold_until")):
+		return true
+	remove_meta("trap_hold_until")
+	return false
+
+
 func is_walking() -> bool:
 	return (not dead) and state == State.WALK
 

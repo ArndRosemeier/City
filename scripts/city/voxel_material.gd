@@ -273,28 +273,64 @@ static func is_door(id: int) -> bool:
 	return id == DOOR
 
 
+## Carve difficulty. Soft/Rock are always within the starter blaster; Reinforced and Exotic
+## need hardness unlocks. Never never yields.
+enum Hardness {
+	SOFT = 0,
+	ROCK = 1,
+	REINFORCED = 2,
+	EXOTIC = 3,
+	NEVER = 4,
+}
+
+
+static func hardness(id: int) -> Hardness:
+	if id == AIR or id == WATER:
+		return Hardness.NEVER
+	if id == BEDROCK or id == ARENA_SHELL or id == LOS_VEIL:
+		return Hardness.NEVER
+	if is_gem(id):
+		## Collected, not carved — treated as never for carve checks.
+		return Hardness.NEVER
+	if (
+		id == METEOR_ROCK or id == INFECTION or id == INFECTION_LEAD
+		or id == FRACTAL_GLOW or id == FRACTAL_INTERIOR or is_fractal_band(id)
+	):
+		return Hardness.EXOTIC
+	if (
+		id == CONCRETE or id == METAL or id == METAL_PLATE or id == WROUGHT_IRON
+		or id == CASTLE_BLOCK or id == CASTLE_BLOCK_MOSSY or id == TILES
+		or id == ROOF or id == ROOF_CLAY or id == GRAVE_STONE or id == GRAVE_MARBLE
+		or id == GAMEBOY
+		or (id >= ROOF_SLOPE_POS_X and id <= ROOF_CLAY_SLOPE_NEG_Z)
+	):
+		return Hardness.REINFORCED
+	if (
+		id == STONE or id == BRICK or id == BRICK_DARK or id == GRAVEL
+		or id == CAVE_WALL or id == CAVE_FLOOR or id == CURB or id == ROAD
+		or id == ROAD_LINE or id == CROSSWALK or id == ASPHALT or id == SIDEWALK
+		or id == PLAZA or id == PAINT or id == TIMBER or id == GRAVE_PATH
+	):
+		return Hardness.ROCK
+	## Dirt, park, plaster, glass, leaves, bark, props, soil, …
+	return Hardness.SOFT
+
+
 static func is_destructible(id: int) -> bool:
-	## Laser / melee / blast carve targets. Infection body, meteor rock, and gems are
-	## immune; only the glowing tip (INFECTION_LEAD) stays player-killable among specials.
-	## Gems are collected, not carved.
-	if id == AIR or id == BEDROCK or id == WATER or id == ARENA_SHELL or id == LOS_VEIL:
+	## Laser / melee / blast carve targets. Hardness gates rate/possibility separately —
+	## this only answers "is this a solid the world may ever yield".
+	if hardness(id) == Hardness.NEVER:
 		return false
-	if id == METEOR_ROCK or id == INFECTION or is_gem(id):
+	if id == INFECTION:
+		## Body stays immune; the glowing tip is player-killable.
+		return false
+	if is_gem(id):
 		return false
 	return id > AIR and id < COUNT
 
 
 static func is_player_carve_immune(id: int) -> bool:
-	return (
-		id == METEOR_ROCK
-		or id == INFECTION
-		or is_gem(id)
-		or id == BEDROCK
-		or id == ARENA_SHELL
-		or id == LOS_VEIL
-		or id == WATER
-		or id == AIR
-	)
+	return hardness(id) == Hardness.NEVER or id == INFECTION or is_gem(id)
 
 
 static func is_infection(id: int) -> bool:
