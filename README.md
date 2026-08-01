@@ -109,6 +109,8 @@ python tools/validate_combat_tables.py      # combat schema + refs + golden sync
 python tools/sync_combat_resolve.py --write # regenerate tools/fixtures/combat_effective_stats.json
 python tools/simulate_monster_duels.py --fighter kaykit/Skeleton_Warrior --duels 10
 python tools/simulate_monster_duels.py --all-pairs --duels 10   # open-field 1v1 balance matrix
+python tools/balance_monster_tiers.py   # retarget within-tier HP / kit parity (then sync)
+python tools/sync_combat_resolve.py --write
 powershell -File tools/run_test.ps1 test_combat_table_sync
 ```
 

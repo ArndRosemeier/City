@@ -194,7 +194,7 @@
     "boss": {
       "intent": "Grown-giant / elite path — high threat, city-wide aggro range, chase melee.",
       "hp_mult": 2.5,
-      "damage_mult": 1.8,
+      "damage_mult": 2.0,
       "speed_mult": 1.15,
       "aggro_range_m": 110.0,
       "leash_m": 150.0,
@@ -210,12 +210,15 @@
       ],
       "crowd_roles": [
         "wave_hunter"
+      ],
+      "attacks": [
+        "stomp"
       ]
     },
     "ranged_boss": {
       "intent": "Artillery elite — skirmish behaviour may use charged_blast / eye_laser (and the rest of the skirmish pool); AI selection deferred. Stack with boss when a body should be both giant and artillery (scalars take max).",
       "hp_mult": 2.0,
-      "damage_mult": 2.2,
+      "damage_mult": 2.0,
       "speed_mult": 0.7,
       "aggro_range_m": 80.0,
       "leash_m": 100.0,
@@ -237,7 +240,7 @@
     "melee_boss": {
       "intent": "Melee elite — closes via chase; specialty template attack stomp (crater) plus contact melee from chase. Same hp_mult/damage_mult as ranged_boss.",
       "hp_mult": 2.0,
-      "damage_mult": 2.2,
+      "damage_mult": 2.0,
       "speed_mult": 1.0,
       "aggro_range_m": 50.0,
       "leash_m": 70.0,
@@ -283,13 +286,13 @@
     },
     "demolisher": {
       "intent": "Relentless bruiser — wide aggro and a long leash, so once it commits it follows across a district. Stacks onto other templates to make a body harder to shake.",
-      "hp_mult": 1.1,
-      "damage_mult": 1.0,
+      "hp_mult": 0.55,
+      "damage_mult": 0.9,
       "speed_mult": 0.95,
       "aggro_range_m": 50.0,
       "leash_m": 80.0,
       "preferred_range_m": 3.0,
-      "armor_mult": 1.1,
+      "armor_mult": 0.95,
       "score_mult": 1.2,
       "behaviour": [
         "chase"
@@ -334,7 +337,8 @@
       "attacks_extra": [
         "orb_convert"
       ],
-      "notes": "Live wave caster body; also eligible for BRUTE slot. Kit from behaviours: rangestriker/skirmish (blaster|eye_laser) + chase melee, plus the orb_convert specialty. Leans full ranged roster."
+      "notes": "Live wave caster body; also eligible for BRUTE slot. Kit from behaviours: rangestriker/skirmish (blaster|eye_laser) + chase melee, plus the orb_convert specialty. Leans full ranged roster.",
+      "hp_mult": 1.2353
     },
     {
       "id": "kaykit/Skeleton_Minion",
@@ -344,7 +348,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
-      "notes": "Reference-height fodder body the capsule numbers were measured on."
+      "notes": "Reference-height fodder body the capsule numbers were measured on.",
+      "hp_mult": 0.6471
     },
     {
       "id": "kaykit/Skeleton_Rogue",
@@ -355,8 +360,9 @@
       "spawn_ready": true,
       "spawn_weight": 1.0,
       "speed_mult": 0.85,
-      "preferred_range_m": 12.0,
+      "preferred_range_m": 24.0,
       "attacks": [
+        "blaster",
         "eye_laser",
         "melee",
         "orb_convert"
@@ -365,7 +371,8 @@
         "hybrid",
         "skirmisher"
       ],
-      "notes": "Caster-slot hybrid: hard-replaces behaviour-derived attacks to drop blaster/charged_blast (rapid/nuke feel wrong on a sword skirmisher) but keeps orb_convert, adds melee + eye_laser single-shot poke. Closer preferred_range; orb scalars stay intact (single template)."
+      "notes": "Caster-slot hybrid: hard-replaces behaviour-derived attacks to drop blaster/charged_blast (rapid/nuke feel wrong on a sword skirmisher) but keeps orb_convert, adds melee + eye_laser single-shot poke. Closer preferred_range; orb scalars stay intact (single template).",
+      "hp_mult": 1.2353
     },
     {
       "id": "kaykit/Skeleton_Warrior",
@@ -376,7 +383,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
-      "notes": "FODDER+BRUTE slots — max-scalar pack hunter / tank (hp/damage from brute)."
+      "notes": "FODDER+BRUTE slots — max-scalar pack hunter / tank (hp/damage from brute).",
+      "hp_mult": 2.0588
     },
     {
       "id": "big/Alien",
@@ -385,7 +393,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 1.1892
     },
     {
       "id": "big/Birb",
@@ -394,7 +403,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 1.2675
     },
     {
       "id": "big/BlueDemon",
@@ -405,7 +415,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.55,
-      "notes": "Dungeon stomper — melee_boss + guard (scalars max: hp/damage 2.0/2.2, leash max(70,22)=70). Kit: stomp + melee."
+      "notes": "Dungeon stomper — melee_boss + guard (scalars max: hp/damage 2.0/2.2, leash max(70,22)=70). Kit: stomp + melee.",
+      "hp_mult": 2.0479,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85
     },
     {
       "id": "big/Bunny",
@@ -414,7 +427,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 1.2248
     },
     {
       "id": "big/Cactoro",
@@ -425,7 +439,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.5,
-      "notes": "Tall grown-giant path candidate."
+      "notes": "Tall grown-giant path candidate.",
+      "hp_mult": 1.4704,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85
     },
     {
       "id": "big/Demon",
@@ -435,7 +452,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.55,
-      "notes": "Artillery demon — charged_blast sphere nuke + eye_laser; not the grown-giant boss path."
+      "notes": "Artillery demon — charged_blast sphere nuke + eye_laser; not the grown-giant boss path.",
+      "hp_mult": 1.8648,
+      "armor_mult": 1.4,
+      "damage_mult": 1.85
     },
     {
       "id": "big/Dino",
@@ -445,7 +465,8 @@
         "demolisher"
       ],
       "spawn_ready": true,
-      "spawn_weight": 0.9
+      "spawn_weight": 0.9,
+      "hp_mult": 1.3076
     },
     {
       "id": "big/Fish",
@@ -454,7 +475,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 1.1234
     },
     {
       "id": "big/Frog",
@@ -463,7 +485,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 1.5652
     },
     {
       "id": "big/Monkroose",
@@ -472,7 +495,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 1.4131
     },
     {
       "id": "big/MushroomKing",
@@ -483,7 +507,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.4,
-      "notes": "Giant + artillery stack: scalars take max (hp_mult 2.5, damage_mult 2.2); attacks union debris|melee|charged_blast|eye_laser. Magical elite silhouette."
+      "notes": "Giant + artillery stack: scalars take max (hp_mult 2.5, damage_mult 2.2); attacks union debris|melee|charged_blast|eye_laser. Magical elite silhouette.",
+      "hp_mult": 1.6121,
+      "armor_mult": 1.4,
+      "damage_mult": 1.85
     },
     {
       "id": "big/Ninja",
@@ -493,10 +520,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
-      "speed_mult": 1.05,
       "tags_extra": [
         "agile"
-      ]
+      ],
+      "hp_mult": 1.3963
     },
     {
       "id": "big/Orc",
@@ -506,7 +533,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.55,
-      "notes": "Melee elite — stomp crater + contact melee; not grown-giant boss path."
+      "notes": "Melee elite — stomp crater + contact melee; not grown-giant boss path.",
+      "hp_mult": 1.8131,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85
     },
     {
       "id": "big/Orc_Skull",
@@ -516,7 +546,8 @@
         "guard"
       ],
       "spawn_ready": true,
-      "spawn_weight": 0.7
+      "spawn_weight": 0.7,
+      "hp_mult": 1.2908
     },
     {
       "id": "big/Tribal",
@@ -526,7 +557,10 @@
         "demolisher"
       ],
       "spawn_ready": true,
-      "spawn_weight": 0.45
+      "spawn_weight": 0.45,
+      "hp_mult": 1.4808,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85
     },
     {
       "id": "big/Yeti",
@@ -537,8 +571,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.5,
-      "hp_mult": 2.7,
-      "notes": "Tanky stomper — melee_boss+brute (damage_mult max 2.2); body hp_mult 2.7 replaces merged max(2.0,1.4)."
+      "notes": "Tanky stomper — melee_boss+brute (damage_mult max 2.2); body hp_mult 2.7 replaces merged max(2.0,1.4).",
+      "damage_mult": 2.55,
+      "armor_mult": 1.85,
+      "hp_mult": 2.0573
     },
     {
       "id": "blob/Alien",
@@ -547,7 +583,8 @@
         "minion"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 0.4206
     },
     {
       "id": "blob/Birb",
@@ -556,17 +593,21 @@
         "minion"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 0.4686
     },
     {
       "id": "blob/Cactoro",
       "faction": "grove",
       "templates": [
-        "minion",
-        "demolisher"
+        "minion"
       ],
       "spawn_ready": true,
-      "spawn_weight": 0.9
+      "spawn_weight": 0.9,
+      "tags_extra": [
+        "relentless"
+      ],
+      "hp_mult": 0.4006
     },
     {
       "id": "blob/Cat",
@@ -578,7 +619,8 @@
       "spawn_weight": 1.0,
       "tags_extra": [
         "small"
-      ]
+      ],
+      "hp_mult": 0.5432
     },
     {
       "id": "blob/Chicken",
@@ -590,7 +632,8 @@
       "spawn_weight": 1.0,
       "tags_extra": [
         "small"
-      ]
+      ],
+      "hp_mult": 0.4944
     },
     {
       "id": "blob/Dog",
@@ -602,7 +645,8 @@
       "spawn_weight": 1.0,
       "tags_extra": [
         "small"
-      ]
+      ],
+      "hp_mult": 0.5602
     },
     {
       "id": "blob/Fish",
@@ -611,7 +655,8 @@
         "minion"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 0.4583
     },
     {
       "id": "blob/GreenBlob",
@@ -621,7 +666,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.2,
-      "notes": "Cheapest pack silhouette in the blob family."
+      "notes": "Cheapest pack silhouette in the blob family.",
+      "hp_mult": 0.5564
     },
     {
       "id": "blob/GreenSpikyBlob",
@@ -632,7 +678,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.7,
-      "notes": "Tall spikes — hybrid fodder/tank; height decoration still goes through CreatureHealth's blob sqrt."
+      "notes": "Tall spikes — hybrid fodder/tank; height decoration still goes through CreatureHealth's blob sqrt.",
+      "hp_mult": 1.184
     },
     {
       "id": "blob/Mushnub",
@@ -641,7 +688,8 @@
         "minion"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 0.4172
     },
     {
       "id": "blob/Mushnub_Evolved",
@@ -651,7 +699,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 0.6
+      "spawn_weight": 0.6,
+      "hp_mult": 1.1474
     },
     {
       "id": "blob/Orc",
@@ -660,7 +709,8 @@
         "minion"
       ],
       "spawn_ready": true,
-      "spawn_weight": 1.0
+      "spawn_weight": 1.0,
+      "hp_mult": 0.4944
     },
     {
       "id": "blob/Pigeon",
@@ -672,7 +722,8 @@
       "spawn_weight": 1.0,
       "tags_extra": [
         "small"
-      ]
+      ],
+      "hp_mult": 0.5642
     },
     {
       "id": "blob/PinkBlob",
@@ -684,7 +735,8 @@
       "spawn_weight": 1.1,
       "tags_extra": [
         "small"
-      ]
+      ],
+      "hp_mult": 0.5344
     },
     {
       "id": "blob/Yeti",
@@ -694,7 +746,8 @@
         "brute"
       ],
       "spawn_ready": true,
-      "spawn_weight": 0.8
+      "spawn_weight": 0.8,
+      "hp_mult": 1.5437
     },
     {
       "id": "blob/Wizard",
@@ -704,7 +757,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.6,
-      "notes": "Promoted from rangestriker convert kit to ranged_boss artillery — charged_blast + eye_laser (no orb_convert)."
+      "notes": "Promoted from rangestriker convert kit to ranged_boss artillery — charged_blast + eye_laser (no orb_convert).",
+      "hp_mult": 4.2693,
+      "armor_mult": 1.4,
+      "damage_mult": 1.85
     },
     {
       "id": "blob/Ninja",
@@ -714,7 +770,8 @@
       ],
       "spawn_ready": false,
       "spawn_weight": 0.0,
-      "notes": "Catalog note: rest pose sits 0.23 units below y=0 — vendored, not spawnable until fixed."
+      "notes": "Catalog note: rest pose sits 0.23 units below y=0 — vendored, not spawnable until fixed.",
+      "hp_mult": 0.4365
     },
     {
       "id": "flying/Alpaking",
@@ -726,7 +783,10 @@
       "crowd_roles": [
         "ambient"
       ],
-      "notes": "Flying rig — no ground locomotion; table row only."
+      "notes": "Flying rig — no ground locomotion; table row only.",
+      "hp_mult": 4.7078,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85
     },
     {
       "id": "flying/Alpaking_Evolved",
@@ -737,7 +797,10 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 3.8538,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85
     },
     {
       "id": "flying/Armabee",
@@ -748,7 +811,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 0.5515
     },
     {
       "id": "flying/Armabee_Evolved",
@@ -759,7 +823,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 0.518
     },
     {
       "id": "flying/Demon",
@@ -770,7 +835,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 3.8559
     },
     {
       "id": "flying/Dragon",
@@ -783,7 +849,10 @@
       "crowd_roles": [
         "ambient"
       ],
-      "notes": "Fantasy flyer: elite + ranged; not spawnable until flight exists."
+      "notes": "Fantasy flyer: elite + ranged; not spawnable until flight exists.",
+      "hp_mult": 5.5465,
+      "armor_mult": 1.4,
+      "damage_mult": 1.85
     },
     {
       "id": "flying/Dragon_Evolved",
@@ -795,7 +864,10 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 4.0728,
+      "armor_mult": 1.4,
+      "damage_mult": 1.85
     },
     {
       "id": "flying/Ghost",
@@ -806,7 +878,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 0.8211
     },
     {
       "id": "flying/Ghost_Skull",
@@ -817,7 +890,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 0.8211
     },
     {
       "id": "flying/Glub",
@@ -828,7 +902,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 0.494
     },
     {
       "id": "flying/Glub_Evolved",
@@ -840,7 +915,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 1.2516
     },
     {
       "id": "flying/Goleling",
@@ -852,7 +928,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 4.007
     },
     {
       "id": "flying/Goleling_Evolved",
@@ -864,7 +941,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 3.115
     },
     {
       "id": "flying/Hywirl",
@@ -875,7 +953,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 0.8727
     },
     {
       "id": "flying/Pigeon",
@@ -887,7 +966,8 @@
       "crowd_roles": [
         "ambient"
       ],
-      "notes": "Authored hovering ~1.57 units up — ambient table only."
+      "notes": "Authored hovering ~1.57 units up — ambient table only.",
+      "hp_mult": 0.6471
     },
     {
       "id": "flying/Squidle",
@@ -898,7 +978,8 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 0.5373
     },
     {
       "id": "flying/Tribal",
@@ -910,7 +991,10 @@
       "spawn_ready": false,
       "crowd_roles": [
         "ambient"
-      ]
+      ],
+      "hp_mult": 3.3971,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85
     }
   ],
   "items": {
