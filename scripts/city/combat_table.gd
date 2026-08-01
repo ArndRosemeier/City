@@ -7,9 +7,10 @@
 ## Merge rules (same names as Python):
 ##   merge_template_scalars — max across templates; body scalars replace
 ##   merge_template_lists / apply_body_list_overrides — union; *_extra adds; bare hard-replaces
-##   average_prey_weights — mean across effective behaviours (missing key = 0)
 ##   attacks_from_behaviours + body attacks_extra (add) / attacks (hard-replace)
 ##   effective_attack_damage — attack damage_vs_* × damage_mult
+##
+## There is no prey table: who a body hunts is its faction against everyone else's.
 class_name CombatTable
 extends RefCounted
 
@@ -33,9 +34,6 @@ const SCALAR_KEYS: PackedStringArray = [
 ## Keep aligned with tools/combat_resolve.py LIST_KEYS
 const LIST_KEYS: PackedStringArray = ["behaviour", "attacks", "tags", "crowd_roles"]
 
-## Keep aligned with tools/combat_resolve.py ALLOWED_PREY (sorted)
-const PREY_KEYS: PackedStringArray = ["building", "monsters", "ped", "player"]
-
 const SYNC_FLOAT_DECIMALS := 6
 
 ## Resolved effective combat for one monster body.
@@ -54,8 +52,6 @@ class EffectiveStats:
 	var attacks: PackedStringArray = PackedStringArray()
 	var tags: PackedStringArray = PackedStringArray()
 	var crowd_roles: PackedStringArray = PackedStringArray()
-	## prey key → averaged weight
-	var prey_weights: Dictionary = {}
 	## attack_id → { "vs_player": float, "vs_mob": float } (base × damage_mult)
 	var attack_damage: Dictionary = {}
 
@@ -104,11 +100,6 @@ class EffectiveStats:
 
 	## Sync-normalized Dictionary matching tools/fixtures/combat_effective_stats.json rows.
 	func to_sync_dict() -> Dictionary:
-		## Local copies — nested classes cannot rely on outer class_name at parse time.
-		var prey_keys: PackedStringArray = ["building", "monsters", "ped", "player"]
-		var prey_out: Dictionary = {}
-		for key: String in prey_keys:
-			prey_out[key] = _round_sync(float(prey_weights.get(key, 0.0)))
 		var atk: Array = []
 		for a: String in attacks:
 			atk.append(a)
@@ -152,7 +143,6 @@ class EffectiveStats:
 			"behaviour": beh,
 			"attacks": atk,
 			"attack_damage": dmg_out,
-			"prey_weights": prey_out,
 			"tags": tag_list,
 			"crowd_roles": roles,
 		}
@@ -365,7 +355,6 @@ static func effective_monster_combat(
 	var behaviour_ids: PackedStringArray = lists["behaviour"] as PackedStringArray
 	# specialty = template specialty ∪ body attacks_extra (or hard body attacks list).
 	var specialty: PackedStringArray = lists["attacks"] as PackedStringArray
-	var prey := average_prey_weights(behaviour_ids)
 	var derived := attacks_from_behaviours(behaviour_ids)
 	var attacks: PackedStringArray
 	if body.has("attacks"):
@@ -382,7 +371,6 @@ static func effective_monster_combat(
 	eff.attacks = attacks
 	eff.tags = lists["tags"] as PackedStringArray
 	eff.crowd_roles = lists["crowd_roles"] as PackedStringArray
-	eff.prey_weights = prey
 	eff.attack_damage = effective_attack_damages(attacks, eff.damage_mult)
 	return eff
 
@@ -401,31 +389,6 @@ static func union_lists(a: PackedStringArray, b: PackedStringArray = PackedStrin
 			continue
 		seen[item] = true
 		out.append(item)
-	return out
-
-
-## Python: combat_resolve.average_prey_weights
-static func average_prey_weights(behaviour_ids: PackedStringArray) -> Dictionary:
-	ensure_loaded()
-	var out: Dictionary = {}
-	for key: String in PREY_KEYS:
-		out[key] = 0.0
-	if behaviour_ids.is_empty():
-		return out
-	var n := float(behaviour_ids.size())
-	for bid: String in behaviour_ids:
-		if not _behaviours.has(bid):
-			push_error("CombatTable: unknown behaviour '%s'" % bid)
-			assert(false, "CombatTable: unknown behaviour in average_prey_weights")
-			continue
-		var row: Dictionary = _behaviours[bid]
-		var weights_raw: Variant = row.get("prey_weights", {})
-		var weights: Dictionary = weights_raw if typeof(weights_raw) == TYPE_DICTIONARY else {}
-		for key: String in PREY_KEYS:
-			var raw: Variant = weights.get(key, 0.0)
-			out[key] = float(out[key]) + _require_number(raw, "behaviour '%s' prey_weights.%s" % [bid, key])
-	for key: String in PREY_KEYS:
-		out[key] = float(out[key]) / n
 	return out
 
 

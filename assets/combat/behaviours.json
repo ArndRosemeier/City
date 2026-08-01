@@ -2,94 +2,37 @@
   "behaviours": {
     "ambient": {
       "id": "ambient",
-      "intent": "Non-combat presence — no hunt, no attacks.",
-      "attacks": [],
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.0,
-        "ped": 0.0,
-        "player": 0.0
-      }
+      "intent": "Non-combat presence — no attacks, so nothing to hunt with.",
+      "attacks": []
     },
     "chase": {
       "id": "chase",
-      "intent": "Close and pursue living targets. Monster prey is other-faction only.",
+      "intent": "Close and pursue. Hostility is faction-only: anything not of this body's faction, player and pedestrians included.",
       "attacks": [
         "melee"
-      ],
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      }
-    },
-    "demolish": {
-      "id": "demolish",
-      "intent": "Building-first chew; also hunts other-faction creatures when AI is wired.",
-      "attacks": [
-        "melee",
-        "nibble"
-      ],
-      "prey_weights": {
-        "building": 1.0,
-        "monsters": 0.7,
-        "ped": 0.7,
-        "player": 0.7
-      }
-    },
-    "grow": {
-      "id": "grow",
-      "intent": "Grown-giant path — debris scrape vs buildings and player pressure.",
-      "attacks": [
-        "debris"
-      ],
-      "prey_weights": {
-        "building": 1.0,
-        "monsters": 0.0,
-        "ped": 0.0,
-        "player": 0.8
-      }
+      ]
     },
     "guard": {
       "id": "guard",
-      "intent": "Hold a post; engage the player and other-faction monsters.",
+      "intent": "Hold a post on a short leash, then engage whatever other-faction body walked into it.",
       "attacks": [
         "melee"
-      ],
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.5,
-        "ped": 0.5,
-        "player": 1.0
-      }
+      ]
     },
     "skirmish": {
       "id": "skirmish",
-      "intent": "Standoff / ranged pressure — hunt player, peds, and other-faction monsters; no structure chew. Attack pool is the full caster/artillery set; AI selection among them is deferred.",
+      "intent": "Standoff / ranged pressure. Attack pool is the full caster/artillery set; AI selection among them is deferred.",
       "attacks": [
         "blaster",
         "eye_laser"
-      ],
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.6,
-        "ped": 0.6,
-        "player": 1.0
-      }
+      ]
     },
     "wander_hunt": {
       "id": "wander_hunt",
-      "intent": "Roam and hunt living targets like chase — other-faction monsters included.",
+      "intent": "Roam until something of another faction is in aggro range, then chase it.",
       "attacks": [
         "melee"
-      ],
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 1.0,
-        "ped": 1.0,
-        "player": 1.0
-      }
+      ]
     }
   }
 }

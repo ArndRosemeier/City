@@ -45,6 +45,7 @@ const ArmedTrapScript := preload("res://scripts/city/armed_trap.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
+const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
 const InteriorDecoratorScript := preload("res://scripts/city/interior_decorator.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
@@ -2157,6 +2158,18 @@ func get_player_node() -> Node:
 	return _walker
 
 
+## MonsterFaction.Id the player fights as — human until a faction-change power exists.
+func player_faction() -> int:
+	if _walker != null and is_instance_valid(_walker):
+		return _walker.combat_faction()
+	return MonsterFactionScript.Id.HUMAN
+
+
+## Pedestrians are civilians, not authored bodies: they are human, all of them.
+func ped_faction() -> int:
+	return MonsterFactionScript.Id.HUMAN
+
+
 func is_player_alive() -> bool:
 	return not _game_over and _walker != null and is_instance_valid(_walker)
 
@@ -3956,11 +3969,12 @@ func collect_ped_positions(from: Vector3, max_dist: float) -> PackedVector3Array
 	return out
 
 
-## All living hostile monster aim points within max_dist (XZ) for `hunter`.
-func collect_hostile_monster_positions(
+## Living hostile monsters within max_dist (XZ) for `hunter`. Bodies rather than points,
+## because a hunter commits to one target and has to recognise it again next tick.
+func collect_hostile_monsters(
 	from: Vector3, max_dist: float, hunter: UndeadUnit = null
-) -> PackedVector3Array:
-	var out := PackedVector3Array()
+) -> Array[UndeadUnit]:
+	var out: Array[UndeadUnit] = []
 	if _monsters == null or not is_instance_valid(_monsters):
 		return out
 	var max_d2 := max_dist * max_dist
@@ -3979,7 +3993,7 @@ func collect_hostile_monster_positions(
 		).length_squared()
 		if d2 > max_d2:
 			continue
-		out.append(unit.global_position + Vector3(0.0, 1.0, 0.0))
+		out.append(unit)
 	return out
 
 
@@ -4137,6 +4151,9 @@ func undead_stomp_at(world_pos: Vector3, radius_m: float) -> void:
 
 ## Giant facade brush: peel full-height structure strips and tumble the debris.
 ## inward = toward the wall, along = walk direction parallel to the facade.
+##
+## No AI drives this any more — mobs hunt bodies, never fabric. Kept as a voxel operation a
+## future scripted set-piece can call; the only damage buildings take now is collateral.
 func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vector3) -> int:
 	if _terrain == null or _tool == null:
 		return 0
@@ -4236,7 +4253,8 @@ func _damage_player_in_debris(world_hit: Vector3) -> void:
 	damage_player(DamageSourceScript.Id.GIANT_DEBRIS)
 
 
-## Minion bite: remove one nearby building voxel. No cascade.
+## Remove one nearby building voxel. No cascade. Like `undead_giant_scrape_at`, nothing in
+## the AI calls this since mobs stopped targeting buildings.
 func undead_nibble_building_near(world_pos: Vector3, reach_m: float) -> bool:
 	if _terrain == null or _tool == null:
 		return false

@@ -39,6 +39,7 @@ const VoxelBodyMotionScript := preload("res://scripts/city/voxel_body_motion.gd"
 const PlayerHealthScript := preload("res://scripts/city/player_health.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 
+const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const PedOutfitCatalogScript := preload("res://scripts/humans/ped_outfit_catalog.gd")
 const PedOutfitApplierScript := preload("res://scripts/humans/ped_outfit_applier.gd")
 
@@ -282,6 +283,10 @@ var _blaster_accum: float = 0.0
 var _live_blaster_bolts: Array[Node] = []
 var _energy: float = 100.0
 var _health := PlayerHealthScript.new()
+## Whose side the player is on. Mobs hunt every faction but their own, so this is the one
+## thing standing between the player and the pedestrians they walk among. Deliberately has
+## no setter: a faction-change power would write it, and nothing else may.
+var _combat_faction: int = MonsterFactionScript.Id.HUMAN
 var _blast_fire_token: int = 0
 var _blast_pending_aim: Vector3 = Vector3.ZERO
 var _blast_pending_radius: float = 1.0
@@ -919,6 +924,21 @@ func regen_boost_left() -> float:
 	return _boost_regen_left
 
 
+func temp_scale_left() -> float:
+	return _temp_scale_left
+
+
+## +1 while enlarged vs restore, −1 while shrunk, 0 when the timer is idle.
+func temp_scale_sign() -> int:
+	if _temp_scale_left <= 0.0 or _temp_scale_restore <= 0.0:
+		return 0
+	if character_scale > _temp_scale_restore * 1.001:
+		return 1
+	if character_scale < _temp_scale_restore * 0.999:
+		return -1
+	return 0
+
+
 ## Temporary grow/shrink that reverts when the timer ends.
 func begin_temp_scale(target_scale: float, duration_sec: float) -> void:
 	if _temp_scale_left <= 0.0:
@@ -987,6 +1007,11 @@ func _regen_energy(delta: float) -> void:
 	_energy = minf(_energy + rate * delta, energy_max)
 	if not is_equal_approx(prev, _energy):
 		energy_changed.emit(_energy, energy_max)
+
+
+## MonsterFaction.Id the player fights as. Human, and only human, for now.
+func combat_faction() -> int:
+	return _combat_faction
 
 
 func get_health() -> float:

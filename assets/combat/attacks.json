@@ -38,18 +38,6 @@
       "damage_source": "PLAYER_BLAST",
       "notes": "CityWalker Alt+LMB charge → ChargedBlastVfx; charged_blast_speed_mps=10, charge_sec=1.6, radius_max 2.52×scale, cooldown_sec=0.55, energy_cost_blast=20; DamageSource.PLAYER_BLAST=150. Aim uses same cursor ray as laser (100m). radius_m is max-charge sphere at 1×. Monsters keep full charge windup + long recovery (monster_cooldown_s); shorter AI throw reach (monster_range_m)."
     },
-    "debris": {
-      "id": "debris",
-      "kind": "environmental",
-      "damage_vs_player": 10.0,
-      "damage_vs_mob": 0.0,
-      "cooldown_s": 0.32,
-      "energy_cost": 0.0,
-      "range_m": 3.6,
-      "carves_voxels": true,
-      "damage_source": "GIANT_DEBRIS",
-      "notes": "Live giant facade scrape (UndeadUnit SCRAPE_INTERVAL_SEC=0.32, GIANT_SCRAPE_DIST_M=3.6). DamageSource.GIANT_DEBRIS=10. Monster-only."
-    },
     "eye_laser": {
       "id": "eye_laser",
       "kind": "projectile_single",
@@ -90,18 +78,6 @@
       "carves_voxels": false,
       "damage_source": null,
       "notes": "Basic monster contact/swing. DamageSource.MONSTER_MELEE (player) / MONSTER_MELEE_MOB (creature). Clip binding later: prefer Rogue 1H_Melee_Attack_* then CreatureClips MELEE fallback. Not the player fist (see `fist`)."
-    },
-    "nibble": {
-      "id": "nibble",
-      "kind": "voxel_nibble",
-      "damage_vs_player": 0.0,
-      "damage_vs_mob": 0.0,
-      "cooldown_s": 15.0,
-      "energy_cost": 0.0,
-      "range_m": 2.4,
-      "carves_voxels": true,
-      "damage_source": null,
-      "notes": "Live minion building chew (UndeadUnit MINION_NIBBLE_INTERVAL_SEC=15, MINION_NIBBLE_REACH_M=2.4). Damage is voxel removal, not a creature HP hit — damage_vs_* stay 0."
     },
     "orb_convert": {
       "id": "orb_convert",

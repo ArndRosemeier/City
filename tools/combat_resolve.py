@@ -8,11 +8,12 @@ and tools/fixtures/combat_effective_stats.json.
 Merge rules:
   - Scalars: max across templates; body scalar keys replace
   - Lists: union across templates; *_extra adds; bare list on body hard-replaces
-  - Prey weights: mean across effective behaviours (missing key = 0); not from templates
   - Attacks: union from effective behaviours, then body overrides:
       hard body `attacks` → full effective list (drops behaviour-derived)
       else → behaviour pool ∪ template specialty ∪ body `attacks_extra`
   - Effective attack damage: attack row damage_vs_player/mob × body damage_mult
+
+There is no prey table: who a body hunts is its faction against everyone else's.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ SCALAR_KEYS = (
     "score_mult",
 )
 
-# Prey is not a template/monster list field — it lives on behaviours.
 LIST_KEYS = ("behaviour", "attacks", "tags", "crowd_roles")
 LIST_EXTRA_KEYS = (
     "behaviour_extra",
@@ -39,12 +39,8 @@ LIST_EXTRA_KEYS = (
     "crowd_roles_extra",
 )
 
-ALLOWED_PREY = frozenset({"player", "ped", "building", "monsters"})
-
 # Multi-template scalar merge: highest value wins (never average).
 MERGE_SCALARS_USE_MAX = True
-# Prey weights: mean across behaviours; missing keys count as 0.
-PREY_MISSING_COUNTS_AS_ZERO = True
 
 # Golden / sync float rounding — keep Python and Godot comparisons stable.
 SYNC_FLOAT_DECIMALS = 6
@@ -60,40 +56,6 @@ def union_lists(*lists: list[str]) -> list[str]:
                 continue
             seen.add(item)
             out.append(item)
-    return out
-
-
-def average_prey_weights(
-    behaviour_ids: list[str],
-    behaviours: dict[str, dict],
-) -> dict[str, float]:
-    """Mean prey weight per key across behaviours; missing keys count as 0.
-
-    Empty behaviour_ids → all zeros. Raises KeyError if a behaviour id is unknown.
-    # GDScript: CombatTable.average_prey_weights
-    """
-    if not PREY_MISSING_COUNTS_AS_ZERO:
-        raise RuntimeError("PREY_MISSING_COUNTS_AS_ZERO must stay True")
-    out: dict[str, float] = {key: 0.0 for key in sorted(ALLOWED_PREY)}
-    if not behaviour_ids:
-        return out
-    n = float(len(behaviour_ids))
-    for bid in behaviour_ids:
-        row = behaviours.get(bid)
-        if not isinstance(row, dict):
-            raise KeyError(f"unknown behaviour '{bid}'")
-        weights = row.get("prey_weights")
-        if not isinstance(weights, dict):
-            weights = {}
-        for key in ALLOWED_PREY:
-            raw = weights.get(key, 0.0)
-            if not isinstance(raw, (int, float)) or isinstance(raw, bool):
-                raise TypeError(
-                    f"behaviour '{bid}' prey_weights.{key} must be numeric"
-                )
-            out[key] += float(raw)
-    for key in out:
-        out[key] /= n
     return out
 
 
@@ -189,7 +151,7 @@ def effective_monster_combat(
     body: dict,
     behaviours: dict[str, dict],
 ) -> dict[str, Any]:
-    """Resolve scalars, lists, averaged prey weights, and derived attacks for a body.
+    """Resolve scalars, lists, and derived attacks for a body.
     # GDScript: CombatTable.effective_monster_combat / CombatTable.resolve
     """
     scalars = merge_template_scalars(template_ids, templates)
@@ -202,7 +164,6 @@ def effective_monster_combat(
 
     lists = apply_body_list_overrides(merge_template_lists(template_ids, templates), body)
     behaviour_ids = lists["behaviour"]
-    prey = average_prey_weights(behaviour_ids, behaviours)
     derived = attacks_from_behaviours(behaviour_ids, behaviours)
     # lists["attacks"] already includes template specialty and body attacks_extra
     # (via apply_body_list_overrides). Hard body `attacks` replaces the entire
@@ -215,7 +176,6 @@ def effective_monster_combat(
         "scalars": scalars,
         "lists": lists,
         "behaviour": behaviour_ids,
-        "prey_weights": prey,
         "attacks": attacks,
     }
 
@@ -274,12 +234,11 @@ def effective_attack_damages(
 def sync_payload(eff: dict[str, Any], attacks: dict[str, dict]) -> dict[str, Any]:
     """Normalize an effective_monster_combat result for the golden sync fixture.
 
-    Attacks / behaviour / tags / crowd_roles are sorted; prey keys sorted; scalars
-    rounded. Runtime list order in resolve() is unchanged — only the sync export sorts.
+    Attacks / behaviour / tags / crowd_roles are sorted; scalars rounded. Runtime list
+    order in resolve() is unchanged — only the sync export sorts.
     """
     scalars = eff["scalars"]
     lists = eff["lists"]
-    prey = eff["prey_weights"]
     out: dict[str, Any] = {}
     for key in SCALAR_KEYS:
         out[key] = _round_sync_float(float(scalars[key]))
@@ -293,9 +252,6 @@ def sync_payload(eff: dict[str, Any], attacks: dict[str, dict]) -> dict[str, Any
             "vs_mob": _round_sync_float(vals["vs_mob"]),
         }
         for aid, vals in attack_damage.items()
-    }
-    out["prey_weights"] = {
-        key: _round_sync_float(float(prey[key])) for key in sorted(ALLOWED_PREY)
     }
     out["tags"] = sorted(lists["tags"])
     out["crowd_roles"] = sorted(lists["crowd_roles"])

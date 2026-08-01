@@ -42,8 +42,6 @@ var _melee_hit_streams: Array[AudioStream] = []
 ## Purple conversion orb cast + impact.
 var _orb_cast_streams: Array[AudioStream] = []
 var _orb_impact_streams: Array[AudioStream] = []
-## Soft building-nibble clicks.
-var _nibble_streams: Array[AudioStream] = []
 
 var _pool: Array[AudioStreamPlayer3D] = []
 var _pool_i: int = 0
@@ -387,22 +385,6 @@ func play_orb_impact(world_pos: Vector3, character_scale: float = 1.0) -> void:
 	p.play()
 
 
-## Soft chew when a minion nibbles a building face.
-func play_nibble(world_pos: Vector3, character_scale: float = 1.0) -> void:
-	if not enabled:
-		return
-	var stream := _pick(_nibble_streams)
-	if stream == null:
-		return
-	var p := _next_player()
-	p.stream = stream
-	p.global_position = world_pos
-	p.pitch_scale = clampf(1.15 / sqrt(maxf(character_scale, 0.25)), 0.7, 1.5)
-	p.pitch_scale *= _rng.randf_range(0.9, 1.15)
-	p.volume_db = -9.0
-	p.play()
-
-
 ## Falling meteor scream — follows the body until impact / stop.
 func play_meteor_whine(follow: Node3D) -> void:
 	if not enabled or follow == null:
@@ -582,12 +564,11 @@ func _load_banks() -> void:
 	_chest_open_stream = _build_chest_open()
 	_bling_stream = _build_treasure_bling()
 	_lock_on_stream = _build_lock_on()
-	## Melee / orb / nibble — same: no pack for the mood, so synthesize a few variants.
+	## Melee / orb — same: no pack for the mood, so synthesize a few variants.
 	_melee_swing_streams = [_build_melee_swing(0), _build_melee_swing(1), _build_melee_swing(2)]
 	_melee_hit_streams = [_build_melee_hit(0), _build_melee_hit(1), _build_melee_hit(2)]
 	_orb_cast_streams = [_build_orb_cast(0), _build_orb_cast(1)]
 	_orb_impact_streams = [_build_orb_impact(0), _build_orb_impact(1)]
-	_nibble_streams = [_build_nibble(0), _build_nibble(1), _build_nibble(2)]
 
 
 func _load_dir(dir_path: String, prefixes: Array[String]) -> Array[AudioStream]:
@@ -876,18 +857,6 @@ func _build_orb_impact(variant: int) -> AudioStreamWAV:
 		var zap := sin(TAU * spark * t) * exp(-t * 30.0)
 		var fizz := (_rng.randf() * 2.0 - 1.0) * 0.45 * exp(-t * 16.0)
 		return (boom + zap * 0.8 + fizz) * env
-	)
-
-
-func _build_nibble(variant: int) -> AudioStreamWAV:
-	## Soft stone-chew click — quieter and shorter than a debris cascade.
-	var click_hz := 380.0 + float(variant) * 55.0
-	return _synthesize(0.1, func(t: float, _i: int) -> float:
-		var env := exp(-t * 32.0) * smoothstep(0.0, 0.006, t)
-		var click := sin(TAU * click_hz * t) * exp(-t * 50.0)
-		var grit := (_rng.randf() * 2.0 - 1.0) * 0.4 * exp(-t * 22.0)
-		var body := sin(TAU * 120.0 * t) * 0.3 * env
-		return (click * 0.75 + grit + body) * env
 	)
 
 

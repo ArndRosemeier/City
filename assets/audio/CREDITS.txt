@@ -14,4 +14,4 @@ Original downloads kept under assets/audio/blast/source/ (converted to mono WAV 
 
 Procedural (CityAudio._synthesize) — no external pack:
 - meteor / tendril / gem pickup
-- monster melee swing+hit, conversion orb cast+impact, building nibble
+- monster melee swing+hit, conversion orb cast+impact

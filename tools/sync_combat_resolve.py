@@ -3,7 +3,7 @@
 
 Writes / checks tools/fixtures/combat_effective_stats.json — every monster id mapped to
 its effective scalars, behaviours, sorted attacks (with vs_player/vs_mob damage ×
-damage_mult), averaged prey weights, tags, and crowd_roles.
+damage_mult), tags, and crowd_roles.
 
 When merge rules change:
   1. Update tools/combat_resolve.py AND scripts/city/combat_table.gd identically

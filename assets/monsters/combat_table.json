@@ -1,7 +1,7 @@
 {
   "templates": {
     "brute": {
-      "intent": "Tanky melee pressure — Quaternius Big / warrior bulk that sticks to the player. chase behaviour supplies living prey weights (other-faction monsters included).",
+      "intent": "Tanky melee pressure — Quaternius Big / warrior bulk that sticks to whatever it committed to.",
       "hp_mult": 1.4,
       "damage_mult": 1.3,
       "speed_mult": 0.9,
@@ -21,7 +21,7 @@
       ]
     },
     "minion": {
-      "intent": "Convert fodder and pack hunters — fast, fragile, chew buildings between fights. chase + wander_hunt + demolish: living prey (other-faction monsters) averaged with building hunger from demolish.",
+      "intent": "Convert fodder and pack hunters — fast, fragile, roam wide. chase + wander_hunt: close on any other-faction body in aggro range.",
       "hp_mult": 0.5,
       "damage_mult": 0.85,
       "speed_mult": 1.0,
@@ -32,8 +32,7 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "wander_hunt",
-        "demolish"
+        "wander_hunt"
       ],
       "tags": [
         "fodder",
@@ -45,7 +44,7 @@
       ]
     },
     "boss": {
-      "intent": "Grown-giant / elite path — high threat; chase + demolish + grow supply melee/nibble/debris and averaged building/player prey weights.",
+      "intent": "Grown-giant / elite path — high threat, city-wide aggro range, chase melee.",
       "hp_mult": 2.5,
       "damage_mult": 1.8,
       "speed_mult": 1.15,
@@ -55,9 +54,7 @@
       "armor_mult": 1.6,
       "score_mult": 20.0,
       "behaviour": [
-        "chase",
-        "demolish",
-        "grow"
+        "chase"
       ],
       "tags": [
         "elite",
@@ -68,7 +65,7 @@
       ]
     },
     "ranged_boss": {
-      "intent": "Artillery elite — skirmish behaviour may use charged_blast / eye_laser (and the rest of the skirmish pool); AI selection deferred. Boss-tier threat but not the grown-giant demolish path; stack with boss when a body should be both giant and artillery (scalars take max).",
+      "intent": "Artillery elite — skirmish behaviour may use charged_blast / eye_laser (and the rest of the skirmish pool); AI selection deferred. Stack with boss when a body should be both giant and artillery (scalars take max).",
       "hp_mult": 2.0,
       "damage_mult": 2.2,
       "speed_mult": 0.7,
@@ -115,7 +112,7 @@
       ]
     },
     "rangestriker": {
-      "intent": "Standoff caster/skirmisher — skirmish attack pool (orb/blaster/eye_laser/charged_blast) plus chase melee when closing; prey weights average skirmish + chase.",
+      "intent": "Standoff caster/skirmisher — skirmish attack pool (orb/blaster/eye_laser/charged_blast) plus chase melee when closing.",
       "hp_mult": 1.0,
       "damage_mult": 1.0,
       "speed_mult": 0.55,
@@ -137,7 +134,7 @@
       ]
     },
     "demolisher": {
-      "intent": "Building-first chewer — demolish behaviour weights building high and also hunts other-faction creatures. Stacks onto other templates for structure threat.",
+      "intent": "Relentless bruiser — wide aggro and a long leash, so once it commits it follows across a district. Stacks onto other templates to make a body harder to shake.",
       "hp_mult": 1.1,
       "damage_mult": 1.0,
       "speed_mult": 0.95,
@@ -147,17 +144,17 @@
       "armor_mult": 1.1,
       "score_mult": 1.2,
       "behaviour": [
-        "demolish"
+        "chase"
       ],
       "tags": [
-        "structure_threat"
+        "relentless"
       ],
       "crowd_roles": [
         "wave_hunter"
       ]
     },
     "guard": {
-      "intent": "Dungeon holder — short leash, holds a post, engages the player (guard behaviour: player-only prey weights).",
+      "intent": "Dungeon holder — short leash, holds a post, engages whatever other-faction body reaches it.",
       "hp_mult": 1.2,
       "damage_mult": 1.1,
       "speed_mult": 0.75,
@@ -189,7 +186,7 @@
       "attacks_extra": [
         "orb_convert"
       ],
-      "notes": "Live wave caster body; also eligible for BRUTE slot. Kit from behaviours: demolisher(nibble) + rangestriker/skirmish (orb_convert|blaster|eye_laser|charged_blast) + chase melee. Leans full ranged roster."
+      "notes": "Live wave caster body; also eligible for BRUTE slot. Kit from behaviours: rangestriker/skirmish (blaster|eye_laser) + chase melee, plus the orb_convert specialty. Leans full ranged roster."
     },
     {
       "id": "kaykit/Skeleton_Minion",

@@ -42,9 +42,8 @@ HTML_PATH = TOOLS / "combat_tables.html"
 RENDER_SCRIPT = TOOLS / "render_combat_tables.py"
 
 SCALAR_KEYS = validate_mod.SCALAR_KEYS
-LIST_KEYS = validate_mod.LIST_KEYS  # behaviour, attacks, tags, crowd_roles (no prey)
+LIST_KEYS = validate_mod.LIST_KEYS  # behaviour, attacks, tags, crowd_roles
 LIST_EXTRA_KEYS = validate_mod.LIST_EXTRA_KEYS
-PREY_KEYS = tuple(sorted(validate_mod.ALLOWED_PREY))
 KNOWN_ATTACK_KINDS = sorted(validate_mod.KNOWN_ATTACK_KINDS)
 ALLOWED_BEHAVIOUR = sorted(validate_mod.ALLOWED_BEHAVIOUR)
 
@@ -85,7 +84,6 @@ BEHAVIOUR_FIELD_ORDER = (
     "id",
     "intent",
     "attacks",
-    "prey_weights",
     "notes",
 )
 
@@ -183,7 +181,6 @@ def _enum_options(
         "crowd_roles": sorted(validate_mod.ALLOWED_CROWD_ROLES),
         "attacks": attack_ids,
         "kind": list(KNOWN_ATTACK_KINDS),
-        "prey": list(PREY_KEYS),
     }
 
 
@@ -291,7 +288,6 @@ class CombatEditor(tk.Tk):
         self._behaviour_intent = tk.StringVar()
         self._behaviour_notes: tk.Text | None = None
         self._behaviour_attacks: Checklist | None = None
-        self._behaviour_prey_vars: dict[str, tk.StringVar] = {}
         self._template_scalar_entries: dict[str, tk.StringVar] = {}
         self._template_intent = tk.StringVar()
         self._template_checklists: dict[str, Checklist] = {}
@@ -710,19 +706,6 @@ class CombatEditor(tk.Tk):
         self._behaviour_attacks = Checklist(form, height=12)
         self._behaviour_attacks.grid(row=2, column=1, sticky="nsew", pady=4)
 
-        prey = ttk.LabelFrame(
-            form, text="prey_weights (>= 0; omit/0 = not hunted)", padding=4
-        )
-        prey.grid(row=3, column=0, columnspan=2, sticky="ew", pady=6)
-        for i, key in enumerate(PREY_KEYS):
-            var = tk.StringVar(value="0")
-            self._behaviour_prey_vars[key] = var
-            ttk.Label(prey, text=key).grid(row=i // 2, column=(i % 2) * 2, sticky="w")
-            ttk.Entry(prey, textvariable=var, width=10).grid(
-                row=i // 2, column=(i % 2) * 2 + 1, sticky="w", padx=4, pady=2
-            )
-            var.trace_add("write", self._mark_dirty)
-
         ttk.Label(form, text="notes").grid(row=4, column=0, sticky="nw", pady=2)
         self._behaviour_notes = tk.Text(form, height=5, wrap="word")
         self._behaviour_notes.grid(row=4, column=1, sticky="nsew", pady=2)
@@ -791,12 +774,6 @@ class CombatEditor(tk.Tk):
                 [a for a in attacks if isinstance(a, str)]
             )
             self._wire_checklist_dirty(self._behaviour_attacks)
-            weights = row.get("prey_weights", {})
-            if not isinstance(weights, dict):
-                weights = {}
-            for key in PREY_KEYS:
-                raw = weights.get(key, 0.0)
-                self._behaviour_prey_vars[key].set(str(raw))
             assert self._behaviour_notes is not None
             self._behaviour_notes.delete("1.0", "end")
             self._behaviour_notes.insert("1.0", str(row.get("notes", "")))
@@ -827,13 +804,8 @@ class CombatEditor(tk.Tk):
             row.pop("intent", None)
         assert self._behaviour_attacks is not None
         row["attacks"] = self._behaviour_attacks.get_selected()
-        weights: dict[str, float] = {}
-        for key in PREY_KEYS:
-            value = _parse_required_float(self._behaviour_prey_vars[key].get(), key)
-            if value < 0.0:
-                raise ValueError(f"prey_weights.{key} must be >= 0, got {value}")
-            weights[key] = value
-        row["prey_weights"] = weights
+        for forbidden in validate_mod.FORBIDDEN_PREY_KEYS:
+            row.pop(forbidden, None)
         assert self._behaviour_notes is not None
         notes = self._behaviour_notes.get("1.0", "end-1c")
         if notes.strip() == "":
@@ -890,7 +862,6 @@ class CombatEditor(tk.Tk):
             "id": name,
             "intent": "",
             "attacks": [],
-            "prey_weights": {key: 0.0 for key in PREY_KEYS},
         }
         self._mark_dirty()
         self._refresh_behaviour_list(name)
@@ -1093,7 +1064,6 @@ class CombatEditor(tk.Tk):
         existing = templates[old_id]
         assert isinstance(existing, dict)
         row = copy.deepcopy(existing)
-        # Drop legacy prey fields if present in memory.
         for forbidden in validate_mod.FORBIDDEN_PREY_KEYS:
             row.pop(forbidden, None)
         new_id = self._template_id_var.get().strip()
@@ -1323,7 +1293,7 @@ class CombatEditor(tk.Tk):
             form,
             text=(
                 "Other list overrides — Inherit / Extra (*_extra) / Replace (hard)  "
-                "[no prey; attacks above]"
+                "[attacks above]"
             ),
             padding=4,
         )
@@ -1369,7 +1339,7 @@ class CombatEditor(tk.Tk):
             preview,
             text=(
                 "Same merge as game code (CombatTable / combat_resolve.py): "
-                "max scalars · union lists · mean prey · behaviour attacks "
+                "max scalars · union lists · behaviour attacks "
                 "+ body attacks_extra / hard attacks"
             ),
             wraplength=360,
@@ -1681,13 +1651,6 @@ class CombatEditor(tk.Tk):
                 val = eff["scalars"].get(key, "—")
                 self._monster_preview.insert("end", f"  {key:<18} ", "muted")
                 self._monster_preview.insert("end", f"{val:g}\n" if isinstance(val, float) else f"{val}\n", "accent")
-            self._monster_preview.insert("end", "\n")
-
-            self._insert_preview_heading("PREY WEIGHTS (mean across behaviours; missing=0)")
-            for key in PREY_KEYS:
-                w = float(eff["prey_weights"].get(key, 0.0))
-                self._monster_preview.insert("end", f"  {key:<12} ", "muted")
-                self._monster_preview.insert("end", f"{w:g}\n", "accent")
             self._monster_preview.insert("end", "\n")
 
             self._insert_preview_heading("ATTACKS (resolved)")

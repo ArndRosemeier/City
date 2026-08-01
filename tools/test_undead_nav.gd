@@ -4,8 +4,9 @@
 ## The city is stubbed rather than booted — what is under test is undead_unit.gd and
 ## undead_goal_provider.gd talking to a real NavService over a hand-painted tile, not
 ## CityRoot's world generation. The tile states its geometry: an open deck a giant fits on,
-## and one sealed sixteen-metre tower that is simultaneously a facade to chew, an
-## unreachable roof, and somewhere to be entombed.
+## and one sealed sixteen-metre tower that is both an unreachable roof and somewhere to be
+## entombed. Nothing hunts the tower — buildings are not targets — so every case here gives
+## its body a pedestrian to want and watches how it gets there.
 ##
 ## Two `NavAgent ... TRAPPED ... escape=TELEPORTED / DUG_OUT` warnings on stderr are expected and
 ## are the last two cases asserting themselves: being loud about an entombment is the behaviour
@@ -44,7 +45,9 @@ const BODY_SEED := 20260728
 const DEFAULT_BODY: Dictionary[int, String] = {
 	int(UndeadUnit.Role.MAGE): "kaykit/Skeleton_Mage",
 	int(UndeadUnit.Role.MINION): "kaykit/Skeleton_Minion",
-	int(UndeadUnit.Role.GIANT): "kaykit/Skeleton_Mage",
+	## A melee elite: it closes to contact range, so the corridor a buried giant asks for ends
+	## out on the deck rather than inside the brick it is entombed in.
+	int(UndeadUnit.Role.GIANT): "big/Orc",
 }
 ## A Quaternius Big body, three metres tall, which is the whole reason the mid-size profile
 ## exists.
@@ -68,14 +71,11 @@ var _states: Array[int] = []
 class TestCity:
 	extends CityRoot
 	var player_at: Vector3 = Vector3.ZERO
+	## The crowd this city has: up to two pedestrians, either slot Vector3.INF for absent.
+	## Two, because sticky pursuit is only a claim you can test with somebody else around.
 	var prey_at: Vector3 = Vector3.INF
-	var fabric_at: Vector3 = Vector3.INF
+	var prey_b: Vector3 = Vector3.INF
 	var brush: CityBrush = null
-	var nibble_calls: int = 0
-	var scrape_calls: int = 0
-	## Whatever the next nibble or scrape reports back.
-	var nibble_hits: bool = true
-	var scrape_removes: int = 12
 	## When false, voxel LOS fails (corner-juke / pursuit investigate tests).
 	var los_ok: bool = true
 
@@ -88,39 +88,31 @@ class TestCity:
 		return player_at
 
 	func get_player_target_position() -> Vector3:
-		## Not a combatant. Headless undead tests hunt `prey_at` via the ped query.
+		## Not a combatant. Headless undead tests hunt the crowd instead.
 		return Vector3.INF
 
 	func find_nearest_ped_position(from: Vector3, max_dist: float) -> Vector3:
-		if prey_at == Vector3.INF or from.distance_to(prey_at) > max_dist:
-			return Vector3.INF
-		return prey_at
+		var best := Vector3.INF
+		var best_d := INF
+		for ped: Vector3 in collect_ped_positions(from, max_dist):
+			var d := from.distance_to(ped)
+			if d < best_d:
+				best_d = d
+				best = ped
+		return best
 
 	func find_nearest_ped_only(from: Vector3, max_dist: float) -> Vector3:
 		return find_nearest_ped_position(from, max_dist)
 
 	func collect_ped_positions(from: Vector3, max_dist: float) -> PackedVector3Array:
 		var out := PackedVector3Array()
-		var ped := find_nearest_ped_position(from, max_dist)
-		if ped != Vector3.INF:
-			out.append(ped)
+		for ped: Vector3 in [prey_at, prey_b]:
+			if ped != Vector3.INF and from.distance_to(ped) <= max_dist:
+				out.append(ped)
 		return out
 
 	func has_voxel_line_of_sight(_from_world: Vector3, _to_world: Vector3) -> bool:
 		return los_ok
-
-	func find_nearest_building_nibble(from: Vector3, max_dist: float) -> Vector3:
-		if fabric_at == Vector3.INF or from.distance_to(fabric_at) > max_dist:
-			return Vector3.INF
-		return fabric_at
-
-	func undead_nibble_building_near(_world_pos: Vector3, _reach_m: float) -> bool:
-		nibble_calls += 1
-		return nibble_hits
-
-	func undead_giant_scrape_at(_contact: Vector3, _inward: Vector3, _along: Vector3) -> int:
-		scrape_calls += 1
-		return scrape_removes
 
 	func voxel_brush() -> CityBrush:
 		return brush
@@ -179,7 +171,7 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
-	await _test_minion_walks_to_a_facade()
+	await _test_minion_walks_to_its_prey()
 	if _failed:
 		_quit()
 		return
@@ -188,6 +180,10 @@ func _ready() -> void:
 		_quit()
 		return
 	await _test_pursuit_investigates_after_los_break()
+	if _failed:
+		_quit()
+		return
+	await _test_sticky_target_survives_a_closer_one()
 	if _failed:
 		_quit()
 		return
@@ -252,71 +248,48 @@ func _test_no_hacks_left() -> void:
 # Walking a corridor to what the provider asked for
 # ---------------------------------------------------------------------------
 
-## A minion wants building fabric. The fabric voxel itself is solid, so the goal is the span
-## beside it — the corridor has to end somewhere the body can stand.
-func _test_minion_walks_to_a_facade() -> void:
-	var start := _w(Vector3i(90, 1, 60))
-	_city.fabric_at = _vox_centre(Vector3i(TOWER_MIN.x, 3, 60))
-	_city.nibble_hits = true
+## A minion crosses the deck to the only thing it hunts: a body of another faction. It closes
+## to contact rather than to some stand-off, because melee is the whole kit it has.
+func _test_minion_walks_to_its_prey() -> void:
+	var start := _w(Vector3i(30, 1, 90))
+	_city.prey_at = _w(Vector3i(110, 1, 90))
 	var unit := _spawn(UndeadUnit.Role.MINION, start)
 	if unit == null:
 		return
 	NavAgent.reset_events()
 
 	var frames := await _run(
-		unit, func() -> bool: return unit.state == UndeadUnit.State.NIBBLE
+		unit,
+		func() -> bool: return unit.global_position.distance_to(_city.prey_at) <= 3.0
 	)
-	if unit.state != UndeadUnit.State.NIBBLE:
+	var reach := unit.global_position.distance_to(_city.prey_at)
+	if reach > 3.0:
 		_fail(
-			"FAIL the minion is %d after %d ticks, %.1f m from the wall (ladder %s)"
-			% [
-				unit.state,
-				frames,
-				unit.global_position.distance_to(_city.fabric_at),
-				NavLadder.state_name(unit.nav_state()),
-			]
+			"FAIL the minion is %.1f m from its prey after %d ticks (state %d, ladder %s)"
+			% [reach, frames, unit.state, NavLadder.state_name(unit.nav_state())]
 		)
 		return
 	var walked := start.distance_to(unit.global_position)
 	if walked < 10.0:
-		_fail("FAIL the minion only covered %.1f m before claiming to be at the wall" % walked)
-		return
-	var reach := unit.global_position.distance_to(_city.fabric_at)
-	if reach > UndeadUnit.MINION_NIBBLE_REACH_M + 1.2:
-		_fail("FAIL the minion stopped %.1f m from the fabric it is chewing" % reach)
+		_fail("FAIL the minion only covered %.1f m before claiming to be on its prey" % walked)
 		return
 	if NavAgent.trapped_events() != 0:
-		_fail("FAIL walking to a facade reported %d entombments" % NavAgent.trapped_events())
+		_fail("FAIL crossing an open deck reported %d entombments" % NavAgent.trapped_events())
 		return
-
-	## Locked on: it keeps swinging, and a voxel dies on the nibble interval. The first bite
-	## is staggered by up to the whole interval so a pack does not bite in lockstep.
-	await _run(unit, func() -> bool: return _city.nibble_calls > 0)
-	if _city.nibble_calls == 0:
-		_fail("FAIL the minion reached the wall but never bit it")
-		return
-	if unit.state != UndeadUnit.State.NIBBLE:
-		_fail("FAIL a minion whose bite landed left the facade anyway")
-		return
-
-	## The wall is gone; it must go looking for another instead of chewing air.
-	_city.nibble_hits = false
-	_city.fabric_at = Vector3.INF
-	await _run(unit, func() -> bool: return unit.state != UndeadUnit.State.NIBBLE)
 	if unit.state != UndeadUnit.State.SEEK_PED:
-		_fail("FAIL a minion with nothing left to bite is in state %d" % unit.state)
+		_fail("FAIL a minion standing on its prey is in state %d" % unit.state)
 		return
-	print(
-		"minion: %.1f m to the facade in %d ticks, %d bites, released when the wall went"
-		% [walked, frames, _city.nibble_calls]
-	)
+	if unit.combat_prey() == Vector3.INF:
+		_fail("FAIL the minion arrived with nothing to swing at")
+		return
+	print("minion: %.1f m to a human in %d ticks, still on it" % [walked, frames])
 	_despawn(unit)
+	_city.prey_at = Vector3.INF
 
 
 ## The mage stops at orb range and fires, rather than walking into the pedestrian.
 func _test_mage_closes_to_orb_range() -> void:
 	var start := _w(Vector3i(40, 1, 30))
-	_city.fabric_at = Vector3.INF
 	_city.prey_at = _w(Vector3i(110, 1, 30))
 	var unit := _spawn(UndeadUnit.Role.MAGE, start)
 	if unit == null:
@@ -354,7 +327,6 @@ func _test_mage_closes_to_orb_range() -> void:
 func _test_pursuit_investigates_after_los_break() -> void:
 	var start := _w(Vector3i(40, 1, 40))
 	var prey := _w(Vector3i(100, 1, 40))
-	_city.fabric_at = Vector3.INF
 	_city.prey_at = prey
 	_city.los_ok = true
 	var unit := _spawn(UndeadUnit.Role.MAGE, start)
@@ -433,14 +405,90 @@ func _test_pursuit_investigates_after_los_break() -> void:
 	_city.los_ok = true
 
 
+## Committing to a target means keeping it. A second human walking past at arm's length is
+## exactly the case the old closest-wins pick got wrong: the hunter would swap every query and
+## never finish either chase. It only lets go once the one it picked is gone.
+##
+## The mage is the body for this because it holds orb range instead of walking, so what moves
+## between the phases is the crowd and nothing else. The committed pedestrian is nudged a
+## metre — inside the re-match radius, so it is still the same person — and the last-known
+## point moving with it is what proves a fresh query ran rather than a cache being read.
+func _test_sticky_target_survives_a_closer_one() -> void:
+	var start := _w(Vector3i(30, 1, 95))
+	var first := _w(Vector3i(70, 1, 95))
+	var first_moved := _w(Vector3i(72, 1, 95))
+	var closer := _w(Vector3i(34, 1, 95))
+	_city.prey_at = first
+	_city.prey_b = Vector3.INF
+	_city.los_ok = true
+	var unit := _spawn(UndeadUnit.Role.MAGE, start)
+	if unit == null:
+		return
+	var provider := unit.goal_provider()
+
+	var frames := await _run(
+		unit,
+		func() -> bool: return provider.pursuit() == UndeadGoalProvider.Pursuit.HOT
+	)
+	if provider.pursuit() != UndeadGoalProvider.Pursuit.HOT:
+		_fail("FAIL pursuit never went Hot on the first human in %d ticks" % frames)
+		return
+	var locked := provider.last_known_prey()
+	if locked.distance_to(first) > 1.5:
+		_fail("FAIL Hot pursuit locked onto %s, not the only human there" % str(locked))
+		return
+
+	## Somebody much nearer turns up, and the one being chased takes a step.
+	_city.prey_b = closer
+	_city.prey_at = first_moved
+	frames = await _run(
+		unit,
+		func() -> bool: return provider.last_known_prey().distance_to(locked) > 0.2
+	)
+	var held := provider.last_known_prey()
+	if held.distance_to(locked) <= 0.2:
+		_fail(
+			"FAIL no fresh prey query landed in %d ticks, so stickiness was never exercised"
+			% frames
+		)
+		return
+	if held.distance_to(first_moved) > 1.5:
+		_fail(
+			"FAIL the mage re-picked %s; %.1f m from the human it committed to and %.1f m"
+			% [str(held), held.distance_to(first_moved), held.distance_to(closer)]
+			+ " from the one that walked up"
+		)
+		return
+	if not provider.has_committed_target():
+		_fail("FAIL a Hot mage is holding no committed target")
+		return
+
+	## Its quarry leaves. Only now may the nearer one become the hunt.
+	_city.prey_at = Vector3.INF
+	frames = await _run(
+		unit,
+		func() -> bool: return provider.last_known_prey().distance_to(closer) <= 1.5
+	)
+	var switched := provider.last_known_prey()
+	if switched.distance_to(closer) > 1.5:
+		_fail(
+			"FAIL the mage never took the remaining human in %d ticks (last known %s)"
+			% [frames, str(switched)]
+		)
+		return
+	print("sticky: held the first human past a 2 m alternative, took it only once it left")
+	_despawn(unit)
+	_city.prey_at = Vector3.INF
+	_city.prey_b = Vector3.INF
+
+
 ## A three-metre Quaternius body is neither a minion nor a giant. It registers on the
 ## mid-size profile, which is two cells of clearance and seven of headroom, and it has to
 ## cross the same open deck the minion does without ever asking the giant profile for the
 ## eleven cells it does not need.
 func _test_mid_size_monster_walks_its_own_profile() -> void:
 	var start := _w(Vector3i(90, 1, 95))
-	_city.fabric_at = _vox_centre(Vector3i(TOWER_MIN.x, 3, 66))
-	_city.nibble_hits = true
+	_city.prey_at = _w(Vector3i(30, 1, 95))
 	var unit := _spawn(UndeadUnit.Role.MINION, start, MONSTER_BODY)
 	if unit == null:
 		return
@@ -465,24 +513,21 @@ func _test_mid_size_monster_walks_its_own_profile() -> void:
 	NavAgent.reset_events()
 
 	var frames := await _run(
-		unit, func() -> bool: return unit.state == UndeadUnit.State.NIBBLE
+		unit,
+		func() -> bool: return unit.global_position.distance_to(_city.prey_at) <= 4.0
 	)
-	if unit.state != UndeadUnit.State.NIBBLE:
+	var reach := unit.global_position.distance_to(_city.prey_at)
+	if reach > 4.0:
 		_fail(
-			"FAIL the monster is %d after %d ticks, %.1f m from the wall (ladder %s)"
-			% [
-				unit.state,
-				frames,
-				unit.global_position.distance_to(_city.fabric_at),
-				NavLadder.state_name(unit.nav_state()),
-			]
+			"FAIL the monster is %.1f m from its prey after %d ticks (state %d, ladder %s)"
+			% [reach, frames, unit.state, NavLadder.state_name(unit.nav_state())]
 		)
 		return
 	if NavAgent.trapped_events() != 0:
 		_fail("FAIL the monster reported %d entombments crossing an open deck" % NavAgent.trapped_events())
 		return
 	print(
-		"monster: %s, %.2f m tall, hit radius %.2f (minion base %.2f), reached the wall in %d ticks"
+		"monster: %s, %.2f m tall, hit radius %.2f (minion base %.2f), ran its prey down in %d ticks"
 		% [
 			MONSTER_BODY,
 			unit.creature_entry().measured_height,
@@ -492,20 +537,20 @@ func _test_mid_size_monster_walks_its_own_profile() -> void:
 		]
 	)
 	_despawn(unit)
-	_city.fabric_at = Vector3.INF
+	_city.prey_at = Vector3.INF
 
 
 # ---------------------------------------------------------------------------
 # The ladder, where the old code teleported
 # ---------------------------------------------------------------------------
 
-## The tower roof is sixteen metres of sheer wall up. An undead climbs, but not that, and no
-## landing span exists to chain links from — so the goal is genuinely impossible. The old
-## code would have jammed against the facade and relocated itself; the ladder walks to the
-## closest span, calls the goal unreachable, and leaves the body where it is.
+## The tower roof is sixteen metres of sheer wall up, and there is somebody standing on it. An
+## undead climbs, but not that, and no landing span exists to chain links from — so the goal
+## is genuinely impossible. The old code would have jammed against the facade and relocated
+## itself; the ladder calls the goal unreachable and leaves the body where it is.
 func _test_unreachable_goal_escalates_instead_of_teleporting() -> void:
 	var start := _w(Vector3i(100, 1, 90))
-	_city.fabric_at = _vox_centre(Vector3i(130, TOWER_MAX.y - 1, 60))
+	_city.prey_at = _w(Vector3i(130, TOWER_MAX.y, 60))
 	var unit := _spawn(UndeadUnit.Role.MINION, start)
 	if unit == null:
 		return
@@ -538,14 +583,15 @@ func _test_unreachable_goal_escalates_instead_of_teleporting() -> void:
 		return
 	print("unreachable roof: ladder ran %s, nothing teleported" % str(_states))
 	_despawn(unit)
-	_city.fabric_at = Vector3.INF
+	_city.prey_at = Vector3.INF
 
 
 ## Entombment is the one case that does move a body, and the whole point of the port is that
 ## it is loud: counted on NavAgent, counted on CityProfiler, and warned about.
 func _test_entombed_undead_is_reported() -> void:
 	var buried := _w(Vector3i(130, 10, 60))
-	_city.fabric_at = _vox_centre(Vector3i(TOWER_MIN.x, 3, 60))
+	## Somebody out on the deck to want, so a corridor is asked for from inside the brick.
+	_city.prey_at = _w(Vector3i(100, 1, 60))
 	var unit := _spawn(UndeadUnit.Role.MINION, buried)
 	if unit == null:
 		return
@@ -576,7 +622,7 @@ func _test_entombed_undead_is_reported() -> void:
 		return
 	print("entombed minion: reported, counted and moved %.1f m onto a span" % moved)
 	_despawn(unit)
-	_city.fabric_at = Vector3.INF
+	_city.prey_at = Vector3.INF
 
 
 # ---------------------------------------------------------------------------
@@ -587,16 +633,17 @@ func _test_entombed_undead_is_reported() -> void:
 ## moved, and the dig has to be a real edit: through CityBrush, the single write funnel, in
 ## a pocket wide enough for the eleven cells of clearance the giant profile demands.
 func _test_giant_digs_out_through_the_brush() -> void:
-	## Off the end of the baked tile, but still inside the giant's building-seek range, so the
-	## goal resolves and the path query fails on the start rather than never being asked.
+	## Off the end of the baked tile, but still inside the giant's aggro range, so the goal
+	## resolves and the path query fails on the start rather than never being asked.
 	var nowhere := _w(Vector3i(SX + 40, 1, 60))
 	var centre := Vector3i(ORIGIN.x + SX + 40, ORIGIN.y + 1, ORIGIN.z + 60)
 	## Solid to dig out of, wider than the pocket so the pocket's edges can be checked.
 	_city.brush.fill_box(
 		centre + Vector3i(-16, -1, -16), centre + Vector3i(17, 12, 17), VoxelMaterial.BRICK
 	)
-	## Somewhere real to want to go, so the query fails on the start rather than the goal.
-	_city.fabric_at = _vox_centre(Vector3i(60, 1, 60))
+	## Somebody real to want, out on the deck, so the query fails on the start rather than
+	## the goal — and far enough out that the stand-off point is clear of the brick too.
+	_city.prey_at = _w(Vector3i(110, 1, 60))
 	var unit := _spawn(UndeadUnit.Role.GIANT, nowhere)
 	if unit == null:
 		return
@@ -640,7 +687,7 @@ func _test_giant_digs_out_through_the_brush() -> void:
 		% [r * 2 + 1, frames]
 	)
 	_despawn(unit)
-	_city.fabric_at = Vector3.INF
+	_city.prey_at = Vector3.INF
 
 
 # ---------------------------------------------------------------------------
@@ -740,15 +787,6 @@ func _offline_brush() -> CityBrush:
 func _w(vox: Vector3i) -> Vector3:
 	return Vector3(
 		float(ORIGIN.x + vox.x), float(ORIGIN.y + vox.y), float(ORIGIN.z + vox.z)
-	) * VOXEL_SIZE
-
-
-## World centre of a voxel, which is what CityRoot's building-fabric queries hand back.
-func _vox_centre(vox: Vector3i) -> Vector3:
-	return Vector3(
-		float(ORIGIN.x + vox.x) + 0.5,
-		float(ORIGIN.y + vox.y) + 0.5,
-		float(ORIGIN.z + vox.z) + 0.5
 	) * VOXEL_SIZE
 
 

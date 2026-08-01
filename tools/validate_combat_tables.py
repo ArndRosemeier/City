@@ -3,12 +3,11 @@
 
 Checks:
   - assets/combat/attacks.json schema (required fields, kinds, optional monster_*)
-  - assets/combat/behaviours.json (attacks + prey_weights per behaviour)
+  - assets/combat/behaviours.json (attack pool per behaviour)
   - assets/monsters/combat_table.json templates/monsters against CreatureCatalog
   - every behaviour id used by templates/monsters exists
   - every attack id on a behaviour / template / monster exists
-  - no leftover prey / prey_extra on templates or monsters
-  - effective prey weights = mean across behaviours (missing keys = 0)
+  - no leftover prey weighting anywhere: hostility is faction-only
   - golden sync fixture matches resolve output (tools/fixtures/combat_effective_stats.json)
 
 Merge helpers live in tools/combat_resolve.py (mirrored by scripts/city/combat_table.gd).
@@ -44,15 +43,13 @@ CATALOG_PATH = ROOT / "scripts" / "city" / "creature_catalog.gd"
 SCALAR_KEYS = resolve_mod.SCALAR_KEYS
 LIST_KEYS = resolve_mod.LIST_KEYS
 LIST_EXTRA_KEYS = resolve_mod.LIST_EXTRA_KEYS
-ALLOWED_PREY = resolve_mod.ALLOWED_PREY
 MERGE_SCALARS_USE_MAX = resolve_mod.MERGE_SCALARS_USE_MAX
-PREY_MISSING_COUNTS_AS_ZERO = resolve_mod.PREY_MISSING_COUNTS_AS_ZERO
 
-FORBIDDEN_PREY_KEYS = frozenset({"prey", "prey_extra"})
+# Prey selection is gone: mobs hunt every faction but their own. Any of these keys
+# coming back means someone is re-authoring target priority as data.
+FORBIDDEN_PREY_KEYS = frozenset({"prey", "prey_extra", "prey_weights"})
 
-ALLOWED_BEHAVIOUR = frozenset(
-    {"skirmish", "chase", "guard", "wander_hunt", "demolish", "grow", "ambient"}
-)
+ALLOWED_BEHAVIOUR = frozenset({"skirmish", "chase", "guard", "wander_hunt", "ambient"})
 ALLOWED_CROWD_ROLES = frozenset(
     {
         "wave_caster",
@@ -63,7 +60,8 @@ ALLOWED_CROWD_ROLES = frozenset(
         "ambient",
     }
 )
-## Combat allegiance ids — keep in sync with MonsterFaction.faction_name / combat_table.json.
+## Allegiances an authored body may take. MonsterFaction also has `human`, which the player
+## and pedestrians wear — no combat-table row may claim it.
 ALLOWED_FACTIONS = frozenset(
     {
         "undead",
@@ -83,8 +81,6 @@ KNOWN_ATTACK_KINDS = frozenset(
         "convert_projectile",
         "area",
         "area_blast",
-        "environmental",
-        "voxel_nibble",
     }
 )
 
@@ -116,7 +112,6 @@ OPTIONAL_INT_FIELDS = (
 
 # Re-export resolve API for editor / sync (import validate_combat_tables as before).
 union_lists = resolve_mod.union_lists
-average_prey_weights = resolve_mod.average_prey_weights
 attacks_from_behaviours = resolve_mod.attacks_from_behaviours
 merge_template_scalars = resolve_mod.merge_template_scalars
 merge_template_lists = resolve_mod.merge_template_lists
@@ -345,23 +340,11 @@ def validate_behaviour(
     if "id" in row:
         if not isinstance(row["id"], str) or row["id"] != bid:
             fail(f"{where}: id field must match object key '{bid}'", errors)
+    reject_prey_fields(row, where, errors)
     attacks = require_string_list(row, "attacks", where, errors)
     for a in attacks:
         if a not in attack_ids:
             fail(f"{where}: attack '{a}' not defined in shared attacks table", errors)
-    weights = row.get("prey_weights")
-    if not isinstance(weights, dict):
-        fail(f"{where}: prey_weights must be an object", errors)
-        return
-    for key, value in weights.items():
-        if key not in ALLOWED_PREY:
-            fail(f"{where}: prey_weights key '{key}' not in {sorted(ALLOWED_PREY)}", errors)
-            continue
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            fail(f"{where}: prey_weights.{key} must be numeric", errors)
-            continue
-        if float(value) < 0.0:
-            fail(f"{where}: prey_weights.{key} must be >= 0, got {value}", errors)
     if "intent" in row and not isinstance(row["intent"], str):
         fail(f"{where}: intent must be a string when present", errors)
     if "notes" in row and not isinstance(row["notes"], str):
@@ -393,8 +376,8 @@ def reject_prey_fields(obj: dict, where: str, errors: list[str]) -> None:
     for key in FORBIDDEN_PREY_KEYS:
         if key in obj:
             fail(
-                f"{where}: '{key}' is forbidden — prey lives on behaviours "
-                f"({BEHAVIOURS_PATH.relative_to(ROOT)})",
+                f"{where}: '{key}' is forbidden — a body hunts every faction but its own, "
+                "so there is nothing to weight",
                 errors,
             )
 
@@ -521,8 +504,6 @@ def _check_list_enums(
         for c in values:
             if c not in ALLOWED_CROWD_ROLES:
                 fail(f"{where}: crowd_role '{c}' not allowed", errors)
-    elif key == "prey":
-        fail(f"{where}: prey list is forbidden — use behaviours.json prey_weights", errors)
 
 
 def validate_attacks_document(data: object, errors: list[str]) -> dict[str, dict]:

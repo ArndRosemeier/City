@@ -186,6 +186,32 @@ func _check_hud_chips() -> void:
 	if regen_chip == null or not regen_chip.visible:
 		_fail("FAIL Regen chip not visible after regen tonic")
 
+	var grow_chip := root.get_node_or_null("BoostRow/GrowChip") as Control
+	var shrink_chip := root.get_node_or_null("BoostRow/ShrinkChip") as Control
+	if grow_chip != null and grow_chip.visible:
+		_fail("FAIL Grow chip visible without temp scale")
+	if shrink_chip != null and shrink_chip.visible:
+		_fail("FAIL Shrink chip visible without temp scale")
+
+	var base_scale := walker.get_character_scale()
+	walker.begin_temp_scale(base_scale * 1.45, 25.0)
+	hud.call("_refresh")
+	if grow_chip == null or not grow_chip.visible:
+		_fail("FAIL Grow chip not visible after grow")
+	if shrink_chip != null and shrink_chip.visible:
+		_fail("FAIL Shrink chip visible during grow")
+	var grow_label := grow_chip.get_node_or_null("Label") as Label
+	if grow_label == null or not grow_label.text.begins_with("Grow"):
+		_fail("FAIL Grow chip label missing countdown")
+
+	## Same timer; retarget below the restore size so the chip flips to Shrink.
+	walker.begin_temp_scale(base_scale / 1.45, 25.0)
+	hud.call("_refresh")
+	if shrink_chip == null or not shrink_chip.visible:
+		_fail("FAIL Shrink chip not visible after shrink")
+	if grow_chip != null and grow_chip.visible:
+		_fail("FAIL Grow chip still visible during shrink")
+
 	hud.call("clear_display")
 	if root.visible:
 		_fail("FAIL boost HUD root stayed up after clear_display")

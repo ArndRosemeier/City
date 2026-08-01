@@ -148,8 +148,13 @@ func _test_resolve_on_spawn() -> void:
 	if not _has_str(attacks, "melee"):
 		_fail("FAIL minion attacks missing melee: %s" % str(attacks))
 		return
-	if not _has_str(attacks, "nibble"):
-		_fail("FAIL minion attacks missing nibble")
+	## Buildings are not targets: nothing in a kit may aim at fabric any more.
+	for gone: String in ["nibble", "debris"]:
+		if _has_str(attacks, gone):
+			_fail("FAIL minion still carries the building attack '%s'" % gone)
+			return
+	if not bool(unit.combat().call("hunts_living")):
+		_fail("FAIL a minion with melee and %.0f m aggro does not hunt" % float(stats.get("aggro_range_m")))
 		return
 	var want_hp: float = CreatureHealth.for_scale(unit.creature_entry(), 1.0) * hp_mult
 	if absf(unit.health_max() - want_hp) > HEALTH_EPS:
@@ -220,6 +225,17 @@ func _test_melee_hurts_player() -> void:
 	walker.set_physics_process(false)
 	await get_tree().process_frame
 	_city.bind_player(walker)
+	## The player is a body in the faction system like any other, and being human is the only
+	## reason a skeleton swings at it.
+	if walker.combat_faction() != int(MonsterFaction.Id.HUMAN):
+		_fail("FAIL the player fights as faction %d, not human" % walker.combat_faction())
+		return
+	if _city.player_faction() != walker.combat_faction():
+		_fail("FAIL CityRoot reports player faction %d" % _city.player_faction())
+		return
+	if not MonsterFaction.is_hostile(int(MonsterFaction.Id.UNDEAD), _city.player_faction()):
+		_fail("FAIL undead are not hostile to humans")
+		return
 	var before := walker.get_health()
 	if before <= 0.0:
 		_fail("FAIL walker has no health after ready")
@@ -276,6 +292,9 @@ func _test_factions_and_mob_melee() -> void:
 		if faction_id < 0:
 			_fail("FAIL no faction for %s" % entry.id)
 			return
+	if _city.ped_faction() != int(MonsterFaction.Id.HUMAN):
+		_fail("FAIL pedestrians are faction %d, not human" % _city.ped_faction())
+		return
 	var undead_a := _spawn(
 		UndeadUnit.Role.MINION, _w(Vector3i(40, 1, 40)), "kaykit/Skeleton_Minion"
 	)

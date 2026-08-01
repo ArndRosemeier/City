@@ -1,5 +1,9 @@
 ## One undead soldier: Mage (convert), Minion (melee fodder), or Giant (grown + stomp).
 ##
+## Who it fights is not on this script and not in a table: `_faction` against everyone
+## else's, with the player and every pedestrian counting as `human`. Buildings are not
+## targets at all — area attacks still carve them, but nothing here aims at fabric.
+##
 ## Toughness is not a property of the role: it comes off whichever body the catalogue handed
 ## this unit, through `creature_health.gd`, so a two-metre skeleton and a four-metre monster
 ## wearing the same behaviour take a different number of hits. `kill_from_player` is what happens
@@ -14,7 +18,7 @@ class_name UndeadUnit
 extends CharacterBody3D
 
 enum Role { MAGE, MINION, GIANT }
-enum State { IDLE, SEEK_PED, CAST, NIBBLE, GROWING, STOMP, SCRAPE, DEAD }
+enum State { IDLE, SEEK_PED, CAST, GROWING, STOMP, DEAD }
 
 const OrbScript := preload("res://scripts/city/undead_orb_projectile.gd")
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
@@ -40,6 +44,9 @@ const WALK_ANIM_REF_MPS := 1.55
 ## Giants keep a heavy, slow playback regardless of ground speed.
 const GIANT_ANIM_SPEED := 0.38
 const CAST_COOLDOWN_SEC := 20.0
+## Faction every pedestrian and the player belong to. Mobs hunt anything that is not their
+## own faction, so this is the only thing that makes a civilian a target.
+const HUMAN_FACTION := MonsterFactionScript.Id.HUMAN
 const ORB_RANGE_M := 30.0
 ## Stop this far inside orb range, so a step of drift does not put the target out of reach.
 const ORB_STANDOFF_FRACTION := 0.92
@@ -49,13 +56,6 @@ const MAGE_CLOSE_IN_M := 2.5
 const MAGE_PURSUE_RANGE_M := 40.0
 const GIANT_SCALE_TARGET := 10.0
 const GROW_LOG_RATE := 0.55
-## Peel a facade strip this often while working on a wall.
-const SCRAPE_INTERVAL_SEC := 0.32
-## Hunt building fabric in this radius; ignore the player.
-const GIANT_BUILDING_SEEK_M := 110.0
-## Stand-off from the facade while scraping (meters).
-const GIANT_SCRAPE_DIST_M := 3.6
-const GIANT_APPROACH_DIST_M := 5.5
 ## Longest a body holds its flinch before locomotion may have the rig back. The clip's own
 ## length wins under this — the KayKit flinch is a third of a second and the Blob one shorter —
 ## and the cap is here so a family that ships a two-second stagger cannot stop a body walking.
@@ -74,9 +74,6 @@ const MUZZLE_BASE_M := 1.35
 ## How often prey is re-acquired for a running hunt.
 const PED_QUERY_INTERVAL_SEC := 0.28
 const ANIM_FAR_DIST_M := 90.0
-const MINION_NIBBLE_INTERVAL_SEC := 15.0
-const MINION_BUILDING_SEEK_M := 45.0
-const MINION_NIBBLE_REACH_M := 2.4
 ## Fall acceleration for the near tier. Heavier than world gravity so a dropped body lands
 ## rather than floating down a facade.
 const FALL_GRAVITY := 28.0
@@ -109,7 +106,6 @@ var _nav_agent: NavAgent
 var _nav_motor: NavMotor
 var _provider: UndeadGoalProvider
 var _cast_cd: float = 0.0
-var _scrape_cd: float = 0.0
 var _alive: bool = true
 var _yaw: float = 0.0
 var _retarget_cd: float = 0.0
@@ -121,7 +117,6 @@ var _variation: CreatureVariation = null
 var _seed: int = 0
 ## Catalogue entry asked for by name, empty when the seed chooses.
 var _body_id: String = ""
-var _nibble_cd: float = 0.0
 ## Points of punishment left, and how many this body started with. Both come from the
 ## catalogue's measurement of it, so a bigger monster is a tougher one without a table of
 ## fifty-four hand-written numbers.
@@ -137,8 +132,6 @@ var _hit_react_left: float = 0.0
 ## The orb is away; hold CAST one more frame so the spellcast clip is not stomped by the
 ## walking states' idle.
 var _cast_fired: bool = false
-## The building voxel the body is chewing or peeling. Vector3.INF while it has none.
-var _facade_target: Vector3 = Vector3.INF
 ## Resolved combat kit (MonsterCombat). Null only before setup finishes.
 var _combat: RefCounted = null
 ## MonsterFaction.Id for this body. Set once the catalogue entry is known.
@@ -183,9 +176,6 @@ func setup(
 	_reset_health()
 	_apply_scale()
 	_build_health_bar()
-	if role == Role.MINION:
-		## Stagger nibbles so a pack doesn't all bite on the same frame.
-		_nibble_cd = randf_range(0.0, MINION_NIBBLE_INTERVAL_SEC)
 	state = State.STOMP if role == Role.GIANT else State.SEEK_PED
 	_build_nav()
 	_play_action(CreatureClips.Action.IDLE)
@@ -285,11 +275,11 @@ func fire_convert_orb(toward: Vector3) -> void:
 	_fire_orb(toward)
 
 
-## Instantly remove a pedestrian at `prey` when that prey kind is weighted. No health pool.
+## Instantly remove a pedestrian at `prey`, if this body is hostile to humans. No health pool.
 func try_remove_ped_at(prey: Vector3, reach_m: float) -> bool:
 	if _city == null:
 		return false
-	if _combat != null and float(_combat.call("prey_weight", "ped")) <= 0.0:
+	if not MonsterFactionScript.is_hostile(_faction, HUMAN_FACTION):
 		return false
 	## One-shot remove — peds have no health pool.
 	var removed: Variant = _city.call("try_kill_ped_near", prey, reach_m)
@@ -819,12 +809,10 @@ func _restart_goal() -> void:
 	_nav_agent.abandon_goal()
 
 
-## Entombment. NavAgent has already counted it, warned and moved or dug the body out; all
-## this has to do is forget the wall it was working on.
+## Entombment. NavAgent has already counted it, warned and moved or dug the body out, and the
+## hunting states this body can be in survive being relocated — so there is nothing to undo.
 func _on_trapped(_world_pos: Vector3, _escape: NavLadder.Escape) -> void:
-	_facade_target = Vector3.INF
-	if state == State.NIBBLE or state == State.SCRAPE:
-		state = State.STOMP if role == Role.GIANT else State.SEEK_PED
+	pass
 
 
 ## A `can_break` body is entombed, and breaking out is what the profile promised. The pocket
@@ -878,25 +866,10 @@ func has_attack_id(attack_id: String) -> bool:
 	return _combat != null and bool(_combat.call("has_attack", attack_id))
 
 
-func on_facade_in_reach(point: Vector3, working: State) -> void:
-	_facade_target = point
-	state = working
-
-
 ## The ladder abandoned a goal — GOAL_UNREACHABLE or TRAPPED, both already reported by
-## NavAgent. Drop whatever the goal was about so the next one is picked from scratch.
+## NavAgent. The provider picks the next goal from scratch; nothing on the body to unwind.
 func on_goal_failed(_goal: NavGoal, _ladder_state: NavLadder.State) -> void:
-	_facade_target = Vector3.INF
-	if state == State.NIBBLE or state == State.SCRAPE:
-		state = State.STOMP if role == Role.GIANT else State.SEEK_PED
-
-
-## How far out from building fabric this body wants to stand while working on it: inside bite
-## reach for a minion, arm's length plus its own bulk for a giant.
-func facade_standoff_m() -> float:
-	if role == Role.GIANT:
-		return GIANT_APPROACH_DIST_M
-	return MINION_NIBBLE_REACH_M * 0.6
+	pass
 
 
 # ---------------------------------------------------------------------------
@@ -933,8 +906,6 @@ func tick(delta: float) -> void:
 		return
 	CityProfiler.begin("undead_unit")
 	_cast_cd = maxf(0.0, _cast_cd - delta)
-	_scrape_cd = maxf(0.0, _scrape_cd - delta)
-	_nibble_cd = maxf(0.0, _nibble_cd - delta)
 	_retarget_cd = maxf(0.0, _retarget_cd - delta)
 	_hit_react_left = maxf(0.0, _hit_react_left - delta)
 	if _provider != null:
@@ -958,12 +929,8 @@ func tick(delta: float) -> void:
 	match state:
 		State.CAST:
 			_tick_cast()
-		State.NIBBLE:
-			_tick_nibble()
 		State.GROWING:
 			_tick_growing(delta)
-		State.SCRAPE:
-			_tick_scrape()
 		State.IDLE, State.SEEK_PED, State.STOMP, State.DEAD:
 			## Walking states: corridor plus table-driven strikes when prey is close.
 			if state == State.SEEK_PED or state == State.STOMP:
@@ -979,7 +946,7 @@ func tick(delta: float) -> void:
 func _tick_combat_strikes() -> void:
 	if _combat == null or _combat_prey == Vector3.INF:
 		return
-	if not bool(_combat.call("has_living_prey")):
+	if not bool(_combat.call("hunts_living")):
 		return
 	_combat.call("try_attack_living", _combat_prey)
 
@@ -1020,23 +987,6 @@ func _tick_cast() -> void:
 		_cast_cd = CAST_COOLDOWN_SEC
 
 
-## Locked on a facade — keep swinging the whole time; the voxel only dies every 15 s.
-func _tick_nibble() -> void:
-	_look_at_flat(_facade_target)
-	if _hit_react_left <= 0.0:
-		_replay_action(CreatureClips.Action.MELEE)
-	if _nibble_cd > 0.0:
-		return
-	if _city.undead_nibble_building_near(global_position, MINION_NIBBLE_REACH_M + 1.2):
-		_nibble_cd = MINION_NIBBLE_INTERVAL_SEC
-		_play_sfx("play_nibble", global_position)
-		return
-	## Nothing left within reach: the provider picks the next piece of fabric.
-	_facade_target = Vector3.INF
-	state = State.SEEK_PED
-	_restart_goal()
-
-
 func _tick_growing(delta: float) -> void:
 	character_scale = minf(GIANT_SCALE_TARGET, character_scale * exp(GROW_LOG_RATE * delta))
 	_apply_scale()
@@ -1055,29 +1005,6 @@ func _become_giant() -> void:
 	if _invasion != null and _invasion.has_method("notify_giant_ready"):
 		_invasion.call("notify_giant_ready", self)
 	_play_action(CreatureClips.Action.IDLE)
-
-
-## Peel a full-height strip off whatever the corridor walked the giant up to. A scrape that
-## removes nothing means the face is gone, so the provider picks the next building.
-func _tick_scrape() -> void:
-	_look_at_flat(_facade_target)
-	if _scrape_cd > 0.0:
-		return
-	_scrape_cd = SCRAPE_INTERVAL_SEC
-	var inward := _facade_target - global_position
-	inward.y = 0.0
-	if inward.length_squared() < 0.0001:
-		inward = Vector3(sin(_yaw), 0.0, cos(_yaw))
-	inward = inward.normalized()
-	var along := Vector3(-inward.z, 0.0, inward.x)
-	var contact := global_position + inward * GIANT_SCRAPE_DIST_M
-	contact.y = global_position.y + 1.2
-	if _city.undead_giant_scrape_at(contact, inward, along) > 0:
-		_play_sfx("play_debris", contact)
-		return
-	_facade_target = Vector3.INF
-	state = State.STOMP
-	_restart_goal()
 
 
 func _fire_orb(toward: Vector3) -> void:
@@ -1123,10 +1050,9 @@ func _animate_motion(moved: Vector3, delta: float) -> void:
 	var flat := Vector3(moved.x, 0.0, moved.z)
 	var ground_speed := flat.length() / delta
 	if ground_speed < MOVE_ANIM_EPS_MPS:
-		## Casting, chewing, peeling and flinching drive their own clips.
-		if state != State.CAST and state != State.NIBBLE and state != State.SCRAPE:
-			if _hit_react_left <= 0.0:
-				_play_action(CreatureClips.Action.IDLE)
+		## Casting and flinching drive their own clips.
+		if state != State.CAST and _hit_react_left <= 0.0:
+			_play_action(CreatureClips.Action.IDLE)
 		return
 	_face_direction(flat, delta)
 	## A staggered body still turns and still walks its corridor — only the rig is busy.
@@ -1210,20 +1136,6 @@ func _play_hit_reaction() -> void:
 	_current_anim = clip
 	_anim.play(clip)
 	_anim.seek(0.0, true)
-
-
-func _play_sfx(method: String, world_pos: Vector3) -> void:
-	var tree := get_tree()
-	if tree == null:
-		return
-	var audio := tree.get_first_node_in_group(&"city_audio")
-	if audio == null or not audio.has_method(method):
-		return
-	## Debris is unscaled; everything else pitches with body size.
-	if method == "play_debris":
-		audio.call(method, world_pos)
-	else:
-		audio.call(method, world_pos, character_scale)
 
 
 func _play_action(action: CreatureClips.Action) -> void:

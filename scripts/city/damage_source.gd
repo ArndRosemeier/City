@@ -199,7 +199,8 @@ static func death_reason(id: Id) -> String:
 
 
 ## Map a combat-table attack id to the DamageSource used when that attack hits the player.
-## Building-only attacks (`nibble`) and null-source rows have no player mapping.
+## `fist` is the player's own swing and has no monster mapping. `GIANT_DEBRIS` still exists,
+## but it is collateral from a collapse rather than an attack a body can choose.
 static func for_monster_attack(attack_id: String) -> Id:
 	match attack_id:
 		"melee":
@@ -214,9 +215,7 @@ static func for_monster_attack(attack_id: String) -> Id:
 			return Id.MONSTER_BLAST
 		"orb_convert":
 			return Id.UNDEAD_ORB
-		"debris":
-			return Id.GIANT_DEBRIS
-		"nibble", "fist":
+		"fist":
 			push_error(
 				"DamageSource.for_monster_attack: '%s' does not hurt the player"
 				% attack_id
@@ -229,7 +228,7 @@ static func for_monster_attack(attack_id: String) -> Id:
 
 
 ## Map a combat-table attack id to the CREATURE-targeting source used when that attack hits
-## another monster. Orb convert and debris stay player/building-only.
+## another monster. Orb convert stays player/pedestrian-only.
 static func for_monster_attack_mob(attack_id: String) -> Id:
 	match attack_id:
 		"melee":
@@ -242,7 +241,7 @@ static func for_monster_attack_mob(attack_id: String) -> Id:
 			return Id.MONSTER_STOMP_MOB
 		"charged_blast":
 			return Id.MONSTER_BLAST_MOB
-		"orb_convert", "debris", "nibble", "fist":
+		"orb_convert", "fist":
 			push_error(
 				"DamageSource.for_monster_attack_mob: '%s' does not hurt creatures"
 				% attack_id

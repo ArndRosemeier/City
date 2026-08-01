@@ -8,9 +8,8 @@ Reads:
 
 Merge / derive (implemented in validate_combat_tables.py):
   1) max scalars / union lists across assigned templates
-  2) effective prey weights = mean across behaviours (missing key = 0)
-  3) effective attacks = union of behaviour pools (+ specialty / body overrides)
-  4) body overrides: bare list replaces; `*_extra` appends; scalar replaces
+  2) effective attacks = union of behaviour pools (+ specialty / body overrides)
+  3) body overrides: bare list replaces; `*_extra` appends; scalar replaces
 
 Usage (from repo root):
   python tools/render_combat_tables.py
@@ -38,7 +37,6 @@ OUT_PATH = Path(__file__).resolve().parent / "combat_tables.html"
 
 SCALAR_KEYS = validate_mod.SCALAR_KEYS
 LIST_KEYS = validate_mod.LIST_KEYS
-PREY_KEYS = tuple(sorted(validate_mod.ALLOWED_PREY))
 
 ATTACK_CORE_COLS = (
     "id",
@@ -103,11 +101,6 @@ def fmt_list(items: list[Any] | None) -> str:
     return ", ".join(esc(x) for x in items)
 
 
-def fmt_prey_weights(weights: dict[str, float]) -> str:
-    parts = [f"{key}={fmt_num(weights.get(key, 0.0))}" for key in PREY_KEYS]
-    return ", ".join(parts)
-
-
 def cell(text: str, css: str = "") -> str:
     cls = f' class="{css}"' if css else ""
     return f"<td{cls}>{text}</td>"
@@ -141,16 +134,11 @@ def build_html(
     behaviour_rows_html: list[str] = []
     for bid in behaviour_ids:
         b = behaviours[bid]
-        weights = b.get("prey_weights", {})
-        if not isinstance(weights, dict):
-            weights = {}
         cols = [
             cell(esc(bid), "id"),
             cell(esc(b.get("intent", "")), "wrap"),
             cell(fmt_list(b.get("attacks") or []), "wrap list"),
         ]
-        for key in PREY_KEYS:
-            cols.append(cell(fmt_num(weights.get(key, 0.0))))
         behaviour_rows_html.append("<tr>" + "".join(cols) + "</tr>")
 
     template_rows_html: list[str] = []
@@ -178,7 +166,6 @@ def build_html(
         ]
         for key in SCALAR_KEYS:
             cols.append(cell(fmt_num(eff["scalars"].get(key))))
-        cols.append(cell(fmt_prey_weights(eff["prey_weights"]), "wrap list"))
         cols.append(cell(fmt_list(eff.get("attacks") or []), "wrap list"))
         for key in LIST_KEYS:
             if key in ("behaviour", "attacks"):
@@ -197,9 +184,7 @@ def build_html(
         monster_rows_html.append("<tr>" + "".join(cols) + "</tr>")
 
     attack_header = "".join(th(c) for c in ATTACK_CORE_COLS + ATTACK_EXTRA_COLS)
-    behaviour_header = "".join(
-        th(c) for c in ("id", "intent", "attacks") + PREY_KEYS
-    )
+    behaviour_header = "".join(th(c) for c in ("id", "intent", "attacks"))
     template_header = "".join(
         th(c) for c in ("id", "intent") + SCALAR_KEYS + LIST_KEYS
     )
@@ -208,7 +193,7 @@ def build_html(
         for c in (
             ("id", "faction", "templates", "behaviour")
             + SCALAR_KEYS
-            + ("prey_weights (avg)", "attacks (derived)")
+            + ("attacks (derived)",)
             + tuple(k for k in LIST_KEYS if k not in ("behaviour", "attacks"))
             + ("spawn_ready", "spawn_weight", "notes")
         )
@@ -302,9 +287,9 @@ td.list { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
   <code>assets/combat/attacks.json</code>,
   <code>assets/combat/behaviours.json</code>, and
   <code>assets/monsters/combat_table.json</code>.
-  Prey lives on behaviours (averaged per mob). Attacks prefer behaviour pools.
-  Scalars: <strong>max</strong> across templates. Prey weights: <strong>mean</strong>
-  across behaviours (missing key = 0).
+  Who a body hunts is not in here: hostility is faction against faction, and the player
+  and every pedestrian are <code>human</code>. Attacks prefer behaviour pools.
+  Scalars: <strong>max</strong> across templates.
 </p>
 <p class="meta toc">
   <a href="#attacks">Attacks (<span class="count">{len(attack_ids)}</span>)</a>

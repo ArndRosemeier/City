@@ -1,21 +1,28 @@
-## Top-of-HUD chips for active speed / regen tonics (remaining seconds).
+## Top-of-HUD chips for active speed / regen tonics and temporary grow / shrink.
 ##
-## World auras are the primary read; these chips cover first-person camera angles and
-## confirm which tonic is still ticking when both are stacked.
+## World auras are the primary read for tonics; these chips cover first-person camera
+## angles and confirm which timer is still ticking when several are stacked.
 extends CanvasLayer
 
 const InventoryItemVisualScript := preload("res://scripts/city/inventory_item_visual.gd")
+const AbilityIconVisualScript := preload("res://scripts/city/ability_icon_visual.gd")
 
 const SPEED_COLOR := InventoryItemVisualScript.TONIC_SPEED_COLOR
 const REGEN_COLOR := InventoryItemVisualScript.TONIC_REGEN_COLOR
+const GROW_COLOR := AbilityIconVisualScript.GROW_GREEN
+const SHRINK_COLOR := AbilityIconVisualScript.SHRINK_VIOLET
 
 var _walker: Node
 var _root: Control
 var _row: HBoxContainer
 var _speed_chip: PanelContainer
 var _regen_chip: PanelContainer
+var _grow_chip: PanelContainer
+var _shrink_chip: PanelContainer
 var _speed_label: Label
 var _regen_label: Label
+var _grow_label: Label
+var _shrink_label: Label
 
 
 func _ready() -> void:
@@ -33,8 +40,8 @@ func _ready() -> void:
 	_row.add_theme_constant_override("separation", 8)
 	_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_row.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_row.offset_left = -160.0
-	_row.offset_right = 160.0
+	_row.offset_left = -280.0
+	_row.offset_right = 280.0
 	_row.offset_top = -210.0
 	_row.offset_bottom = -178.0
 	_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -47,6 +54,14 @@ func _ready() -> void:
 	_regen_chip = _make_chip("RegenChip", REGEN_COLOR)
 	_regen_label = _regen_chip.get_node("Label") as Label
 	_row.add_child(_regen_chip)
+
+	_grow_chip = _make_chip("GrowChip", GROW_COLOR)
+	_grow_label = _grow_chip.get_node("Label") as Label
+	_row.add_child(_grow_chip)
+
+	_shrink_chip = _make_chip("ShrinkChip", SHRINK_COLOR)
+	_shrink_label = _shrink_chip.get_node("Label") as Label
+	_row.add_child(_shrink_chip)
 
 
 func bind_walker(walker: Node) -> void:
@@ -74,21 +89,35 @@ func _refresh() -> void:
 		return
 	var speed_left := 0.0
 	var regen_left := 0.0
+	var scale_left := 0.0
+	var scale_sign := 0
 	if _walker.has_method("speed_boost_left"):
 		speed_left = float(_walker.call("speed_boost_left"))
 	if _walker.has_method("regen_boost_left"):
 		regen_left = float(_walker.call("regen_boost_left"))
+	if _walker.has_method("temp_scale_left"):
+		scale_left = float(_walker.call("temp_scale_left"))
+	if _walker.has_method("temp_scale_sign"):
+		scale_sign = int(_walker.call("temp_scale_sign"))
 
 	var show_speed := speed_left > 0.05
 	var show_regen := regen_left > 0.05
+	var show_grow := scale_left > 0.05 and scale_sign > 0
+	var show_shrink := scale_left > 0.05 and scale_sign < 0
 	_speed_chip.visible = show_speed
 	_regen_chip.visible = show_regen
+	_grow_chip.visible = show_grow
+	_shrink_chip.visible = show_shrink
 	if show_speed and _speed_label != null:
 		_speed_label.text = "Speed  %ds" % ceili(speed_left)
 	if show_regen and _regen_label != null:
 		_regen_label.text = "Regen  %ds" % ceili(regen_left)
+	if show_grow and _grow_label != null:
+		_grow_label.text = "Grow  %ds" % ceili(scale_left)
+	if show_shrink and _shrink_label != null:
+		_shrink_label.text = "Shrink  %ds" % ceili(scale_left)
 	## Keep CanvasLayer visibility under CityRoot's HUD band; only hide the chips.
-	_root.visible = show_speed or show_regen
+	_root.visible = show_speed or show_regen or show_grow or show_shrink
 
 
 func _make_chip(node_name: String, accent: Color) -> PanelContainer:

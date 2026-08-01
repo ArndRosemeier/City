@@ -234,7 +234,8 @@ static func is_building_fabric(id: int) -> bool:
 			return id > AIR and id < COUNT
 
 
-## Walls/props undead may stomp or nibble — never infection, meteor rock, or park trees.
+## Walls/props an undead stomp or blast may carve — never infection, meteor rock, or park
+## trees. Nothing aims at fabric on purpose; this only bounds the collateral.
 static func is_undead_structure_target(id: int) -> bool:
 	if is_infection(id) or id == METEOR_ROCK or is_gem(id):
 		return false

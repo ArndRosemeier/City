@@ -23,12 +23,6 @@
           "vs_mob": 15.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      },
       "tags": [
         "tank"
       ],
@@ -56,12 +50,6 @@
           "vs_player": 15.6,
           "vs_mob": 15.6
         }
-      },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
       },
       "tags": [
         "tank"
@@ -97,12 +85,6 @@
           "vs_mob": 110.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.65,
-        "ped": 0.65,
-        "player": 1.0
-      },
       "tags": [
         "dungeon",
         "elite",
@@ -135,12 +117,6 @@
           "vs_mob": 15.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      },
       "tags": [
         "tank"
       ],
@@ -158,39 +134,21 @@
       "armor_mult": 1.6,
       "score_mult": 20.0,
       "behaviour": [
-        "chase",
-        "demolish",
-        "grow"
+        "chase"
       ],
       "attacks": [
-        "debris",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
-        "debris": {
-          "vs_player": 18.0,
-          "vs_mob": 0.0
-        },
         "melee": {
           "vs_player": 21.6,
           "vs_mob": 21.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.666667,
-        "monsters": 0.5,
-        "ped": 0.5,
-        "player": 0.833333
       },
       "tags": [
         "elite",
         "giant",
-        "structure_threat"
+        "relentless"
       ],
       "crowd_roles": [
         "wave_hunter"
@@ -222,12 +180,6 @@
           "vs_mob": 39.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.6,
-        "ped": 0.6,
-        "player": 1.0
-      },
       "tags": [
         "artillery",
         "elite",
@@ -247,31 +199,19 @@
       "armor_mult": 1.3,
       "score_mult": 1.5,
       "behaviour": [
-        "chase",
-        "demolish"
+        "chase"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
           "vs_mob": 15.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
       },
-      "prey_weights": {
-        "building": 0.5,
-        "monsters": 0.75,
-        "ped": 0.75,
-        "player": 0.85
-      },
       "tags": [
-        "structure_threat",
+        "relentless",
         "tank"
       ],
       "crowd_roles": [
@@ -298,12 +238,6 @@
           "vs_player": 15.6,
           "vs_mob": 15.6
         }
-      },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
       },
       "tags": [
         "tank"
@@ -333,12 +267,6 @@
           "vs_mob": 15.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      },
       "tags": [
         "tank"
       ],
@@ -367,12 +295,6 @@
           "vs_mob": 15.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      },
       "tags": [
         "tank"
       ],
@@ -391,25 +313,17 @@
       "score_mult": 20.0,
       "behaviour": [
         "chase",
-        "demolish",
-        "grow",
         "skirmish"
       ],
       "attacks": [
         "blaster",
-        "debris",
         "eye_laser",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "blaster": {
           "vs_player": 39.6,
           "vs_mob": 39.6
-        },
-        "debris": {
-          "vs_player": 22.0,
-          "vs_mob": 0.0
         },
         "eye_laser": {
           "vs_player": 39.6,
@@ -418,17 +332,7 @@
         "melee": {
           "vs_player": 26.4,
           "vs_mob": 26.4
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.5,
-        "monsters": 0.525,
-        "ped": 0.525,
-        "player": 0.875
       },
       "tags": [
         "artillery",
@@ -461,12 +365,6 @@
           "vs_player": 15.6,
           "vs_mob": 15.6
         }
-      },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
       },
       "tags": [
         "agile",
@@ -502,12 +400,6 @@
           "vs_mob": 110.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      },
       "tags": [
         "elite",
         "melee",
@@ -539,12 +431,6 @@
           "vs_mob": 15.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.65,
-        "ped": 0.65,
-        "player": 1.0
-      },
       "tags": [
         "dungeon",
         "tank"
@@ -564,39 +450,21 @@
       "armor_mult": 1.6,
       "score_mult": 20.0,
       "behaviour": [
-        "chase",
-        "demolish",
-        "grow"
+        "chase"
       ],
       "attacks": [
-        "debris",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
-        "debris": {
-          "vs_player": 18.0,
-          "vs_mob": 0.0
-        },
         "melee": {
           "vs_player": 21.6,
           "vs_mob": 21.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.666667,
-        "monsters": 0.5,
-        "ped": 0.5,
-        "player": 0.833333
       },
       "tags": [
         "elite",
         "giant",
-        "structure_threat"
+        "relentless"
       ],
       "crowd_roles": [
         "wave_hunter"
@@ -628,12 +496,6 @@
           "vs_mob": 110.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      },
       "tags": [
         "elite",
         "melee",
@@ -655,28 +517,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -698,28 +548,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -741,33 +579,21 @@
       "score_mult": 1.2,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 12.0,
           "vs_mob": 12.0
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
         "pack",
-        "structure_threat"
+        "relentless"
       ],
       "crowd_roles": [
         "convert_minion",
@@ -785,28 +611,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -829,28 +643,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -873,28 +675,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -917,28 +707,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -960,28 +738,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1003,28 +769,16 @@
       "score_mult": 1.5,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
           "vs_mob": 15.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1047,28 +801,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1090,28 +832,16 @@
       "score_mult": 1.5,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
           "vs_mob": 15.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1134,28 +864,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1177,28 +895,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1220,28 +926,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1264,28 +958,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1323,12 +1005,6 @@
           "vs_mob": 39.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.6,
-        "ped": 0.6,
-        "player": 1.0
-      },
       "tags": [
         "artillery",
         "elite",
@@ -1349,28 +1025,16 @@
       "score_mult": 1.5,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
           "vs_mob": 15.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1392,34 +1056,16 @@
       "armor_mult": 1.6,
       "score_mult": 20.0,
       "behaviour": [
-        "chase",
-        "demolish",
-        "grow"
+        "chase"
       ],
       "attacks": [
-        "debris",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
-        "debris": {
-          "vs_player": 18.0,
-          "vs_mob": 0.0
-        },
         "melee": {
           "vs_player": 21.6,
           "vs_mob": 21.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.666667,
-        "monsters": 0.5,
-        "ped": 0.5,
-        "player": 0.833333
       },
       "tags": [
         "elite",
@@ -1439,34 +1085,16 @@
       "armor_mult": 1.6,
       "score_mult": 20.0,
       "behaviour": [
-        "chase",
-        "demolish",
-        "grow"
+        "chase"
       ],
       "attacks": [
-        "debris",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
-        "debris": {
-          "vs_player": 18.0,
-          "vs_mob": 0.0
-        },
         "melee": {
           "vs_player": 21.6,
           "vs_mob": 21.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.666667,
-        "monsters": 0.5,
-        "ped": 0.5,
-        "player": 0.833333
       },
       "tags": [
         "elite",
@@ -1487,28 +1115,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1529,28 +1145,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1581,12 +1185,6 @@
           "vs_mob": 15.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.8,
-        "ped": 0.8,
-        "player": 1.0
-      },
       "tags": [
         "tank"
       ],
@@ -1605,25 +1203,17 @@
       "score_mult": 20.0,
       "behaviour": [
         "chase",
-        "demolish",
-        "grow",
         "skirmish"
       ],
       "attacks": [
         "blaster",
-        "debris",
         "eye_laser",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "blaster": {
           "vs_player": 32.4,
           "vs_mob": 32.4
-        },
-        "debris": {
-          "vs_player": 18.0,
-          "vs_mob": 0.0
         },
         "eye_laser": {
           "vs_player": 32.4,
@@ -1632,17 +1222,7 @@
         "melee": {
           "vs_player": 21.6,
           "vs_mob": 21.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.5,
-        "monsters": 0.525,
-        "ped": 0.525,
-        "player": 0.875
       },
       "tags": [
         "caster",
@@ -1665,25 +1245,17 @@
       "score_mult": 20.0,
       "behaviour": [
         "chase",
-        "demolish",
-        "grow",
         "skirmish"
       ],
       "attacks": [
         "blaster",
-        "debris",
         "eye_laser",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "blaster": {
           "vs_player": 32.4,
           "vs_mob": 32.4
-        },
-        "debris": {
-          "vs_player": 18.0,
-          "vs_mob": 0.0
         },
         "eye_laser": {
           "vs_player": 32.4,
@@ -1692,17 +1264,7 @@
         "melee": {
           "vs_player": 21.6,
           "vs_mob": 21.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.5,
-        "monsters": 0.525,
-        "ped": 0.525,
-        "player": 0.875
       },
       "tags": [
         "caster",
@@ -1746,12 +1308,6 @@
           "vs_mob": 12.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.7,
-        "ped": 0.7,
-        "player": 1.0
-      },
       "tags": [
         "caster",
         "ranged"
@@ -1792,12 +1348,6 @@
           "vs_mob": 12.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.7,
-        "ped": 0.7,
-        "player": 1.0
-      },
       "tags": [
         "caster",
         "ranged"
@@ -1817,28 +1367,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1859,28 +1397,16 @@
       "score_mult": 1.5,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
           "vs_mob": 15.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -1913,12 +1439,6 @@
           "vs_mob": 15.6
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.65,
-        "ped": 0.65,
-        "player": 1.0
-      },
       "tags": [
         "dungeon",
         "tank"
@@ -1948,12 +1468,6 @@
           "vs_player": 15.6,
           "vs_mob": 15.6
         }
-      },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.65,
-        "ped": 0.65,
-        "player": 1.0
       },
       "tags": [
         "dungeon",
@@ -1995,12 +1509,6 @@
           "vs_mob": 12.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.7,
-        "ped": 0.7,
-        "player": 1.0
-      },
       "tags": [
         "caster",
         "ranged"
@@ -2020,28 +1528,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -2062,28 +1558,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -2103,39 +1587,21 @@
       "armor_mult": 1.6,
       "score_mult": 20.0,
       "behaviour": [
-        "chase",
-        "demolish",
-        "grow"
+        "chase"
       ],
       "attacks": [
-        "debris",
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
-        "debris": {
-          "vs_player": 18.0,
-          "vs_mob": 0.0
-        },
         "melee": {
           "vs_player": 21.6,
           "vs_mob": 21.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.666667,
-        "monsters": 0.5,
-        "ped": 0.5,
-        "player": 0.833333
       },
       "tags": [
         "elite",
         "giant",
-        "structure_threat"
+        "relentless"
       ],
       "crowd_roles": [
         "ambient"
@@ -2178,12 +1644,6 @@
           "vs_mob": 0.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.7,
-        "ped": 0.7,
-        "player": 1.0
-      },
       "tags": [
         "caster",
         "ranged"
@@ -2203,28 +1663,16 @@
       "score_mult": 1.0,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 10.2,
           "vs_mob": 10.2
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",
@@ -2267,12 +1715,6 @@
           "vs_mob": 0.0
         }
       },
-      "prey_weights": {
-        "building": 0.0,
-        "monsters": 0.7,
-        "ped": 0.7,
-        "player": 1.0
-      },
       "tags": [
         "caster",
         "hybrid",
@@ -2294,28 +1736,16 @@
       "score_mult": 1.5,
       "behaviour": [
         "chase",
-        "demolish",
         "wander_hunt"
       ],
       "attacks": [
-        "melee",
-        "nibble"
+        "melee"
       ],
       "attack_damage": {
         "melee": {
           "vs_player": 15.6,
           "vs_mob": 15.6
-        },
-        "nibble": {
-          "vs_player": 0.0,
-          "vs_mob": 0.0
         }
-      },
-      "prey_weights": {
-        "building": 0.333333,
-        "monsters": 0.833333,
-        "ped": 0.833333,
-        "player": 0.9
       },
       "tags": [
         "fodder",

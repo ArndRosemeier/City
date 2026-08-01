@@ -1,7 +1,7 @@
 ## Per-body combat kit: resolved CombatTable stats, attack cooldowns, and execution.
 ##
-## Owned by `UndeadUnit`. Keeps the unit's Role/State machine for navigation and grow/nibble/
-## scrape, while attack choice and player-facing damage come from the shared combat tables.
+## Owned by `UndeadUnit`. Keeps the unit's Role/State machine for navigation and growth,
+## while attack choice and the damage it deals come from the shared combat tables.
 ##
 ## Typed loosely on purpose: this script and `undead_unit.gd` preload each other, so naming
 ## `UndeadUnit` / `CombatTable.EffectiveStats` here breaks class_name resolution at parse time.
@@ -89,19 +89,14 @@ func preferred_range_m() -> float:
 	return float(_stats.get("preferred_range_m")) if _stats != null else 0.0
 
 
-func prey_weight(key: String) -> float:
+## Whether this body hunts at all. Who it hunts is not a property of the kit — that is
+## faction against faction — so the only question left is whether it has something to swing
+## and a range at which it notices anyone. Ambient bodies have neither.
+func hunts_living() -> bool:
 	if _stats == null:
-		return 0.0
-	var weights: Dictionary = _stats.get("prey_weights") as Dictionary
-	return float(weights.get(key, 0.0))
-
-
-func has_living_prey() -> bool:
-	return prey_weight("player") > 0.0 or prey_weight("ped") > 0.0 or prey_weight("monsters") > 0.0
-
-
-func has_building_prey() -> bool:
-	return prey_weight("building") > 0.0
+		return false
+	var attacks: PackedStringArray = _stats.get("attacks") as PackedStringArray
+	return not attacks.is_empty() and aggro_range_m() > 0.0
 
 
 func has_attack(attack_id: String) -> bool:
@@ -175,9 +170,6 @@ func _pick_attack(dist_m: float) -> String:
 	var best_score := -1.0
 	for attack_id: String in attacks:
 		if float(_cooldown.get(attack_id, 0.0)) > 0.0:
-			continue
-		if attack_id == "nibble" or attack_id == "debris":
-			## Building work stays on the role states (NIBBLE / SCRAPE).
 			continue
 		var reach := CombatTableScript.monster_attack_range_m(attack_id)
 		if dist_m > reach:
@@ -319,7 +311,7 @@ func _execute_melee(prey: Vector3) -> bool:
 	if mob != null:
 		_hurt_monster(mob, "melee")
 		return true
-	## Pedestrian: one-shot remove when weighted; buildings are not melee prey.
+	## Pedestrian: one-shot remove. Nothing here swings at fabric.
 	_unit.call(
 		"try_remove_ped_at", prey, CombatTableScript.monster_attack_range_m("melee")
 	)
