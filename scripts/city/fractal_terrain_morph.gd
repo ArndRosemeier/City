@@ -485,6 +485,86 @@ func _max_current() -> int:
 	return m
 
 
+## World centre of the largest walkable plateau on the finished sculpture: the biggest
+## 4-connected block of columns that share one height (> 0). Thin unreachable spires lose to a
+## wide shelf even when the shelf is lower. Tie-break: taller plateau, then lower sample index.
+## INF when the morph has no exterior relief.
+func largest_plateau_world() -> Vector3:
+	if _current_h.is_empty() or _grid_w <= 0 or _grid_h <= 0:
+		return Vector3(INF, INF, INF)
+	var n := _grid_w * _grid_h
+	var seen := PackedByteArray()
+	seen.resize(n)
+	seen.fill(0)
+	var best_size := 0
+	var best_h := -1
+	var best_cells: PackedInt32Array = PackedInt32Array()
+	for start in range(n):
+		if seen[start] != 0:
+			continue
+		var h := int(_current_h[start])
+		if h <= 0:
+			seen[start] = 1
+			continue
+		var cells := PackedInt32Array()
+		var stack: Array[int] = [start]
+		seen[start] = 1
+		while not stack.is_empty():
+			var i: int = stack.pop_back()
+			cells.append(i)
+			var sx := i % _grid_w
+			var sz := i / _grid_w
+			var nbs: Array[Vector2i] = [
+				Vector2i(sx + 1, sz),
+				Vector2i(sx - 1, sz),
+				Vector2i(sx, sz + 1),
+				Vector2i(sx, sz - 1),
+			]
+			for nb: Vector2i in nbs:
+				if nb.x < 0 or nb.y < 0 or nb.x >= _grid_w or nb.y >= _grid_h:
+					continue
+				var ni := nb.x + nb.y * _grid_w
+				if seen[ni] != 0 or int(_current_h[ni]) != h:
+					continue
+				seen[ni] = 1
+				stack.append(ni)
+		var size := cells.size()
+		if (
+			size > best_size
+			or (size == best_size and h > best_h)
+			or (size == best_size and h == best_h and cells[0] < best_cells[0])
+		):
+			best_size = size
+			best_h = h
+			best_cells = cells
+	if best_size <= 0 or best_h <= 0:
+		return Vector3(INF, INF, INF)
+	## Middle of the plateau: cell closest to the component's sample-centroid.
+	var sum_x := 0.0
+	var sum_z := 0.0
+	for i2 in range(best_cells.size()):
+		var ci := int(best_cells[i2])
+		sum_x += float(ci % _grid_w)
+		sum_z += float(ci / _grid_w)
+	var mid_x := sum_x / float(best_cells.size())
+	var mid_z := sum_z / float(best_cells.size())
+	var best_i := int(best_cells[0])
+	var best_d2 := INF
+	for i3 in range(best_cells.size()):
+		var ci2 := int(best_cells[i3])
+		var dx := float(ci2 % _grid_w) - mid_x
+		var dz := float(ci2 / _grid_w) - mid_z
+		var d2 := dx * dx + dz * dz
+		if d2 < best_d2 or (is_equal_approx(d2, best_d2) and ci2 < best_i):
+			best_d2 = d2
+			best_i = ci2
+	var box := _sample_box(best_i)
+	var wx := (float(box.position.x) + float(box.end.x)) * 0.5 * voxel_size
+	var wz := (float(box.position.y) + float(box.end.y)) * 0.5 * voxel_size
+	var wy := (float(_deck_y_vox + 1 + best_h)) * voxel_size
+	return Vector3(wx, wy, wz)
+
+
 func _resolve_brush() -> CityBrush:
 	if not _brush_getter.is_valid():
 		return null

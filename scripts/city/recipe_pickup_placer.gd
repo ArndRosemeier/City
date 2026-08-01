@@ -15,13 +15,14 @@ const SITE_CASTLE_TOWER := 1
 const SITE_ARENA_TOWER := 2
 const SITE_GAZEBO := 3
 const SITE_LAKE_ISLAND := 4
-const SITE_FRACTAL_NICHE := 5
+## Peak of a lock-on Create morph. Replaces the old spiral-niche hide.
+const SITE_FRACTAL_PEAK := 5
 const SITE_CRYPT := 6
 const SITE_ROOFTOP := 7
 const SITE_CHEST := 8
 
-## Scrolls one district may hold. Landmark sites are placed first, so the cap trims the cheap
-## sites rather than the ones worth climbing to.
+## Scrolls one district may hold from the stream-time placer. Fractal peak recipes sit outside
+## this cap — each of the four panels can pay once when the player follows its lock-on.
 const PER_DISTRICT_MAX := 2
 
 var _pickups: Array[RecipePickup] = []
@@ -39,8 +40,8 @@ static func site_kind_name(kind: int) -> String:
 			return "gazebo"
 		SITE_LAKE_ISLAND:
 			return "island"
-		SITE_FRACTAL_NICHE:
-			return "fractal-niche"
+		SITE_FRACTAL_PEAK:
+			return "fractal-peak"
 		SITE_CRYPT:
 			return "crypt"
 		SITE_ROOFTOP:
@@ -66,8 +67,9 @@ static func chance_pct(kind: int) -> int:
 			return 100
 		SITE_LAKE_ISLAND:
 			return 45
-		SITE_FRACTAL_NICHE:
-			return 60
+		SITE_FRACTAL_PEAK:
+			## Earned by following a lock-on Create — the discovery *is* the roll.
+			return 100
 		SITE_CRYPT:
 			return 25
 		SITE_ROOFTOP:
@@ -142,12 +144,30 @@ func try_place(
 ) -> RecipePickup:
 	if at_capacity():
 		return null
+	return _spawn_pickup(kind, coord, index, world_pos, site_seed)
+
+
+## Fractal peak after a lock-on Create. Bypasses the stream-time district cap so all four panels
+## can pay; still refuses a site this run already looted.
+func try_place_fractal_peak(
+	coord: Vector2i, edge_index: int, world_pos: Vector3, site_seed: int
+) -> RecipePickup:
+	return _spawn_pickup(SITE_FRACTAL_PEAK, coord, edge_index, world_pos, site_seed)
+
+
+func _spawn_pickup(
+	kind: int, coord: Vector2i, index: int, world_pos: Vector3, site_seed: int
+) -> RecipePickup:
 	var id := site_id(kind, coord, index)
 	var city := _city_root()
 	if city != null and city.is_recipe_site_looted(id):
 		return null
 	if not should_place(kind, site_seed):
 		return null
+	## Already standing — do not double-spawn the same peak after a second Create.
+	for existing in _pickups:
+		if existing != null and is_instance_valid(existing) and existing.site_id == id:
+			return null
 	var pickup: RecipePickup = RecipePickupScript.new() as RecipePickup
 	pickup.name = "RecipePickup%d" % _pickups.size()
 	add_child(pickup)

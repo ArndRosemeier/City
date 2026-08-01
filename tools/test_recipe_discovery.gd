@@ -261,6 +261,7 @@ func _check_site_ids_and_chances() -> void:
 		RecipePickupPlacer.SITE_CASTLE_TOWER,
 		RecipePickupPlacer.SITE_ARENA_TOWER,
 		RecipePickupPlacer.SITE_GAZEBO,
+		RecipePickupPlacer.SITE_FRACTAL_PEAK,
 	]:
 		if not RecipePickupPlacer.should_place(kind, 1234):
 			_fail("FAIL landmark kind %d should always place" % kind)

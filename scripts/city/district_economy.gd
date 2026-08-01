@@ -31,7 +31,7 @@ const EXPLORED_KEY := "explored"
 ## curve. Hills are the mine — a larger constant — and the bake paints exactly whatever is
 ## still remaining (constant minus harvested).
 const THEME_TOTALS: Dictionary[int, int] = {
-	DistrictTheme.HILL: 100,
+	DistrictTheme.HILL: 800,
 	DistrictTheme.CASTLE: 40,
 	DistrictTheme.CORE_HIGHRISE: 35,
 	DistrictTheme.OLD_TOWN: 30,

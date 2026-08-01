@@ -598,7 +598,7 @@ func _place_recipe_pickups(gen: DistrictGenerator, origin_vox: Vector3i) -> void
 	_place_arena_tower_recipe(gen, origin_vox)
 	_place_hill_summit_recipe(gen, origin_vox)
 	_place_gazebo_recipe(gen, origin_vox)
-	_place_fractal_niche_recipe(gen, origin_vox)
+	## Fractal recipes come from lock-on Create → peak (MandelbrotArena), not stream-time.
 	_place_lake_island_recipe(gen, origin_vox)
 	_place_crypt_recipe(gen, origin_vox)
 	_place_roof_recipes(gen, origin_vox)
@@ -661,19 +661,6 @@ func _place_gazebo_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
 		0,
 		_landmark_world(Vector2i(gazebo.x, gazebo.z), gazebo.y, origin_vox),
 		_dseed ^ 0x6A2E0
-	)
-
-
-func _place_fractal_niche_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
-	var niche := gen.get_fractal_niche()
-	if niche.x < 0:
-		return
-	recipe_pickups.try_place(
-		RecipePickupPlacer.SITE_FRACTAL_NICHE,
-		coord,
-		0,
-		_landmark_world(Vector2i(niche.x, niche.z), niche.y + 1, origin_vox),
-		_dseed ^ 0x0F2AC
 	)
 
 
@@ -759,7 +746,9 @@ func _spawn_mandelbrot_arena(gen: DistrictGenerator) -> void:
 		bounds["max"] as Vector3,
 		float(bounds.get("ground_y_m", 0.0)),
 		Callable(self, "live_brush"),
-		_voxel_size
+		_voxel_size,
+		_dseed,
+		coord
 	)
 
 

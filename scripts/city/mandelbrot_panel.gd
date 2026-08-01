@@ -10,6 +10,10 @@
 ## "Instant" runs Create behind a wait splash at full speed.
 ## "Clear" rebuilds the district (wait splash) so the plaza is pristine again.
 ##
+## Each panel also carries one curated lock-on spot: a marker on the default view.
+## Fire the marker to autozoom into that postcard; Create without further zooming
+## is what earns the peak recipe (see MandelbrotArena).
+##
 ## Always baked at TEX_RES² via NativeMandelbrot on WorkerThreadPool; the main
 ## thread only applies the finished ImageTexture (stale jobs are dropped).
 class_name MandelbrotPanel
@@ -19,6 +23,8 @@ signal bake_finished(success: bool)
 signal create_requested(cx_hp: String, cy_hp: String, scale_hp: String)
 signal clear_requested()
 signal instant_changed(enabled: bool)
+## Fired when a lock-on autozoom lands on the curated postcard.
+signal lock_engaged()
 
 const PANEL_W := 9.0
 const PANEL_H := 5.0
@@ -38,6 +44,13 @@ const TEX_SHADER_PATH := "res://scripts/city/mandelbrot_tex.gdshader"
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const INSTANT_OFF_COLOR := Color(0.28, 0.28, 0.32, 1.0)
 const INSTANT_ON_COLOR := Color(0.16, 0.52, 0.42, 1.0)
+## Lock marker on the default view — cyan so it reads apart from the gold target.
+const LOCK_MARKER_COLOR := Color(0.25, 0.95, 1.0, 1.0)
+const LOCK_MARKER_M := 0.28
+## Fractal-UV hit radius for the lock marker (panel is 5×5 m of fractal).
+const LOCK_HIT_UV := 0.045
+## Relative scale equality for "still on the locked postcard".
+const LOCK_SCALE_EPS := 1e-4
 
 ## High-precision view state (decimal strings). Float mirrors are approx only.
 var view_cx_hp: String = "-0.5"
@@ -61,6 +74,17 @@ var _bake_gen: int = 0
 var _baking: bool = false
 var _instant: bool = false
 var _instant_rect: Rect2 = Rect2()
+
+## Curated postcard this panel offers. Empty until the arena assigns one.
+var _lock_cx_hp: String = ""
+var _lock_cy_hp: String = ""
+var _lock_scale_hp: String = ""
+var _lock_fuv: Vector2 = Vector2.INF
+var _lock_marker: MeshInstance3D = null
+## True after autozoom until the player zooms / retargets away from the postcard.
+var _lock_active: bool = false
+## Edge index 0..3 for recipe site ids (south/north/west/east spawn order).
+var lock_edge_index: int = -1
 
 
 func begin(origin: Vector3, face_yaw: float) -> void:
@@ -172,12 +196,14 @@ func wait_bake_finished(timeout_sec: float = 30.0) -> bool:
 
 func rebuild_fractal() -> void:
 	_sync_float_mirrors()
+	_refresh_lock_marker()
 	_start_bake_job()
 
 
 func zoom_in_at_target() -> bool:
 	if not has_target():
 		return false
+	_break_lock()
 	view_cx_hp = target_cx_hp
 	view_cy_hp = target_cy_hp
 	view_scale_hp = _mul_hp(view_scale_hp, str(ZOOM_IN))
@@ -188,6 +214,7 @@ func zoom_in_at_target() -> bool:
 
 
 func zoom_out() -> void:
+	_break_lock()
 	view_scale_hp = _mul_hp(view_scale_hp, str(ZOOM_OUT))
 	_clamp_scale_hp()
 	rebuild_fractal()
@@ -196,6 +223,56 @@ func zoom_out() -> void:
 func complex_at_uv(uv: Vector2) -> Vector2:
 	var hp := _complex_hp_pair(_fractal_uv(uv))
 	return Vector2(float(hp[0]), float(hp[1]))
+
+
+## Assign the curated postcard this panel marks on its default view.
+func assign_lock_spot(spot: Dictionary, edge_index: int) -> void:
+	_lock_cx_hp = str(spot.get("cx", ""))
+	_lock_cy_hp = str(spot.get("cy", ""))
+	_lock_scale_hp = str(spot.get("scale", ""))
+	lock_edge_index = edge_index
+	_lock_active = false
+	if _lock_cx_hp.is_empty() or _lock_cy_hp.is_empty() or _lock_scale_hp.is_empty():
+		push_error("MandelbrotPanel.assign_lock_spot: incomplete spot %s" % str(spot))
+		_clear_lock_marker()
+		return
+	_lock_fuv = MandelbrotSpots.default_view_uv(_lock_cx_hp, _lock_cy_hp)
+	_refresh_lock_marker()
+
+
+func has_lock_spot() -> bool:
+	return not _lock_cx_hp.is_empty() and not _lock_cy_hp.is_empty() and not _lock_scale_hp.is_empty()
+
+
+## True when the view still matches the curated postcard after lock-on autozoom.
+func is_lock_active() -> bool:
+	return _lock_active and _view_matches_lock()
+
+
+func lock_spot() -> Dictionary:
+	if not has_lock_spot():
+		return {}
+	return {"cx": _lock_cx_hp, "cy": _lock_cy_hp, "scale": _lock_scale_hp}
+
+
+## Jump straight to the curated postcard. Plays as the lock-on; further +/− clears it.
+func engage_lock() -> bool:
+	if not has_lock_spot():
+		return false
+	view_cx_hp = _lock_cx_hp
+	view_cy_hp = _lock_cy_hp
+	view_scale_hp = _lock_scale_hp
+	_clamp_scale_hp()
+	target_cx_hp = _lock_cx_hp
+	target_cy_hp = _lock_cy_hp
+	target_cx = float(_lock_cx_hp)
+	target_cy = float(_lock_cy_hp)
+	_lock_active = true
+	rebuild_fractal()
+	_place_marker(_fractal_uv_to_local(Vector2(0.5, 0.5)))
+	_hide_lock_marker()
+	lock_engaged.emit()
+	return true
 
 
 func _on_button_pressed(button_id: StringName, _uv: Vector2) -> void:
@@ -220,7 +297,18 @@ func _on_button_pressed(button_id: StringName, _uv: Vector2) -> void:
 func _on_surface_pressed(uv: Vector2, local_point: Vector3, _world: Vector3) -> void:
 	if not _uv_in_fractal(uv):
 		return
-	var hp := _complex_hp_pair(_fractal_uv(uv))
+	var fuv := _fractal_uv(uv)
+	## Lock marker only lives on the default overview — once zoomed, a surface press is a target.
+	if (
+		has_lock_spot()
+		and not _lock_active
+		and _is_default_overview()
+		and _lock_fuv.distance_to(fuv) <= LOCK_HIT_UV
+	):
+		engage_lock()
+		return
+	_break_lock()
+	var hp := _complex_hp_pair(fuv)
 	target_cx_hp = hp[0]
 	target_cy_hp = hp[1]
 	target_cx = float(hp[0])
@@ -457,3 +545,69 @@ func _clamp_scale_hp() -> void:
 		view_scale_hp = str(MAX_SCALE)
 	elif s < min_s:
 		view_scale_hp = _mul_hp("1", "%.17e" % min_s)
+
+
+func _is_default_overview() -> bool:
+	return (
+		view_cx_hp == "-0.5"
+		and view_cy_hp == "0"
+		and view_scale_hp == "1.5"
+	)
+
+
+func _view_matches_lock() -> bool:
+	if not has_lock_spot():
+		return false
+	if view_cx_hp != _lock_cx_hp or view_cy_hp != _lock_cy_hp:
+		return false
+	var a := absf(float(view_scale_hp))
+	var b := absf(float(_lock_scale_hp))
+	if b <= 0.0:
+		return false
+	return absf(a - b) / b <= LOCK_SCALE_EPS
+
+
+func _break_lock() -> void:
+	if not _lock_active:
+		return
+	_lock_active = false
+	_refresh_lock_marker()
+
+
+func _refresh_lock_marker() -> void:
+	if not has_lock_spot() or _lock_active or not _is_default_overview():
+		_hide_lock_marker()
+		return
+	_ensure_lock_marker()
+	_lock_marker.visible = true
+	_lock_marker.position = _fractal_uv_to_local(_lock_fuv) + Vector3(0.0, 0.0, -0.025)
+
+
+func _hide_lock_marker() -> void:
+	if _lock_marker != null and is_instance_valid(_lock_marker):
+		_lock_marker.visible = false
+
+
+func _clear_lock_marker() -> void:
+	if _lock_marker != null and is_instance_valid(_lock_marker):
+		_lock_marker.queue_free()
+	_lock_marker = null
+
+
+func _ensure_lock_marker() -> void:
+	if _lock_marker != null and is_instance_valid(_lock_marker):
+		return
+	_lock_marker = MeshInstance3D.new()
+	_lock_marker.name = "LockMarker"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(LOCK_MARKER_M, LOCK_MARKER_M)
+	_lock_marker.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = LOCK_MARKER_COLOR
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.emission_enabled = true
+	mat.emission = LOCK_MARKER_COLOR
+	mat.emission_energy_multiplier = 2.2
+	_lock_marker.material_override = mat
+	add_child(_lock_marker)

@@ -1685,6 +1685,15 @@ func _tick_district_economy() -> void:
 		return
 	if _economy.mark_explored(here):
 		_player_score += DistrictEconomy.EXPLORE_SCORE
+		var place := DistrictName.for_district(city_seed, here)
+		## Same beat as a chest: say what happened and play the haul flourish so the score
+		## bump is not only a number ticking in the status line.
+		if _loot_toast != null:
+			_loot_toast.show_message(
+				"%s — +%d explore" % [place, DistrictEconomy.EXPLORE_SCORE]
+			)
+		if _audio != null:
+			_audio.play_treasure_bling()
 		print(
 			"CityRoot: explored %s (+%d, score %d)"
 			% [str(here), DistrictEconomy.EXPLORE_SCORE, _player_score]

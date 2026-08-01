@@ -6,6 +6,7 @@ extends Node
 const Ui3DScript := preload("res://scripts/city/ui_3d.gd")
 const MandelbrotPanelScript := preload("res://scripts/city/mandelbrot_panel.gd")
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
+const MandelbrotSpotsScript := preload("res://scripts/city/mandelbrot_spots.gd")
 const FractalTerrainMorphScript := preload("res://scripts/city/fractal_terrain_morph.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
@@ -13,6 +14,7 @@ const DistrictInstanceScript := preload("res://scripts/city/district_instance.gd
 const DistrictGeneratorScript := preload("res://scripts/city/district_generator.gd")
 const FractalComposerScript := preload("res://scripts/city/fractal_composer.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+const RecipePickupPlacerScript := preload("res://scripts/city/recipe_pickup_placer.gd")
 
 const WORLD_SEED := 42
 
@@ -53,6 +55,11 @@ func _ready() -> void:
 	await _check_native_bake()
 	_check_native_iters()
 	await _check_morph_progression()
+	_check_mandelbrot_spots_catalog()
+	await _check_lock_spots_on_arena()
+	await _check_lock_engage_and_break()
+	await _check_lock_create_places_peak_recipe()
+	_check_no_fractal_niche_site()
 	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
 
@@ -883,6 +890,260 @@ func _check_morph_progression() -> void:
 		morph.queue_free()
 		return
 	morph.queue_free()
+
+
+func _check_mandelbrot_spots_catalog() -> void:
+	if MandelbrotSpotsScript.spot_count() < 80:
+		_fail("FAIL catalog has only %d spots, want ~100" % MandelbrotSpotsScript.spot_count())
+		return
+	var seen: Dictionary = {}
+	for i in range(MandelbrotSpotsScript.spot_count()):
+		var spot: Dictionary = MandelbrotSpotsScript.spot_at(i)
+		var cx := str(spot.get("cx", ""))
+		var cy := str(spot.get("cy", ""))
+		var scale := str(spot.get("scale", ""))
+		if not MandelbrotSpotsScript.scale_in_budget(scale):
+			_fail("FAIL spot %d scale %s outside budget" % [i, scale])
+			return
+		if not MandelbrotSpotsScript.centre_in_default_view(cx, cy):
+			_fail("FAIL spot %d centre (%s,%s) not on default view" % [i, cx, cy])
+			return
+		var key := "%s|%s|%s" % [cx, cy, scale]
+		if seen.has(key):
+			_fail("FAIL duplicate catalog entry %s" % key)
+			return
+		seen[key] = true
+	var pick: Array[Dictionary] = MandelbrotSpotsScript.pick_for_district(42, 4)
+	var again: Array[Dictionary] = MandelbrotSpotsScript.pick_for_district(42, 4)
+	if pick.size() != 4:
+		_fail("FAIL pick_for_district returned %d spots" % pick.size())
+		return
+	for j in range(4):
+		if str(pick[j].get("cx")) != str(again[j].get("cx")):
+			_fail("FAIL district pick is not stable")
+			return
+	var keys: Dictionary = {}
+	for s: Dictionary in pick:
+		keys["%s|%s|%s" % [s["cx"], s["cy"], s["scale"]]] = true
+	if keys.size() != 4:
+		_fail("FAIL district pick reused a spot")
+		return
+	print("OK Mandelbrot catalog: %d budgeted spots, stable 4-pick" % MandelbrotSpotsScript.spot_count())
+
+
+func _check_lock_spots_on_arena() -> void:
+	## Awaits panel bakes before freeing — caller must await.
+	var arena: MandelbrotArena = MandelbrotArenaScript.new() as MandelbrotArena
+	add_child(arena)
+	arena.setup(
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(40.0, 0.0, 40.0),
+		2.5,
+		Callable(),
+		0.5,
+		90210,
+		Vector2i(3, -1)
+	)
+	if arena.panel_count() != 4:
+		_fail("FAIL arena panel_count %d" % arena.panel_count())
+		arena.queue_free()
+		return
+	var spots := arena.lock_spots()
+	if spots.size() != 4:
+		_fail("FAIL arena assigned %d lock spots, want 4" % spots.size())
+		arena.queue_free()
+		return
+	var keys: Dictionary = {}
+	for s: Dictionary in spots:
+		keys["%s|%s|%s" % [s["cx"], s["cy"], s["scale"]]] = true
+	if keys.size() != 4:
+		_fail("FAIL arena lock spots were not distinct")
+		arena.queue_free()
+		return
+	for child in arena.get_children():
+		if child.has_method("has_lock_spot") and bool(child.call("has_lock_spot")):
+			if child.find_child("LockMarker", true, false) == null:
+				_fail("FAIL panel missing LockMarker mesh")
+				arena.queue_free()
+				return
+	## Drain panel bakes so WorkerThreadPool does not keep the process alive after quit.
+	for child2 in arena.get_children():
+		if child2.has_method("wait_bake_finished"):
+			await child2.call("wait_bake_finished", 60.0)
+	arena.queue_free()
+	print("OK arena marks four distinct lock spots")
+
+
+func _check_lock_engage_and_break() -> void:
+	var panel: MandelbrotPanel = MandelbrotPanelScript.new() as MandelbrotPanel
+	add_child(panel)
+	panel.begin(Vector3(0.0, 2.5, 0.0), 0.0)
+	if not await panel.wait_bake_finished(30.0):
+		_fail("FAIL lock engage: initial bake failed")
+		panel.queue_free()
+		return
+	var spot := {
+		"name": "Test",
+		"cx": "-0.745",
+		"cy": "0.113",
+		"scale": "5e-5",
+	}
+	panel.assign_lock_spot(spot, 0)
+	var engaged := {"n": 0}
+	panel.lock_engaged.connect(func() -> void: engaged["n"] = int(engaged["n"]) + 1)
+	var fuv: Vector2 = MandelbrotSpotsScript.default_view_uv("-0.745", "0.113")
+	var local: Vector3 = panel.call("_fractal_uv_to_local", fuv) as Vector3
+	var hit := panel.to_global(local)
+	if not panel.press_at_world(hit):
+		_fail("FAIL lock marker press rejected")
+		panel.queue_free()
+		return
+	if int(engaged["n"]) != 1:
+		_fail("FAIL lock_engaged not emitted")
+		panel.queue_free()
+		return
+	if not panel.is_lock_active():
+		_fail("FAIL panel not lock-active after engage")
+		panel.queue_free()
+		return
+	if str(panel.view_cx_hp) != "-0.745" or str(panel.view_scale_hp) != "5e-5":
+		_fail(
+			"FAIL engage landed on %s,%s scale %s"
+			% [panel.view_cx_hp, panel.view_cy_hp, panel.view_scale_hp]
+		)
+		panel.queue_free()
+		return
+	await panel.wait_bake_finished(30.0)
+	panel.zoom_out()
+	if panel.is_lock_active():
+		_fail("FAIL lock stayed active after zoom out")
+		panel.queue_free()
+		return
+	await panel.wait_bake_finished(30.0)
+	panel.queue_free()
+	print("OK lock engage autozooms and clears on zoom")
+
+
+func _check_lock_create_places_peak_recipe() -> void:
+	var dist: DistrictInstance = DistrictInstanceScript.new() as DistrictInstance
+	dist.coord = Vector2i(7, 2)
+	dist._dseed = 4242
+	add_child(dist)
+	dist.recipe_pickups = RecipePickupPlacerScript.new() as RecipePickupPlacer
+	dist.recipe_pickups.name = "RecipePickups"
+	dist.add_child(dist.recipe_pickups)
+
+	var brush: CityBrush = CityBrushScript.new() as CityBrush
+	brush.use_offline_volume()
+	var arena: MandelbrotArena = MandelbrotArenaScript.new() as MandelbrotArena
+	dist.add_child(arena)
+	arena.setup(
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(40.0, 0.0, 40.0),
+		2.5,
+		func() -> CityBrush: return brush,
+		0.5,
+		4242,
+		dist.coord
+	)
+	var panel: MandelbrotPanel = null
+	for child in arena.get_children():
+		if child is MandelbrotPanel:
+			panel = child as MandelbrotPanel
+			break
+	if panel == null:
+		_fail("FAIL no panel on arena for peak recipe")
+		dist.queue_free()
+		return
+	if not panel.engage_lock():
+		_fail("FAIL could not engage lock for peak Create")
+		dist.queue_free()
+		return
+	if not panel.is_lock_active():
+		_fail("FAIL lock inactive before Create")
+		dist.queue_free()
+		return
+	await panel.wait_bake_finished(60.0)
+	## A thin tall spike must lose to a wider same-height shelf — spires are usually unclimbable.
+	var morph := arena.morph_node()
+	var w := 4
+	var h := 4
+	var heights := PackedInt32Array()
+	var mats := PackedInt32Array()
+	heights.resize(w * h)
+	mats.resize(w * h)
+	## Scattered low columns (not one big floor) + a 3×3 shelf + one lonely spire.
+	for i in range(w * h):
+		heights[i] = 0
+		mats[i] = VoxelMaterial.FRACTAL_INTERIOR
+	heights[0] = 2
+	heights[3] = 2
+	heights[12] = 2
+	for zi in range(3):
+		for xi in range(3):
+			heights[xi + zi * w] = 4
+			mats[xi + zi * w] = VoxelMaterial.fractal_band(2)
+	heights[15] = 12
+	mats[15] = VoxelMaterial.fractal_band(5)
+	await morph.start_from_targets(
+		Vector3i(0, 4, 0), w, h, heights, mats, FractalTerrainMorphScript.EDGE_SOUTH, true
+	)
+	var plateau := morph.largest_plateau_world()
+	if not is_finite(plateau.x):
+		_fail("FAIL largest_plateau_world returned INF")
+		dist.queue_free()
+		return
+	## Shelf top: deck(4)+1+height(4) = 9 voxels → y = 4.5 m at voxel_size 0.5.
+	## Spire would be y = 8.5; ignore interior zeros.
+	if absf(plateau.y - 4.5) > 0.01:
+		_fail("FAIL plateau chose height y=%s, want shelf not spire" % plateau.y)
+		dist.queue_free()
+		return
+	arena.set("_pending_create_panel", panel)
+	arena.set("_pending_create_locked", true)
+	arena.call("_on_morph_finished")
+	await get_tree().process_frame
+	if dist.recipe_pickups.pickup_count() != 1:
+		_fail("FAIL locked Create placed %d recipes, want 1" % dist.recipe_pickups.pickup_count())
+		dist.queue_free()
+		return
+	var pickup := dist.recipe_pickups.live_pickups()[0]
+	if not pickup.site_id.begins_with("fractal-peak:"):
+		_fail("FAIL peak site id is '%s'" % pickup.site_id)
+		dist.queue_free()
+		return
+	## Unlocked Create must not pay again.
+	panel.zoom_out()
+	arena.set("_pending_create_panel", panel)
+	arena.set("_pending_create_locked", false)
+	arena.call("_on_morph_finished")
+	await get_tree().process_frame
+	if dist.recipe_pickups.pickup_count() != 1:
+		_fail("FAIL unlocked Create spawned an extra recipe")
+		dist.queue_free()
+		return
+	for child2 in arena.get_children():
+		if child2.has_method("wait_bake_finished"):
+			await child2.call("wait_bake_finished", 60.0)
+	dist.queue_free()
+	print("OK locked Create places a fractal-peak recipe; unlocked does not")
+
+
+func _check_no_fractal_niche_site() -> void:
+	## The niche hide is gone — kind 5 is the peak site, and the old name must not resolve.
+	if (
+		RecipePickupPlacerScript.site_kind_name(RecipePickupPlacerScript.SITE_FRACTAL_PEAK)
+		!= "fractal-peak"
+	):
+		_fail(
+			"FAIL SITE_FRACTAL_PEAK name is '%s'"
+			% RecipePickupPlacerScript.site_kind_name(RecipePickupPlacerScript.SITE_FRACTAL_PEAK)
+		)
+		return
+	if RecipePickupPlacerScript.chance_pct(RecipePickupPlacerScript.SITE_FRACTAL_PEAK) != 100:
+		_fail("FAIL fractal peak should always place when earned")
+		return
+	print("OK fractal niche site abolished; peak site is certain")
 
 
 func _check_native_bake() -> void:
