@@ -36,16 +36,10 @@ FIXTURE_PATH = TOOLS / "fixtures" / "combat_effective_stats.json"
 
 
 def _load_docs() -> tuple[dict, dict, dict]:
-    attacks_doc = json.loads(validate_mod.ATTACKS_PATH.read_text(encoding="utf-8"))
-    behaviours_doc = json.loads(validate_mod.BEHAVIOURS_PATH.read_text(encoding="utf-8"))
-    table_doc = json.loads(validate_mod.TABLE_PATH.read_text(encoding="utf-8"))
-    if not isinstance(attacks_doc, dict):
-        raise TypeError("attacks.json root must be an object")
-    if not isinstance(behaviours_doc, dict):
-        raise TypeError("behaviours.json root must be an object")
-    if not isinstance(table_doc, dict):
-        raise TypeError("combat_table.json root must be an object")
-    return attacks_doc, behaviours_doc, table_doc
+    import gamedata_io as gd
+
+    root = gd.load_gamedata()
+    return gd.attacks_doc(root), gd.behaviours_doc(root), gd.table_doc(root)
 
 
 def build_golden_from_disk() -> dict:
@@ -149,10 +143,11 @@ def main() -> int:
     args = parser.parse_args()
 
     # Schema must be valid before trusting resolve output.
+    attacks_doc, behaviours_doc, table_doc = _load_docs()
     errors = validate_mod.validate_combat_data(
-        json.loads(validate_mod.ATTACKS_PATH.read_text(encoding="utf-8")),
-        json.loads(validate_mod.TABLE_PATH.read_text(encoding="utf-8")),
-        json.loads(validate_mod.BEHAVIOURS_PATH.read_text(encoding="utf-8")),
+        attacks_doc,
+        table_doc,
+        behaviours_doc,
     )
     if errors:
         print(f"FAIL: combat tables invalid ({len(errors)} error(s)); fix before sync")

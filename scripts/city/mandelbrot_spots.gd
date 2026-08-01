@@ -2,140 +2,55 @@
 ##
 ## Each entry is a centre + half-extent that fits the Create morph budget and is visible on the
 ## default panel view (−0.5, 0) ± 1.5 so a marker can sit on it before autozoom. Regenerated /
-## expanded by `tools/gen_mandelbrot_spots.gd`; the game only samples this table.
+## expanded by `tools/gen_mandelbrot_spots.gd` into `assets/gamedata.json`; the game only samples
+## that table through GameData.
 class_name MandelbrotSpots
 extends RefCounted
 
-## Locked half-extent must sit in this band (plan budget).
-const SCALE_MAX := 1.0e-4
-const SCALE_MIN := 1.0e-8
-const DEFAULT_VIEW_CX := -0.5
-const DEFAULT_VIEW_CY := 0.0
-const DEFAULT_VIEW_HALF := 1.5
+const GameDataScript := preload("res://scripts/city/game_data.gd")
 
-## {name, cx, cy, scale} — decimal strings for NativeMandelbrot HP parsers.
-const SPOTS: Array[Dictionary] = [
-	{"name": "East Needle", "cx": "0.37319912581574121724", "cy": "0.16142269062818020986", "scale": "0.000008589934592"},
-	{"name": "East Needle*", "cx": "0.37319912581574121724", "cy": "-0.16142269062818020986", "scale": "0.000008589934592"},
-	{"name": "East Needle*", "cx": "0.37321105723503528173", "cy": "-0.16145414267349603166", "scale": "0.0000008796093022208"},
-	{"name": "East Needle", "cx": "0.37321105723503528173", "cy": "0.16145414267349603166", "scale": "0.0000008796093022208"},
-	{"name": "East Needle*", "cx": "0.3730386727128538471", "cy": "-0.16152754822974271787", "scale": "0.000008589934592"},
-	{"name": "East Needle", "cx": "0.3730386727128538471", "cy": "0.16152754822974271787", "scale": "0.000008589934592"},
-	{"name": "East Needle", "cx": "0.37321121204628110446", "cy": "0.16145379758516911761", "scale": "0.00000002882303761517"},
-	{"name": "East Needle*", "cx": "0.37321121204628110446", "cy": "-0.16145379758516911761", "scale": "0.00000002882303761517"},
-	{"name": "East Needle B", "cx": "0.36597227945938465288", "cy": "0.10019270703687570279", "scale": "0.00000028147497671066"},
-	{"name": "East Needle B*", "cx": "0.36597227945938465288", "cy": "-0.10019270703687570279", "scale": "0.00000028147497671066"},
-	{"name": "East Needle", "cx": "0.3721584116517052121", "cy": "0.15994381974320159845", "scale": "0.00000002814749767107"},
-	{"name": "East Needle*", "cx": "0.3721584116517052121", "cy": "-0.15994381974320159845", "scale": "0.00000002814749767107"},
-	{"name": "Scepter Spiral*", "cx": "-0.15884415519938976935", "cy": "1.03790327407510107882", "scale": "0.00000009007199254741"},
-	{"name": "Scepter Spiral", "cx": "-0.15884415519938976935", "cy": "-1.03790327407510107882", "scale": "0.00000009007199254741"},
-	{"name": "East Needle B*", "cx": "0.3659682277589955679", "cy": "-0.1001912426247726362", "scale": "0.0000008796093022208"},
-	{"name": "East Needle B", "cx": "0.3659682277589955679", "cy": "0.1001912426247726362", "scale": "0.0000008796093022208"},
-	{"name": "East Needle", "cx": "0.37321715608870825731", "cy": "0.16145565450206819658", "scale": "0.0000008796093022208"},
-	{"name": "East Needle*", "cx": "0.37321715608870825731", "cy": "-0.16145565450206819658", "scale": "0.0000008796093022208"},
-	{"name": "East Needle", "cx": "0.37315299238985011332", "cy": "0.1624232375173817744", "scale": "0.000008589934592"},
-	{"name": "East Needle*", "cx": "0.37315299238985011332", "cy": "-0.1624232375173817744", "scale": "0.000008589934592"},
-	{"name": "East Needle B", "cx": "0.36244839063516598454", "cy": "0.0953234117066195652", "scale": "0.0000008796093022208"},
-	{"name": "East Needle B*", "cx": "0.36244839063516598454", "cy": "-0.0953234117066195652", "scale": "0.0000008796093022208"},
-	{"name": "Quarter Bulb*", "cx": "0.29148911473862354482", "cy": "-0.48476130933254324429", "scale": "0.00000028147497671066"},
-	{"name": "Quarter Bulb", "cx": "0.29148911473862354482", "cy": "0.48476130933254324429", "scale": "0.00000028147497671066"},
-	{"name": "East Needle", "cx": "0.37321154102016196319", "cy": "0.16145414267349603166", "scale": "0.00000028147497671066"},
-	{"name": "East Needle*", "cx": "0.37321154102016196319", "cy": "-0.16145414267349603166", "scale": "0.00000028147497671066"},
-	{"name": "East Needle B", "cx": "0.36597207604967846306", "cy": "0.10019198135919056558", "scale": "0.0000008796093022208"},
-	{"name": "East Needle B*", "cx": "0.36597207604967846306", "cy": "-0.10019198135919056558", "scale": "0.0000008796093022208"},
-	{"name": "Double Spiral", "cx": "-0.74497040001106251683", "cy": "0.11311165600183487046", "scale": "0.0000262144"},
-	{"name": "Double Spiral*", "cx": "-0.74497040001106251683", "cy": "-0.11311165600183487046", "scale": "0.0000262144"},
-	{"name": "East Needle*", "cx": "0.37319861380571200948", "cy": "-0.16250736720265526736", "scale": "0.00000009007199254741"},
-	{"name": "East Needle", "cx": "0.37319861380571200948", "cy": "0.16250736720265526736", "scale": "0.00000009007199254741"},
-	{"name": "East Needle B*", "cx": "0.36255441485698214343", "cy": "-0.09534668398745173301", "scale": "0.00000274877906944"},
-	{"name": "East Needle B", "cx": "0.36255441485698214343", "cy": "0.09534668398745173301", "scale": "0.00000274877906944"},
-	{"name": "East Needle B", "cx": "0.36244949014681016042", "cy": "0.0953245112182637272", "scale": "0.00000274877906944"},
-	{"name": "East Needle B*", "cx": "0.36244949014681016042", "cy": "-0.0953245112182637272", "scale": "0.00000274877906944"},
-	{"name": "East Needle*", "cx": "0.37173920000231264194", "cy": "-0.15921119998824598274", "scale": "0.00008192000000000002"},
-	{"name": "East Needle", "cx": "0.37173920000231264194", "cy": "0.15921119998824598274", "scale": "0.00008192000000000002"},
-	{"name": "East Needle B", "cx": "0.36245421461093818571", "cy": "0.0953245112182637272", "scale": "0.000008589934592"},
-	{"name": "East Needle B*", "cx": "0.36245421461093818571", "cy": "-0.0953245112182637272", "scale": "0.000008589934592"},
-	{"name": "East Needle", "cx": "0.37320026219356267072", "cy": "0.16250183877561305557", "scale": "0.000008589934592"},
-	{"name": "East Needle*", "cx": "0.37320026219356267072", "cy": "-0.16250183877561305557", "scale": "0.000008589934592"},
-	{"name": "East Needle", "cx": "0.37321756840558506507", "cy": "0.16145455499042404846", "scale": "0.0000008796093022208"},
-	{"name": "East Needle*", "cx": "0.37321756840558506507", "cy": "-0.16145455499042404846", "scale": "0.0000008796093022208"},
-	{"name": "East Needle", "cx": "0.37204855678440401645", "cy": "0.15985655139106444422", "scale": "0.00000002814749767107"},
-	{"name": "East Needle*", "cx": "0.37204855678440401645", "cy": "-0.15985655139106444422", "scale": "0.00000002814749767107"},
-	{"name": "East Needle", "cx": "0.37202739461103362384", "cy": "0.15980147657172316666", "scale": "0.00000268435456"},
-	{"name": "East Needle*", "cx": "0.37202739461103362384", "cy": "-0.15980147657172316666", "scale": "0.00000268435456"},
-	{"name": "East Needle B*", "cx": "0.36275167465476310102", "cy": "-0.09548456586128871437", "scale": "0.000008589934592"},
-	{"name": "East Needle B", "cx": "0.36275167465476310102", "cy": "0.09548456586128871437", "scale": "0.000008589934592"},
-	{"name": "East Needle*", "cx": "0.37204978170909608348", "cy": "-0.15985595009563724478", "scale": "0.00000268435456"},
-	{"name": "East Needle", "cx": "0.37204978170909608348", "cy": "0.15985595009563724478", "scale": "0.00000268435456"},
-	{"name": "East Needle*", "cx": "0.373198577776914453", "cy": "-0.16250740323145282384", "scale": "0.00000002882303761517"},
-	{"name": "East Needle", "cx": "0.373198577776914453", "cy": "0.16250740323145282384", "scale": "0.00000002882303761517"},
-	{"name": "East Needle B*", "cx": "0.36596884348549663102", "cy": "-0.10019141854663569935", "scale": "0.00000028147497671066"},
-	{"name": "East Needle B", "cx": "0.36596884348549663102", "cy": "0.10019141854663569935", "scale": "0.00000028147497671066"},
-	{"name": "Elephant Herd*", "cx": "0.29151039738331840923", "cy": "-0.01686439787559903744", "scale": "0.00000009007199254741"},
-	{"name": "Elephant Herd", "cx": "0.29151039738331840923", "cy": "0.01686439787559903744", "scale": "0.00000009007199254741"},
-	{"name": "Valley Floor*", "cx": "-0.73596682177323435869", "cy": "-0.16914613761085897647", "scale": "0.0000008796093022208"},
-	{"name": "Valley Floor", "cx": "-0.73596682177323435869", "cy": "0.16914613761085897647", "scale": "0.0000008796093022208"},
-	{"name": "Misiurewicz M8", "cx": "-0.74358174898484752369", "cy": "0.13654500187716842041", "scale": "0.00000028147497671066"},
-	{"name": "Misiurewicz M8*", "cx": "-0.74358174898484752369", "cy": "-0.13654500187716842041", "scale": "0.00000028147497671066"},
-	{"name": "Filament Knot*", "cx": "-0.15924937593521354406", "cy": "-1.03793021078878178187", "scale": "0.000000274877906944"},
-	{"name": "Filament Knot", "cx": "-0.15924937593521354406", "cy": "1.03793021078878178187", "scale": "0.000000274877906944"},
-	{"name": "East Needle", "cx": "0.37202846835287362026", "cy": "0.15980255031356316309", "scale": "0.0000008589934592"},
-	{"name": "East Needle*", "cx": "0.37202846835287362026", "cy": "-0.15980255031356316309", "scale": "0.0000008589934592"},
-	{"name": "East Needle B", "cx": "0.36597015190431142484", "cy": "0.10019069286895056214", "scale": "0.00000274877906944"},
-	{"name": "East Needle B*", "cx": "0.36597015190431142484", "cy": "-0.10019069286895056214", "scale": "0.00000274877906944"},
-	{"name": "East Needle", "cx": "0.37215200189628561134", "cy": "0.15994345600671053265", "scale": "0.000008388608"},
-	{"name": "East Needle*", "cx": "0.37215200189628561134", "cy": "-0.15994345600671053265", "scale": "0.000008388608"},
-	{"name": "East Needle*", "cx": "0.37319568984185319538", "cy": "-0.16142612660206820396", "scale": "0.00000274877906944"},
-	{"name": "East Needle", "cx": "0.37319568984185319538", "cy": "0.16142612660206820396", "scale": "0.00000274877906944"},
-	{"name": "Julia Island", "cx": "-0.1575107746331923797", "cy": "1.03834997699332531873", "scale": "0.00000009007199254741"},
-	{"name": "Julia Island*", "cx": "-0.1575107746331923797", "cy": "-1.03834997699332531873", "scale": "0.00000009007199254741"},
-	{"name": "East Needle*", "cx": "0.37320026219356267072", "cy": "-0.1624870748252130459", "scale": "0.000008589934592"},
-	{"name": "East Needle", "cx": "0.37320026219356267072", "cy": "0.1624870748252130459", "scale": "0.000008589934592"},
-	{"name": "East Needle B*", "cx": "0.36597240678278208925", "cy": "-0.1001925970856916287", "scale": "0.00000009007199254741"},
-	{"name": "East Needle B", "cx": "0.36597240678278208925", "cy": "0.1001925970856916287", "scale": "0.00000009007199254741"},
-	{"name": "East Needle*", "cx": "0.37202786705746243578", "cy": "-0.15980272211225757251", "scale": "0.000000274877906944"},
-	{"name": "East Needle", "cx": "0.37202786705746243578", "cy": "0.15980272211225757251", "scale": "0.000000274877906944"},
-	{"name": "Quarter Bulb", "cx": "0.2914884990121224817", "cy": "0.4847626452392011509", "scale": "0.000008589934592"},
-	{"name": "Quarter Bulb*", "cx": "0.2914884990121224817", "cy": "-0.4847626452392011509", "scale": "0.000008589934592"},
-	{"name": "Filament Knot", "cx": "-0.15934412388024257745", "cy": "1.03788557231473377307", "scale": "0.00000002882303761517"},
-	{"name": "Filament Knot*", "cx": "-0.15934412388024257745", "cy": "-1.03788557231473377307", "scale": "0.00000002882303761517"},
-	{"name": "Filament Knot*", "cx": "-0.15938860558925802002", "cy": "-1.03787447540090349563", "scale": "0.00000028147497671066"},
-	{"name": "Filament Knot", "cx": "-0.15938860558925802002", "cy": "1.03787447540090349563", "scale": "0.00000028147497671066"},
-	{"name": "East Needle B", "cx": "0.36245765058482620757", "cy": "0.09532107524437573309", "scale": "0.00000274877906944"},
-	{"name": "East Needle B*", "cx": "0.36245765058482620757", "cy": "-0.09532107524437573309", "scale": "0.00000274877906944"},
-	{"name": "East Needle*", "cx": "0.37321144510755899226", "cy": "-0.16145375480097234888", "scale": "0.00000002882303761517"},
-	{"name": "East Needle", "cx": "0.37321144510755899226", "cy": "0.16145375480097234888", "scale": "0.00000002882303761517"},
-	{"name": "East Needle B", "cx": "0.36597235376877956803", "cy": "0.10019284101896233641", "scale": "0.00000002882303761517"},
-	{"name": "East Needle B*", "cx": "0.36597235376877956803", "cy": "-0.10019284101896233641", "scale": "0.00000002882303761517"},
-	{"name": "East Needle", "cx": "0.37200191421395151226", "cy": "0.15978205825432864606", "scale": "0.000008388608"},
-	{"name": "East Needle*", "cx": "0.37200191421395151226", "cy": "-0.15978205825432864606", "scale": "0.000008388608"},
-	{"name": "East Needle", "cx": "0.37319761398716905232", "cy": "0.1614266763578902919", "scale": "0.0000008796093022208"},
-	{"name": "East Needle*", "cx": "0.37319761398716905232", "cy": "-0.1614266763578902919", "scale": "0.0000008796093022208"},
-	{"name": "East Needle B*", "cx": "0.36244839063516598454", "cy": "-0.0953234117066195652", "scale": "0.00000028147497671066"},
-	{"name": "East Needle B", "cx": "0.36244839063516598454", "cy": "0.0953234117066195652", "scale": "0.00000028147497671066"},
-	{"name": "East Needle*", "cx": "0.37321866791722924095", "cy": "-0.16145565450206819658", "scale": "0.00000274877906944"},
-	{"name": "East Needle", "cx": "0.37321866791722924095", "cy": "0.16145565450206819658", "scale": "0.00000274877906944"},
-	{"name": "Antenna Island*", "cx": "-1.76692925057714300685", "cy": "0.00730754683008312013", "scale": "0.0000008796093022208"},
-	{"name": "Antenna Island", "cx": "-1.76692925057714300685", "cy": "-0.00730754683008312013", "scale": "0.0000008796093022208"},
-	{"name": "Scepter Tip*", "cx": "-0.15600264520511755717", "cy": "1.02757314683815614842", "scale": "0.00000009007199254741"},
-	{"name": "Scepter Tip", "cx": "-0.15600264520511755717", "cy": "-1.02757314683815614842", "scale": "0.00000009007199254741"},
-]
+## Locked half-extent must sit in this band (plan budget).
+static var SCALE_MAX: float = 1.0e-4
+static var SCALE_MIN: float = 1.0e-8
+static var DEFAULT_VIEW_CX: float = -0.5
+static var DEFAULT_VIEW_CY: float = 0.0
+static var DEFAULT_VIEW_HALF: float = 1.5
+
+static var _spots: Array = []
+static var _loaded: bool = false
+
+
+static func ensure_loaded() -> void:
+	if _loaded:
+		return
+	_loaded = true
+	var sec: Dictionary = GameDataScript.mandelbrot_spots()
+	SCALE_MAX = float(sec.get("scale_max", 1.0e-4))
+	SCALE_MIN = float(sec.get("scale_min", 1.0e-8))
+	var view: Dictionary = sec.get("default_view", {}) as Dictionary
+	DEFAULT_VIEW_CX = float(view.get("cx", -0.5))
+	DEFAULT_VIEW_CY = float(view.get("cy", 0.0))
+	DEFAULT_VIEW_HALF = float(view.get("half", 1.5))
+	_spots = GameDataScript.mandelbrot_spot_list()
 
 
 static func spot_count() -> int:
-	return SPOTS.size()
+	ensure_loaded()
+	return _spots.size()
 
 
 static func spot_at(index: int) -> Dictionary:
-	if index < 0 or index >= SPOTS.size():
+	ensure_loaded()
+	if index < 0 or index >= _spots.size():
 		push_error("MandelbrotSpots.spot_at: %d is out of range" % index)
 		return {}
-	return SPOTS[index]
+	return _spots[index] as Dictionary
 
 
 ## Four distinct catalog entries for one fractal district. Deterministic in `district_seed`.
 static func pick_for_district(district_seed: int, count: int = 4) -> Array[Dictionary]:
-	var n := SPOTS.size()
+	ensure_loaded()
+	var n := _spots.size()
 	if n < count:
 		push_error("MandelbrotSpots.pick_for_district: need %d spots, have %d" % [count, n])
 		return []
@@ -153,12 +68,13 @@ static func pick_for_district(district_seed: int, count: int = 4) -> Array[Dicti
 		order[j] = tmp
 	var out: Array[Dictionary] = []
 	for k in range(count):
-		out.append(SPOTS[order[k]])
+		out.append(_spots[order[k]] as Dictionary)
 	return out
 
 
 ## Fractal UV [0,1]² of a centre on the default panel view.
 static func default_view_uv(cx_hp: String, cy_hp: String) -> Vector2:
+	ensure_loaded()
 	var cx := float(cx_hp)
 	var cy := float(cy_hp)
 	var u := (cx - (DEFAULT_VIEW_CX - DEFAULT_VIEW_HALF)) / (DEFAULT_VIEW_HALF * 2.0)
@@ -167,11 +83,13 @@ static func default_view_uv(cx_hp: String, cy_hp: String) -> Vector2:
 
 
 static func scale_in_budget(scale_hp: String) -> bool:
+	ensure_loaded()
 	var s := absf(float(scale_hp))
 	return s <= SCALE_MAX + 1e-20 and s >= SCALE_MIN - 1e-20
 
 
 static func centre_in_default_view(cx_hp: String, cy_hp: String) -> bool:
+	ensure_loaded()
 	var cx := float(cx_hp)
 	var cy := float(cy_hp)
 	return (

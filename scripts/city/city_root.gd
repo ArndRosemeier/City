@@ -1745,19 +1745,19 @@ func _tick_district_economy() -> void:
 		## Adventure-less path shouldn't score; already returned.
 		return
 	if _economy.mark_explored(here):
-		_player_score += DistrictEconomy.EXPLORE_SCORE
+		var explore := preload("res://scripts/city/game_data.gd").explore_score()
+		DistrictEconomy.EXPLORE_SCORE = explore
+		_player_score += explore
 		var place := DistrictName.for_district(city_seed, here)
 		## Same beat as a chest: say what happened and play the haul flourish so the score
 		## bump is not only a number ticking in the status line.
 		if _loot_toast != null:
-			_loot_toast.show_message(
-				"%s — +%d explore" % [place, DistrictEconomy.EXPLORE_SCORE]
-			)
+			_loot_toast.show_message("%s — +%d explore" % [place, explore])
 		if _audio != null:
 			_audio.play_treasure_bling()
 		print(
 			"CityRoot: explored %s (+%d, score %d)"
-			% [str(here), DistrictEconomy.EXPLORE_SCORE, _player_score]
+			% [str(here), explore, _player_score]
 		)
 
 
@@ -1980,7 +1980,8 @@ func report_chest_opened(world_pos: Vector3, gems_paid: int) -> void:
 
 ## Gems handed out when the cookbook is already complete. Nothing cheap: the spot was worth a
 ## scroll, so it stays worth the climb after the last recipe is known.
-const RECIPE_FALLBACK_GEMS: Array[int] = [VoxelMaterial.GEM_EMERALD, VoxelMaterial.GEM_DIAMOND]
+## Resolved from gamedata `recipe_sites.fallback_gems` on first use.
+var _recipe_fallback_gems: Array[int] = []
 
 
 func is_recipe_site_looted(site_id: String) -> bool:
@@ -2030,10 +2031,29 @@ func collect_recipe_pickup(site_id: String, world_pos: Vector3) -> bool:
 
 ## The cookbook is full, so the scroll pays a stone instead. Off-budget like a hill chest: the
 ## district ledger is for what is buried in the tile, and this is a reward for standing here.
+func _recipe_fallback_gem_mats() -> Array[int]:
+	if not _recipe_fallback_gems.is_empty():
+		return _recipe_fallback_gems
+	const GameDataScript := preload("res://scripts/city/game_data.gd")
+	var raw: Variant = GameDataScript.recipe_sites().get("fallback_gems", [])
+	if typeof(raw) == TYPE_ARRAY:
+		for item_id_v: Variant in raw:
+			var item_id := str(item_id_v)
+			var def := InventoryCatalog.item(item_id)
+			if def == null or def.gem_mat_id < 0:
+				push_error("CityRoot: fallback gem '%s' is not a gem item" % item_id)
+				continue
+			_recipe_fallback_gems.append(def.gem_mat_id)
+	if _recipe_fallback_gems.is_empty():
+		_recipe_fallback_gems = [VoxelMaterial.GEM_EMERALD, VoxelMaterial.GEM_DIAMOND]
+	return _recipe_fallback_gems
+
+
 func _pay_recipe_fallback_gem(site_id: String, world_pos: Vector3) -> bool:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(site_id) ^ int(city_seed)
-	var gem: int = RECIPE_FALLBACK_GEMS[rng.randi_range(0, RECIPE_FALLBACK_GEMS.size() - 1)]
+	var gems := _recipe_fallback_gem_mats()
+	var gem: int = gems[rng.randi_range(0, gems.size() - 1)]
 	var coord := DistrictCoord.from_world(world_pos, VOXEL_SIZE)
 	if not grant_district_gem(coord, gem, false):
 		push_error("CityRoot: recipe cache could not pay a gem at %s" % site_id)

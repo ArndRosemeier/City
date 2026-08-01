@@ -97,7 +97,7 @@ func _check_roll_is_deterministic() -> void:
 	var total := 0
 	for gem: int in first.keys():
 		total += int(first[gem])
-	var want := int(DistrictEconomy.THEME_TOTALS[DistrictTheme.OLD_TOWN])
+	var want := preload("res://scripts/city/game_data.gd").theme_gem_total(DistrictTheme.OLD_TOWN)
 	if total != want:
 		_fail("FAIL an old town owes %d gems, want %d" % [total, want])
 		return
@@ -122,7 +122,7 @@ func _check_roll_is_deterministic() -> void:
 
 ## Hills seed the theme constant; after harvest the bake list is that constant minus taken gems.
 func _check_hill_is_constant_minus_harvested() -> void:
-	var want := int(DistrictEconomy.THEME_TOTALS[DistrictTheme.HILL])
+	var want := preload("res://scripts/city/game_data.gd").theme_gem_total(DistrictTheme.HILL)
 	var budgets := DistrictEconomy.roll_budgets(
 		DistrictTheme.HILL, DistrictCoord.district_seed(WORLD_SEED, COORD)
 	)

@@ -12,9 +12,11 @@ extends Node3D
 
 const CHEST_SCENE_PATH := "res://assets/city/chests/chest.glb"
 
-## Fewest and most gems one chest can hold before the budget has its say.
-const GEMS_MIN := 1
-const GEMS_MAX := 3
+const GameDataScript := preload("res://scripts/city/game_data.gd")
+
+## Fewest and most gems one chest can hold before the budget has its say (gamedata).
+static var GEMS_MIN: int = 1
+static var GEMS_MAX: int = 3
 ## Kenney's chest is authored about 1 m across; city rooms are 0.5 m voxels, so it reads as a
 ## crate rather than furniture at this size.
 const MODEL_SCALE := 0.9
@@ -74,6 +76,9 @@ func interact_at_world(_world_pos: Vector3) -> bool:
 	if city == null:
 		push_error("GemChest: opened with no CityRoot to hand the gems to")
 		return true
+	var loot: Dictionary = GameDataScript.chest_loot()
+	GEMS_MIN = int(loot.get("gems_min", 1))
+	GEMS_MAX = int(loot.get("gems_max", 3))
 	var wanted := _rng.randi_range(GEMS_MIN, GEMS_MAX)
 	var paid := 0
 	## Hills: cave ore owns the district budget (bake paints remaining). Chests there are a

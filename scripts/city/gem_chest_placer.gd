@@ -8,12 +8,7 @@ extends Node3D
 
 const GemChestScript := preload("res://scripts/city/gem_chest.gd")
 
-## Rooms with a chest in them, out of a hundred. Storage rooms are where you would look first;
-## everywhere else a chest is a find rather than a fixture.
-const CHANCE_STORAGE_PCT := 34
-const CHANCE_ORDINARY_PCT := 7
-## Corridors are for walking through.
-const CHANCE_CORRIDOR_PCT := 0
+const GameDataScript := preload("res://scripts/city/game_data.gd")
 
 var _chests: Array[GemChest] = []
 
@@ -27,11 +22,12 @@ static func should_place(purpose: int, room_seed: int) -> bool:
 
 
 static func chance_pct(purpose: int) -> int:
+	var chances: Dictionary = GameDataScript.chest_loot().get("place_chance_pct", {}) as Dictionary
 	if purpose == RoomDecorator.Purpose.CORRIDOR:
-		return CHANCE_CORRIDOR_PCT
+		return int(chances.get("corridor", 0))
 	if purpose == RoomDecorator.Purpose.STORAGE:
-		return CHANCE_STORAGE_PCT
-	return CHANCE_ORDINARY_PCT
+		return int(chances.get("storage", 34))
+	return int(chances.get("ordinary", 7))
 
 
 ## Stand one chest. Null when the model could not be built, which is a content fault rather than

@@ -14,9 +14,7 @@
 class_name CombatTable
 extends RefCounted
 
-const ATTACKS_PATH := "res://assets/combat/attacks.json"
-const BEHAVIOURS_PATH := "res://assets/combat/behaviours.json"
-const TABLE_PATH := "res://assets/monsters/combat_table.json"
+const GameDataScript := preload("res://scripts/city/game_data.gd")
 const GOLDEN_PATH := "res://tools/fixtures/combat_effective_stats.json"
 
 ## Keep aligned with tools/combat_resolve.py SCALAR_KEYS
@@ -156,7 +154,7 @@ static var _loaded: bool = false
 static var _attacks: Dictionary = {}
 static var _behaviours: Dictionary = {}
 static var _templates: Dictionary = {}
-## monster_id → body Dictionary from combat_table.json
+## monster_id → body Dictionary from gamedata.json
 static var _monsters: Dictionary = {}
 static var _monster_ids: PackedStringArray = PackedStringArray()
 
@@ -175,23 +173,14 @@ static func ensure_loaded() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	_attacks = _load_object_map(ATTACKS_PATH, "attacks")
-	_behaviours = _load_object_map(BEHAVIOURS_PATH, "behaviours")
-	var table: Dictionary = _load_json_object(TABLE_PATH)
-	var templates_raw: Variant = table.get("templates", null)
-	if typeof(templates_raw) != TYPE_DICTIONARY:
-		push_error("CombatTable: %s 'templates' must be an object" % TABLE_PATH)
-		assert(false, "CombatTable: templates missing")
-		return
-	_templates = templates_raw
-	var monsters_raw: Variant = table.get("monsters", null)
-	if typeof(monsters_raw) != TYPE_ARRAY:
-		push_error("CombatTable: %s 'monsters' must be an array" % TABLE_PATH)
-		assert(false, "CombatTable: monsters missing")
-		return
+	## Authored rows live in gamedata.json — GameData is the only JSON reader.
+	GameDataScript.ensure_loaded()
+	_attacks = GameDataScript.attacks()
+	_behaviours = GameDataScript.behaviours()
+	_templates = GameDataScript.templates()
 	_monsters.clear()
 	_monster_ids = PackedStringArray()
-	for item: Variant in monsters_raw:
+	for item: Variant in GameDataScript.monsters_array():
 		if typeof(item) != TYPE_DICTIONARY:
 			push_error("CombatTable: monster entry is not an object")
 			assert(false, "CombatTable: bad monster entry")
@@ -237,7 +226,7 @@ static func faction_for(monster_id: String) -> String:
 	return faction
 
 
-## Bodies marked `spawn_ready` in combat_table.json. Summon UI and tools use this roster.
+## Bodies marked `spawn_ready` in gamedata. Summon UI and tools use this roster.
 static func spawnable_ids() -> PackedStringArray:
 	ensure_loaded()
 	var out := PackedStringArray()

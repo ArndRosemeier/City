@@ -2,8 +2,13 @@
 ##
 ## "Unlocked" means may be assigned. Sandbox treats every non-build combat/power id as unlocked;
 ## Adventure starts with `blaster` and spends gems for the rest. Builds are never gated.
+##
+## Authored ability rows + balance constants live in `assets/gamedata.json` via GameData.
+## Build tray entries are still registered from BuildCatalog (also GameData-backed).
 class_name AbilityRegistry
 extends RefCounted
+
+const GameDataScript := preload("res://scripts/city/game_data.gd")
 
 const SLOT_COUNT := 9
 ## F1–F6 then LMB, Ctrl+LMB, Alt+LMB.
@@ -33,18 +38,17 @@ const KIND_BUILD := "build"
 const KIND_CONSUMABLE := "consumable"
 const KIND_META := "meta"
 
-## Adventure starts with this alone.
-const STARTER_UNLOCKS: Array[String] = [ID_BLASTER]
-
-## Trap-hostile score payout (Adventure only).
-const TRAP_HOSTILE_SCORE := 25
-const BOOST_DURATION_SEC := 20.0
-const GROW_SHRINK_DURATION_SEC := 25.0
-const SHIELD_DRAIN_PER_SEC := 8.0
-## One living ally at a time; recasting dismisses the previous body.
-const MINION_MAX := 1
-## Seconds a summoned ally stays before it is dismissed.
-const MINION_DURATION_SEC := 60.0
+## Filled from GameData.ability_constants on ensure_loaded.
+static var STARTER_UNLOCKS: Array[String] = [ID_BLASTER]
+static var TRAP_HOSTILE_SCORE: int = 25
+static var BOOST_DURATION_SEC: float = 20.0
+static var GROW_SHRINK_DURATION_SEC: float = 25.0
+static var SHIELD_DRAIN_PER_SEC: float = 8.0
+static var MINION_MAX: int = 1
+static var MINION_DURATION_SEC: float = 60.0
+static var _default_sandbox_builds: Array[String] = [
+	"cottage", "pool", "hot_tub", "dog", "cat", "duck"
+]
 
 
 class AbilityDef:
@@ -71,87 +75,56 @@ static func ensure_loaded() -> void:
 	_loaded = true
 	_by_id.clear()
 	_order.clear()
-	_reg(
-		ID_BLASTER, "Blaster", KIND_WEAPON, {}, 1.0, true,
-		"Hold primary fire — starter weapon"
-	)
-	_reg(
-		ID_LASER, "Laser", KIND_WEAPON,
-		{InventoryCatalog.ID_QUARTZ: 8, InventoryCatalog.ID_TOPAZ: 3}, 1.0, true,
-		"Eye beam"
-	)
-	_reg(
-		ID_CHARGED_BLAST, "Charged blast", KIND_WEAPON,
-		{
-			InventoryCatalog.ID_AMBER: 6,
-			InventoryCatalog.ID_TOPAZ: 4,
-			InventoryCatalog.ID_SAPPHIRE: 2,
-		},
-		20.0, true, "Hold Alt fire, release to throw"
-	)
-	_reg(
-		ID_STOMP, "Stomp", KIND_WEAPON,
-		{InventoryCatalog.ID_QUARTZ: 10, InventoryCatalog.ID_EMERALD: 2}, 10.0, true,
-		"Ground slam"
-	)
-	_reg(
-		ID_SHIELD, "Shield", KIND_POWER,
-		{InventoryCatalog.ID_SAPPHIRE: 5, InventoryCatalog.ID_TOPAZ: 4}, 0.0, true,
-		"Toggle — drains energy while up and blunts hits"
-	)
-	_reg(
-		ID_GROW, "Grow", KIND_POWER,
-		{InventoryCatalog.ID_EMERALD: 3, InventoryCatalog.ID_AMBER: 4}, 12.0, true,
-		"Temporary size up"
-	)
-	_reg(
-		ID_SHRINK, "Shrink", KIND_POWER,
-		{InventoryCatalog.ID_EMERALD: 2, InventoryCatalog.ID_AMBER: 4}, 12.0, true,
-		"Temporary size down"
-	)
-	_reg(
-		ID_MINION, "Minion", KIND_POWER,
-		{InventoryCatalog.ID_EMERALD: 4, InventoryCatalog.ID_QUARTZ: 12}, 40.0, true,
-		"Summon a half-strength ally (replaces the previous)"
-	)
-	_reg(
-		ID_DISTRICT_HOP, "District hop", KIND_POWER,
-		{InventoryCatalog.ID_AMBER: 3, InventoryCatalog.ID_QUARTZ: 6}, 0.0, true,
-		"Teleport to a known district"
-	)
-	_reg(
-		ID_TETRIS, "Tetris", KIND_POWER,
-		{InventoryCatalog.ID_AMBER: 2, InventoryCatalog.ID_QUARTZ: 8}, 0.0, true,
-		"Summon a cabinet"
-	)
-	_reg(
-		ID_USE_TRAP, "Throw trap", KIND_CONSUMABLE, {}, 0.0, false,
-		"Aim at a world voxel and lob a hold trap there"
-	)
-	_reg(
-		ID_USE_BOOST_SPEED, "Speed boost", KIND_CONSUMABLE, {}, 0.0, false,
-		"Drink a speed tonic"
-	)
-	_reg(
-		ID_USE_BOOST_REGEN, "Regen boost", KIND_CONSUMABLE, {}, 0.0, false,
-		"Drink a regen tonic"
-	)
-	_reg(
-		ID_HARDNESS_REINFORCED, "Hardness: Reinforced", KIND_META,
-		{InventoryCatalog.ID_DIAMOND: 2, InventoryCatalog.ID_QUARTZ: 20}, 0.0, true,
-		"Carve concrete and steel"
-	)
-	_reg(
-		ID_HARDNESS_EXOTIC, "Hardness: Exotic", KIND_META,
-		{
-			InventoryCatalog.ID_DIAMOND: 4,
-			InventoryCatalog.ID_SAPPHIRE: 4,
-			InventoryCatalog.ID_QUARTZ: 15,
-		},
-		0.0, true, "Carve meteor rock and infection"
-	)
+	var constants: Dictionary = GameDataScript.ability_constants()
+	STARTER_UNLOCKS.clear()
+	var starters: Variant = constants.get("starter_unlocks", [ID_BLASTER])
+	if typeof(starters) == TYPE_ARRAY:
+		for s: Variant in starters:
+			STARTER_UNLOCKS.append(str(s))
+	TRAP_HOSTILE_SCORE = int(constants.get("trap_hostile_score", 25))
+	BOOST_DURATION_SEC = float(constants.get("boost_duration_sec", 20.0))
+	GROW_SHRINK_DURATION_SEC = float(constants.get("grow_shrink_duration_sec", 25.0))
+	SHIELD_DRAIN_PER_SEC = float(constants.get("shield_drain_per_sec", 8.0))
+	MINION_MAX = int(constants.get("minion_max", 1))
+	MINION_DURATION_SEC = float(constants.get("minion_duration_sec", 60.0))
+	_default_sandbox_builds.clear()
+	var builds_raw: Variant = constants.get("default_sandbox_builds", [])
+	if typeof(builds_raw) == TYPE_ARRAY:
+		for b: Variant in builds_raw:
+			_default_sandbox_builds.append(str(b))
+
+	var abilities: Dictionary = GameDataScript.abilities()
+	var ids: Array = abilities.keys()
+	ids.sort()
+	## Keep a stable authoring order: weapons/powers first as listed in gamedata insertion
+	## order is lost after JSON parse — use the key order from the file via unsorted keys
+	## then append builds. Prefer the order keys appear in the raw document.
+	ids = _ability_ids_in_doc_order(abilities)
+	for id_v: Variant in ids:
+		var id := str(id_v)
+		var row: Dictionary = abilities[id] as Dictionary
+		var cost: Dictionary = {}
+		var cost_raw: Variant = row.get("unlock_cost", {})
+		if typeof(cost_raw) == TYPE_DICTIONARY:
+			cost = (cost_raw as Dictionary).duplicate()
+		_reg(
+			id,
+			str(row.get("display_name", id)),
+			str(row.get("kind", KIND_POWER)),
+			cost,
+			float(row.get("energy_cost", 0.0)),
+			bool(row.get("gated", true)),
+			str(row.get("hint", ""))
+		)
 	for recipe: BuildCatalog.Recipe in BuildCatalog.all():
 		_reg(recipe.id, recipe.display_name, KIND_BUILD, {}, 0.0, false, recipe.hint)
+
+
+static func _ability_ids_in_doc_order(abilities: Dictionary) -> Array:
+	## JSON objects do not guarantee order in Godot; sort for determinism.
+	var ids: Array = abilities.keys()
+	ids.sort()
+	return ids
 
 
 static func _reg(
@@ -209,13 +182,13 @@ static func unlockable_defs() -> Array[AbilityDef]:
 
 
 static func default_sandbox_tray() -> Array[String]:
+	ensure_loaded()
 	var slots: Array[String] = []
 	slots.resize(SLOT_COUNT)
-	var builds: Array[String] = ["cottage", "pool", "hot_tub", "dog", "cat", "duck"]
 	for i in range(SLOT_COUNT):
 		slots[i] = ""
-	for i in range(mini(6, builds.size())):
-		slots[i] = builds[i]
+	for i in range(mini(6, _default_sandbox_builds.size())):
+		slots[i] = _default_sandbox_builds[i]
 	slots[SLOT_MOUSE_LMB] = ID_BLASTER
 	slots[SLOT_MOUSE_CTRL] = ID_LASER
 	slots[SLOT_MOUSE_ALT] = ID_CHARGED_BLAST
@@ -223,14 +196,14 @@ static func default_sandbox_tray() -> Array[String]:
 
 
 static func default_adventure_tray() -> Array[String]:
+	ensure_loaded()
 	var slots: Array[String] = []
 	slots.resize(SLOT_COUNT)
 	for i in range(SLOT_COUNT):
 		slots[i] = ""
 	## Free builds on F-keys so the bar is not blank; combat starts as blaster only.
-	var builds: Array[String] = ["cottage", "pool", "hot_tub", "dog", "cat", "duck"]
-	for i in range(mini(6, builds.size())):
-		slots[i] = builds[i]
+	for i in range(mini(6, _default_sandbox_builds.size())):
+		slots[i] = _default_sandbox_builds[i]
 	slots[SLOT_MOUSE_LMB] = ID_BLASTER
 	return slots
 

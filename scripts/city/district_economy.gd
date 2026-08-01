@@ -27,26 +27,10 @@ const GEM_IDS: Array[int] = [
 const GEM_KEYS: Array[String] = ["q", "a", "t", "s", "e", "d"]
 const EXPLORED_KEY := "explored"
 
-## Gems a tile may ever yield, by `DistrictTheme` id. Split across types by the global rarity
-## curve. Hills are the mine — a larger constant — and the bake paints exactly whatever is
-## still remaining (constant minus harvested).
-const THEME_TOTALS: Dictionary[int, int] = {
-	DistrictTheme.HILL: 800,
-	DistrictTheme.CASTLE: 40,
-	DistrictTheme.CORE_HIGHRISE: 35,
-	DistrictTheme.OLD_TOWN: 30,
-	DistrictTheme.CIVIC_QUARTER: 30,
-	DistrictTheme.WATERFRONT_INDUSTRIAL: 28,
-	DistrictTheme.GARDEN_RESIDENTIAL: 25,
-	DistrictTheme.LAKE: 25,
-	DistrictTheme.GRAVEYARD: 22,
-	DistrictTheme.FRACTAL: 20,
-	DistrictTheme.ARENA: 15,
-}
+const GameDataScript := preload("res://scripts/city/game_data.gd")
 
-## Score for walking into a tile for the first time. Flat, landmark or not: paying more for the
-## castle would make exploration a route to optimise rather than a thing to do.
-const EXPLORE_SCORE := 50
+## Score for walking into a tile for the first time. Read from GameData (district_gems).
+static var EXPLORE_SCORE: int = 50
 
 ## coord key → {q,a,t,s,e,d: int, explored: bool}
 var _rows: Dictionary[String, Dictionary] = {}
@@ -72,16 +56,18 @@ static func gem_slot(gem_mat: int) -> int:
 # Rolling a first-create budget
 # ---------------------------------------------------------------------------
 
-## `THEME_TOTALS` picks drawn off the global rarity curve, seeded by the district so the same
-## coord in the same world always owes the same gems.
+## Theme totals from GameData, split across types by the global rarity curve, seeded by the
+## district so the same coord in the same world always owes the same gems.
 static func roll_budgets(theme_id: int, district_seed: int) -> Dictionary[int, int]:
 	var out := _empty_budget()
-	if not THEME_TOTALS.has(theme_id):
+	EXPLORE_SCORE = GameDataScript.explore_score()
+	var total := GameDataScript.theme_gem_total(theme_id)
+	if total <= 0:
 		push_error("DistrictEconomy.roll_budgets: theme %d has no gem total" % theme_id)
 		return out
 	var rng := RandomNumberGenerator.new()
 	rng.seed = district_seed
-	for _i in range(THEME_TOTALS[theme_id]):
+	for _i in range(total):
 		var gem := VoxelMaterial.pick_gem(rng)
 		out[gem] = out[gem] + 1
 	return out

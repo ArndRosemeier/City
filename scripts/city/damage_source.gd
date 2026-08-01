@@ -14,8 +14,9 @@
 ## so `PLAYER_MELEE` 34 against a 34-point skeleton and `UNDEAD_ORB` 25 against the player's
 ## hundred can be read against each other without conversion.
 ##
-## Monster→player rows match `assets/combat/attacks.json` `damage_vs_player` at 1× `damage_mult`.
-## Live units multiply those bases by their resolved combat `damage_mult`.
+## Monster bases match `assets/gamedata.json` `attacks` (`damage_vs_player` / `damage_vs_mob`)
+## at 1× `damage_mult`. Live units multiply those bases by their resolved combat `damage_mult`.
+## Player attack amounts stay authored here — they are not the same as monster shared rows.
 class_name DamageSource
 extends RefCounted
 
@@ -78,7 +79,7 @@ static func all() -> Array[Id]:
 ## is the only thing that meaningfully hurts a giant.
 ##
 ## Undead orb and giant debris keep their live invasion numbers. Monster contact / ranged rows
-## mirror attacks.json so a body's `damage_mult` scales a known base rather than inventing one.
+## mirror gamedata attacks so a body's `damage_mult` scales a known base rather than inventing one.
 static func amount(id: Id) -> float:
 	match id:
 		Id.PLAYER_MELEE:
@@ -96,17 +97,36 @@ static func amount(id: Id) -> float:
 		Id.GIANT_DEBRIS:
 			return 10.0
 		Id.MONSTER_MELEE, Id.MONSTER_MELEE_MOB:
-			return 12.0
+			return _attack_vs_player("melee") if id == Id.MONSTER_MELEE else _attack_vs_mob("melee")
 		Id.MONSTER_LASER, Id.MONSTER_LASER_MOB:
-			return 18.0
+			return (
+				_attack_vs_player("eye_laser") if id == Id.MONSTER_LASER
+				else _attack_vs_mob("eye_laser")
+			)
 		Id.MONSTER_BLASTER, Id.MONSTER_BLASTER_MOB:
-			return 18.0
+			return (
+				_attack_vs_player("blaster") if id == Id.MONSTER_BLASTER
+				else _attack_vs_mob("blaster")
+			)
 		Id.MONSTER_STOMP, Id.MONSTER_STOMP_MOB:
-			return 50.0
+			return _attack_vs_player("stomp") if id == Id.MONSTER_STOMP else _attack_vs_mob("stomp")
 		Id.MONSTER_BLAST, Id.MONSTER_BLAST_MOB:
-			return 50.0
+			return (
+				_attack_vs_player("charged_blast") if id == Id.MONSTER_BLAST
+				else _attack_vs_mob("charged_blast")
+			)
 	push_error("DamageSource: no amount defined for id %d" % int(id))
 	return 0.0
+
+
+static func _attack_vs_player(attack_id: String) -> float:
+	var row: Dictionary = CombatTable.attack_def(attack_id)
+	return float(row.get("damage_vs_player", 0.0))
+
+
+static func _attack_vs_mob(attack_id: String) -> float:
+	var row: Dictionary = CombatTable.attack_def(attack_id)
+	return float(row.get("damage_vs_mob", 0.0))
 
 
 static func target(id: Id) -> Target:

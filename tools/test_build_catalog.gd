@@ -1,11 +1,16 @@
 ## Sanity-check build recipes: every catalog entry has voxels, ids are unique, and
 ## rotation keeps the recipe front pointing at the player.
-extends SceneTree
+##
+## Run: powershell -File tools\run_test.ps1 test_build_catalog -KeepLog
+extends Node
+
+const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
+const BuildPlacerScript := preload("res://scripts/city/build_placer.gd")
 
 
-func _initialize() -> void:
+func _ready() -> void:
 	var failed := false
-	var recipes: Array = BuildCatalog.all()
+	var recipes: Array = BuildCatalogScript.all()
 	if recipes.size() < 8:
 		push_error("FAIL expected at least 8 recipes, got %d" % recipes.size())
 		failed = true
@@ -24,16 +29,17 @@ func _initialize() -> void:
 		print("OK recipe %-10s  %4d voxels  (%s)" % [recipe.id, n, recipe.display_name])
 
 	## Front voxel of a 1×1×1 at (0,0,-1) must land toward +Z when facing the player north of it.
-	var front := BuildPlacer._rotate(Vector3i(0, 0, -1), 0)
+	var front := BuildPlacerScript._rotate(Vector3i(0, 0, -1), 0)
 	if front != Vector3i(0, 0, 1):
 		push_error("FAIL rotate toward +Z: got %s" % front)
 		failed = true
 	else:
 		print("OK rotation maps recipe front toward the player")
 
-	var by := BuildCatalog.by_id("cottage")
+	var by := BuildCatalogScript.by_id("cottage")
 	if by == null or by.id != "cottage":
 		push_error("FAIL by_id(cottage)")
 		failed = true
 
-	quit(1 if failed else 0)
+	print("RESULT: %s" % ("OK" if not failed else "FAIL"))
+	get_tree().quit(1 if failed else 0)

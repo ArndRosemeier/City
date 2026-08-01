@@ -2,6 +2,8 @@
 class_name VoxelMaterial
 extends Object
 
+const GameDataScript := preload("res://scripts/city/game_data.gd")
+
 const AIR := 0
 const BEDROCK := 1
 const ROAD := 2
@@ -129,13 +131,7 @@ const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
 
-## Rarity weights for pick_gem (sum = 100).
-const GEM_WEIGHT_QUARTZ := 48
-const GEM_WEIGHT_AMBER := 24
-const GEM_WEIGHT_TOPAZ := 14
-const GEM_WEIGHT_SAPPHIRE := 8
-const GEM_WEIGHT_EMERALD := 4
-const GEM_WEIGHT_DIAMOND := 2
+## Rarity weights live in gamedata.json (`district_gems.rarity_weights`) via GameData.
 
 ## Which cell face is the tall eaves / ridge side of a slope wedge.
 const SLOPE_HIGH_POS_X := 0
@@ -356,41 +352,48 @@ static func is_castle_block(id: int) -> bool:
 	return id == CASTLE_BLOCK or id == CASTLE_BLOCK_MOSSY
 
 
-static func gem_rarity_weight(id: int) -> int:
-	match id:
+static func gem_item_id(mat_id: int) -> String:
+	match mat_id:
 		GEM_QUARTZ:
-			return GEM_WEIGHT_QUARTZ
+			return "gem_quartz"
 		GEM_AMBER:
-			return GEM_WEIGHT_AMBER
+			return "gem_amber"
 		GEM_TOPAZ:
-			return GEM_WEIGHT_TOPAZ
+			return "gem_topaz"
 		GEM_SAPPHIRE:
-			return GEM_WEIGHT_SAPPHIRE
+			return "gem_sapphire"
 		GEM_EMERALD:
-			return GEM_WEIGHT_EMERALD
+			return "gem_emerald"
 		GEM_DIAMOND:
-			return GEM_WEIGHT_DIAMOND
+			return "gem_diamond"
 		_:
-			return 0
+			return ""
+
+
+static func gem_rarity_weight(id: int) -> int:
+	var item_id := gem_item_id(id)
+	if item_id.is_empty():
+		return 0
+	return GameDataScript.gem_rarity_weight(item_id)
 
 
 ## Weighted roll across the fantasy gem chart (weights sum to 100).
 static func pick_gem(rng: RandomNumberGenerator) -> int:
-	var roll := rng.randi_range(1, 100)
-	if roll <= GEM_WEIGHT_QUARTZ:
+	var mats: Array[int] = [
+		GEM_QUARTZ, GEM_AMBER, GEM_TOPAZ, GEM_SAPPHIRE, GEM_EMERALD, GEM_DIAMOND
+	]
+	var total := 0
+	for mat in mats:
+		total += gem_rarity_weight(mat)
+	if total <= 0:
+		push_error("VoxelMaterial.pick_gem: rarity weights sum to 0")
 		return GEM_QUARTZ
-	roll -= GEM_WEIGHT_QUARTZ
-	if roll <= GEM_WEIGHT_AMBER:
-		return GEM_AMBER
-	roll -= GEM_WEIGHT_AMBER
-	if roll <= GEM_WEIGHT_TOPAZ:
-		return GEM_TOPAZ
-	roll -= GEM_WEIGHT_TOPAZ
-	if roll <= GEM_WEIGHT_SAPPHIRE:
-		return GEM_SAPPHIRE
-	roll -= GEM_WEIGHT_SAPPHIRE
-	if roll <= GEM_WEIGHT_EMERALD:
-		return GEM_EMERALD
+	var roll := rng.randi_range(1, total)
+	for mat in mats:
+		var w := gem_rarity_weight(mat)
+		if roll <= w:
+			return mat
+		roll -= w
 	return GEM_DIAMOND
 
 

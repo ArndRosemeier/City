@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Build a self-contained HTML report from combat JSON tables.
+"""Build a self-contained HTML report from combat slices in gamedata.json.
 
-Reads:
-  assets/combat/attacks.json
-  assets/combat/behaviours.json
-  assets/monsters/combat_table.json
+Reads combat keys from:
+  assets/gamedata.json
 
 Merge / derive (implemented in validate_combat_tables.py):
   1) max scalars / union lists across assigned templates
@@ -28,11 +26,13 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import gamedata_io as gd  # noqa: E402
 import validate_combat_tables as validate_mod  # noqa: E402
 
-ATTACKS_PATH = validate_mod.ATTACKS_PATH
-BEHAVIOURS_PATH = validate_mod.BEHAVIOURS_PATH
-COMBAT_TABLE_PATH = validate_mod.TABLE_PATH
+GAMEDATA_PATH = gd.GAMEDATA_PATH
+ATTACKS_PATH = GAMEDATA_PATH
+BEHAVIOURS_PATH = GAMEDATA_PATH
+COMBAT_TABLE_PATH = GAMEDATA_PATH
 OUT_PATH = Path(__file__).resolve().parent / "combat_tables.html"
 
 SCALAR_KEYS = validate_mod.SCALAR_KEYS
@@ -284,9 +284,7 @@ td.list { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
 <h1>Combat Tables Report</h1>
 <p class="meta">
   Generated from
-  <code>assets/combat/attacks.json</code>,
-  <code>assets/combat/behaviours.json</code>, and
-  <code>assets/monsters/combat_table.json</code>.
+  <code>assets/gamedata.json</code> (attacks, behaviours, templates, monsters).
   Who a body hunts is not in here: hostility is faction against faction, and the player
   and every pedestrian are <code>human</code>. Attacks prefer behaviour pools.
   Scalars: <strong>max</strong> across templates.
@@ -354,20 +352,21 @@ def open_in_browser(path: Path) -> None:
 
 
 def main() -> int:
-    attacks_doc = load_json(ATTACKS_PATH)
-    behaviours_doc = load_json(BEHAVIOURS_PATH)
-    combat_doc = load_json(COMBAT_TABLE_PATH)
+    root = gd.load_gamedata()
+    attacks_doc = gd.attacks_doc(root)
+    behaviours_doc = gd.behaviours_doc(root)
+    combat_doc = gd.table_doc(root)
 
     if "attacks" not in attacks_doc or not isinstance(attacks_doc["attacks"], dict):
-        raise ValueError(f"{ATTACKS_PATH}: missing object key 'attacks'")
+        raise ValueError(f"{GAMEDATA_PATH}: missing object key 'attacks'")
     if "behaviours" not in behaviours_doc or not isinstance(
         behaviours_doc["behaviours"], dict
     ):
-        raise ValueError(f"{BEHAVIOURS_PATH}: missing object key 'behaviours'")
+        raise ValueError(f"{GAMEDATA_PATH}: missing object key 'behaviours'")
     if "templates" not in combat_doc or not isinstance(combat_doc["templates"], dict):
-        raise ValueError(f"{COMBAT_TABLE_PATH}: missing object key 'templates'")
+        raise ValueError(f"{GAMEDATA_PATH}: missing object key 'templates'")
     if "monsters" not in combat_doc or not isinstance(combat_doc["monsters"], list):
-        raise ValueError(f"{COMBAT_TABLE_PATH}: missing list key 'monsters'")
+        raise ValueError(f"{GAMEDATA_PATH}: missing list key 'monsters'")
 
     attacks: dict[str, dict[str, Any]] = attacks_doc["attacks"]
     behaviours: dict[str, dict[str, Any]] = behaviours_doc["behaviours"]

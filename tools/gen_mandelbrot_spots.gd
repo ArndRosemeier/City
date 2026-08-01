@@ -1,6 +1,6 @@
 ## Builds the curated Mandelbrot spot catalog that fractal panels mark for lock-on.
 ##
-## The catalog is committed as static data (`scripts/city/mandelbrot_spots.gd`); this tool is how
+## The catalog is committed in `assets/gamedata.json` (`mandelbrot_spots.spots`); this tool is how
 ## that data was produced and how it is regenerated. Nothing in the game searches at runtime.
 ##
 ## Method: start from the classic named locations (seahorse / elephant / triple spiral / the
@@ -113,6 +113,8 @@ func _ready() -> void:
 	if found.size() > WANT_TOTAL:
 		found.resize(WANT_TOTAL)
 	_print_table(found)
+	if found.size() >= 80:
+		_write_gamedata_spots(found)
 	print("RESULT: %s" % ("OK" if found.size() >= 80 else "FAILED"))
 	get_tree().quit(0 if found.size() >= 80 else 1)
 
@@ -290,6 +292,46 @@ func _print_table(spots: Array[Dictionary]) -> void:
 			]
 		)
 	print("--- END SPOT TABLE ---")
+
+
+func _write_gamedata_spots(spots: Array[Dictionary]) -> void:
+	const PATH := "res://assets/gamedata.json"
+	var raw := FileAccess.get_file_as_string(PATH)
+	if raw.is_empty():
+		push_error("gen_mandelbrot_spots: cannot read %s" % PATH)
+		assert(false, "gen_mandelbrot_spots: missing gamedata.json")
+		return
+	var parsed: Variant = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_error("gen_mandelbrot_spots: %s root must be an object" % PATH)
+		assert(false, "gen_mandelbrot_spots: bad gamedata root")
+		return
+	var doc: Dictionary = parsed
+	var sec: Variant = doc.get("mandelbrot_spots", {})
+	if typeof(sec) != TYPE_DICTIONARY:
+		sec = {}
+	var rows: Array = []
+	for s: Dictionary in spots:
+		rows.append(
+			{
+				"name": str(s["name"]),
+				"cx": _dec(float(s["cx"])),
+				"cy": _dec(float(s["cy"])),
+				"scale": _dec(float(s["scale"])),
+			}
+		)
+	var section: Dictionary = (sec as Dictionary).duplicate(true)
+	section["spots"] = rows
+	doc["mandelbrot_spots"] = section
+	var out := JSON.stringify(doc, "  ")
+	var f := FileAccess.open(PATH, FileAccess.WRITE)
+	if f == null:
+		push_error("gen_mandelbrot_spots: cannot write %s" % PATH)
+		assert(false, "gen_mandelbrot_spots: write failed")
+		return
+	f.store_string(out + "\n")
+	f.close()
+	print("Wrote %d spots → %s" % [rows.size(), PATH])
 
 
 static func _dec(x: float) -> String:

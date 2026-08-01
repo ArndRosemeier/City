@@ -79,8 +79,8 @@ Tetris (after **T**): **1** left · **2** rotate · **3** right · **4** fast dr
 ```
 assets/humans/     MPFB bases, outfits, Quaternius Idle/Walk
 assets/city/       Voxel textures
-assets/combat/     Shared attacks.json + behaviours.json
-assets/monsters/   combat_table.json (templates + per-body rows)
+assets/gamedata.json   Authored game data (combat, items, recipes, districts, abilities, spots)
+assets/monsters/       Monster meshes / kits (combat rows live in gamedata.json)
 assets/vehicles/   Quaternius CC0 car GLBs + catalog.json
 scenes/            city_poc.tscn, main.tscn
 scripts/city/      District generation, crowd, street lights; CombatTable resolver
@@ -89,21 +89,26 @@ scripts/humans/    Outfits, proportions
 LICENSE_ASSETS.md  Content license provenance
 ```
 
-## Combat tables
+## Game data / combat tables
 
-Editable data for monster templates, behaviours, attacks, and per-body overrides lives in
-JSON under `assets/combat/` and `assets/monsters/combat_table.json`. Resolve rules
-(template scalar **max**, list **union**, prey-weight **average**, body
-`attacks_extra` / hard `attacks`, attack damage = `damage_vs_*` × `damage_mult`)
-are implemented twice and kept in lockstep:
+Authored game data (combat, items, craft/build recipes, district gems, abilities,
+chest loot, recipe sites, Mandelbrot spots) lives in `assets/gamedata.json`.
+Runtime loads it only through `scripts/city/game_data.gd` (`GameData`); Python tools
+use `tools/gamedata_io.py`.
+
+Combat resolve rules (template scalar **max**, list **union**, body
+`attacks_extra` / hard `attacks`, attack damage = `damage_vs_*` × `damage_mult`;
+hostility is faction-only) are implemented twice and kept in lockstep:
 
 - Python: `tools/combat_resolve.py` (used by the editor and validators)
 - Godot: `scripts/city/combat_table.gd` (`CombatTable.resolve`)
 
 ```
-python tools/edit_combat_tables.py          # tkinter editor (effective-stats preview)
-python tools/validate_combat_tables.py      # schema + refs + golden sync check
+python tools/edit_gamedata.py               # tkinter editor (all gamedata sections)
+python tools/validate_combat_tables.py      # combat schema + refs + golden sync check
 python tools/sync_combat_resolve.py --write # regenerate tools/fixtures/combat_effective_stats.json
+python tools/simulate_monster_duels.py --fighter kaykit/Skeleton_Warrior --duels 10
+python tools/simulate_monster_duels.py --all-pairs --duels 10   # open-field 1v1 balance matrix
 powershell -File tools/run_test.ps1 test_combat_table_sync
 ```
 

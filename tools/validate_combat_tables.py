@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Validate shared attacks, behaviours, and monster combat table.
 
-Checks:
-  - assets/combat/attacks.json schema (required fields, kinds, optional monster_*)
-  - assets/combat/behaviours.json (attack pool per behaviour)
-  - assets/monsters/combat_table.json templates/monsters against CreatureCatalog
+Checks combat slices in assets/gamedata.json:
+  - attacks schema (required fields, kinds, optional monster_*)
+  - behaviours (attack pool per behaviour)
+  - templates/monsters against CreatureCatalog
   - every behaviour id used by templates/monsters exists
   - every attack id on a behaviour / template / monster exists
   - no leftover prey weighting anywhere: hostility is faction-only
@@ -34,10 +34,14 @@ if str(_TOOLS_DIR) not in sys.path:
 # Pure merge/resolve helpers — keep in sync with scripts/city/combat_table.gd
 import combat_resolve as resolve_mod  # noqa: E402
 
+import gamedata_io as gd  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
-ATTACKS_PATH = ROOT / "assets" / "combat" / "attacks.json"
-BEHAVIOURS_PATH = ROOT / "assets" / "combat" / "behaviours.json"
-TABLE_PATH = ROOT / "assets" / "monsters" / "combat_table.json"
+GAMEDATA_PATH = gd.GAMEDATA_PATH
+## Legacy aliases so older tool imports keep working — all point at the unified file.
+ATTACKS_PATH = GAMEDATA_PATH
+BEHAVIOURS_PATH = GAMEDATA_PATH
+TABLE_PATH = GAMEDATA_PATH
 CATALOG_PATH = ROOT / "scripts" / "city" / "creature_catalog.gd"
 
 SCALAR_KEYS = resolve_mod.SCALAR_KEYS
@@ -548,7 +552,7 @@ def validate_combat_table_document(
     if "attacks" in table:
         fail(
             f"{TABLE_PATH.relative_to(ROOT)}: inline 'attacks' block must be removed; "
-            "use assets/combat/attacks.json",
+            "use assets/gamedata.json attacks",
             errors,
         )
 
@@ -622,11 +626,11 @@ def validate_combat_data(
     shared_attacks = validate_attacks_document(attacks_doc, errors)
     attack_ids = set(shared_attacks.keys())
     if behaviours_doc is None:
-        if not BEHAVIOURS_PATH.is_file():
-            fail(f"missing {BEHAVIOURS_PATH}", errors)
+        if not GAMEDATA_PATH.is_file():
+            fail(f"missing {GAMEDATA_PATH}", errors)
             behaviours: dict[str, dict] = {}
         else:
-            behaviours_doc = json.loads(BEHAVIOURS_PATH.read_text(encoding="utf-8"))
+            behaviours_doc = gd.behaviours_doc(gd.load_gamedata())
             behaviours = validate_behaviours_document(behaviours_doc, attack_ids, errors)
     else:
         behaviours = validate_behaviours_document(behaviours_doc, attack_ids, errors)
@@ -640,19 +644,14 @@ def main() -> int:
     if not CATALOG_PATH.is_file():
         print(f"FAIL: missing {CATALOG_PATH}", file=sys.stderr)
         return 1
-    if not TABLE_PATH.is_file():
-        print(f"FAIL: missing {TABLE_PATH}", file=sys.stderr)
-        return 1
-    if not ATTACKS_PATH.is_file():
-        print(f"FAIL: missing {ATTACKS_PATH}", file=sys.stderr)
-        return 1
-    if not BEHAVIOURS_PATH.is_file():
-        print(f"FAIL: missing {BEHAVIOURS_PATH}", file=sys.stderr)
+    if not GAMEDATA_PATH.is_file():
+        print(f"FAIL: missing {GAMEDATA_PATH}", file=sys.stderr)
         return 1
 
-    attacks_doc = json.loads(ATTACKS_PATH.read_text(encoding="utf-8"))
-    behaviours_doc = json.loads(BEHAVIOURS_PATH.read_text(encoding="utf-8"))
-    table = json.loads(TABLE_PATH.read_text(encoding="utf-8"))
+    root = gd.load_gamedata()
+    attacks_doc = gd.attacks_doc(root)
+    behaviours_doc = gd.behaviours_doc(root)
+    table = gd.table_doc(root)
     errors = validate_combat_data(attacks_doc, table, behaviours_doc)
 
     shared_attacks = (
@@ -672,9 +671,7 @@ def main() -> int:
 
     if errors:
         print(
-            f"FAIL: {len(errors)} problem(s) in combat tables "
-            f"({ATTACKS_PATH.relative_to(ROOT)}, {BEHAVIOURS_PATH.relative_to(ROOT)}, "
-            f"{TABLE_PATH.relative_to(ROOT)})"
+            f"FAIL: {len(errors)} problem(s) in {GAMEDATA_PATH.relative_to(ROOT)}"
         )
         for err in errors:
             print(f"  - {err}")

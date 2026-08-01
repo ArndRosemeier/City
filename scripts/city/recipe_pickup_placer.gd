@@ -21,9 +21,11 @@ const SITE_CRYPT := 6
 const SITE_ROOFTOP := 7
 const SITE_CHEST := 8
 
-## Scrolls one district may hold from the stream-time placer. Fractal peak recipes sit outside
-## this cap — each of the four panels can pay once when the player follows its lock-on.
-const PER_DISTRICT_MAX := 2
+const GameDataScript := preload("res://scripts/city/game_data.gd")
+
+## Scrolls one district may hold from the stream-time placer (gamedata). Fractal peak recipes
+## sit outside this cap — each of the four panels can pay once when the player follows its lock-on.
+static var PER_DISTRICT_MAX: int = 2
 
 var _pickups: Array[RecipePickup] = []
 
@@ -53,32 +55,17 @@ static func site_kind_name(kind: int) -> String:
 			return "unknown"
 
 
-## Out of a hundred. The four landmark sites are certain: they are already rare because the
-## landmark itself is rare, and rolling dice on top of that only makes the climb feel cheated.
+## Out of a hundred. Authored in gamedata.json `recipe_sites.chance_pct`.
 static func chance_pct(kind: int) -> int:
-	match kind:
-		SITE_HILL_SUMMIT:
-			return 100
-		SITE_CASTLE_TOWER:
-			return 100
-		SITE_ARENA_TOWER:
-			return 100
-		SITE_GAZEBO:
-			return 100
-		SITE_LAKE_ISLAND:
-			return 45
-		SITE_FRACTAL_PEAK:
-			## Earned by following a lock-on Create — the discovery *is* the roll.
-			return 100
-		SITE_CRYPT:
-			return 25
-		SITE_ROOFTOP:
-			return 8
-		SITE_CHEST:
-			return 6
-		_:
-			push_error("RecipePickupPlacer.chance_pct: unknown kind %d" % kind)
-			return 0
+	PER_DISTRICT_MAX = int(GameDataScript.recipe_sites().get("per_district_max", 2))
+	var chances: Dictionary = GameDataScript.recipe_sites().get("chance_pct", {}) as Dictionary
+	var key := site_kind_name(kind)
+	if key == "unknown":
+		return 0
+	if not chances.has(key):
+		push_error("RecipePickupPlacer.chance_pct: no gamedata chance for '%s'" % key)
+		return 0
+	return int(chances[key])
 
 
 ## Deterministic in `site_seed`, so the same spot in the same world answers the same way however
