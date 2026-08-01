@@ -54,6 +54,8 @@ const BLOOM_TINTS: Dictionary[String, Color] = {
 static func has_bespoke_shader(id: int) -> bool:
 	if VoxelMaterial.is_gem(id):
 		return true
+	if VoxelMaterial.is_zoo_turf(id):
+		return true
 	match id:
 		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE:
 			return true
@@ -530,17 +532,28 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.roughness = 0.18
 			s.metallic = 0.05
 		VoxelMaterial.ZOO_TURF_UNDEAD:
-			_zoo_turf_spec(s, Color(0.62, 0.72, 0.70, 1.0))
+			_zoo_turf_spec(s, VoxelMaterial.color(VoxelMaterial.ZOO_TURF_UNDEAD))
 		VoxelMaterial.ZOO_TURF_INFERNAL:
-			_zoo_turf_spec(s, Color(0.92, 0.48, 0.36, 1.0))
+			_zoo_turf_spec(s, VoxelMaterial.color(VoxelMaterial.ZOO_TURF_INFERNAL))
 		VoxelMaterial.ZOO_TURF_HORDE:
-			_zoo_turf_spec(s, Color(0.86, 0.72, 0.38, 1.0))
+			_zoo_turf_spec(s, VoxelMaterial.color(VoxelMaterial.ZOO_TURF_HORDE))
 		VoxelMaterial.ZOO_TURF_BEAST:
-			_zoo_turf_spec(s, Color(0.70, 0.60, 0.44, 1.0))
+			_zoo_turf_spec(s, VoxelMaterial.color(VoxelMaterial.ZOO_TURF_BEAST))
 		VoxelMaterial.ZOO_TURF_GROVE:
-			_zoo_turf_spec(s, Color(0.48, 0.80, 0.48, 1.0))
+			_zoo_turf_spec(s, VoxelMaterial.color(VoxelMaterial.ZOO_TURF_GROVE))
 		VoxelMaterial.ZOO_TURF_ARCANE:
-			_zoo_turf_spec(s, Color(0.60, 0.54, 0.96, 1.0))
+			_zoo_turf_spec(s, VoxelMaterial.color(VoxelMaterial.ZOO_TURF_ARCANE))
+		VoxelMaterial.ZOO_PLATE_RIM:
+			## Curb around an inset turf well — small tile scale so the lip reads as edged.
+			s.albedo_file = "wrought_iron.jpg"
+			s.normal_file = "wrought_iron_normal.jpg"
+			s.tile_meters = Vector2(0.5, 0.5)
+			s.tint = Color(0.55, 0.52, 0.58, 1.0)
+			s.roughness = 0.7
+			s.metallic = 0.35
+			s.normal_strength = 1.0
+			s.weathering = 0.35
+			s.grime = 0.4
 		VoxelMaterial.DOOR:
 			## Closed doorway plug — timber, not masonry.
 			s.albedo_file = "wood.jpg"
@@ -561,8 +574,8 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 	return s
 
 
-## Faction home turf: one packed-earth plate, retinted per owner. The tint is the whole
-## read — a player has to tell whose ground they stepped on before it starts burning.
+## Faction home turf (fallback atlas / debris). Live meshes use the glowing gem shader
+## in VoxelBlockLibrary — these specs only matter when that path is skipped.
 static func _zoo_turf_spec(s: VoxelSurfaceSpec, tint: Color) -> void:
 	s.albedo_file = "gravel.jpg"
 	s.normal_file = "gravel_normal.jpg"

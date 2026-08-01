@@ -137,12 +137,15 @@ const ZOO_TURF_GROVE := 264
 const ZOO_TURF_ARCANE := 265
 const ZOO_TURF_FIRST := ZOO_TURF_UNDEAD
 const ZOO_TURF_LAST := ZOO_TURF_ARCANE
+## Dark curb around an inset 2×2 turf well — the rim that makes a plate look placed,
+## not painted onto the dirt.
+const ZOO_PLATE_RIM := 266
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
 ## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-const COUNT := 266
+const COUNT := 267
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -206,6 +209,7 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == TIMBER
 		or is_fractal_band(id)
 		or is_zoo_turf(id)
+		or id == ZOO_PLATE_RIM
 	)
 
 
@@ -213,7 +217,7 @@ static func is_ground_surface(id: int) -> bool:
 	## Outdoor ground / road deck — meteor auto-spawns land here, never on buildings.
 	## Diggable STONE substrate under the deck is not a landing / ped surface.
 	match id:
-		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL, FRACTAL_GLOW, FRACTAL_INTERIOR:
+		ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_FLOOR, GRAVE_PATH, GRAVE_SOIL, FRACTAL_GLOW, FRACTAL_INTERIOR, ZOO_PLATE_RIM:
 			return true
 		_:
 			return is_zoo_turf(id)
@@ -228,7 +232,7 @@ static func is_diggable_substrate(id: int) -> bool:
 ## collapsing column. Stone and cave fabric cascade like built structure.
 static func is_self_supporting_terrain(id: int) -> bool:
 	match id:
-		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR:
+		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, ZOO_PLATE_RIM:
 			return true
 		_:
 			return is_fractal_band(id) or is_zoo_turf(id)
@@ -237,7 +241,7 @@ static func is_self_supporting_terrain(id: int) -> bool:
 static func is_building_fabric(id: int) -> bool:
 	## Structural / prop voxels: walls, roofs, trees, fixtures — not ground, road, or diggable stone.
 	match id:
-		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, LOS_VEIL:
+		AIR, BEDROCK, STONE, ROAD, SIDEWALK, PLAZA, PARK, ASPHALT, GRAVEL, DIRT, WATER, CURB, ROAD_LINE, CROSSWALK, TILES, CAVE_WALL, CAVE_FLOOR, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, LOS_VEIL, ZOO_PLATE_RIM:
 			return false
 		METEOR_ROCK, INFECTION, INFECTION_LEAD, GAMEBOY:
 			return true
@@ -327,6 +331,7 @@ static func hardness(id: int) -> Hardness:
 		or id == CAVE_WALL or id == CAVE_FLOOR or id == CURB or id == ROAD
 		or id == ROAD_LINE or id == CROSSWALK or id == ASPHALT or id == SIDEWALK
 		or id == PLAZA or id == PAINT or id == TIMBER or id == GRAVE_PATH
+		or id == ZOO_PLATE_RIM
 	):
 		return Hardness.ROCK
 	## Dirt, park, plaster, glass, leaves, bark, props, soil, …
@@ -569,17 +574,21 @@ static func color(id: int) -> Color:
 		ZOO_FENCE_GLASS:
 			return Color(0.72, 0.24, 0.26, 0.36)
 		ZOO_TURF_UNDEAD:
-			return Color(0.36, 0.42, 0.40)
+			## Saturated enough to glow as emissive plates — muted earth tones vanished at range.
+			return Color(0.42, 0.88, 0.58)
 		ZOO_TURF_INFERNAL:
-			return Color(0.52, 0.24, 0.18)
+			return Color(1.0, 0.38, 0.14)
 		ZOO_TURF_HORDE:
-			return Color(0.46, 0.38, 0.20)
+			return Color(0.95, 0.72, 0.18)
 		ZOO_TURF_BEAST:
-			return Color(0.34, 0.30, 0.22)
+			return Color(0.82, 0.58, 0.28)
 		ZOO_TURF_GROVE:
-			return Color(0.26, 0.42, 0.26)
+			return Color(0.32, 0.95, 0.42)
 		ZOO_TURF_ARCANE:
-			return Color(0.32, 0.28, 0.50)
+			return Color(0.62, 0.42, 1.0)
+		ZOO_PLATE_RIM:
+			## Near-black curb — frames the glowing well without competing with it.
+			return Color(0.16, 0.15, 0.18)
 		_:
 			if is_room_prop(id):
 				return Color(0.55, 0.4, 0.26)

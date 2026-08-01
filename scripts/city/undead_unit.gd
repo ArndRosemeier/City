@@ -60,6 +60,9 @@ const GROW_LOG_RATE := 0.55
 ## length wins under this — the KayKit flinch is a third of a second and the Blob one shorter —
 ## and the cap is here so a family that ships a two-second stagger cannot stop a body walking.
 const HIT_REACT_MAX_HOLD_SEC := 0.6
+## Same idea for strike / cast clips: `_tick_nav` runs after combat every frame and would
+## otherwise replace a punch with Walking_A before the swing is visible.
+const COMBAT_ANIM_MAX_HOLD_SEC := 1.15
 ## Collision stays walkable — full 10× body scale on the capsule embeds in buildings.
 const COL_RADIUS_MAX_M := 1.25
 const COL_HEIGHT_MAX_M := 3.4
@@ -131,6 +134,8 @@ var _health_bar: MonsterHealthBar = null
 var _model_reach: float = 0.0
 ## Seconds the flinch still owns the rig.
 var _hit_react_left: float = 0.0
+## Seconds a melee / cast clip still owns the rig against locomotion and idle.
+var _combat_anim_left: float = 0.0
 ## The orb is away; hold CAST one more frame so the spellcast clip is not stomped by the
 ## walking states' idle.
 var _cast_fired: bool = false
@@ -140,6 +145,8 @@ var _combat: RefCounted = null
 var _faction: int = -1
 ## Cached living-prey aim for the combat tick (refreshed with the goal provider).
 var _combat_prey: Vector3 = Vector3.INF
+## Accumulator for stride SFX while locomoting (mirrors CityWalker cadence).
+var _footstep_accum: float = 0.0
 
 
 ## `p_seed` decides which body out of the catalogue this unit wears and every procedural
@@ -291,17 +298,59 @@ func face_combat_prey(world: Vector3) -> void:
 
 
 func play_combat_windup(attack_id: String) -> void:
-	if attack_id == "orb_convert" or attack_id == "eye_laser" or attack_id == "blaster" or attack_id == "charged_blast":
-		_play_action(CreatureClips.Action.CAST)
-	else:
-		_play_action(CreatureClips.Action.MELEE)
+	## Restart so the telegraph always begins at the wind-up pose.
+	_play_combat_clip(_combat_clip_action(attack_id), true)
 
 
 func play_combat_strike(attack_id: String) -> void:
-	if attack_id == "orb_convert" or attack_id == "eye_laser" or attack_id == "blaster" or attack_id == "charged_blast":
-		_play_action(CreatureClips.Action.CAST)
-	else:
-		_play_action(CreatureClips.Action.MELEE)
+	## After a windup the same clip is already running — continue it rather than restarting.
+	_play_combat_clip(_combat_clip_action(attack_id), false)
+
+
+func _combat_clip_action(attack_id: String) -> CreatureClips.Action:
+	if (
+		attack_id == "orb_convert"
+		or attack_id == "eye_laser"
+		or attack_id == "blaster"
+		or attack_id == "charged_blast"
+	):
+		return CreatureClips.Action.CAST
+	return CreatureClips.Action.MELEE
+
+
+## Play (or continue) a combat clip and pin the rig so locomotion cannot erase it mid-swing.
+func _play_combat_clip(action: CreatureClips.Action, restart: bool) -> void:
+	if _anim == null:
+		return
+	var clip := _clip_for(action)
+	if clip.is_empty():
+		push_error(
+			"UndeadUnit %s: %s has no %s clip to play"
+			% [name, "no body" if _entry == null else _entry.id, CreatureClips.action_name(action)]
+		)
+		return
+	var anim := _anim.get_animation(clip)
+	if anim == null:
+		push_error(
+			"UndeadUnit: %s resolved %s to %s, a clip it does not have"
+			% [
+				"no body" if _entry == null else _entry.id,
+				CreatureClips.action_name(action),
+				clip,
+			]
+		)
+		return
+	_set_anim_speed(1.0 if not is_giant() else GIANT_ANIM_SPEED)
+	var need_start := restart or _current_anim != clip or not _anim.is_playing()
+	if need_start:
+		_current_anim = clip
+		if _anim.active:
+			_anim.play(clip)
+			_anim.seek(0.0, true)
+	var left := anim.length
+	if _anim.active and _current_anim == clip and _anim.is_playing():
+		left = maxf(anim.length - _anim.current_animation_position, 0.05)
+	_combat_anim_left = minf(left, COMBAT_ANIM_MAX_HOLD_SEC)
 
 
 func fire_convert_orb(toward: Vector3) -> void:
@@ -945,6 +994,7 @@ func tick(delta: float) -> void:
 	_cast_cd = maxf(0.0, _cast_cd - delta)
 	_retarget_cd = maxf(0.0, _retarget_cd - delta)
 	_hit_react_left = maxf(0.0, _hit_react_left - delta)
+	_combat_anim_left = maxf(0.0, _combat_anim_left - delta)
 	if _provider != null:
 		_provider.tick_pursuit(delta)
 	if _combat != null:
@@ -1089,15 +1139,36 @@ func _animate_motion(moved: Vector3, delta: float) -> void:
 	var flat := Vector3(moved.x, 0.0, moved.z)
 	var ground_speed := flat.length() / delta
 	if ground_speed < MOVE_ANIM_EPS_MPS:
-		## Casting and flinching drive their own clips.
-		if state != State.CAST and _hit_react_left <= 0.0:
+		_footstep_accum = 0.0
+		## Casting, striking, and flinching drive their own clips.
+		if state != State.CAST and _hit_react_left <= 0.0 and _combat_anim_left <= 0.0:
 			_play_action(CreatureClips.Action.IDLE)
 		return
 	_face_direction(flat, delta)
-	## A staggered body still turns and still walks its corridor — only the rig is busy.
-	if _hit_react_left > 0.0:
+	## A staggered or swinging body still turns — only the locomotion clip waits.
+	if _hit_react_left > 0.0 or _combat_anim_left > 0.0:
 		return
+	_update_footstep_sfx(delta, ground_speed)
 	_play_locomotion(ground_speed)
+
+
+func _update_footstep_sfx(delta: float, ground_speed: float) -> void:
+	if not is_on_floor():
+		_footstep_accum = 0.0
+		return
+	## Stride interval grows with size so giants don't machine-gun footsteps.
+	var interval := clampf(0.34 * sqrt(character_scale), 0.24, 0.9)
+	var cadence := clampf(ground_speed / maxf(_move_speed(), 0.01), 0.55, 1.6)
+	_footstep_accum += delta * cadence
+	if _footstep_accum < interval:
+		return
+	_footstep_accum = 0.0
+	var tree := get_tree()
+	if tree == null:
+		return
+	var audio := tree.get_first_node_in_group(&"city_audio")
+	if audio != null and audio.has_method("play_monster_footstep"):
+		audio.call("play_monster_footstep", global_position, character_scale)
 
 
 func _play_locomotion(ground_speed: float) -> void:

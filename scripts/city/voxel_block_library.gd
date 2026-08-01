@@ -72,6 +72,15 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 		VoxelMaterial.CURB:
 			## Low curb lip (~0.2 m world) so CharacterBody can step/jump it.
 			return _mesh_model(id, _mesh_curb(), false, true, AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.4, 1.0)))
+		VoxelMaterial.ZOO_PLATE_RIM:
+			## Short curb around a turf pad — taller than the glow so the lip reads.
+			return _mesh_model(
+				id,
+				_mesh_zoo_plate_rim(),
+				false,
+				false,
+				AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, PLATE_RIM_H, 1.0))
+			)
 		VoxelMaterial.ROAD_LINE:
 			return _mesh_model(id, _mesh_road_line(), false, true, AABB(Vector3.ZERO, Vector3.ONE))
 		VoxelMaterial.PAINT:
@@ -103,6 +112,15 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 				return _make_cube(id)
 			if VoxelMaterial.is_room_prop(id):
 				return _make_room_prop_model(id)
+			if VoxelMaterial.is_zoo_turf(id):
+				## Short glowing slab — a faction pad, not a full dirt cell painted over.
+				return _mesh_model(
+					id,
+					_mesh_zoo_turf_pad(),
+					false,
+					false,
+					AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, PLATE_PAD_H, 1.0))
+				)
 			return _make_cube(id)
 
 
@@ -611,6 +629,34 @@ static func _mesh_curb() -> ArrayMesh:
 	return st.commit()
 
 
+## Unit-cell heights for zoo faction pads (cell is 0..1). Short on purpose — less than a
+## full voxel of drop from neighbouring dirt, with the rim a hair taller as the lip.
+const PLATE_PAD_H := 0.32
+const PLATE_RIM_H := 0.48
+
+
+## Glowing 2×2 pad body: a low slab with a slight bevel so it does not read as a flat stamp.
+static func _mesh_zoo_turf_pad() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := PLATE_PAD_H
+	_emit_box(st, Vector3(0.0, 0.0, 0.0), Vector3(1.0, h * 0.72, 1.0))
+	_emit_box(st, Vector3(0.06, h * 0.72, 0.06), Vector3(0.94, h, 0.94))
+	st.index()
+	return st.commit()
+
+
+## Dark lip around the pad — taller than the glow, still well under a full cell.
+static func _mesh_zoo_plate_rim() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := PLATE_RIM_H
+	_emit_box(st, Vector3(0.0, 0.0, 0.0), Vector3(1.0, h * 0.7, 1.0))
+	_emit_box(st, Vector3(0.05, h * 0.7, 0.05), Vector3(0.95, h, 0.95))
+	st.index()
+	return st.commit()
+
+
 ## Lane paint: full asphalt body + raised center stripe (one material).
 static func _mesh_road_line() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -688,6 +734,7 @@ static var _fractal_interior_mat: ShaderMaterial = null
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
 static var _zoo_fence_line_mat: ShaderMaterial = null
+static var _zoo_turf_mat_cache: Dictionary = {}
 
 
 ## Terrain block material. Everything except infection / meteor rock / Game Boy / gems
@@ -709,6 +756,8 @@ static func block_material_for(id: int) -> Material:
 		return fractal_band_material(id)
 	if id == VoxelMaterial.ZOO_FENCE_LINE:
 		return zoo_fence_line_material()
+	if VoxelMaterial.is_zoo_turf(id):
+		return zoo_turf_material(id)
 	## Room props are authored meshes — grain follows the prop, not the street.
 	if VoxelMaterial.is_room_prop(id) or id == VoxelMaterial.PROP_FOOTPRINT:
 		return surface_material(id, true)
@@ -734,6 +783,8 @@ static func debris_material_for(id: int) -> Material:
 		return fractal_band_material(id)
 	if id == VoxelMaterial.ZOO_FENCE_LINE:
 		return zoo_fence_line_material()
+	if VoxelMaterial.is_zoo_turf(id):
+		return zoo_turf_material(id)
 	return surface_material(id, true)
 
 
@@ -914,6 +965,36 @@ static func zoo_fence_line_material() -> ShaderMaterial:
 	mat.set_shader_parameter("metallic_base", 0.0)
 	mat.set_shader_parameter("roughness_base", 0.35)
 	_zoo_fence_line_mat = mat
+	return mat
+
+
+## Faction home-turf plate — saturated ground that glows in the owner's colour so a
+## visitor can tell whose field they are about to stand on before it starts burning.
+static func zoo_turf_material(id: int) -> ShaderMaterial:
+	if not VoxelMaterial.is_zoo_turf(id):
+		push_error("VoxelBlockLibrary.zoo_turf_material: %d is not zoo turf" % id)
+		return zoo_fence_line_material()
+	var cached: Variant = _zoo_turf_mat_cache.get(id)
+	if cached is ShaderMaterial:
+		return cached as ShaderMaterial
+	var albedo := VoxelMaterial.color(id)
+	var emit := Color(
+		clampf(albedo.r * 1.15, 0.0, 1.0),
+		clampf(albedo.g * 1.15, 0.0, 1.0),
+		clampf(albedo.b * 1.15, 0.0, 1.0)
+	)
+	var shader: Shader = load("res://assets/city/shaders/voxel_gem.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", albedo)
+	mat.set_shader_parameter("emission_color", emit)
+	mat.set_shader_parameter("emission_base", 2.8)
+	mat.set_shader_parameter("emission_peak", 5.8)
+	mat.set_shader_parameter("pulse_hz", 0.4)
+	mat.set_shader_parameter("sparkle_scale", 2.2)
+	mat.set_shader_parameter("metallic_base", 0.05)
+	mat.set_shader_parameter("roughness_base", 0.45)
+	_zoo_turf_mat_cache[id] = mat
 	return mat
 
 

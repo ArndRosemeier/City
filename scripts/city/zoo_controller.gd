@@ -10,6 +10,7 @@ extends Node3D
 
 const ZooCloakGateScript := preload("res://scripts/city/zoo_cloak_gate.gd")
 const ZooCombatScript := preload("res://scripts/city/zoo_combat.gd")
+const ZooSummonVfxScript := preload("res://scripts/city/zoo_summon_vfx.gd")
 const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 
@@ -219,11 +220,23 @@ func _spawn_at_station(index: int) -> bool:
 		return false
 	var at := layout.spawner_world(index, origin_vox, voxel_size)
 	at.y += SPAWN_LIFT_M
-	var unit: UndeadUnit = _spawn_cb.call(body, at) as UndeadUnit
+	## Land on the gazebo deck — nav snap would yank the body out through a column.
+	var unit: UndeadUnit = _spawn_cb.call(body, at, false) as UndeadUnit
 	if unit == null or not is_instance_valid(unit):
 		return false
 	ZooCombatScript.tag_unit(unit, index)
+	_play_summon_vfx(unit, layout.seed_faction[index])
 	return true
+
+
+## Halo + ghost-to-solid fade under the summon gazebo. Owned by the controller so it
+## keeps ticking while the unit itself is frozen for the arrival.
+func _play_summon_vfx(unit: UndeadUnit, faction_index: int) -> void:
+	var turf := VoxelMaterial.zoo_turf_for_faction_index(faction_index)
+	var color := VoxelMaterial.color(turf)
+	var vfx: Node = ZooSummonVfxScript.new() as Node
+	add_child(vfx)
+	vfx.call("begin", unit, color)
 
 
 ## Weighted pick among the faction's `spawn_ready` bodies.
@@ -270,16 +283,18 @@ func _tick_plates(delta: float) -> void:
 			unit.apply_damage_scaled(
 				DamageSourceScript.Id.ZOO_PLATE_MOB, 1.0, "zoo turf", null
 			)
+			_sfx_plate_burn(unit.global_position, unit.character_scale)
 	if not _city.is_player_alive():
 		return
-	var player := _city.get_player_node()
+	var player := _city.get_player_node() as CityWalker
 	if player == null or not is_instance_valid(player):
 		return
-	var here := _plate_faction_under(brush, (player as Node3D).global_position)
+	var here := _plate_faction_under(brush, player.global_position)
 	if here < 0:
 		return
 	## The cloak hides the player from hunters, not from the floor.
 	_city.damage_player(DamageSourceScript.Id.ZOO_PLATE)
+	_sfx_plate_burn(player.global_position, player.character_scale)
 
 
 ## MonsterFaction.Id of the turf plate under `world`, or -1 when the floor is ordinary
@@ -360,6 +375,19 @@ func _end_cloak() -> void:
 		_city.hide_zoo_cloak()
 	if _gate != null and is_instance_valid(_gate):
 		_gate.set_cloak_active(false, 0.0)
+
+
+func _sfx_plate_burn(world_pos: Vector3, character_scale: float) -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_zoo_plate_burn"):
+		audio.call("play_zoo_plate_burn", world_pos, character_scale)
+
+
+func _city_audio() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	return tree.get_first_node_in_group(&"city_audio")
 
 
 func _despawn_zoo_units() -> void:

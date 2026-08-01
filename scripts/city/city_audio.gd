@@ -7,7 +7,14 @@ const GROUP_NAME := &"city_audio"
 const POOL_SIZE := 12
 const GEM_VOICE_COUNT := 4
 const MAX_DEBRIS_PER_SEC := 14.0
+const MAX_PLATE_BURN_PER_SEC := 10.0
+const MAX_MONSTER_FOOT_PER_SEC := 20.0
 const MAX_TENDRIL_VOICES := 10
+## Combat / zoo SFX need to read across a district, not just at arm's length.
+const MONSTER_SFX_MAX_DISTANCE := 220.0
+const MONSTER_SFX_UNIT_SIZE := 32.0
+const LOCAL_SFX_MAX_DISTANCE := 80.0
+const LOCAL_SFX_UNIT_SIZE := 4.0
 
 const FOOTSTEP_DIR := "res://assets/audio/footstep"
 const DEBRIS_DIR := "res://assets/audio/debris"
@@ -42,11 +49,17 @@ var _melee_hit_streams: Array[AudioStream] = []
 ## Purple conversion orb cast + impact.
 var _orb_cast_streams: Array[AudioStream] = []
 var _orb_impact_streams: Array[AudioStream] = []
+## Monster Zoo: hostile turf sizzle, summon shimmer, summon solidify.
+var _zoo_plate_streams: Array[AudioStream] = []
+var _zoo_summon_start_streams: Array[AudioStream] = []
+var _zoo_summon_ready_streams: Array[AudioStream] = []
 
 var _pool: Array[AudioStreamPlayer3D] = []
 var _pool_i: int = 0
 var _rng := RandomNumberGenerator.new()
 var _debris_budget: float = 0.0
+var _plate_burn_budget: float = 0.0
+var _monster_foot_budget: float = 0.0
 var _ui_player: AudioStreamPlayer
 var _gem_players: Array[AudioStreamPlayer] = []
 var _gem_player_i: int = 0
@@ -66,9 +79,10 @@ func _ready() -> void:
 	for i in POOL_SIZE:
 		var p := AudioStreamPlayer3D.new()
 		p.name = "Sfx_%d" % i
-		p.max_distance = 80.0
-		p.unit_size = 4.0
+		p.max_distance = LOCAL_SFX_MAX_DISTANCE
+		p.unit_size = LOCAL_SFX_UNIT_SIZE
 		p.max_db = 6.0
+		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		p.bus = &"Master"
 		add_child(p)
 		_pool.append(p)
@@ -89,18 +103,27 @@ func _ready() -> void:
 	_whine_player = _make_dedicated_player("MeteorWhine", 420.0, 18.0)
 	_crash_player = _make_dedicated_player("MeteorCrash", 720.0, 42.0)
 	_crash_player.attenuation_filter_cutoff_hz = 5000.0
-	_blast_charge_player = _make_dedicated_player("BlastCharge", 40.0, 5.0)
-	## Short range + inverse-square so distant cracks fall off quickly.
-	_blast_impact_player = _make_dedicated_player("BlastImpact3D", 45.0, 4.5)
-	_blast_impact_player.max_db = 12.0
-	_blast_impact_player.attenuation_model = (
-		AudioStreamPlayer3D.ATTENUATION_INVERSE_SQUARE_DISTANCE
+	_blast_charge_player = _make_dedicated_player(
+		"BlastCharge", MONSTER_SFX_MAX_DISTANCE, MONSTER_SFX_UNIT_SIZE
 	)
-	_blast_impact_player.attenuation_filter_cutoff_hz = 7000.0
+	_blast_charge_player.attenuation_filter_cutoff_hz = 14000.0
+	## Inverse distance (not square) so charged impacts still read across the zoo.
+	_blast_impact_player = _make_dedicated_player(
+		"BlastImpact3D", MONSTER_SFX_MAX_DISTANCE, MONSTER_SFX_UNIT_SIZE
+	)
+	_blast_impact_player.max_db = 12.0
+	_blast_impact_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	_blast_impact_player.attenuation_filter_cutoff_hz = 14000.0
 
 
 func _process(delta: float) -> void:
 	_debris_budget = minf(_debris_budget + MAX_DEBRIS_PER_SEC * delta, MAX_DEBRIS_PER_SEC)
+	_plate_burn_budget = minf(
+		_plate_burn_budget + MAX_PLATE_BURN_PER_SEC * delta, MAX_PLATE_BURN_PER_SEC
+	)
+	_monster_foot_budget = minf(
+		_monster_foot_budget + MAX_MONSTER_FOOT_PER_SEC * delta, MAX_MONSTER_FOOT_PER_SEC
+	)
 	if _whine_follow != null and is_instance_valid(_whine_follow) and _whine_player.playing:
 		_whine_player.global_position = _whine_follow.global_position
 		## Pitch climbs as it drops — incoming scream.
@@ -137,6 +160,26 @@ func play_footstep(world_pos: Vector3, character_scale: float = 1.0) -> void:
 	p.pitch_scale = clampf(1.1 / sqrt(maxf(character_scale, 0.2)), 0.55, 1.55)
 	p.pitch_scale *= _rng.randf_range(0.94, 1.06)
 	p.volume_db = -10.0 + clampf((character_scale - 1.0) * 2.0, -4.0, 5.0)
+	p.play()
+
+
+## Monster stride — same bank as the player, rate-limited so a packed Zoo does not
+## drown every other SFX in stomps.
+func play_monster_footstep(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	if _monster_foot_budget < 1.0:
+		return
+	_monster_foot_budget -= 1.0
+	var stream := _pick(_foot_streams)
+	if stream == null:
+		return
+	var p := _next_monster_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.05 / sqrt(maxf(character_scale, 0.2)), 0.5, 1.5)
+	p.pitch_scale *= _rng.randf_range(0.9, 1.1)
+	p.volume_db = -5.5 + clampf((character_scale - 1.0) * 2.0, -3.0, 4.0)
 	p.play()
 
 
@@ -221,11 +264,11 @@ func play_laser_fire(world_pos: Vector3, character_scale: float = 1.0) -> void:
 	var stream := _pick(_laser_fire_streams)
 	if stream == null:
 		return
-	var p := _next_player()
+	var p := _next_monster_player()
 	p.stream = stream
 	p.global_position = world_pos
 	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.55, 1.35)
-	p.volume_db = -5.0
+	p.volume_db = -2.0
 	p.play()
 
 
@@ -235,11 +278,11 @@ func play_laser_impact(world_pos: Vector3, character_scale: float = 1.0) -> void
 	var stream := _pick(_laser_impact_streams)
 	if stream == null:
 		return
-	var p := _next_player()
+	var p := _next_monster_player()
 	p.stream = stream
 	p.global_position = world_pos
 	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.55, 1.3)
-	p.volume_db = -3.0
+	p.volume_db = -0.5
 	p.play()
 
 
@@ -282,12 +325,12 @@ func play_charged_blast_throw(world_pos: Vector3, character_scale: float = 1.0) 
 		## Fall back so a missing bank never goes silent.
 		play_laser_fire(world_pos, character_scale)
 		return
-	var p := _next_player()
+	var p := _next_monster_player()
 	p.stream = stream
 	p.global_position = world_pos
 	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.55, 1.35)
 	p.pitch_scale *= _rng.randf_range(0.96, 1.06)
-	p.volume_db = -3.5
+	p.volume_db = -2.0
 	p.play()
 
 
@@ -321,12 +364,12 @@ func play_melee_swing(world_pos: Vector3, character_scale: float = 1.0) -> void:
 	var stream := _pick(_melee_swing_streams)
 	if stream == null:
 		return
-	var p := _next_player()
+	var p := _next_monster_player()
 	p.stream = stream
 	p.global_position = world_pos
 	p.pitch_scale = clampf(1.05 / sqrt(maxf(character_scale, 0.25)), 0.5, 1.45)
 	p.pitch_scale *= _rng.randf_range(0.92, 1.08)
-	p.volume_db = -7.0 + clampf((character_scale - 1.0) * 1.5, -3.0, 4.0)
+	p.volume_db = -1.5 + clampf((character_scale - 1.0) * 1.5, -3.0, 4.0)
 	p.play()
 
 
@@ -337,12 +380,12 @@ func play_melee_hit(world_pos: Vector3, character_scale: float = 1.0) -> void:
 	var stream := _pick(_melee_hit_streams)
 	if stream == null:
 		return
-	var p := _next_player()
+	var p := _next_monster_player()
 	p.stream = stream
 	p.global_position = world_pos
 	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.5, 1.35)
 	p.pitch_scale *= _rng.randf_range(0.9, 1.1)
-	p.volume_db = -4.0 + clampf((character_scale - 1.0) * 2.0, -2.0, 5.0)
+	p.volume_db = 0.5 + clampf((character_scale - 1.0) * 2.0, -2.0, 5.0)
 	p.play()
 
 
@@ -360,12 +403,12 @@ func play_orb_cast(world_pos: Vector3, character_scale: float = 1.0) -> void:
 	var stream := _pick(_orb_cast_streams)
 	if stream == null:
 		return
-	var p := _next_player()
+	var p := _next_monster_player()
 	p.stream = stream
 	p.global_position = world_pos
 	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.6, 1.4)
 	p.pitch_scale *= _rng.randf_range(0.95, 1.08)
-	p.volume_db = -5.5
+	p.volume_db = -1.5
 	p.play()
 
 
@@ -376,12 +419,64 @@ func play_orb_impact(world_pos: Vector3, character_scale: float = 1.0) -> void:
 	var stream := _pick(_orb_impact_streams)
 	if stream == null:
 		return
-	var p := _next_player()
+	var p := _next_monster_player()
 	p.stream = stream
 	p.global_position = world_pos
 	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.6, 1.35)
 	p.pitch_scale *= _rng.randf_range(0.93, 1.1)
-	p.volume_db = -4.0
+	p.volume_db = -0.5
+	p.play()
+
+
+## Hostile zoo turf biting a foot — short magical sizzle. Budgeted so a crowded
+## forever-war tick does not turn into a wall of noise.
+func play_zoo_plate_burn(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	if _plate_burn_budget < 1.0:
+		return
+	_plate_burn_budget -= 1.0
+	var stream := _pick(_zoo_plate_streams)
+	if stream == null:
+		return
+	var p := _next_monster_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.05 / sqrt(maxf(character_scale, 0.25)), 0.65, 1.4)
+	p.pitch_scale *= _rng.randf_range(0.9, 1.12)
+	p.volume_db = -3.0
+	p.play()
+
+
+## Body starting to materialize under a summon gazebo — rising shimmer.
+func play_zoo_summon_start(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_zoo_summon_start_streams)
+	if stream == null:
+		return
+	var p := _next_monster_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.6, 1.35)
+	p.pitch_scale *= _rng.randf_range(0.94, 1.06)
+	p.volume_db = -1.0
+	p.play()
+
+
+## Materialize finished — soft solid thump as the ghost becomes a body.
+func play_zoo_summon_ready(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_zoo_summon_ready_streams)
+	if stream == null:
+		return
+	var p := _next_monster_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.25)), 0.55, 1.3)
+	p.pitch_scale *= _rng.randf_range(0.92, 1.08)
+	p.volume_db = -1.5
 	p.play()
 
 
@@ -499,10 +594,22 @@ func _make_dedicated_player(node_name: String, max_distance: float, unit_size: f
 func _next_player() -> AudioStreamPlayer3D:
 	var p := _pool[_pool_i]
 	_pool_i = (_pool_i + 1) % _pool.size()
-	## Reset pool defaults in case a one-shot temporarily widened range.
-	p.max_distance = 80.0
-	p.unit_size = 4.0
+	## Close-range defaults (player footfalls, debris) — monster voices widen below.
+	p.max_distance = LOCAL_SFX_MAX_DISTANCE
+	p.unit_size = LOCAL_SFX_UNIT_SIZE
 	p.max_db = 6.0
+	p.attenuation_filter_cutoff_hz = 5000.0
+	return p
+
+
+## Combat / zoo one-shots: long carry so a district-scale fight stays audible.
+func _next_monster_player() -> AudioStreamPlayer3D:
+	var p := _next_player()
+	p.max_distance = MONSTER_SFX_MAX_DISTANCE
+	p.unit_size = MONSTER_SFX_UNIT_SIZE
+	p.max_db = 10.0
+	## Keep highs longer so distant hits still read as hits, not muffled dust.
+	p.attenuation_filter_cutoff_hz = 14000.0
 	return p
 
 
@@ -569,6 +676,10 @@ func _load_banks() -> void:
 	_melee_hit_streams = [_build_melee_hit(0), _build_melee_hit(1), _build_melee_hit(2)]
 	_orb_cast_streams = [_build_orb_cast(0), _build_orb_cast(1)]
 	_orb_impact_streams = [_build_orb_impact(0), _build_orb_impact(1)]
+	## Zoo turf / summon — procedural; no pack matches the magical pad bite.
+	_zoo_plate_streams = [_build_zoo_plate_burn(0), _build_zoo_plate_burn(1), _build_zoo_plate_burn(2)]
+	_zoo_summon_start_streams = [_build_zoo_summon_start(0), _build_zoo_summon_start(1)]
+	_zoo_summon_ready_streams = [_build_zoo_summon_ready(0), _build_zoo_summon_ready(1)]
 
 
 func _load_dir(dir_path: String, prefixes: Array[String]) -> Array[AudioStream]:
@@ -857,6 +968,46 @@ func _build_orb_impact(variant: int) -> AudioStreamWAV:
 		var zap := sin(TAU * spark * t) * exp(-t * 30.0)
 		var fizz := (_rng.randf() * 2.0 - 1.0) * 0.45 * exp(-t * 16.0)
 		return (boom + zap * 0.8 + fizz) * env
+	)
+
+
+func _build_zoo_plate_burn(variant: int) -> AudioStreamWAV:
+	## Hostile turf bite — short electric sizzle with a glassy sting.
+	var sting := 920.0 + float(variant) * 110.0
+	return _synthesize(0.2, func(t: float, _i: int) -> float:
+		var env := smoothstep(0.0, 0.012, t) * exp(-t * 14.0)
+		var buzz := sin(TAU * 180.0 * t) * 0.4 + sin(TAU * 270.0 * t) * 0.25
+		var glass := sin(TAU * sting * t + sin(TAU * 40.0 * t) * 1.2) * exp(-t * 18.0)
+		var hiss := (_rng.randf() * 2.0 - 1.0) * 0.55 * exp(-t * 12.0)
+		return (buzz + glass * 0.85 + hiss) * env * 0.9
+	)
+
+
+func _build_zoo_summon_start(variant: int) -> AudioStreamWAV:
+	## Rising ward shimmer while the body materializes (~covers the first beat of fade-in).
+	var base := 160.0 + float(variant) * 28.0
+	return _synthesize(1.35, func(t: float, _i: int) -> float:
+		var env := smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(1.0, 1.35, t))
+		var prog := clampf(t / 1.35, 0.0, 1.0)
+		var hz := lerpf(base, base * 2.8, prog * prog)
+		var a := sin(TAU * hz * t) * 0.45
+		var b := sin(TAU * hz * 1.5 * t + 0.4) * 0.35
+		var swirl := sin(TAU * (7.0 + prog * 11.0) * t) * 0.2
+		var sparkle := sin(TAU * (1400.0 + prog * 900.0) * t) * 0.12 * env
+		var air := (_rng.randf() * 2.0 - 1.0) * 0.12 * env
+		return (a + b + swirl + sparkle + air) * env * 0.75
+	)
+
+
+func _build_zoo_summon_ready(variant: int) -> AudioStreamWAV:
+	## Soft solidify thump — body lands in the world.
+	var body_hz := 62.0 + float(variant) * 14.0
+	return _synthesize(0.28, func(t: float, _i: int) -> float:
+		var env := exp(-t * 11.0) * smoothstep(0.0, 0.01, t)
+		var thud := sin(TAU * body_hz * t) * 0.75 + sin(TAU * (body_hz * 1.6) * t) * 0.3
+		var chime := sin(TAU * 520.0 * t) * exp(-t * 22.0) * 0.55
+		var grit := (_rng.randf() * 2.0 - 1.0) * 0.25 * exp(-t * 20.0)
+		return (thud + chime + grit) * env
 	)
 
 

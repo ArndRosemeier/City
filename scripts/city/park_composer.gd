@@ -31,6 +31,9 @@ const GAZEBO_CHANCE_PCT := 18
 ## Half-width of the deck (11×11 footprint) and how far its corners are chamfered off.
 const GAZEBO_HALF := 5
 const GAZEBO_CHAMFER := 2
+## Posts this far in from each face corner. Must stay on the chamfered deck (HALF-1 is
+## off the footprint); everything between the two posts is the doorway.
+const GAZEBO_POST_INSET := 2
 ## Deck step, column height above the deck, and the pitch of the little roof.
 const GAZEBO_DECK_RISE := 1
 const GAZEBO_COLUMN_H := 6
@@ -526,10 +529,7 @@ func _build_gazebo(centre: Vector2i) -> void:
 		)
 	var column_top := deck_y + GAZEBO_COLUMN_H
 	for offset: Vector2i in rim:
-		## Columns on the rim's straight runs only — the chamfers stay open as entrances.
-		if absi(offset.x) == GAZEBO_HALF and absi(offset.y) == GAZEBO_HALF:
-			continue
-		if (absi(offset.x) + absi(offset.y)) % 2 == 1:
+		if not _gazebo_column_at(offset):
 			continue
 		brush.fill_box(
 			Vector3i(centre.x + offset.x, deck_y + 1, centre.y + offset.y),
@@ -538,6 +538,18 @@ func _build_gazebo(centre: Vector2i) -> void:
 		)
 	_build_gazebo_roof(centre, column_top)
 	gazebo_center = Vector3i(centre.x, deck_y, centre.y)
+
+
+## Two posts per face, parked at the ends — the middle of every side stays a walkable door.
+func _gazebo_column_at(offset: Vector2i) -> bool:
+	var ax := absi(offset.x)
+	var az := absi(offset.y)
+	var on_ns := az == GAZEBO_HALF and ax < GAZEBO_HALF
+	var on_ew := ax == GAZEBO_HALF and az < GAZEBO_HALF
+	if not on_ns and not on_ew:
+		return false
+	var along := ax if on_ns else az
+	return along == GAZEBO_HALF - GAZEBO_POST_INSET
 
 
 ## Stepped clay cone over the columns, narrowing a ring at a time to a finial.

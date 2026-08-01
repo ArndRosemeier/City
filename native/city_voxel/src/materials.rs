@@ -74,8 +74,10 @@ pub const ZOO_FENCE_GLASS: i32 = 259;
 /// Faction home-turf plates (undead … arcane). Soft ground: a blast craters them.
 pub const ZOO_TURF_FIRST: i32 = 260;
 pub const ZOO_TURF_LAST: i32 = 265;
+/// Dark curb around an inset turf well.
+pub const ZOO_PLATE_RIM: i32 = 266;
 /// Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-pub const COUNT: i32 = 266;
+pub const COUNT: i32 = 267;
 
 #[inline]
 pub fn is_zoo_fence(id: i32) -> bool {
@@ -131,7 +133,7 @@ pub fn is_destructible(id: i32) -> bool {
 pub fn is_self_supporting_terrain(id: i32) -> bool {
     matches!(
         id,
-        DIRT | GRAVEL | PARK | GRAVE_SOIL | GRAVE_PATH | FRACTAL_GLOW
+        DIRT | GRAVEL | PARK | GRAVE_SOIL | GRAVE_PATH | FRACTAL_GLOW | ZOO_PLATE_RIM
     ) || (id >= FRACTAL_BAND_0 && id <= FRACTAL_BAND_15)
         || id == FRACTAL_INTERIOR
         || is_zoo_turf(id)

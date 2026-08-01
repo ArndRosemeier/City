@@ -45,13 +45,24 @@ const FACTION_CAP_SLACK := 2
 ## Ownership grid pitch: 2 m cells are fine for "whose ground am I standing on".
 const OWNER_CELL := 4
 
-## Spawn pad radius, and how far scars must stay clear of one.
-const PAD_RADIUS := 3
-const PAD_CLEAR := 5
+## Summon gazebo footprint (half-extent) and the scar-clear radius around each station.
+const PAD_HALF := 5
+const PAD_CHAMFER := 2
+## Posts this far in from the square corner along each face. Must stay on the chamfered
+## deck (HALF-1 is off the footprint); mid-face between the two posts is the doorway.
+const PAD_POST_INSET := 2
+const PAD_COLUMN_H := 7
+const PAD_ROOF_H := 4
+const PAD_CLEAR := 9
 
-## Plate density at a territory core, and the falloff exponent out to the seed radius.
-const PLATE_MAX_P := 0.7
-const PLATE_FALLOFF_POW := 1.6
+## Inset 2×2 turf wells with a 1-voxel rim (4×4 footprint). Sparse on purpose — a
+## dancefloor of flush tiles reads as paint; a few deliberate pads read as markers.
+const PLATE_GLOW := 2
+const PLATE_RIM := 1
+const PLATE_FOOT := PLATE_GLOW + PLATE_RIM * 2
+## One pad per this many square voxels of field, then thinned by distance to the seed.
+const PLATE_PER_AREA := 2200
+const PLATE_CORE_BIAS := 1.8
 
 ## Battlefield scatter budgets, as one prop per this many square voxels of field. The
 ## reserve is most of a district — a fixed count would leave a 350 m field with a dozen
@@ -689,7 +700,10 @@ func _build_gazebo(cx: int, cz: int) -> void:
 	var post_top := deck + 9
 	brush.begin_edit()
 	brush.fill_disk(cx, cz, deck, 5, VoxelMaterial.TILES)
+	## Skip the south arc (i = 4,5) so the ring has a real walk-out, not a closed cage.
 	for i in range(8):
+		if i == 4 or i == 5:
+			continue
 		var a := TAU * float(i) / 8.0
 		var px := cx + int(round(cos(a) * 4.0))
 		var pz := cz + int(round(sin(a) * 4.0))
@@ -884,49 +898,80 @@ func _ring_debris(cx: int, cz: int, radius: int, mat: int) -> void:
 
 # --- turf and pads ----------------------------------------------------------
 
-## Home ground, densest at each seed and near-nothing at the borders, so territories bleed
-## into each other instead of meeting at a wall.
+## Home ground as short 2×2 glowing slabs with a slightly taller rim — same cell as the
+## dirt, just not as tall. Densest near each seed, sparse at the borders.
 func _stamp_turf_plates() -> void:
 	if layout.seed_xz.is_empty():
 		return
-	var field := layout.field_rect
+	var field := layout.field_rect.grow(-(PLATE_FOOT + 2))
+	if field.size.x <= PLATE_FOOT or field.size.y <= PLATE_FOOT:
+		return
 	var radius := float(maxi(layout.seed_radius_vox, 1))
+	var want := _budget(PLATE_PER_AREA)
 	var stamped := 0
+	var tries := want * 50
 	brush.begin_edit()
-	for z in range(field.position.y, field.end.y):
-		for x in range(field.position.x, field.end.x):
-			if _is_protected(x, z):
-				continue
-			var t := layout.territory_at_local(x, z)
-			if t < 0:
-				continue
-			var s := layout.seed_xz[t]
-			var dx := float(x - s.x)
-			var dz := float(z - s.y)
-			var d := sqrt(dx * dx + dz * dz) / radius
-			if d >= 1.0:
-				continue
-			var p := PLATE_MAX_P * pow(1.0 - d, PLATE_FALLOFF_POW)
-			## Roll before touching voxels: the density field rejects most columns and a
-			## get_vox per field column is the expensive half of this pass.
-			if rng.randf() >= p:
-				continue
-			var top := _surface_y(x, z)
-			if top < 0:
-				continue
-			var id := brush.get_vox(Vector3i(x, top, z))
-			if not _plateable(id):
-				continue
-			brush.set_vox(
-				Vector3i(x, top, z),
-				VoxelMaterial.zoo_turf_for_faction_index(layout.seed_faction[t])
-			)
-			stamped += 1
+	while stamped < want and tries > 0:
+		tries -= 1
+		var x0 := field.position.x + rng.randi() % maxi(field.size.x - PLATE_FOOT + 1, 1)
+		var z0 := field.position.y + rng.randi() % maxi(field.size.y - PLATE_FOOT + 1, 1)
+		var cx := x0 + PLATE_FOOT / 2
+		var cz := z0 + PLATE_FOOT / 2
+		if _is_protected(cx, cz):
+			continue
+		var t := layout.territory_at_local(cx, cz)
+		if t < 0:
+			continue
+		var s := layout.seed_xz[t]
+		var dx := float(cx - s.x)
+		var dz := float(cz - s.y)
+		var d := sqrt(dx * dx + dz * dz) / radius
+		if d >= 1.0:
+			continue
+		## Prefer cores; borders stay almost bare so territories still mingle.
+		if rng.randf() >= pow(1.0 - d, PLATE_CORE_BIAS):
+			continue
+		if not _place_turf_pad(
+			x0, z0, VoxelMaterial.zoo_turf_for_faction_index(layout.seed_faction[t])
+		):
+			continue
+		stamped += 1
 	brush.end_edit()
 	print(
-		"ZooComposer: %d turf plates over %d territories (seed radius %d vox)"
+		"ZooComposer: %d short turf pads over %d territories (seed radius %d vox)"
 		% [stamped, layout.territory_count(), layout.seed_radius_vox]
 	)
+
+
+## One deliberate pad on the surface cell: short glowing 2×2, short dark rim around it.
+## No digging into the cell below — the mesh height is what makes them sit low.
+func _place_turf_pad(x0: int, z0: int, turf: int) -> bool:
+	var top := _surface_y(x0, z0)
+	if top < 0:
+		return false
+	for z in range(z0, z0 + PLATE_FOOT):
+		for x in range(x0, x0 + PLATE_FOOT):
+			if _is_protected(x, z):
+				return false
+			if _surface_y(x, z) != top:
+				return false
+			var id := brush.get_vox(Vector3i(x, top, z))
+			if not _plateable(id):
+				return false
+			if id == VoxelMaterial.ZOO_PLATE_RIM or VoxelMaterial.is_zoo_turf(id):
+				return false
+	var inner0 := x0 + PLATE_RIM
+	var inner1 := x0 + PLATE_RIM + PLATE_GLOW
+	var inz0 := z0 + PLATE_RIM
+	var inz1 := z0 + PLATE_RIM + PLATE_GLOW
+	for z in range(z0, z0 + PLATE_FOOT):
+		for x in range(x0, x0 + PLATE_FOOT):
+			var edge := x < inner0 or x >= inner1 or z < inz0 or z >= inz1
+			if edge:
+				brush.set_vox(Vector3i(x, top, z), VoxelMaterial.ZOO_PLATE_RIM)
+			else:
+				brush.set_vox(Vector3i(x, top, z), turf)
+	return true
 
 
 ## Only loose ground takes a plate — never a roof, a headstone or a house floor.
@@ -949,33 +994,84 @@ func _surface_y(x: int, z: int) -> int:
 	return -1
 
 
-## One pylon per territory: a clean pad the spawns land on and a lit post that says whose
-## corner of the war this is. Built after the scars so the pad is always flat.
+## One open summon gazebo per territory: a bandstand the bodies arrive under, with
+## entrances on the chamfers so a fight can spill through. Built after the scars so the
+## deck is always flat — the forever war needs somewhere clean to land.
 func _build_spawn_pads() -> void:
-	var deck := layout.deck_y
 	brush.begin_edit()
 	for i in range(layout.spawner_vox.size()):
-		var pad := layout.spawner_vox[i]
-		brush.fill_box(
-			Vector3i(pad.x - PAD_RADIUS, deck - 1, pad.z - PAD_RADIUS),
-			Vector3i(pad.x + PAD_RADIUS + 1, deck, pad.z + PAD_RADIUS + 1),
-			VoxelMaterial.STONE
+		_build_summon_gazebo(
+			layout.spawner_vox[i],
+			VoxelMaterial.zoo_turf_for_faction_index(layout.seed_faction[i])
 		)
-		brush.fill_disk(pad.x, pad.z, deck, PAD_RADIUS, VoxelMaterial.GRAVEL)
-		## Four corner posts capped in the owner's colour. The middle of the pad has to
-		## stay clear — that is exactly where the bodies arrive.
-		var corners: Array[Vector2i] = [
-			Vector2i(pad.x - PAD_RADIUS, pad.z - PAD_RADIUS),
-			Vector2i(pad.x + PAD_RADIUS, pad.z - PAD_RADIUS),
-			Vector2i(pad.x - PAD_RADIUS, pad.z + PAD_RADIUS),
-			Vector2i(pad.x + PAD_RADIUS, pad.z + PAD_RADIUS),
-		]
-		var cap := VoxelMaterial.zoo_turf_for_faction_index(layout.seed_faction[i])
-		for c: Vector2i in corners:
-			brush.fill_box(
-				Vector3i(c.x, deck, c.y),
-				Vector3i(c.x + 1, deck + 5, c.y + 1),
-				VoxelMaterial.ZOO_FENCE_FRAME
-			)
-			brush.set_vox(Vector3i(c.x, deck + 5, c.y), cap)
 	brush.end_edit()
+
+
+func _build_summon_gazebo(pad: Vector3i, turf: int) -> void:
+	var deck := layout.deck_y
+	var centre := Vector2i(pad.x, pad.z)
+	var rim: Array[Vector2i] = []
+	for dz in range(-PAD_HALF, PAD_HALF + 1):
+		for dx in range(-PAD_HALF, PAD_HALF + 1):
+			if absi(dx) + absi(dz) > PAD_HALF * 2 - PAD_CHAMFER:
+				continue
+			var x := centre.x + dx
+			var z := centre.y + dz
+			brush.fill_box(
+				Vector3i(x, deck - 1, z), Vector3i(x + 1, deck, z + 1), VoxelMaterial.STONE
+			)
+			## Owner colour on the deck — the glow that says whose station this is.
+			var floor_mat := turf if maxi(absi(dx), absi(dz)) <= 2 else VoxelMaterial.TILES
+			brush.set_vox(Vector3i(x, deck, z), floor_mat)
+			if maxi(absi(dx), absi(dz)) == PAD_HALF:
+				rim.append(Vector2i(dx, dz))
+	## Clear the arrival cell so a body is not born inside a tile.
+	brush.set_vox(Vector3i(centre.x, deck, centre.y), turf)
+	var column_top := deck + PAD_COLUMN_H
+	for offset: Vector2i in rim:
+		if not _summon_column_at(offset):
+			continue
+		brush.fill_box(
+			Vector3i(centre.x + offset.x, deck + 1, centre.y + offset.y),
+			Vector3i(centre.x + offset.x + 1, column_top + 1, centre.y + offset.y + 1),
+			VoxelMaterial.ZOO_FENCE_FRAME
+		)
+		## Lit cap so the station reads as a summon ring, not a park bandstand.
+		brush.set_vox(
+			Vector3i(centre.x + offset.x, column_top + 1, centre.y + offset.y),
+			VoxelMaterial.ZOO_FENCE_LINE
+		)
+	_build_summon_roof(centre, column_top, turf)
+
+
+## Two posts per face at the ends — every side keeps a walkable middle so spawned
+## bodies can leave the station instead of rattling around inside a cage.
+func _summon_column_at(offset: Vector2i) -> bool:
+	var ax := absi(offset.x)
+	var az := absi(offset.y)
+	var on_ns := az == PAD_HALF and ax < PAD_HALF
+	var on_ew := ax == PAD_HALF and az < PAD_HALF
+	if not on_ns and not on_ew:
+		return false
+	var along := ax if on_ns else az
+	return along == PAD_HALF - PAD_POST_INSET
+
+
+func _build_summon_roof(centre: Vector2i, column_top: int, turf: int) -> void:
+	var y := column_top + 1
+	var half := PAD_HALF
+	for step in range(PAD_ROOF_H):
+		for dz in range(-half, half + 1):
+			for dx in range(-half, half + 1):
+				if absi(dx) + absi(dz) > half * 2 - PAD_CHAMFER:
+					continue
+				## Outer ring of the lowest roof course is the energy rail.
+				var mat := VoxelMaterial.ROOF_CLAY
+				if step == 0 and maxi(absi(dx), absi(dz)) == half:
+					mat = VoxelMaterial.ZOO_FENCE_LINE
+				brush.set_vox(Vector3i(centre.x + dx, y, centre.y + dz), mat)
+		y += 1
+		half -= 1
+		if half < 1:
+			break
+	brush.set_vox(Vector3i(centre.x, y, centre.y), turf)

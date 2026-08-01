@@ -26,6 +26,8 @@ var _speed_on: bool = false
 var _regen_on: bool = false
 var _shield_on: bool = false
 var _age: float = 0.0
+## Shield layer colour. Defaults to the player ward cyan; the zoo recolors it per faction.
+var _shield_color: Color = SHIELD_COLOR
 
 var _speed_root: Node3D
 var _regen_root: Node3D
@@ -85,6 +87,21 @@ func set_shield_active(on: bool) -> void:
 		return
 	_shield_on = on
 	_sync_visibility()
+
+
+## Recolor the shield ward. Call before or after `set_shield_active` — mats update live.
+func set_shield_color(color: Color) -> void:
+	_shield_color = color
+	if _shield_mat != null:
+		_shield_mat.albedo_color = Color(color.r, color.g, color.b, _shield_mat.albedo_color.a)
+		_shield_mat.emission = color
+	if _shield_ring_mat != null:
+		_shield_ring_mat.albedo_color = Color(
+			color.r, color.g, color.b, _shield_ring_mat.albedo_color.a
+		)
+		_shield_ring_mat.emission = color
+	if _shield_light != null:
+		_shield_light.light_color = color
 
 
 func is_speed_active() -> bool:
@@ -159,8 +176,8 @@ func _build_layers() -> void:
 	_shield_root = Node3D.new()
 	_shield_root.name = "ShieldAura"
 	add_child(_shield_root)
-	_shield_mat = _make_shell_mat(SHIELD_COLOR, 0.18)
-	_shield_ring_mat = _make_shell_mat(SHIELD_COLOR, 0.46)
+	_shield_mat = _make_shell_mat(_shield_color, 0.18)
+	_shield_ring_mat = _make_shell_mat(_shield_color, 0.46)
 	_shield_mesh = SphereMesh.new()
 	_shield_mesh.radial_segments = 20
 	_shield_mesh.rings = 12
@@ -173,7 +190,7 @@ func _build_layers() -> void:
 	## Upright hoop — a ward, not a tonic belt.
 	_shield_ring.rotation_degrees = Vector3(12.0, 0.0, 0.0)
 	_shield_root.add_child(_shield_ring)
-	_shield_light = _make_light("Light", SHIELD_COLOR)
+	_shield_light = _make_light("Light", _shield_color)
 	_shield_root.add_child(_shield_light)
 
 
@@ -288,7 +305,7 @@ func _apply_pulse(age: float) -> void:
 			_shield_mat,
 			_shield_ring_mat,
 			_shield_light,
-			SHIELD_COLOR,
+			_shield_color,
 			shield_pulse,
 			0.14,
 			0.32,

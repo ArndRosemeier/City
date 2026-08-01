@@ -195,12 +195,14 @@ func _check_voxels(blocks: Dictionary, layout: ZooLayout, deck: int) -> bool:
 	var frame_n := int(above.get(VoxelMaterial.ZOO_FENCE_FRAME, 0))
 	var line_n := int(above.get(VoxelMaterial.ZOO_FENCE_LINE, 0))
 	var glass_n := int(above.get(VoxelMaterial.ZOO_FENCE_GLASS, 0))
+	var rim_n := int(surface.get(VoxelMaterial.ZOO_PLATE_RIM, 0))
+	## Short pads live on the deck cell; summon gazebos also stamp turf there.
 	var plate_n := 0
 	for f in range(6):
 		plate_n += int(surface.get(VoxelMaterial.zoo_turf_for_faction_index(f), 0))
 	print(
-		"voxels frame=%d line=%d glass=%d plates@deck=%d"
-		% [frame_n, line_n, glass_n, plate_n]
+		"voxels frame=%d line=%d glass=%d plate_rim=%d turf=%d"
+		% [frame_n, line_n, glass_n, rim_n, plate_n]
 	)
 	if frame_n < 2000:
 		_fail("FAIL containment ring frame too thin (%d)" % frame_n)
@@ -211,8 +213,11 @@ func _check_voxels(blocks: Dictionary, layout: ZooLayout, deck: int) -> bool:
 	if glass_n < 500:
 		_fail("FAIL not enough fence glass (%d)" % glass_n)
 		return false
-	if plate_n < 400:
-		_fail("FAIL home-turf plates barely stamped (%d)" % plate_n)
+	if rim_n < 200:
+		_fail("FAIL short plates have almost no rim (%d)" % rim_n)
+		return false
+	if plate_n < 80:
+		_fail("FAIL home-turf pads barely stamped (%d turf voxels)" % plate_n)
 		return false
 
 	## The gate is the one hole: air all the way up through the ring line.
@@ -254,6 +259,29 @@ func _check_voxels(blocks: Dictionary, layout: ZooLayout, deck: int) -> bool:
 		_fail("FAIL scattered houses left only %d wall voxels standing" % wall_n)
 		return false
 	print("ruined house fabric standing: %d voxels" % wall_n)
+
+	## Summon stations are open gazebos: a roof, lit posts, and a mid-face doorway wide
+	## enough that a spawned body is not trapped under the roof.
+	var pad := layout.spawner_vox[0]
+	var roof := _probe(blocks, pad.x, deck + 9, pad.z)
+	if roof != VoxelMaterial.ROOF_CLAY and roof != VoxelMaterial.ZOO_FENCE_LINE:
+		roof = _probe(blocks, pad.x + 3, deck + 8, pad.z)
+	if roof != VoxelMaterial.ROOF_CLAY and roof != VoxelMaterial.ZOO_FENCE_LINE:
+		_fail(
+			"FAIL summon station at %s has no gazebo roof (found %d)"
+			% [pad, roof]
+		)
+		return false
+	## South face middle must be air at body height — that is the walk-out.
+	var door := _probe(blocks, pad.x, deck + 3, pad.z + 5)
+	if door != VoxelMaterial.AIR:
+		_fail("FAIL summon gazebo south door is blocked by mat %d" % door)
+		return false
+	var post := _probe(blocks, pad.x + 3, deck + 3, pad.z + 5)
+	if post != VoxelMaterial.ZOO_FENCE_FRAME:
+		_fail("FAIL summon gazebo has no end-of-face post (found %d)" % post)
+		return false
+	print("summon gazebo ok: roof mat %d, south door open, end posts standing" % roof)
 	return true
 
 
