@@ -1006,6 +1006,8 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 		spawn = _find_hill_cave_mouth_spawn(spawn_y, HEADROOM_VOX)
 	elif theme != null and theme.id == DistrictTheme.ARENA:
 		spawn = _find_arena_gate_spawn(spawn_y, HEADROOM_VOX)
+	elif theme != null and theme.id == DistrictTheme.CASTLE:
+		spawn = _find_castle_gate_spawn(HEADROOM_VOX)
 	if not is_finite(spawn.x):
 		var cx := size_x / 2
 		var cz := size_z / 2
@@ -1167,9 +1169,83 @@ func _find_arena_gate_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
 	return Vector3(INF, INF, INF)
 
 
+## Stand on the terrace just outside the gatehouse, facing the passage.
+func _find_castle_gate_spawn(headroom_vox: int) -> Vector3:
+	if _castle_layout == null or _castle_layout.gate_dir == Vector2i.ZERO:
+		return Vector3(INF, INF, INF)
+	var layout := _castle_layout
+	var d := layout.gate_dir
+	var side := Vector2i(-d.y, d.x)
+	var face := _castle_gatehouse_face(layout)
+	var vs := voxel_size
+	## A few columns past the outer face clears the flanking turrets; then widen the search.
+	for dist: int in range(2, 36):
+		for lateral: int in [0, 1, -1, 2, -2, 3, -3]:
+			var x: int = face.x + d.x * dist + side.x * lateral
+			var z: int = face.y + d.y * dist + side.y * lateral
+			if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
+				continue
+			var floor_y: int = _castle_spawn_floor_y(x, z, layout.courtyard_y)
+			if floor_y < 0:
+				continue
+			if not _has_spawn_headroom_above(x, floor_y, z, headroom_vox):
+				continue
+			## Face the gate (walker forward is −Z at yaw 0).
+			var look_x := float(layout.gate_center.x) - float(x)
+			var look_z := float(layout.gate_center.y) - float(z)
+			if look_x * look_x + look_z * look_z < 0.25:
+				continue
+			last_spawn_yaw = atan2(-look_x, -look_z)
+			var feet_y := float(floor_y + 1) * vs + 0.85
+			return Vector3(
+				(float(origin_vox.x + x) + 0.5) * vs,
+				feet_y,
+				(float(origin_vox.z + z) + 0.5) * vs
+			)
+	return Vector3(INF, INF, INF)
+
+
+## Outer face of the gatehouse on the gate axis, on the passage centre line.
+func _castle_gatehouse_face(layout: CastleLayout) -> Vector2i:
+	var gh := layout.gatehouse_rect
+	if layout.gate_dir.x > 0:
+		return Vector2i(gh.end.x - 1, layout.gate_center.y)
+	if layout.gate_dir.x < 0:
+		return Vector2i(gh.position.x, layout.gate_center.y)
+	if layout.gate_dir.y > 0:
+		return Vector2i(layout.gate_center.x, gh.end.y - 1)
+	return Vector2i(layout.gate_center.x, gh.position.y)
+
+
+## Top solid a body can stand on near the courtyard datum (causeway / terrace / planks).
+func _castle_spawn_floor_y(x: int, z: int, prefer_y: int) -> int:
+	for y in range(prefer_y + 4, prefer_y - 10, -1):
+		if y < 1:
+			break
+		var mat := _brush.get_vox(Vector3i(x, y, z))
+		if not _is_castle_spawn_floor(mat):
+			continue
+		if _brush.get_vox(Vector3i(x, y + 1, z)) != VoxelMaterial.AIR:
+			continue
+		return y
+	return -1
+
+
+func _is_castle_spawn_floor(mat: int) -> bool:
+	return (
+		VoxelMaterial.is_castle_block(mat)
+		or mat == VoxelMaterial.TIMBER
+		or VoxelMaterial.is_walkable_surface(mat)
+	)
+
+
 func _has_spawn_headroom(x: int, z: int, air_voxels: int) -> bool:
+	return _has_spawn_headroom_above(x, ground_thickness, z, air_voxels)
+
+
+func _has_spawn_headroom_above(x: int, floor_y: int, z: int, air_voxels: int) -> bool:
 	for dy in range(1, air_voxels + 1):
-		if _brush.get_vox(Vector3i(x, ground_thickness + dy, z)) != VoxelMaterial.AIR:
+		if _brush.get_vox(Vector3i(x, floor_y + dy, z)) != VoxelMaterial.AIR:
 			return false
 	return true
 

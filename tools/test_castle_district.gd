@@ -136,6 +136,7 @@ func _ready() -> void:
 	_check_vertical_budget(layout, int(res["ground_thickness"]))
 	_check_gate(layout)
 	_check_causeway(layout)
+	_check_spawn_at_gate(gen, layout)
 	_check_gardens("seed %d" % WORLD_SEED, res, layout)
 	_check_keep_shell(layout)
 	_check_keep_tree("seed %d" % WORLD_SEED, layout)
@@ -466,6 +467,42 @@ func _check_causeway(layout: CastleLayout) -> void:
 			"FAIL the causeway climbs %d voxels, the plinth is %d tall"
 			% [climb, CastleComposerScript.PLINTH_RISE]
 		)
+
+
+## Spawn stands just outside the gatehouse on the approach, facing the passage.
+func _check_spawn_at_gate(gen: DistrictGenerator, layout: CastleLayout) -> void:
+	var spawn := gen.find_spawn_world(null)
+	if not is_finite(spawn.x):
+		_fail("FAIL castle gate spawn not found")
+		return
+	if not is_finite(float(gen.last_spawn_yaw)):
+		_fail("FAIL castle spawn yaw missing (should face the gate)")
+		return
+	var lx := int(floor(spawn.x / VOXEL_SIZE)) - gen.origin_vox.x
+	var lz := int(floor(spawn.z / VOXEL_SIZE)) - gen.origin_vox.z
+	var to_gate := Vector2(
+		float(layout.gate_center.x) - float(lx),
+		float(layout.gate_center.y) - float(lz)
+	)
+	var reach := to_gate.length()
+	## Outside the gatehouse face, close enough that the leaves fill the view.
+	if reach > 28.0:
+		_fail(
+			"FAIL castle spawn at (%d,%d) is %.0f voxels from the gate — not in front of it"
+			% [lx, lz, reach]
+		)
+		return
+	var outward := Vector2(float(layout.gate_dir.x), float(layout.gate_dir.y))
+	if to_gate.dot(outward) > -0.5:
+		_fail(
+			"FAIL castle spawn at (%d,%d) is not outside the gate (gate_dir=%s)"
+			% [lx, lz, layout.gate_dir]
+		)
+		return
+	print(
+		"spawn=(%.1f, %.1f, %.1f) yaw=%.2f at (%d,%d) %.0f voxels from gate"
+		% [spawn.x, spawn.y, spawn.z, float(gen.last_spawn_yaw), lx, lz, reach]
+	)
 
 
 # ---------------------------------------------------------------------------
