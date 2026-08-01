@@ -13,6 +13,7 @@ const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd"
 const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd")
 const PlayerHealthHudScript := preload("res://scripts/city/player_health_hud.gd")
 const PlayerBoostHudScript := preload("res://scripts/city/player_boost_hud.gd")
+const PlayerCompassHudScript := preload("res://scripts/city/player_compass_hud.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
@@ -104,6 +105,7 @@ var _minions: Array[FollowMinion] = []
 var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
 var _boost_hud: CanvasLayer
+var _compass_hud: PlayerCompassHud
 var _debris_root: Node3D
 var _cascade: NativeCascadeDebris
 var _gem_lights: GemLightDirector
@@ -588,6 +590,10 @@ func _build_hud() -> void:
 	_boost_hud.name = "PlayerBoostHud"
 	add_child(_boost_hud)
 
+	_compass_hud = PlayerCompassHudScript.new() as PlayerCompassHud
+	_compass_hud.name = "PlayerCompassHud"
+	add_child(_compass_hud)
+
 	_undead_hud = UndeadInvasionHudScript.new()
 	_undead_hud.name = "UndeadInvasionHud"
 	add_child(_undead_hud)
@@ -818,6 +824,111 @@ func _on_cheat_opened() -> void:
 	_refresh_hud_visibility()
 	if _walker != null and is_instance_valid(_walker):
 		_walker.release_capture()
+	## Fresh dump every open — the log is for what is true right now, not a history of opens.
+	if _cheat_panel != null:
+		_cheat_panel.set_log(build_cheat_district_report())
+
+
+## Snapshot of the player's tile for the cheat modal: gems still owed, living actor tallies, and
+## the four neighbouring themes. Themes are looked up by seed rather than by what is loaded, so
+## an unloaded neighbour still has a name.
+func build_cheat_district_report() -> String:
+	var lines: PackedStringArray = PackedStringArray()
+	if _walker == null or not is_instance_valid(_walker):
+		return "District report\n(no walker)"
+	var here := DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE)
+	var theme := DistrictTheme.for_district(city_seed, here)
+	var place := DistrictName.for_district(city_seed, here)
+	lines.append("District report")
+	lines.append("%s (%s) at %s" % [place, theme.display_name, str(here)])
+	lines.append("")
+
+	if _loadout != null and _loadout.uses_gem_budgets():
+		var left := 0
+		if _economy != null:
+			left = _economy.remaining_total(here)
+		lines.append("Hidden gems: %d" % left)
+	else:
+		lines.append("Hidden gems: n/a (no gem budgets in this mode)")
+	lines.append("")
+
+	lines.append("Actors")
+	var actor_lines := _cheat_actor_lines()
+	if actor_lines.is_empty():
+		lines.append("  (none active)")
+	else:
+		lines.append_array(actor_lines)
+	lines.append("")
+
+	lines.append("Neighbors")
+	## Same order as signposts: east, south, west, north.
+	var card_names: PackedStringArray = PackedStringArray(["east", "south", "west", "north"])
+	var card_offs: Array[Vector2i] = [
+		Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)
+	]
+	for i in card_names.size():
+		var ncoord := here + card_offs[i]
+		var ntheme := DistrictTheme.for_district(city_seed, ncoord)
+		lines.append("  %s => %s" % [card_names[i], ntheme.display_name.to_lower()])
+	return "\n".join(lines)
+
+
+## One line per living actor kind across the loaded bubble (and the global monster roster).
+## Kinds with a zero count are omitted so an empty invasion does not pad the report.
+func _cheat_actor_lines() -> PackedStringArray:
+	var lines: PackedStringArray = PackedStringArray()
+	var peds := 0
+	var vehicles := 0
+	if _streamer != null:
+		for entry in _streamer.get_loaded_districts():
+			var inst := _as_district_instance(entry)
+			if inst == null:
+				continue
+			if inst.crowd != null and is_instance_valid(inst.crowd):
+				peds += inst.crowd.agents_for_occupancy().size()
+			if inst.vehicles != null and is_instance_valid(inst.vehicles):
+				vehicles += inst.vehicles.vehicle_live_count()
+	if peds > 0:
+		lines.append("  pedestrians: %d" % peds)
+	if vehicles > 0:
+		lines.append("  vehicles: %d" % vehicles)
+
+	var monster_counts: Dictionary = {}  ## String label → int
+	if _monsters != null and is_instance_valid(_monsters):
+		for unit in _monsters.get_alive_units():
+			if unit == null or not is_instance_valid(unit):
+				continue
+			var label := _cheat_monster_label(unit)
+			monster_counts[label] = int(monster_counts.get(label, 0)) + 1
+	var monster_keys: Array = monster_counts.keys()
+	monster_keys.sort()
+	for key: Variant in monster_keys:
+		lines.append("  %s: %d" % [str(key), int(monster_counts[key])])
+
+	var minion_n := 0
+	for m in _minions:
+		if m != null and is_instance_valid(m):
+			minion_n += 1
+	if minion_n > 0:
+		lines.append("  follow minions: %d" % minion_n)
+	return lines
+
+
+func _cheat_monster_label(unit: UndeadUnit) -> String:
+	var entry := unit.creature_entry()
+	if entry != null and not entry.id.is_empty():
+		return entry.id
+	if unit.is_giant():
+		return "giant"
+	match unit.role:
+		UndeadUnit.Role.MAGE:
+			return "mage"
+		UndeadUnit.Role.MINION:
+			return "minion"
+		UndeadUnit.Role.GIANT:
+			return "giant"
+		_:
+			return "monster"
 
 
 func _on_cheat_closed() -> void:
@@ -2697,6 +2808,8 @@ func _regenerate() -> void:
 		_health_hud.call("clear_display")
 	if _boost_hud != null and is_instance_valid(_boost_hud):
 		_boost_hud.call("clear_display")
+	if _compass_hud != null and is_instance_valid(_compass_hud):
+		_compass_hud.clear_display()
 	if _undead_hud != null and is_instance_valid(_undead_hud):
 		_undead_hud.call("clear_display")
 	if _minimap != null and is_instance_valid(_minimap):
@@ -2886,6 +2999,8 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 		_health_hud.call("bind_walker", _walker)
 	if _boost_hud != null and is_instance_valid(_boost_hud):
 		_boost_hud.call("bind_walker", _walker)
+	if _compass_hud != null and is_instance_valid(_compass_hud):
+		_compass_hud.bind_walker(_walker)
 	if _settings_panel != null:
 		_on_settings_applied(_settings_panel.get_settings())
 		_apply_saved_controls()

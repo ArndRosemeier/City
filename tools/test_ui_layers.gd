@@ -17,6 +17,7 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/city_minimap.gd", "layer": UiLayers.HUD_MINIMAP},
 	{"path": "res://scripts/city/player_energy_hud.gd", "layer": UiLayers.HUD_ENERGY},
 	{"path": "res://scripts/city/player_boost_hud.gd", "layer": UiLayers.HUD_BOOST},
+	{"path": "res://scripts/city/player_compass_hud.gd", "layer": UiLayers.HUD_COMPASS},
 	{"path": "res://scripts/city/city_settings_panel.gd", "layer": UiLayers.MODAL_SETTINGS},
 	{"path": "res://scripts/city/player_inventory_panel.gd", "layer": UiLayers.MODAL_INVENTORY},
 	{"path": "res://scripts/city/character_editor.gd", "layer": UiLayers.MODAL_CHARACTER_EDITOR},
@@ -44,6 +45,7 @@ const HUD: Array[int] = [
 	UiLayers.HUD_HEALTH,
 	UiLayers.HUD_LOOT,
 	UiLayers.HUD_BOOST,
+	UiLayers.HUD_COMPASS,
 ]
 
 const MODALS: Array[int] = [

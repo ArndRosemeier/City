@@ -25,6 +25,8 @@ const HUD_HEALTH := 16
 const HUD_LOOT := 17
 ## Active tonic chips (speed / regen). Above the bars, below loot so a find still owns the eye.
 const HUD_BOOST := 18
+## Heading rose. Top of the band with loot: always-on travel chrome, never over a find card.
+const HUD_COMPASS := 19
 const HUD_MAX := 19
 
 ## Panels that own the screen while open. Above every HUD surface, below every takeover.

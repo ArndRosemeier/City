@@ -221,7 +221,7 @@ func _build_ui() -> void:
 	log_panel.add_child(log_col)
 
 	var log_title := Label.new()
-	log_title.text = "Debug log"
+	log_title.text = "District report / log"
 	log_title.modulate = HINT_COLOR
 	log_title.add_theme_font_size_override("font_size", 13)
 	log_col.add_child(log_title)
@@ -232,7 +232,7 @@ func _build_ui() -> void:
 	_log.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_log.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_log.placeholder_text = "Cheat actions report here. Room for probes later."
+	_log.placeholder_text = "Opens with a district report. Cheat actions append below."
 	_log.add_theme_font_size_override("font_size", 13)
 	log_col.add_child(_log)
 
