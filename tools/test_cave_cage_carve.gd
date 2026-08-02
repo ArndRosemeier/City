@@ -1,4 +1,4 @@
-## Headless: cave-cage voxels must be blastable (ROCK, destructible) and not zoo-fence immune.
+## Headless: cave-cage voxels dissolve (not explode), stay blastable ROCK, and are not zoo-fence.
 extends Node
 
 
@@ -18,14 +18,14 @@ func _ready() -> void:
 		if not VoxelMaterial.is_destructible(id):
 			push_error("FAIL %d not destructible" % id)
 			failed = true
-		if not VoxelMaterial.is_explosive(id):
-			push_error("FAIL %d not explosive" % id)
+		if not VoxelMaterial.is_dissolve(id):
+			push_error("FAIL %d not dissolve" % id)
 			failed = true
-		if VoxelMaterial.explosive_radius_m(id) < 5.0:
-			push_error(
-				"FAIL %d explosive radius %f too small for whole cage"
-				% [id, VoxelMaterial.explosive_radius_m(id)]
-			)
+		if VoxelMaterial.is_explosive(id):
+			push_error("FAIL %d still explosive — cage must dissolve, not crater" % id)
+			failed = true
+		if VoxelMaterial.explosive_radius_m(id) != 0.0:
+			push_error("FAIL %d explosive radius %f want 0" % [id, VoxelMaterial.explosive_radius_m(id)])
 			failed = true
 		var h := VoxelMaterial.hardness(id)
 		if h != VoxelMaterial.Hardness.ROCK and h != VoxelMaterial.Hardness.SOFT:
@@ -34,6 +34,20 @@ func _ready() -> void:
 		if h == VoxelMaterial.Hardness.NEVER:
 			push_error("FAIL %d hardness NEVER" % id)
 			failed = true
+	## Frame, line and glass share one dissolve cluster so a single hit opens the whole cage.
+	if not VoxelMaterial.dissolves_with(
+		VoxelMaterial.CAVE_CAGE_GLASS, VoxelMaterial.CAVE_CAGE_FRAME
+	):
+		push_error("FAIL cage glass does not dissolve with frame")
+		failed = true
+	if not VoxelMaterial.dissolves_with(
+		VoxelMaterial.CAVE_CAGE_FRAME, VoxelMaterial.CAVE_CAGE_LINE
+	):
+		push_error("FAIL cage frame does not dissolve with line")
+		failed = true
+	if VoxelMaterial.dissolves_with(VoxelMaterial.CAVE_CAGE_FRAME, VoxelMaterial.STONE):
+		push_error("FAIL cage wrongly dissolves with STONE")
+		failed = true
 	for id in [
 		VoxelMaterial.ZOO_FENCE_FRAME,
 		VoxelMaterial.ZOO_FENCE_LINE,
@@ -48,8 +62,14 @@ func _ready() -> void:
 		if VoxelMaterial.is_explosive(id):
 			push_error("FAIL zoo fence %d wrongly explosive" % id)
 			failed = true
+		if VoxelMaterial.is_dissolve(id):
+			push_error("FAIL zoo fence %d wrongly dissolve" % id)
+			failed = true
 	if VoxelMaterial.is_explosive(VoxelMaterial.STONE):
 		push_error("FAIL STONE wrongly explosive")
+		failed = true
+	if VoxelMaterial.is_dissolve(VoxelMaterial.STONE):
+		push_error("FAIL STONE wrongly dissolve")
 		failed = true
 	if VoxelMaterial.COUNT <= VoxelMaterial.CAVE_CAGE_GLASS:
 		push_error(
@@ -58,11 +78,12 @@ func _ready() -> void:
 		)
 		failed = true
 	print(
-		"cave cage hardness frame=%d line=%d glass=%d COUNT=%d"
+		"cave cage dissolve frame=%d line=%d glass=%d cluster=%d COUNT=%d"
 		% [
 			VoxelMaterial.hardness(VoxelMaterial.CAVE_CAGE_FRAME),
 			VoxelMaterial.hardness(VoxelMaterial.CAVE_CAGE_LINE),
 			VoxelMaterial.hardness(VoxelMaterial.CAVE_CAGE_GLASS),
+			VoxelMaterial.dissolve_cluster(VoxelMaterial.CAVE_CAGE_GLASS),
 			VoxelMaterial.COUNT,
 		]
 	)

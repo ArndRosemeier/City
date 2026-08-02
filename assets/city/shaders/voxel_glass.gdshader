@@ -30,6 +30,12 @@ varying vec3 v_object;
 varying vec3 v_world_normal;
 varying vec3 v_object_normal;
 
+/// Lit brightness of one window cell: on/off from the cell hash, times its own dimming.
+float vx_window_glow(vec3 cell) {
+	float pick = vx_hash13(cell);
+	return step(1.0 - lit_ratio, pick) * (0.65 + 0.35 * fract(pick * 31.7));
+}
+
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_object = VERTEX;
@@ -49,6 +55,10 @@ void fragment() {
 	vec3 axis_u;
 	vec3 axis_v;
 	vx_project(p, n, uv, axis_u, axis_v);
+	/// Metre-space face UV, kept before the tile divide: the window grid needs the two
+	/// axes that actually run across this face, not the world triple (the third is
+	/// constant on a flat voxel face, so its derivative is zero and useless for AA).
+	vec2 face_m = uv;
 	uv /= max(tile_meters, vec2(0.01, 0.01));
 
 	vec3 pane = texture(albedo_tex, uv).rgb;
@@ -66,15 +76,41 @@ void fragment() {
 	albedo = mix(albedo, albedo * 1.15 + sky * 0.35, rim * 0.85);
 
 	vec3 emission = sky * (0.12 + rim * 0.28) + vec3(1.0) * pow(fres, 5.0) * 0.55;
-	if (lit_ratio > 0.0) {
-		vec3 cell = floor(v_world / max(window_meters, 0.05));
-		float pick = vx_hash13(cell);
-		float on = step(1.0 - lit_ratio, pick);
+	/// Both tests are uniforms, so daylight skips the whole grid rather than filtering a
+	/// window pattern that resolves to zero emission anyway (power is 0 below 0.15).
+	if (lit_ratio > 0.0 && night_factor > 0.15) {
+		float wm = max(window_meters, 0.05);
+		vec3 cell = floor(p / wm);
 		float warm_mix = vx_hash13(cell + 41.7);
 		vec3 lamp = mix(lit_cool.rgb, lit_warm.rgb, smoothstep(0.25, 0.75, warm_mix));
-		float power = smoothstep(0.15, 0.7, night_factor) * (0.65 + 0.35 * fract(pick * 31.7));
-		emission += lamp * lit_energy * power * on;
-		albedo = mix(albedo, lamp * 0.85, power * on * 0.5);
+
+		/// Each cell is flat-shaded, so the only detail is the hard jump at its border —
+		/// exactly the one-pixel edge that crawls into moving patterns. Box-filter it:
+		/// weight this cell against the neighbour the pixel footprint spills into.
+		vec2 grid = face_m / wm;
+		vec2 px = max(fwidth(grid), vec2(1e-5));
+		vec2 f = fract(grid);
+		vec2 spill_lo = max(vec2(0.0), px * 0.5 - f) / px;
+		vec2 spill_hi = max(vec2(0.0), f + px * 0.5 - 1.0) / px;
+		vec2 wn = min(spill_lo + spill_hi, vec2(0.5));
+		vec3 du = axis_u * (spill_lo.x > 0.0 ? -1.0 : 1.0);
+		vec3 dv = axis_v * (spill_lo.y > 0.0 ? -1.0 : 1.0);
+		float glow = mix(
+			mix(vx_window_glow(cell), vx_window_glow(cell + du), wn.x),
+			mix(vx_window_glow(cell + dv), vx_window_glow(cell + du + dv), wn.x),
+			wn.y
+		);
+
+		/// Past roughly one pixel per cell even a filtered grid is noise. Fade the whole
+		/// thing into the steady glow it averages to: lit_ratio of the cells, at the mean
+		/// brightness and a neutral lamp colour.
+		float lod = smoothstep(0.35, 1.0, max(px.x, px.y));
+		lamp = mix(lamp, mix(lit_cool.rgb, lit_warm.rgb, 0.5), lod);
+		glow = mix(glow, lit_ratio * 0.825, lod);
+
+		float power = smoothstep(0.15, 0.7, night_factor);
+		emission += lamp * lit_energy * power * glow;
+		albedo = mix(albedo, lamp * 0.85, clamp(power * glow, 0.0, 1.0) * 0.5);
 	}
 
 	ALBEDO = albedo;

@@ -76,7 +76,7 @@ pub const ZOO_TURF_FIRST: i32 = 260;
 pub const ZOO_TURF_LAST: i32 = 265;
 /// Dark curb around an inset turf well.
 pub const ZOO_PLATE_RIM: i32 = 266;
-/// Hill-cave boss cage. Blastable (unlike ZOO_FENCE_*); crumble auras skip it in GD.
+/// Hill-cave boss cage. Dissolves on hit (unlike ZOO_FENCE_*); crumble auras skip it in GD.
 #[allow(dead_code)]
 pub const CAVE_CAGE_FRAME: i32 = 267;
 #[allow(dead_code)]
@@ -98,11 +98,19 @@ pub fn is_cave_cage(id: i32) -> bool {
     id == CAVE_CAGE_FRAME || id == CAVE_CAGE_LINE || id == CAVE_CAGE_GLASS
 }
 
-/// Player-damage detonation flag. GDScript owns the blast; native keeps id parity.
+/// Player-damage dissolve flag. GDScript owns the cascade; native keeps id parity.
 #[allow(dead_code)]
 #[inline]
-pub fn is_explosive(id: i32) -> bool {
+pub fn is_dissolve(id: i32) -> bool {
     is_cave_cage(id)
+}
+
+/// Player-damage detonation flag. GDScript owns the blast; native keeps id parity.
+/// No live assignees — cave cage moved to dissolve.
+#[allow(dead_code)]
+#[inline]
+pub fn is_explosive(_id: i32) -> bool {
+    false
 }
 
 #[inline]

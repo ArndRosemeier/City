@@ -305,7 +305,7 @@ func _await_walker(city: CityRoot) -> CityWalker:
 
 
 ## Boot is over when the walker has physics and the title splash has let go of the screen.
-## CityRoot holds physics off until ground collision exists, and the splash then fades out over
+## CityRoot holds physics off until the spawn column has stamped solid, and the splash then fades over
 ## half a second — long enough that a wait counted in frames photographs the title art instead.
 func _await_boot(city: CityRoot, walker: CityWalker) -> bool:
 	var splash := _splash(city)

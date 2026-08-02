@@ -140,7 +140,7 @@ const ZOO_TURF_LAST := ZOO_TURF_ARCANE
 ## Dark curb around an inset 2×2 turf well — the rim that makes a plate look placed,
 ## not painted onto the dirt.
 const ZOO_PLATE_RIM := 266
-## Hill-cave boss cage: zoo-fence look, but ROCK hardness so the player can blast it open.
+## Hill-cave boss cage: zoo-fence look, ROCK hardness, dissolves when hit (see `is_dissolve`).
 ## Immune to monster crumble auras only — see `is_cave_cage`.
 const CAVE_CAGE_FRAME := 267
 const CAVE_CAGE_LINE := 268
@@ -374,21 +374,40 @@ static func is_zoo_fence(id: int) -> bool:
 	return id == ZOO_FENCE_FRAME or id == ZOO_FENCE_LINE or id == ZOO_FENCE_GLASS
 
 
-## Hill-cave boss cage (posts, energy line, pane). Blastable by the player; crumble auras skip it.
+## Hill-cave boss cage (posts, energy line, pane). Dissolves when hit; crumble auras skip it.
 static func is_cave_cage(id: int) -> bool:
 	return id == CAVE_CAGE_FRAME or id == CAVE_CAGE_LINE or id == CAVE_CAGE_GLASS
 
 
-## Player damage on this cell detonates a charged blast (see `explosive_radius_m`).
-static func is_explosive(id: int) -> bool:
+## Player damage on this cell runs a dissolve cascade (see `dissolves_with`).
+static func is_dissolve(id: int) -> bool:
 	return is_cave_cage(id)
 
 
-## Sphere radius (metres) when `id` detonates. Zero when not explosive.
-## Cave cage: ~7×7×8 voxels — cover the far corner from any surface hit.
-static func explosive_radius_m(id: int) -> float:
+## Cluster key for dissolve infection. Same key → neighbours catch the cascade.
+## Default is the material id itself; multi-part assemblies (cage frame+line+glass) share one.
+static func dissolve_cluster(id: int) -> int:
 	if is_cave_cage(id):
-		return 6.0
+		return CAVE_CAGE_FRAME
+	return id
+
+
+## True when `other` should catch a dissolve started on `seed_id`.
+static func dissolves_with(seed_id: int, other: int) -> bool:
+	if not is_dissolve(seed_id) or not is_dissolve(other):
+		return false
+	return dissolve_cluster(seed_id) == dissolve_cluster(other)
+
+
+## Player damage on this cell detonates a charged blast (see `explosive_radius_m`).
+## No live assignees yet — the cave cage used to be explosive and is dissolve now; keep the
+## property so other fabrics can opt in without another carve path.
+static func is_explosive(id: int) -> bool:
+	return false
+
+
+## Sphere radius (metres) when `id` detonates. Zero when not explosive.
+static func explosive_radius_m(id: int) -> float:
 	return 0.0
 
 

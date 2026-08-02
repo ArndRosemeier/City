@@ -49,6 +49,9 @@ const MODAL_CHEAT := 26
 ## Whole-screen state changes, above any modal.
 const GAME_OVER := 40
 const LOADING_SPLASH := 50
+## Boot ran out of ways to place the player. Above the splash, which is still up when this
+## appears and would otherwise bury the only way out of a world that failed to build.
+const BOOT_FAILURE := 55
 
 ## Debug and failure surfaces, above modals and takeovers.
 const DEBUG_NAV_COUNTERS := 110

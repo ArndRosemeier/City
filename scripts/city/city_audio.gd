@@ -71,6 +71,8 @@ var _blast_charge_player: AudioStreamPlayer3D
 var _blast_impact_player: AudioStreamPlayer3D
 var _explosive_boom_player: AudioStreamPlayer3D
 var _explosive_boom_stream: AudioStream
+var _dissolve_hiss_player: AudioStreamPlayer3D
+var _dissolve_hiss_stream: AudioStream
 var _tendril_voices: Dictionary = {}  # tendril_id → AudioStreamPlayer3D
 
 
@@ -116,11 +118,17 @@ func _ready() -> void:
 	_blast_impact_player.max_db = 12.0
 	_blast_impact_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	_blast_impact_player.attenuation_filter_cutoff_hz = 14000.0
-	## Material detonations (cage, etc.) — carries farther than a normal charged impact.
+	## Material detonations — carries farther than a normal charged impact.
 	_explosive_boom_player = _make_dedicated_player("ExplosiveBoom", 420.0, 28.0)
 	_explosive_boom_player.max_db = 14.0
 	_explosive_boom_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	_explosive_boom_player.attenuation_filter_cutoff_hz = 6000.0
+	## Dissolve cascade — crystalline unravel, not a crater boom. Long enough to cover a
+	## whole cage's infection waves; position follows the frontier while it plays.
+	_dissolve_hiss_player = _make_dedicated_player("DissolveHiss", 140.0, 18.0)
+	_dissolve_hiss_player.max_db = 10.0
+	_dissolve_hiss_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	_dissolve_hiss_player.attenuation_filter_cutoff_hz = 12000.0
 
 
 func _process(delta: float) -> void:
@@ -364,7 +372,7 @@ func play_charged_blast_impact(world_pos: Vector3, character_scale: float = 1.0)
 		_blast_impact_player.play()
 
 
-## Fat low boom for explosive materials (cage detonation, etc.).
+## Fat low boom for explosive materials.
 func play_explosive_boom(world_pos: Vector3) -> void:
 	if not enabled:
 		return
@@ -377,6 +385,29 @@ func play_explosive_boom(world_pos: Vector3) -> void:
 	_explosive_boom_player.max_db = 14.0
 	_explosive_boom_player.volume_db = 5.0
 	_explosive_boom_player.play()
+
+
+## Crystalline unravel when dissolve fabric starts cascading. Call once at the seed hit;
+## `move_dissolve_hiss` keeps it on the infection front while waves run.
+func play_dissolve_hiss(world_pos: Vector3) -> void:
+	if not enabled:
+		return
+	if _dissolve_hiss_stream == null or _dissolve_hiss_player == null:
+		play_laser_impact(world_pos, 1.0)
+		return
+	_dissolve_hiss_player.stream = _dissolve_hiss_stream
+	_dissolve_hiss_player.global_position = world_pos
+	_dissolve_hiss_player.pitch_scale = _rng.randf_range(0.94, 1.06)
+	_dissolve_hiss_player.max_db = 10.0
+	_dissolve_hiss_player.volume_db = 2.0
+	_dissolve_hiss_player.play()
+
+
+## Keep the dissolve bed on the living frontier so it stays with the cage as it unravels.
+func move_dissolve_hiss(world_pos: Vector3) -> void:
+	if _dissolve_hiss_player == null or not _dissolve_hiss_player.playing:
+		return
+	_dissolve_hiss_player.global_position = world_pos
 
 
 ## Whoosh of a claw / fist swing. Scale drops the pitch for giants.
@@ -688,6 +719,7 @@ func _load_banks() -> void:
 	_meteor_whine_stream = _build_meteor_whine()
 	_meteor_crash_stream = _build_meteor_crash()
 	_explosive_boom_stream = _build_explosive_boom()
+	_dissolve_hiss_stream = _build_dissolve_hiss()
 	_tendril_drone_stream = _build_tendril_drone()
 	_tendril_tick_stream = _build_tendril_tick()
 	_gem_pickup_stream = _build_gem_pickup()
@@ -825,7 +857,7 @@ func _build_meteor_crash() -> AudioStreamWAV:
 
 
 func _build_explosive_boom() -> AudioStreamWAV:
-	## Cage / material detonation — deep pressure thump, glass snap, short ringing tail.
+	## Material detonation — deep pressure thump, glass snap, short ringing tail.
 	return _synthesize(1.15, func(t: float, _i: int) -> float:
 		var env := exp(-t * 3.1) * smoothstep(0.0, 0.015, t)
 		var boom := sin(TAU * 42.0 * t) * 0.9 + sin(TAU * 68.0 * t) * 0.5
@@ -835,6 +867,36 @@ func _build_explosive_boom() -> AudioStreamWAV:
 		var grit := (_rng.randf() * 2.0 - 1.0) * 0.55 * exp(-t * 5.5)
 		var ring := sin(TAU * 210.0 * t) * exp(-t * 4.0) * 0.28
 		return (boom + pressure + glass + crack + grit + ring) * env
+	)
+
+
+func _build_dissolve_hiss() -> AudioStreamWAV:
+	## Dissolve cascade — glass crack, then a rolling crystalline unravel with a thin red-energy
+	## sheen. Long enough to ride a whole cage's infection waves; no boom, no rubble thud.
+	return _synthesize(1.45, func(t: float, _i: int) -> float:
+		## Fast attack, slow burn, soft release so the last cells still have a tail.
+		var env := smoothstep(0.0, 0.012, t) * exp(-t * 1.55) * (1.0 - smoothstep(1.15, 1.45, t))
+		## Opening snap — brittle pane giving way.
+		var crack := (
+			sin(TAU * 1850.0 * t) * exp(-t * 42.0) * 0.7
+			+ sin(TAU * 2650.0 * t) * exp(-t * 55.0) * 0.45
+		)
+		## Cascading shimmer: chirps that tumble downward as cells infect outwards.
+		var tumble_hz := lerpf(1600.0, 420.0, clampf(t / 1.1, 0.0, 1.0))
+		var shimmer := (
+			sin(TAU * tumble_hz * t + sin(TAU * 9.0 * t) * 2.2) * 0.55
+			+ sin(TAU * tumble_hz * 1.47 * t) * 0.32
+		) * exp(-t * 1.8)
+		## Soft grit of fabric unweaving — denser early, thins as the cage opens.
+		var grit := (_rng.randf() * 2.0 - 1.0) * 0.38 * exp(-t * 3.2)
+		## Thin energy bed under the glass (reads as the red containment line dying).
+		var energy := (
+			sin(TAU * 210.0 * t) * 0.28
+			+ sin(TAU * 315.0 * t + sin(TAU * 6.5 * t)) * 0.22
+		) * exp(-t * 2.0)
+		## Late whisper of settling air — the hole left behind.
+		var air := sin(TAU * 90.0 * t) * 0.12 * smoothstep(0.35, 0.9, t) * exp(-t * 1.2)
+		return (crack + shimmer + grit + energy + air) * env
 	)
 
 

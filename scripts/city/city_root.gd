@@ -130,6 +130,9 @@ var _aim_panel: Node3D
 var _game_over_layer: CanvasLayer
 var _game_over_title: Label
 var _game_over_detail: Label
+## Built on demand — a boot that worked never pays for these nodes.
+var _boot_fail_layer: CanvasLayer
+var _boot_fail_detail: Label
 ## Per-meteor crater sites: rock stays immune + purple beam until that site's tendrils end.
 var _meteor_sites: Dictionary = {}  # site_id → {tendrils, beam, impact_vox}
 var _tendril_to_meteor_site: Dictionary = {}  # tendril_id → site_id
@@ -193,6 +196,27 @@ const SAVE_FOOTING_UP_VOX := 48
 const SAVE_FOOTING_DOWN_VOX := 12
 ## Body height the footing search must clear, in voxels (1.7 m capsule at 0.5 m voxels).
 const SAVE_FOOTING_HEIGHT_VOX := 4
+## Span the spawn column is searched for a floor before the walker is dropped onto it.
+## Up covers a spawn point sunk slightly into its own deck; down covers a rooftop or
+## mid-air save whose ground is a storey or two below.
+const FLOOR_PROBE_UP_M := 8.0
+const FLOOR_PROBE_DOWN_M := 20.0
+## How long the preferred column gets before the search widens. Deliberately short: the
+## district that owns the column has already reported ready, so ground that is not there
+## after this is not coming, and every extra second is a player staring at a splash.
+const FOOTING_PREFERRED_MS := 10_000
+## And how long each fallback column gets. Shorter still — by now the world is warm.
+const FOOTING_FALLBACK_MS := 6_000
+## Rings walked outwards when the preferred column has no floor, in metres. Wide enough to
+## clear a crypt, a cave mouth or a single unstamped block, tight enough that the player
+## still wakes up where they saved.
+const FOOTING_RING_RADII_M: Array[float] = [2.0, 4.0, 6.0, 8.0]
+## Where the footing the walker was finally given came from. Anything but PREFERRED means
+## the world did not have ground where it was asked for it, and said so in the log.
+const FOOTING_PREFERRED := "preferred"
+const FOOTING_NEARBY := "nearby"
+const FOOTING_DISTRICT := "district-spawn"
+const FOOTING_SOFT_LAND := "soft-land"
 var _audio: CityAudio
 var _day_night: DayNightCycle
 var _settings_panel: CitySettingsPanel
@@ -207,6 +231,18 @@ var _infection_stream_accum: float = 0.0
 var _street_night_factor: float = 0.0
 ## True while a material detonation is running — blocks recursive explosive triggers.
 var _explosive_detonating: bool = false
+## Dissolve cascade: frontier cells die this frame and infect matching neighbours.
+var _dissolve_frontier: Array[Vector3i] = []
+var _dissolve_seen: Dictionary = {}  # Vector3i → true
+var _dissolve_seed_id: int = -1
+var _dissolve_removed: int = 0
+## Hard cap so a mis-authored dissolve fabric cannot eat the district in one cascade.
+const DISSOLVE_MAX_CELLS := 8000
+const _DISSOLVE_NEIGHBOURS: Array[Vector3i] = [
+	Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
+	Vector3i(0, 1, 0), Vector3i(0, -1, 0),
+	Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+]
 
 ## Visual mesh radius (~90 m at default). Collisions use a shorter viewer below.
 var _voxel_view_vox: int = 100
@@ -734,6 +770,115 @@ func _build_game_over_overlay() -> void:
 	box.add_child(hint)
 
 
+## The last resort when no rung of the footing ladder produced anywhere to stand. A boot that
+## dies silently behind the title art looks like a hang and leaves the player with nothing to
+## press, so this hands the screen back: retry the same world, start a fresh one, or leave.
+func _show_boot_fail_overlay(reason: String) -> void:
+	_build_boot_fail_overlay()
+	_boot_fail_detail.text = reason
+	_boot_fail_layer.visible = true
+	if _status != null:
+		_status.visible = false
+	if _loading_splash != null:
+		_loading_splash.call("set_status", "Could not start the world")
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+	push_error("CityRoot: boot failed — %s" % reason)
+
+
+func _build_boot_fail_overlay() -> void:
+	if _boot_fail_layer != null and is_instance_valid(_boot_fail_layer):
+		return
+	_boot_fail_layer = CanvasLayer.new()
+	_boot_fail_layer.name = "BootFailureOverlay"
+	_boot_fail_layer.layer = UiLayers.BOOT_FAILURE
+	_boot_fail_layer.visible = false
+	## The world is not running, so the overlay must not depend on it running.
+	_boot_fail_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_boot_fail_layer)
+
+	var dim := ColorRect.new()
+	dim.name = "Dim"
+	dim.color = Color(0.03, 0.02, 0.02, 0.86)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_boot_fail_layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boot_fail_layer.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 16)
+	center.add_child(box)
+
+	var title := Label.new()
+	title.text = "COULD NOT START"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 54)
+	title.add_theme_color_override("font_color", Color(1.0, 0.66, 0.28))
+	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	title.add_theme_constant_override("outline_size", 8)
+	box.add_child(title)
+
+	_boot_fail_detail = Label.new()
+	_boot_fail_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_boot_fail_detail.add_theme_font_size_override("font_size", 21)
+	_boot_fail_detail.add_theme_color_override("font_color", Color(0.95, 0.93, 0.88))
+	_boot_fail_detail.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_boot_fail_detail.add_theme_constant_override("outline_size", 4)
+	box.add_child(_boot_fail_detail)
+
+	var hint := Label.new()
+	hint.text = "The log has the spawn column that failed."
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 17)
+	hint.add_theme_color_override("font_color", Color(0.78, 0.74, 0.68))
+	box.add_child(hint)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	box.add_child(row)
+	row.add_child(_boot_fail_button("Retry this world", _on_boot_fail_retry))
+	row.add_child(_boot_fail_button("New game", _on_boot_fail_new_game))
+	row.add_child(_boot_fail_button("Quit", _on_boot_fail_quit))
+
+
+func _boot_fail_button(text: String, pressed: Callable) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(190.0, 46.0)
+	button.add_theme_font_size_override("font_size", 19)
+	button.pressed.connect(pressed)
+	return button
+
+
+func _hide_boot_fail_overlay() -> void:
+	if _boot_fail_layer != null and is_instance_valid(_boot_fail_layer):
+		_boot_fail_layer.visible = false
+	if _status != null:
+		_status.visible = true
+
+
+## Same seed, same save: most boot failures are a streaming race that a second attempt wins.
+func _on_boot_fail_retry() -> void:
+	_hide_boot_fail_overlay()
+	_regenerate()
+
+
+## The save itself may be the thing that cannot be placed, so this route drops it.
+func _on_boot_fail_new_game() -> void:
+	_hide_boot_fail_overlay()
+	start_new_game(_loadout.mode)
+
+
+func _on_boot_fail_quit() -> void:
+	get_tree().quit()
+
+
 func _on_spawn_meteors_toggled(enabled: bool) -> void:
 	_spawn_meteors_enabled = enabled
 	if enabled:
@@ -1246,6 +1391,10 @@ func _process(delta: float) -> void:
 	_infection_stream_accum += delta
 	_gem_pickup_accum += delta
 	_economy_accum += delta
+	if not _dissolve_frontier.is_empty():
+		CityProfiler.begin("voxel_dissolve")
+		_tick_dissolve()
+		CityProfiler.end("voxel_dissolve")
 	CityProfiler.begin("underground")
 	_sync_underground_lighting()
 	CityProfiler.end("underground")
@@ -2551,13 +2700,19 @@ func _respawn_at_zone_spawn() -> void:
 	_walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	_walker.velocity = Vector3.ZERO
 	_apply_spawn_yaw(_walker, inst.generator)
-	var floor_y := await _wait_floor_collision_ms(spawn, 15_000)
-	if is_nan(floor_y):
-		## Soft land on the generator Y if collisions are slow.
-		floor_y = spawn.y
+	var footing := await _resolve_playable_footing(
+		spawn, inst.generator, "respawn in %s" % coord, FOOTING_FALLBACK_MS
+	)
 	if not is_instance_valid(_walker):
 		_respawning = false
 		return
+	if footing.is_empty():
+		_respawning = false
+		push_error("CityRoot: respawn — nowhere to stand in %s, regenerating" % coord)
+		call_deferred("_regenerate")
+		return
+	spawn = footing["spawn"] as Vector3
+	var floor_y := float(footing["floor_y"])
 	_walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
 	_walker.velocity = Vector3.ZERO
 	_apply_spawn_yaw(_walker, inst.generator)
@@ -2755,17 +2910,13 @@ func _district_reload_async(coord: Vector2i) -> void:
 		spawn = Vector3(stay_xz.x, candidate.y, stay_xz.z)
 	walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
 	walker.velocity = Vector3.ZERO
-	_loading_splash.call("set_status", "Waiting for ground collisions…")
-	var floor_y := await _wait_floor_collision_ms(spawn, 60_000)
-	if is_nan(floor_y):
-		## Fall back to district spawn if the old XZ never remeshed solid.
-		if inst.generator != null and inst.generator.has_method("find_spawn_world"):
-			spawn = inst.generator.find_spawn_world(_tool)
-			walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
-			floor_y = await _wait_floor_collision_ms(spawn, 60_000)
-	if is_nan(floor_y):
-		await _finish_district_hop_fail("no ground collision after reload", origin_pos)
+	_loading_splash.call("set_status", "Finding footing…")
+	var footing := await _resolve_playable_footing(spawn, inst.generator, "reload of %s" % coord)
+	if footing.is_empty():
+		await _finish_district_hop_fail("no ground under spawn after reload", origin_pos)
 		return
+	spawn = footing["spawn"] as Vector3
+	var floor_y := float(footing["floor_y"])
 	walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
 	walker.velocity = Vector3.ZERO
 	walker.set_physics_process(true)
@@ -2872,7 +3023,7 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		_loading_splash.call("set_status", "Finding spawn in %s…" % theme.display_name)
 	var spawn: Vector3 = inst.generator.find_spawn_world(_tool)
 	if not _has_solid_ground_at(spawn):
-		var ground_deadline := Time.get_ticks_msec() + 45_000
+		var ground_deadline := Time.get_ticks_msec() + FOOTING_PREFERRED_MS
 		while not _has_solid_ground_at(spawn) and Time.get_ticks_msec() < ground_deadline:
 			await get_tree().process_frame
 		spawn = inst.generator.find_spawn_world(_tool)
@@ -2880,11 +3031,13 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 	walker.velocity = Vector3.ZERO
 	_apply_spawn_yaw(walker, inst.generator)
 	if _loading_splash != null:
-		_loading_splash.call("set_status", "Waiting for ground collisions…")
-	var floor_y := await _wait_floor_collision_ms(spawn, 60_000)
-	if is_nan(floor_y):
-		await _finish_district_hop_fail("no ground collision at hop spawn", origin_pos)
+		_loading_splash.call("set_status", "Finding footing…")
+	var footing := await _resolve_playable_footing(spawn, inst.generator, "hop into %s" % dest)
+	if footing.is_empty():
+		await _finish_district_hop_fail("no ground under hop spawn", origin_pos)
 		return
+	spawn = footing["spawn"] as Vector3
+	var floor_y := float(footing["floor_y"])
 	walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
 	walker.velocity = Vector3.ZERO
 	_apply_spawn_yaw(walker, inst.generator)
@@ -3080,7 +3233,7 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 	## Verify stamped ground exists under spawn (voxel data, not just mesh flag).
 	if not _has_solid_ground_at(spawn):
 		_status.text = "Waiting for stamped ground…"
-		var ground_deadline := Time.get_ticks_msec() + 45_000
+		var ground_deadline := Time.get_ticks_msec() + FOOTING_PREFERRED_MS
 		while not _has_solid_ground_at(spawn) and Time.get_ticks_msec() < ground_deadline:
 			await get_tree().process_frame
 		spawn = gen.find_spawn_world(_tool)
@@ -3144,13 +3297,22 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 	_nav_overlay.bind_follow(_walker)
 	_nav_overlay.bind_aim_provider(_nav_overlay_aim)
 
-	_status.text = "Waiting for ground collisions…"
-	var floor_y := await _wait_floor_collision(spawn, 2400)
-	if is_nan(floor_y):
-		_status.text = "ERROR: no ground collision at spawn"
-		push_error("CityRoot: floor ray never hit — refusing to enable walker physics")
+	_status.text = "Finding footing…"
+	var footing := await _resolve_playable_footing(spawn, gen, "boot spawn")
+	if footing.is_empty():
+		## Out of rungs. Never leave a walker standing in the world with physics off and no
+		## way out — hand the screen back to the player.
+		_status.text = "ERROR: no ground at spawn"
 		_booting = false
+		if is_instance_valid(spawn_viewer):
+			spawn_viewer.queue_free()
+		if is_instance_valid(_walker):
+			_show_boot_fail_overlay(
+				"The spawn district came up without ground to stand on."
+			)
 		return
+	spawn = footing["spawn"] as Vector3
+	var floor_y := float(footing["floor_y"])
 
 	_walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
 	_walker.velocity = Vector3.ZERO
@@ -3547,40 +3709,180 @@ func _has_solid_ground_at(world: Vector3) -> bool:
 	return false
 
 
-func _wait_floor_collision(spawn: Vector3, max_frames: int = 1800) -> float:
-	## Boot path still passes a frame budget; map it to wall-clock at 60 Hz so a
-	## unlocked render loop cannot burn the whole wait in a few seconds.
-	return await _wait_floor_collision_ms(spawn, maxi(1, max_frames) * 1000 / 60)
+## What the spawn column actually holds when no floor turns up. Voxel data and mesh state
+## are separate stages: no data means the district never stamped here, data without a mesh
+## means the streamer is still behind.
+func _describe_missing_floor(spawn: Vector3) -> String:
+	var vx := floori(spawn.x / VOXEL_SIZE)
+	var vz := floori(spawn.z / VOXEL_SIZE)
+	var vy := floori(spawn.y / VOXEL_SIZE)
+	var column := PackedStringArray()
+	for dy in range(-6, 5):
+		var y := vy + dy
+		var mat := int(_tool.get_voxel(Vector3i(vx, y, vz))) if _tool != null else -1
+		column.append("%d:%d" % [y, mat])
+	var meshed := "n/a"
+	if _terrain != null and is_instance_valid(_terrain):
+		meshed = str(_terrain.is_area_meshed(_spawn_neighborhood_aabb(spawn, 8.0)))
+	return (
+		"spawn %s (voxel %d,%d,%d) column[y:mat] %s · area meshed %s"
+		% [spawn, vx, vy, vz, " ".join(column), meshed]
+	)
 
 
-func _wait_floor_collision_ms(spawn: Vector3, max_ms: int = 60_000) -> float:
-	## Returns floor Y, or NAN if never found. Physics stays disabled until this succeeds.
+## Surface Y of the highest solid voxel in the spawn column, or NAN when it is all air.
+## Searches the same span the walker could plausibly be dropped through.
+func _voxel_floor_y(spawn: Vector3) -> float:
+	if _tool == null:
+		return NAN
+	var vx := floori(spawn.x / VOXEL_SIZE)
+	var vz := floori(spawn.z / VOXEL_SIZE)
+	var top := floori((spawn.y + FLOOR_PROBE_UP_M) / VOXEL_SIZE)
+	var bottom := floori((spawn.y - FLOOR_PROBE_DOWN_M) / VOXEL_SIZE)
+	for y in range(top, bottom - 1, -1):
+		var mat := int(_tool.get_voxel(Vector3i(vx, y, vz)))
+		if mat != VoxelMaterial.AIR and VoxelMaterial.is_solid(mat):
+			return float(y + 1) * VOXEL_SIZE
+	return NAN
+
+
+## Waits for a district to stamp ground under `spawn`, then reports its surface Y, or NAN
+## if none ever appears.
+##
+## Reads voxel data, not remeshed colliders. The walker moves with VoxelBoxMover against
+## that same data and its collision_mask deliberately excludes terrain bodies, so a block
+## the remesher left without a collider is still solid ground to it. Gating on colliders
+## used to strand a boot for the full budget on ground the player could have stood on.
+func _wait_voxel_floor_ms(spawn: Vector3, max_ms: int = 60_000, stage: String = "") -> float:
 	var deadline := Time.get_ticks_msec() + max_ms
 	var started := Time.get_ticks_msec()
 	var last_status := 0
 	while Time.get_ticks_msec() < deadline:
 		if _walker == null or not is_instance_valid(_walker):
 			return NAN
-		var space := _walker.get_world_3d().direct_space_state
-		var from := spawn + Vector3(0.0, 8.0, 0.0)
-		var to := spawn + Vector3(0.0, -20.0, 0.0)
-		var q := PhysicsRayQueryParameters3D.create(from, to)
-		q.collision_mask = 1
-		q.exclude = [_walker.get_rid()]
-		var hit := space.intersect_ray(q)
-		if not hit.is_empty():
-			return float(hit.position.y)
+		var floor_y := _voxel_floor_y(spawn)
+		if not is_nan(floor_y):
+			return floor_y
 		var elapsed := Time.get_ticks_msec() - started
 		if elapsed - last_status >= 500:
 			last_status = elapsed
+			var text := "Finding footing… %s (%ds)" % [stage, elapsed / 1000] if stage != "" \
+				else "Waiting for ground… (%ds)" % (elapsed / 1000)
 			if _status != null:
-				_status.text = "Waiting for ground collisions… (%ds)" % (elapsed / 1000)
-			if _loading_splash != null and _district_hopping:
-				_loading_splash.call(
-					"set_status", "Waiting for ground collisions… (%ds)" % (elapsed / 1000)
-				)
-		await get_tree().physics_frame
+				_status.text = text
+			if _loading_splash != null and (_booting or _district_hopping):
+				_loading_splash.call("set_status", text)
+		await get_tree().process_frame
 	return NAN
+
+
+## First column around `centre` a body actually fits in, or Vector3.INF. Walks outwards in
+## rings so a spawn that lost its own block still wakes the player within sight of it.
+func _nearby_footing(centre: Vector3) -> Vector3:
+	if _tool == null or not is_finite(centre.x) or not is_finite(centre.z):
+		return Vector3.INF
+	const DIRECTIONS: Array[Vector2] = [
+		Vector2(1.0, 0.0), Vector2(-1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, -1.0),
+		Vector2(0.7, 0.7), Vector2(-0.7, 0.7), Vector2(0.7, -0.7), Vector2(-0.7, -0.7),
+	]
+	for radius: float in FOOTING_RING_RADII_M:
+		for dir: Vector2 in DIRECTIONS:
+			var hint := centre + Vector3(dir.x * radius, 0.0, dir.y * radius)
+			## `first_free_footing` checks the body fits, not just that something is solid —
+			## a spawn wedged under a crypt lid is no better than no spawn at all.
+			var footing := GameSaveScript.first_free_footing(
+				_tool,
+				hint,
+				VOXEL_SIZE,
+				SAVE_FOOTING_HEIGHT_VOX,
+				SAVE_FOOTING_UP_VOX,
+				SAVE_FOOTING_DOWN_VOX
+			)
+			if footing != Vector3.INF:
+				return footing
+	return Vector3.INF
+
+
+## The one way any entry point asks the world where the player may stand.
+##
+## Returns `{ spawn: Vector3, floor_y: float, source: String }`, or an empty Dictionary only
+## when there is nothing finite left to stand on at all — the caller must then hand the
+## player an escape hatch rather than leave a walker with physics switched off.
+##
+## Every rung below the first is a defect in the world, not a normal outcome, so each one
+## says so in the log. It still lands the player: a run that continues on the wrong paving
+## slab beats a run that never starts.
+func _resolve_playable_footing(
+	preferred: Vector3, gen: DistrictGenerator, label: String, max_ms: int = FOOTING_PREFERRED_MS
+) -> Dictionary:
+	if is_finite(preferred.x) and is_finite(preferred.z):
+		var direct := await _wait_voxel_floor_ms(preferred, max_ms, "preferred")
+		if not is_nan(direct):
+			return {"spawn": preferred, "floor_y": direct, "source": FOOTING_PREFERRED}
+		if _walker == null or not is_instance_valid(_walker):
+			return {}
+		push_warning(
+			"CityRoot: %s — no floor in the preferred column after %.1fs, widening the search. %s"
+			% [label, max_ms / 1000.0, _describe_missing_floor(preferred)]
+		)
+		_set_footing_status("Finding footing… nearby")
+		var near := _nearby_footing(preferred)
+		if near != Vector3.INF:
+			push_warning(
+				"CityRoot: %s — standing %.1f m from the preferred column instead (%s)"
+				% [label, preferred.distance_to(near), near]
+			)
+			return {"spawn": near, "floor_y": near.y, "source": FOOTING_NEARBY}
+
+	var district_spawn := Vector3.INF
+	if gen != null and gen.has_method("find_spawn_world"):
+		district_spawn = gen.find_spawn_world(_tool)
+	if is_finite(district_spawn.x) and not district_spawn.is_equal_approx(preferred):
+		_set_footing_status("Finding footing… district spawn")
+		var at_district := await _wait_voxel_floor_ms(
+			district_spawn, FOOTING_FALLBACK_MS, "district spawn"
+		)
+		if _walker == null or not is_instance_valid(_walker):
+			return {}
+		if not is_nan(at_district):
+			push_warning(
+				"CityRoot: %s — fell back to the district spawn %s" % [label, district_spawn]
+			)
+			return {
+				"spawn": district_spawn, "floor_y": at_district, "source": FOOTING_DISTRICT
+			}
+		var near_district := _nearby_footing(district_spawn)
+		if near_district != Vector3.INF:
+			push_warning(
+				"CityRoot: %s — fell back to %s, near the district spawn"
+				% [label, near_district]
+			)
+			return {
+				"spawn": near_district, "floor_y": near_district.y, "source": FOOTING_NEARBY
+			}
+
+	## Nothing in this world is solid where it should be. Soft-land on the best finite guess
+	## and let the walker's void floor and safety deck carry it — but say loudly that the
+	## district failed to produce ground, because that is a world-generation bug.
+	var landing := preferred if is_finite(preferred.x) else district_spawn
+	if not is_finite(landing.x) or not is_finite(landing.y) or not is_finite(landing.z):
+		push_error(
+			"CityRoot: %s — no finite spawn anywhere in this district; cannot place the player"
+			% label
+		)
+		return {}
+	push_error(
+		"CityRoot: %s — no solid ground at the spawn or anywhere around it; soft-landing. %s"
+		% [label, _describe_missing_floor(landing)]
+	)
+	return {"spawn": landing, "floor_y": landing.y, "source": FOOTING_SOFT_LAND}
+
+
+func _set_footing_status(text: String) -> void:
+	if _status != null:
+		_status.text = text
+	if _loading_splash != null and (_booting or _district_hopping):
+		_loading_splash.call("set_status", text)
 
 
 func _wait_area_meshed(area_vox: AABB, label: String, max_frames: int = 900) -> bool:
@@ -3609,6 +3911,8 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	var local := _terrain.to_local(hit_position)
 	var hit_vox := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
 	var hit_mat := int(_tool.get_voxel(hit_vox))
+	if _try_start_dissolve(hit_position, hit_mat):
+		return
 	if _try_detonate_explosive(hit_position, hit_mat):
 		return
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
@@ -3620,6 +3924,97 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	_brush.end_edit()
 	_notify_tetris_damage()
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
+
+
+## Player damage touched dissolve fabric — start (or extend) a neighbour-infection cascade.
+## Returns true when the hit was dissolve fabric (caller should skip the normal carve).
+## No area damage: the point is that the cage opens without cratering the boss.
+func _try_start_dissolve(hit_world: Vector3, mat_id: int) -> bool:
+	if not VoxelMaterial.is_dissolve(mat_id):
+		return false
+	if _tool == null or _terrain == null or _brush == null:
+		return false
+	var local := _terrain.to_local(hit_world)
+	var seed_vox := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
+	## A second hit on the same assembly just feeds the frontier; a different cluster waits.
+	if not _dissolve_frontier.is_empty():
+		if VoxelMaterial.dissolve_cluster(mat_id) != VoxelMaterial.dissolve_cluster(_dissolve_seed_id):
+			return true
+		_dissolve_enqueue(seed_vox, mat_id)
+		return true
+	_dissolve_seen.clear()
+	_dissolve_seed_id = mat_id
+	_dissolve_removed = 0
+	_dissolve_frontier.clear()
+	_dissolve_enqueue(seed_vox, mat_id)
+	if _dissolve_frontier.is_empty():
+		_dissolve_seed_id = -1
+		return true
+	if _audio != null and _audio.has_method("play_dissolve_hiss"):
+		_audio.call("play_dissolve_hiss", hit_world)
+	## First wave this frame so the struck cell is gone before the next shot lands.
+	_tick_dissolve()
+	return true
+
+
+func _dissolve_enqueue(vox: Vector3i, seed_id: int) -> void:
+	if _dissolve_seen.has(vox):
+		return
+	var mat := _brush.get_vox(vox) if _brush != null else VoxelMaterial.AIR
+	if not VoxelMaterial.dissolves_with(seed_id, mat):
+		return
+	_dissolve_seen[vox] = true
+	_dissolve_frontier.append(vox)
+
+
+## One infection wave: every frontier cell vanishes and infects matching 6-neighbours.
+func _tick_dissolve() -> void:
+	if _dissolve_frontier.is_empty() or _brush == null or _terrain == null:
+		return
+	var seed_id := _dissolve_seed_id
+	var wave: Array[Vector3i] = _dissolve_frontier
+	_dissolve_frontier = []
+	var next: Array[Vector3i] = []
+	var world_hint := Vector3.ZERO
+	var hinted := false
+	_brush.begin_edit()
+	for vox: Vector3i in wave:
+		if _dissolve_removed >= DISSOLVE_MAX_CELLS:
+			push_error(
+				"CityRoot: dissolve cascade hit DISSOLVE_MAX_CELLS (%d) — stopping"
+				% DISSOLVE_MAX_CELLS
+			)
+			assert(false, "CityRoot: dissolve cascade overflow")
+			break
+		var mat := _brush.get_vox(vox)
+		if not VoxelMaterial.dissolves_with(seed_id, mat):
+			continue
+		_brush.destroy_vox(vox)
+		_dissolve_removed += 1
+		if not hinted:
+			world_hint = _terrain.to_global(
+				Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+			)
+			hinted = true
+		for d: Vector3i in _DISSOLVE_NEIGHBOURS:
+			var n := vox + d
+			if _dissolve_seen.has(n):
+				continue
+			var nmat := _brush.get_vox(n)
+			if not VoxelMaterial.dissolves_with(seed_id, nmat):
+				continue
+			_dissolve_seen[n] = true
+			next.append(n)
+	_brush.end_edit()
+	_dissolve_frontier = next
+	if hinted:
+		_notify_destruction(world_hint, 18.0)
+		if _audio != null and _audio.has_method("move_dissolve_hiss"):
+			_audio.call("move_dissolve_hiss", world_hint)
+	if _dissolve_frontier.is_empty():
+		_dissolve_seen.clear()
+		_dissolve_seed_id = -1
+		_dissolve_removed = 0
 
 
 ## Player damage touched explosive fabric — charged blast + boom + area damage once.
@@ -3664,6 +4059,13 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	var cy := int(floor(local.y))
 	var cz := int(floor(local.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	## Dissolve fabric under the impact: cascade instead of a crater (no boss-killing blast).
+	if _brush != null:
+		var probe_mat := _brush.get_vox(Vector3i(cx, cy, cz))
+		if VoxelMaterial.is_dissolve(probe_mat):
+			CityProfiler.end("voxel_blast")
+			_try_start_dissolve(hit_world, probe_mat)
+			return
 	## Explosive fabric under the impact: enlarge to material radius + acoustic boom.
 	## Area damage is the caller's job (walker / stomp / `_try_detonate_explosive`).
 	if not _explosive_detonating and _brush != null:
@@ -3928,6 +4330,9 @@ func apply_voxel_strike(
 	## Punching a gem (or a gem in the fist sphere) collects it — gems never carve.
 	if hit_gem:
 		try_collect_gem_at(hit_vox)
+	elif VoxelMaterial.is_dissolve(int(_tool.get_voxel(hit_vox))):
+		var hit_world_dissolve := _terrain.to_global(hit_center)
+		return _try_start_dissolve(hit_world_dissolve, int(_tool.get_voxel(hit_vox)))
 	elif VoxelMaterial.is_explosive(int(_tool.get_voxel(hit_vox))):
 		var hit_world_boom := _terrain.to_global(hit_center)
 		return _try_detonate_explosive(hit_world_boom, int(_tool.get_voxel(hit_vox)))

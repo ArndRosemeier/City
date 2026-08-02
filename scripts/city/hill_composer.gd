@@ -91,7 +91,7 @@ const CAVE_HOLLOW_TARGET := 0.30
 ## Keep gems off the meadow skin and the outer CAVE_SHELL band.
 const GEM_SURFACE_MARGIN := 3
 
-## Blastable red cage for the Unique cave boss. Interior fits a Big Demon (~3.1 u).
+## Dissolving red cage for the Unique cave boss. Interior fits a Big Demon (~3.1 u).
 const CAGE_INNER_HALF := 2
 const CAGE_WALL := 1
 const CAGE_INNER_H := 6
@@ -1452,7 +1452,7 @@ func _is_cave_shellable(id: int) -> bool:
 			return false
 
 
-## One blastable red cage per hill, partially exposed in open cave so the glow reads from a passage.
+## One dissolving red cage per hill, partially exposed in open cave so the glow reads from a passage.
 func _place_cave_cage() -> void:
 	cave_cage_stand = Vector3i(-1, -1, -1)
 	if cave_mouths.is_empty():

@@ -170,9 +170,9 @@ func _await_walker(city: CityRoot) -> CityWalker:
 	return null
 
 
-## Boot is over when the walker has physics: CityRoot holds it off until ground collision
-## exists, and the same await ends by placing the walker at the spawn, aiming it and showing the
-## HUD again. Anything this tool does before that is undone.
+## Boot is over when the walker has physics: CityRoot holds it off until the spawn column has
+## stamped solid, and the same await ends by placing the walker at the spawn, aiming it and
+## showing the HUD again. Anything this tool does before that is undone.
 func _await_boot(walker: CityWalker) -> bool:
 	var deadline := Time.get_ticks_msec() + WALKER_TIMEOUT_MS
 	while Time.get_ticks_msec() < deadline:
