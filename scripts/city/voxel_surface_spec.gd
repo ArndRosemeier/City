@@ -57,7 +57,7 @@ static func has_bespoke_shader(id: int) -> bool:
 	if VoxelMaterial.is_zoo_turf(id):
 		return true
 	match id:
-		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE:
+		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE, VoxelMaterial.CAVE_CAGE_LINE:
 			return true
 		_:
 			return false
@@ -508,7 +508,7 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.weathering = 0.6
 			s.grime = 0.5
 			s.streaks = 0.35
-		VoxelMaterial.ZOO_FENCE_FRAME:
+		VoxelMaterial.ZOO_FENCE_FRAME, VoxelMaterial.CAVE_CAGE_FRAME:
 			## Near-black painted steel posts — the line and the pane are the colour, the
 			## frame is only the thing they are strung on.
 			s.albedo_file = "wrought_iron.jpg"
@@ -522,7 +522,7 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.grime = 0.45
 			s.grime_height = 6.0
 			s.streaks = 0.35
-		VoxelMaterial.ZOO_FENCE_GLASS:
+		VoxelMaterial.ZOO_FENCE_GLASS, VoxelMaterial.CAVE_CAGE_GLASS:
 			## Dark red quarantine pane. Kept opaque enough that daylight does not bleach
 			## it into a white wall; the emissive line bands carry the glow.
 			s.kind = Kind.GLASS

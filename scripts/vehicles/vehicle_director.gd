@@ -270,8 +270,13 @@ func _drain_flee_queue() -> void:
 		agent.flee_goal_queued = false
 		if agent.wrecked or not agent.fleeing:
 			continue
-		agent.nav.set_goal(_provider.flee_goal(agent))
+		var goal := _provider.flee_goal(agent)
 		budget -= 1
+		if goal == null:
+			## No open lane to run to. The car stays put rather than bolting across whatever
+			## open ground the span field would happily route it over.
+			continue
+		agent.nav.set_goal(goal)
 
 
 ## Panic ends by distance, not by the goal: a flee goal can also be abandoned as unreachable,
@@ -519,6 +524,7 @@ func _spawn_agents() -> void:
 		## about to drive straight through.
 		agent.motor.waypoint_radius_m = 1.2
 		agent.motor.arrive_radius_m = 1.5
+		agent.motor.bind_lanes(_lanes)
 		agent.nav = NavAgent.new()
 		agent.nav.setup(agent, NavProfile.Id.CAR, agent.motor, _provider, _lod)
 		agent.nav.seed_rng(_rng.randi())

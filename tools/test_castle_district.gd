@@ -9,8 +9,11 @@
 ## and ceiling headrooms — exists because a route is the first thing any of them breaks, and
 ## a measurement says which one broke where a failed path only says "unreachable".
 ##
-## The last check is different in kind: six seeds are planned and their dungeons tabulated,
+## The last check is different in kind: twenty seeds are planned and their dungeons tabulated,
 ## because "the dungeons feel distinct" is a requirement no single-seed assertion can express.
+## The full voxel/nav walk itself also picks a fresh castle seed each run (override with
+## CITY_CASTLE_SEED), and every distinctness seed gets the cheap dungeon-tree walk so a sealed
+## vault cannot hide behind seed 42.
 ##
 ## Run: powershell -File tools\run_test.ps1 test_castle_district
 extends Node
@@ -21,7 +24,6 @@ const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd"
 const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 
-const WORLD_SEED := 42
 const VOXEL_SIZE := 0.5
 const BLOCK := 16
 ## Rings searched for a Castle tile. CASTLE is a ring 2+ theme, so this is generous.
@@ -71,6 +73,9 @@ var _volume: NativeOfflineVoxelVolume = null
 ## Wet / dry: whether a ditch of that kind has already been dug through voxel by voxel.
 var _moat_checked: Dictionary[bool, bool] = {}
 var _garden_props := 0
+## Picked once per run so the full voxel/nav walk is not forever seed 42. Printed first so a
+## failure is reproducible: re-run with `CITY_CASTLE_SEED=<n>` to pin it.
+var _world_seed: int = 0
 
 
 func _fail(msg: String) -> void:
@@ -80,12 +85,13 @@ func _fail(msg: String) -> void:
 
 func _ready() -> void:
 	CityVoxelNativeScript.require_loaded()
-	var coord := DistrictTheme.find_coord_for_theme(WORLD_SEED, DistrictTheme.CASTLE, MAX_RING)
-	if DistrictTheme.for_district(WORLD_SEED, coord).id != DistrictTheme.CASTLE:
-		_fail("FAIL no Castle theme in ring 0..%d for seed %d" % [MAX_RING, WORLD_SEED])
+	_world_seed = _pick_world_seed()
+	var coord := DistrictTheme.find_coord_for_theme(_world_seed, DistrictTheme.CASTLE, MAX_RING)
+	if DistrictTheme.for_district(_world_seed, coord).id != DistrictTheme.CASTLE:
+		_fail("FAIL no Castle theme in ring 0..%d for seed %d" % [MAX_RING, _world_seed])
 		_quit()
 		return
-	print("baking Castle district at %s" % coord)
+	print("baking Castle district seed=%d at %s" % [_world_seed, coord])
 
 	var planner := _check_layout(coord)
 	if _failed:
@@ -102,7 +108,7 @@ func _ready() -> void:
 	var t0 := Time.get_ticks_msec()
 	var res: Dictionary = DistrictBakeJobScript.bake({
 		"coord": coord,
-		"world_seed": WORLD_SEED,
+		"world_seed": _world_seed,
 		"bake_nav": true,
 		"nav_solidity": nav.solidity_tables(),
 		"nav_link_params": nav.link_params(),
@@ -137,9 +143,9 @@ func _ready() -> void:
 	_check_gate(layout)
 	_check_causeway(layout)
 	_check_spawn_at_gate(gen, layout)
-	_check_gardens("seed %d" % WORLD_SEED, res, layout)
+	_check_gardens("seed %d" % _world_seed, res, layout)
 	_check_keep_shell(layout)
-	_check_keep_tree("seed %d" % WORLD_SEED, layout)
+	_check_keep_tree("seed %d" % _world_seed, layout)
 	_check_stair_treads(layout)
 	_check_openings(layout)
 	_check_rooms(layout)
@@ -148,6 +154,7 @@ func _ready() -> void:
 	_check_dungeon_rooms(layout)
 	_check_dungeon_stairs(layout)
 	_check_dungeon_tall(layout)
+	_check_dungeon_tree("seed %d" % _world_seed, layout)
 	_check_doors(layout)
 	_check_door_meshes(layout, res)
 	if _failed:
@@ -191,7 +198,7 @@ func _ready() -> void:
 ## Castle tiles are street connectors, not neighbourhoods: edge stubs, no interior grid and
 ## no housing anywhere.
 func _check_layout(coord: Vector2i) -> DistrictPlanner:
-	var dseed := DistrictCoord.district_seed(WORLD_SEED, coord)
+	var dseed := DistrictCoord.district_seed(_world_seed, coord)
 	var planner: DistrictPlanner = DistrictPlannerScript.new()
 	planner.theme = DistrictTheme.make(DistrictTheme.CASTLE)
 	planner.build(
@@ -549,7 +556,7 @@ func _check_keep_shell(layout: CastleLayout) -> void:
 		_fail("FAIL %d voxels of the keep's corner pier are air" % hollow)
 		return
 	## The keep's storey-0 floor *is* the courtyard slab, and the cellar route cuts a well
-	## through it. Anywhere else that slab has to be whole, or the keep's ground floor is a pit.
+	## through it. Anywhere else it has to carry, or the keep's ground floor is a pit.
 	var cellar := layout.dungeon_entry_of(CastleDungeonEntry.KIND_KEEP_CELLAR)
 	var well := {}
 	if cellar != null:
@@ -557,19 +564,30 @@ func _check_keep_shell(layout: CastleLayout) -> void:
 			well[c] = true
 	var pierced := 0
 	var stray := 0
-	for y2 in range(layout.dungeon_y1 + 1, layout.courtyard_y + 1):
+	var where: Array[String] = []
+	## The floor course and the one bedding it. The slab is three courses, but a descent's
+	## shaft is carved one voxel taller than a chamber on purpose (DUNGEON_SHAFT_HEAD) so a
+	## body climbing out does not jam on the lid, and a flight arriving on the top dungeon
+	## level takes that bite out of the slab's bottom course wherever it lands — under the
+	## keep as readily as anywhere else in the bailey. That buried void is sealed and is the
+	## dungeon's business; what would make the ground floor a pit is the floor itself going.
+	for y2 in range(layout.courtyard_y - 1, layout.courtyard_y + 1):
 		for z in range(kr.position.y, kr.end.y):
 			for x in range(kr.position.x, kr.end.x):
 				if _vox(x, y2, z) != VoxelMaterial.AIR:
 					continue
 				if well.has(Vector2i(x, z)):
 					pierced += 1
-				else:
-					stray += 1
+					continue
+				stray += 1
+				## A count alone says nothing about which lane or shaft cut the hole.
+				if where.size() < 6:
+					where.append("(%d,%d,%d)" % [x, y2, z])
 	if stray > 0:
 		_fail(
-			"FAIL %d air voxels are in the keep's ground floor slab outside the cellar well"
+			"FAIL %d air voxels are in the keep's ground floor slab outside the cellar well,"
 			% stray
+			+ " keep %s cellar=%s at %s" % [kr, "yes" if cellar != null else "none", " ".join(where)]
 		)
 		return
 	if cellar != null and pierced == 0:
@@ -596,6 +614,32 @@ func _check_keep_shell(layout: CastleLayout) -> void:
 	)
 
 
+## World seed for this run. `CITY_CASTLE_SEED` pins a failure; otherwise a fresh castle seed
+## is drawn each time so a sealed vault cannot hide behind seed 42 forever.
+func _pick_world_seed() -> int:
+	var pinned := OS.get_environment("CITY_CASTLE_SEED").strip_edges()
+	if not pinned.is_empty():
+		var n := int(pinned)
+		if n <= 0:
+			_fail("FAIL CITY_CASTLE_SEED=%s is not a positive world seed" % pinned)
+			return 42
+		return n
+	var candidates: Array[int] = []
+	for s in range(1, DISTINCT_SEED_MAX + 1):
+		var c := DistrictTheme.find_coord_for_theme(s, DistrictTheme.CASTLE, MAX_RING)
+		if DistrictTheme.for_district(s, c).id == DistrictTheme.CASTLE:
+			candidates.append(s)
+	if candidates.is_empty():
+		_fail(
+			"FAIL no world seed in 1..%d puts a Castle in ring 0..%d"
+			% [DISTINCT_SEED_MAX, MAX_RING]
+		)
+		return 42
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	return candidates[rng.randi() % candidates.size()]
+
+
 ## The keep's circulation, counted off the plan alone.
 ##
 ## Cheap, and it holds for a castle nothing has walked through yet, which is what makes it the
@@ -620,6 +664,98 @@ func _check_keep_tree(what: String, layout: CastleLayout) -> void:
 				% [what, f.storey, f.rooms.size(), doors]
 			)
 			return
+
+
+## The dungeon's circulation, counted off the plan alone — the cheap twin of
+## `_check_dungeon_reachable`. Every surviving chamber must be reachable from every route
+## down by walking tree/loop doors and inter-level flights. Catches a sealed vault before the
+## nav bake spends a minute proving the same thing.
+func _check_dungeon_tree(what: String, layout: CastleLayout) -> void:
+	if layout.dungeon_entries.is_empty():
+		_fail("FAIL %s: the dungeon has no route down" % what)
+		return
+	if layout.dungeon_vaults.is_empty():
+		_fail("FAIL %s: the dungeon has no chambers" % what)
+		return
+	## Vault identity is the object itself — indices into `dungeon_vaults` stay stable for the
+	## adjacency walk below.
+	var vaults := layout.dungeon_vaults
+	var adj: Array[PackedInt32Array] = []
+	adj.resize(vaults.size())
+	for i in range(vaults.size()):
+		adj[i] = PackedInt32Array()
+	for d: CastleDoorway in layout.dungeon_doorways:
+		var a := _vault_index_covering(vaults, d.storey, d.center - d.axis)
+		var b := _vault_index_covering(vaults, d.storey, d.center + d.axis * d.depth)
+		if a < 0 or b < 0 or a == b:
+			_fail(
+				"FAIL %s: doorway %s does not join two chambers (a=%d b=%d)"
+				% [what, d.describe(), a, b]
+			)
+			return
+		adj[a].append(b)
+		adj[b].append(a)
+	for st: CastleStair in layout.dungeon_stairs:
+		if st.from_storey < 0 or st.to_storey < 0:
+			continue
+		var lo := _vault_index_covering(vaults, st.from_storey, st.center_column(0))
+		var hi := _vault_index_covering(
+			vaults, st.to_storey, st.center_column(st.run_len() - 1)
+		)
+		if lo < 0 or hi < 0:
+			_fail(
+				"FAIL %s: %s lands outside any chamber (foot=%d head=%d)"
+				% [what, st.describe(), lo, hi]
+			)
+			return
+		adj[lo].append(hi)
+		adj[hi].append(lo)
+	for e: CastleDungeonEntry in layout.dungeon_entries:
+		var start := _vault_index_covering(
+			vaults, layout.dungeon_top_level(), e.foot()
+		)
+		if start < 0:
+			_fail(
+				"FAIL %s: %s foot %s sits in no top-level chamber"
+				% [what, e.describe(), e.foot()]
+			)
+			return
+		var seen: Array[bool] = []
+		seen.resize(vaults.size())
+		seen.fill(false)
+		var queue: Array[int] = [start]
+		seen[start] = true
+		var qi := 0
+		while qi < queue.size():
+			var cur: int = queue[qi]
+			qi += 1
+			for nxt: int in adj[cur]:
+				if seen[nxt]:
+					continue
+				seen[nxt] = true
+				queue.append(nxt)
+		for vi in range(vaults.size()):
+			if seen[vi]:
+				continue
+			_fail(
+				"FAIL %s: %s cannot reach %s on the plan (doors+flights)"
+				% [what, e.kind_name(), (vaults[vi] as CastleVault).describe()]
+			)
+			return
+	print(
+		"dungeon tree: %s — %d chambers reachable from every one of %d routes on the plan"
+		% [what, vaults.size(), layout.dungeon_entries.size()]
+	)
+
+
+func _vault_index_covering(vaults: Array[CastleVault], level: int, col: Vector2i) -> int:
+	for i in range(vaults.size()):
+		var v: CastleVault = vaults[i]
+		if v.level != level:
+			continue
+		if v.rect.has_point(col) or v.rect.grow(1).has_point(col):
+			return i
+	return -1
 
 
 ## Every riser on every flight, measured off the voxels. One voxel is the whole rule: at
@@ -1276,7 +1412,7 @@ func _check_doors(layout: CastleLayout) -> void:
 			% [CastleDoorway.SWING_REACH, CastleComposerScript.LANE_MARGIN]
 		)
 		return
-	_check_door_plan("seed %d" % WORLD_SEED, layout)
+	_check_door_plan("seed %d" % _world_seed, layout)
 	if _failed:
 		return
 	var all := layout.doorways()
@@ -2041,7 +2177,7 @@ func _walk(
 func _check_determinism(coord: Vector2i, planner: DistrictPlanner, layout: CastleLayout) -> void:
 	var res: Dictionary = DistrictBakeJobScript.bake({
 		"coord": coord,
-		"world_seed": WORLD_SEED,
+		"world_seed": _world_seed,
 	})
 	if not bool(res.get("ok", false)):
 		_fail("FAIL second bake: %s" % res.get("error", "?"))
@@ -2161,6 +2297,9 @@ func _check_distinctness() -> void:
 		## The dungeon's lane claims compete with the keep's for the same plate, so every seed
 		## is checked for a keep that still works as well as for a dungeon that differs.
 		_check_keep_tree("seed %d" % seeds[i], l)
+		## And for a dungeon whose chambers still form one graph from every route down — the
+		## nav walk only ever ran on one seed, so a sealed vault elsewhere went unnoticed.
+		_check_dungeon_tree("seed %d" % seeds[i], l)
 		## And for doors that fit. A leaf is sized off its opening, so a seed that rolls an
 		## opening no other seed produced is the one that would hang a door through a wall.
 		_check_door_plan("seed %d" % seeds[i], l)

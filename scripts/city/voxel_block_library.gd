@@ -64,7 +64,7 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			return _make_glass_cube(id)
 		VoxelMaterial.GLASS_LIT:
 			return _make_glass_cube(id)
-		VoxelMaterial.ZOO_FENCE_GLASS:
+		VoxelMaterial.ZOO_FENCE_GLASS, VoxelMaterial.CAVE_CAGE_GLASS:
 			return _make_glass_cube(id)
 		VoxelMaterial.LOS_VEIL:
 			## Invisible walk-through volume that still counts as solid for LOS probes.
@@ -754,7 +754,7 @@ static func block_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
-	if id == VoxelMaterial.ZOO_FENCE_LINE:
+	if id == VoxelMaterial.ZOO_FENCE_LINE or id == VoxelMaterial.CAVE_CAGE_LINE:
 		return zoo_fence_line_material()
 	if VoxelMaterial.is_zoo_turf(id):
 		return zoo_turf_material(id)
@@ -781,7 +781,7 @@ static func debris_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
-	if id == VoxelMaterial.ZOO_FENCE_LINE:
+	if id == VoxelMaterial.ZOO_FENCE_LINE or id == VoxelMaterial.CAVE_CAGE_LINE:
 		return zoo_fence_line_material()
 	if VoxelMaterial.is_zoo_turf(id):
 		return zoo_turf_material(id)

@@ -105,6 +105,8 @@ var _hill_cave_mouths: PackedVector2Array = PackedVector2Array()
 var _hill_cave_summit: Vector2i = Vector2i(-1, -1)
 ## Landmark spots that survive the bake so recipe scrolls can be stood on them at stream time.
 var _hill_summit_top: Vector3i = Vector3i(-1, 0, -1)
+## Stand pose inside the hill cave boss cage (district-local X, floor Y, Z). x=-1 when none.
+var _hill_cave_cage_stand: Vector3i = Vector3i(-1, -1, -1)
 var _lake_island_crowns: Array[Vector3i] = []
 var _park_gazebo: Vector3i = Vector3i(-1, 0, -1)
 var _fractal_niche: Vector3i = Vector3i(-1, 0, -1)
@@ -206,6 +208,11 @@ func get_hill_summit_top() -> Vector3i:
 	return _hill_summit_top
 
 
+## Stand pose inside the Unique cave-cage boss enclosure. `x` is -1 when the hill has no cage.
+func get_hill_cave_cage_stand() -> Vector3i:
+	return _hill_cave_cage_stand
+
+
 ## Crown of every lake island in district-local voxels (x, height above deck, z). Empty outside
 ## Lake districts.
 func get_lake_island_crowns() -> Array[Vector3i]:
@@ -285,6 +292,7 @@ func _setup_composers() -> void:
 	_hill_cave_mouths = PackedVector2Array()
 	_hill_cave_summit = Vector2i(-1, -1)
 	_hill_summit_top = Vector3i(-1, 0, -1)
+	_hill_cave_cage_stand = Vector3i(-1, -1, -1)
 	_lake_island_crowns = []
 	_park_gazebo = Vector3i(-1, 0, -1)
 	_fractal_niche = Vector3i(-1, 0, -1)
@@ -664,6 +672,7 @@ func decorate_open_spaces() -> void:
 		_hill_cave_mouths = _hill.cave_mouths.duplicate()
 		_hill_cave_summit = _hill.cave_summit
 		_hill_summit_top = _hill.summit_top
+		_hill_cave_cage_stand = _hill.cave_cage_stand
 		return
 	var lg := _planner.large_graveyard
 	if lg.size.x > 0:

@@ -45,6 +45,7 @@ const ArmedTrapScript := preload("res://scripts/city/armed_trap.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
+const CombatTableScript := preload("res://scripts/city/combat_table.gd")
 const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
 const InteriorDecoratorScript := preload("res://scripts/city/interior_decorator.gd")
@@ -65,6 +66,8 @@ const SPAWN_DISTRICT_RING := 3
 ## How far beside a recipe scroll the cheat teleport leaves the walker. Close enough to see and
 ## click, far enough not to stand inside the prop.
 const CHEAT_RECIPE_STAND_OFF_M := 2.4
+## Stand-off beside the hill cave boss cage after the cheat hop.
+const CHEAT_CAGE_STAND_OFF_M := 3.5
 ## District layouts hang off this seed plus the district's grid coordinate. Left at
 ## SEED_RANDOM every launch builds a different world; set a concrete value (in the
 ## scene, from code, or with --city-seed=N) to replay one exactly.
@@ -202,6 +205,8 @@ var _district_hopping: bool = false
 var _fps_accum: float = 0.0
 var _infection_stream_accum: float = 0.0
 var _street_night_factor: float = 0.0
+## True while a material detonation is running — blocks recursive explosive triggers.
+var _explosive_detonating: bool = false
 
 ## Visual mesh radius (~90 m at default). Collisions use a shorter viewer below.
 var _voxel_view_vox: int = 100
@@ -652,6 +657,7 @@ func _build_hud() -> void:
 	_cheat_panel.fill_gems_requested.connect(_on_cheat_fill_gems)
 	_cheat_panel.fill_recipes_requested.connect(_on_cheat_fill_recipes)
 	_cheat_panel.teleport_nearest_recipe_requested.connect(_on_cheat_teleport_nearest_recipe)
+	_cheat_panel.teleport_cave_cage_requested.connect(_on_cheat_teleport_cave_cage)
 
 	_loot_toast = LootToastScript.new() as LootToast
 	_loot_toast.name = "LootToast"
@@ -1845,10 +1851,14 @@ func hill_gem_paint_list(coord: Vector2i) -> PackedInt32Array:
 		)
 	var paint := _economy.remaining_flat_list(coord)
 	var want := preload("res://scripts/city/game_data.gd").theme_gem_total(DistrictTheme.HILL)
-	if paint.size() < want:
+	## A mined hill paints what is left of it, so a short list is only a defect when the gems
+	## are not accounted for by the harvest: that is a ledger rolled against another theme's
+	## total, which `ensure_hill_row` cannot repair once the tile has been dug.
+	var harvested := _economy.harvested_total(coord)
+	if paint.size() + harvested < want:
 		push_error(
-			"CityRoot: hill %s paint list is %d, theme budget %d"
-			% [str(coord), paint.size(), want]
+			"CityRoot: hill %s paint list is %d with %d harvested, theme budget %d"
+			% [str(coord), paint.size(), harvested, want]
 		)
 	return paint
 
@@ -2165,6 +2175,37 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 	var world := _terrain.to_global(local) if _terrain != null else local * VOXEL_SIZE
 	report_gem_haul(world, paid, pitch_mat)
 	return true
+
+
+## Off-budget gem trove when the player kills a body that lists kill_gems_min/max.
+func grant_monster_kill_haul(world_pos: Vector3, monster_id: String) -> void:
+	var haul: Vector2i = CombatTableScript.kill_gems_range(monster_id)
+	if haul.y <= 0:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var wanted := rng.randi_range(haul.x, haul.y)
+	if wanted <= 0:
+		return
+	var vox := Vector3i.ZERO
+	if _terrain != null:
+		var local := _terrain.to_local(world_pos)
+		vox = Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
+	var coord := _district_coord_for_vox(vox)
+	var paid := 0
+	var pitch_mat := -1
+	for _i in range(wanted):
+		var gem := VoxelMaterial.pick_gem(rng)
+		if grant_district_gem(coord, gem, false):
+			paid += 1
+			if pitch_mat < 0:
+				pitch_mat = gem
+	if paid <= 0:
+		return
+	report_gem_haul(world_pos, paid, pitch_mat)
+	## report_gem_haul names a generic find — boss kills get their own card title after.
+	if _loot_toast != null:
+		_loot_toast.set_headline("Boss slain")
 
 
 ## Same flourish as a chest haul: one card headline and one bling for every stone already stacked
@@ -3566,6 +3607,10 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 		return
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var local := _terrain.to_local(hit_position)
+	var hit_vox := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
+	var hit_mat := int(_tool.get_voxel(hit_vox))
+	if _try_detonate_explosive(hit_position, hit_mat):
+		return
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
 	## Revert any tip in the blast first; restored fabric then takes the carve normally.
 	_tip_kill_leads_in_sphere(local, radius_vox)
@@ -3575,6 +3620,31 @@ func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> voi
 	_brush.end_edit()
 	_notify_tetris_damage()
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
+
+
+## Player damage touched explosive fabric — charged blast + boom + area damage once.
+## Returns true when a detonation ran (caller should skip the normal carve).
+func _try_detonate_explosive(hit_world: Vector3, mat_id: int) -> bool:
+	if _explosive_detonating:
+		return false
+	if not VoxelMaterial.is_explosive(mat_id):
+		return false
+	var radius := VoxelMaterial.explosive_radius_m(mat_id)
+	if radius <= 0.0:
+		push_error("CityRoot: explosive mat %d has non-positive blast radius" % mat_id)
+		assert(false, "CityRoot: explosive_radius_m")
+		return false
+	_explosive_detonating = true
+	if _audio != null:
+		if _audio.has_method("play_explosive_boom"):
+			_audio.call("play_explosive_boom", hit_world)
+		if _audio.has_method("play_charged_blast_impact"):
+			## Large scale → deeper pitch; layered under the dedicated boom.
+			_audio.call("play_charged_blast_impact", hit_world, 2.8)
+	apply_area_damage(hit_world, radius, DamageSourceScript.Id.PLAYER_BLAST)
+	apply_charged_blast(hit_world, radius)
+	_explosive_detonating = false
+	return true
 
 
 ## Charged LMB bomb (and stomp): carve + outward tumble debris, then cascade columns above.
@@ -3594,6 +3664,22 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	var cy := int(floor(local.y))
 	var cz := int(floor(local.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	## Explosive fabric under the impact: enlarge to material radius + acoustic boom.
+	## Area damage is the caller's job (walker / stomp / `_try_detonate_explosive`).
+	if not _explosive_detonating and _brush != null:
+		var probe := _brush.get_vox(Vector3i(cx, cy, cz))
+		if VoxelMaterial.is_explosive(probe):
+			var er := VoxelMaterial.explosive_radius_m(probe)
+			if er > radius:
+				radius = er
+				radius_vox = minf(radius / VOXEL_SIZE, 14.0)
+				r_i = int(ceil(radius_vox)) + 1
+				r2 = radius_vox * radius_vox
+			if _audio != null:
+				if _audio.has_method("play_explosive_boom"):
+					_audio.call("play_explosive_boom", hit_world)
+				if _audio.has_method("play_charged_blast_impact"):
+					_audio.call("play_charged_blast_impact", hit_world, 2.8)
 	var detached: Array = []
 	var column_max_y: Dictionary = {}  # Vector2i → int
 	const MAX_DEBRIS := 900
@@ -3842,6 +3928,9 @@ func apply_voxel_strike(
 	## Punching a gem (or a gem in the fist sphere) collects it — gems never carve.
 	if hit_gem:
 		try_collect_gem_at(hit_vox)
+	elif VoxelMaterial.is_explosive(int(_tool.get_voxel(hit_vox))):
+		var hit_world_boom := _terrain.to_global(hit_center)
+		return _try_detonate_explosive(hit_world_boom, int(_tool.get_voxel(hit_vox)))
 	## Revert tips in the punch sphere first; then the strike carves restored fabric as usual.
 	_tip_kill_leads_in_sphere(hit_center, radius_vox)
 	var r_i := int(ceil(radius_vox))
@@ -4341,6 +4430,78 @@ func undead_stomp_at(world_pos: Vector3, radius_m: float) -> void:
 	if removed <= 0:
 		return
 	_notify_destruction(world_pos, 28.0 + radius_vox)
+
+
+## Crumble-stride aura: peel destructible voxels ahead of a walking monster and cascade.
+## Skips cave-cage materials (player must blast those). Soft self-supporting terrain still
+## craters without column collapse via the usual cascade gate.
+func undead_crumble_stride_at(
+	contact_world: Vector3, along: Vector3, along_half: int = 1, depth_vox: int = 2
+) -> int:
+	if _terrain == null or _tool == null or _brush == null:
+		return 0
+	var forward := along
+	forward.y = 0.0
+	if forward.length_squared() < 0.0001:
+		return 0
+	forward = forward.normalized()
+	var side := Vector3(-forward.z, 0.0, forward.x)
+	var local := _terrain.to_local(contact_world)
+	var origin := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
+	var ix := Vector3i(int(round(forward.x)), 0, int(round(forward.z)))
+	if ix == Vector3i.ZERO:
+		if absf(forward.x) >= absf(forward.z):
+			ix = Vector3i(1 if forward.x >= 0.0 else -1, 0, 0)
+		else:
+			ix = Vector3i(0, 0, 1 if forward.z >= 0.0 else -1)
+	var sx := Vector3i(int(round(side.x)), 0, int(round(side.z)))
+	if sx == Vector3i.ZERO:
+		sx = Vector3i(-ix.z, 0, ix.x)
+	var detached: Array = []
+	var column_max_y: Dictionary = {}
+	const MAX_DEBRIS := 80
+	var removed := 0
+	var y_lo := maxi(1, origin.y - 1)
+	var y_hi := origin.y + 5
+	_brush.begin_edit()
+	for a in range(-along_half, along_half + 1):
+		for d in range(0, maxi(depth_vox, 1)):
+			var col_x := origin.x + sx.x * a + ix.x * d
+			var col_z := origin.z + sx.z * a + ix.z * d
+			for y3 in range(y_lo, y_hi + 1):
+				var vox := Vector3i(col_x, y3, col_z)
+				var mat_id := _brush.get_vox(vox)
+				if not VoxelMaterial.is_destructible(mat_id):
+					continue
+				if VoxelMaterial.is_cave_cage(mat_id):
+					continue
+				var carved := _brush.destroy_vox(vox)
+				for entry in carved:
+					if detached.size() < MAX_DEBRIS:
+						detached.append(entry)
+					removed += 1
+				var key := Vector2i(vox.x, vox.z)
+				var prev_y: int = int(column_max_y.get(key, -1))
+				if vox.y > prev_y:
+					column_max_y[key] = vox.y
+	_brush.end_edit()
+	if removed <= 0:
+		return 0
+	var world_hit := _terrain.to_global(
+		Vector3(float(origin.x) + 0.5, float(origin.y) + 0.5, float(origin.z) + 0.5)
+	)
+	_ensure_cascade_debris()
+	if _cascade != null and is_instance_valid(_cascade):
+		if _cascade.has_method("detach_blast_voxels") and not detached.is_empty():
+			CityProfiler.begin("cascade_detach")
+			_cascade.call("detach_blast_voxels", detached, world_hit)
+			CityProfiler.end("cascade_detach")
+		for key_v: Variant in column_max_y.keys():
+			var xz: Vector2i = key_v as Vector2i
+			var max_y: int = int(column_max_y[key_v])
+			_cascade_column_above(Vector3i(xz.x, max_y, xz.y))
+	_notify_destruction(world_hit, 20.0)
+	return removed
 
 
 ## Giant facade brush: peel full-height structure strips and tumble the debris.
@@ -5086,6 +5247,13 @@ func _apply_agent_hit(
 		return false
 	var kind: String = str(hit.get("kind", ""))
 	var point: Vector3 = hit["point"] as Vector3
+	var agent_d := float(hit.get("distance", from.distance_to(point)))
+	## Blaster / laser impacts march a short carve segment past the solid they stopped on.
+	## Without this gate, a CageDemon (or any mob) behind glass steals the strike and the
+	## wall never yields — solids must win so fabric can carve.
+	var solid := probe_solid_ray(from, point)
+	if not solid.is_empty() and float(solid["distance"]) + 0.2 < agent_d:
+		return false
 	var ok := false
 	if kind == "ped":
 		var crowd: CrowdDirector = hit["crowd"]
@@ -5658,6 +5826,64 @@ func _on_cheat_teleport_nearest_recipe() -> void:
 	print("CityRoot: cheat — %s" % msg)
 	if _cheat_panel != null:
 		_cheat_panel.close_panel()
+
+
+## Hop to a Hill tile, then stand beside the Unique cave-cage boss enclosure.
+func _on_cheat_teleport_cave_cage() -> void:
+	if _walker == null or not is_instance_valid(_walker):
+		_cheat_log("Cave cage teleport failed: no walker.")
+		return
+	if _streamer == null:
+		_cheat_log("Cave cage teleport failed: world not streaming yet.")
+		return
+	if _district_hopping:
+		_cheat_log("Cave cage teleport failed: already hopping.")
+		return
+	var dest := DistrictTheme.find_coord_for_theme(city_seed, DistrictTheme.HILL)
+	var theme := DistrictTheme.for_district(city_seed, dest)
+	if theme.id != DistrictTheme.HILL:
+		_cheat_log("Cave cage teleport failed: no Hill district found.")
+		push_error("CityRoot: cheat cave cage — no Hill for seed %d" % city_seed)
+		return
+	_cheat_log("Hopping to Hill %s for the cave cage…" % str(dest))
+	if _cheat_panel != null:
+		_cheat_panel.close_panel()
+	_district_hopping = true
+	await _district_hop_to(dest, _walker.global_position)
+	if _walker == null or not is_instance_valid(_walker):
+		return
+	var cage_inst: DistrictInstance = null
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
+		if inst == null or inst.coord != dest:
+			continue
+		cage_inst = inst
+		break
+	if cage_inst == null:
+		_cheat_log("Cave cage teleport: Hill loaded but district instance missing.")
+		push_error("CityRoot: cheat cave cage — no DistrictInstance at %s" % str(dest))
+		return
+	if not cage_inst.cave_cage_stand_world.is_finite():
+		_cheat_log("Cave cage teleport: Hill has no cage stand (no chamber?).")
+		push_error("CityRoot: cheat cave cage — INF stand at %s" % str(dest))
+		return
+	var target: Vector3 = cage_inst.cave_cage_stand_world
+	var from := _walker.global_position
+	var flat := Vector3(target.x - from.x, 0.0, target.z - from.z)
+	if flat.length_squared() < 0.01:
+		flat = Vector3(CHEAT_CAGE_STAND_OFF_M, 0.0, 0.0)
+	else:
+		flat = flat.normalized() * CHEAT_CAGE_STAND_OFF_M
+	var stand := Vector3(target.x - flat.x, target.y + 0.35, target.z - flat.z)
+	_walker.velocity = Vector3.ZERO
+	_walker.global_position = stand
+	_walker.velocity = Vector3.ZERO
+	var toward := target - stand
+	if _walker.has_method("set_yaw"):
+		_walker.call("set_yaw", atan2(-toward.x, -toward.z))
+	var msg := "Stood beside cave cage at %s." % str(dest)
+	_cheat_log(msg)
+	print("CityRoot: cheat — %s" % msg)
 
 
 func _cheat_log(line: String) -> void:

@@ -99,6 +99,14 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	await _test_global_cooldown()
+	if _failed:
+		_quit()
+		return
+	_test_crumble_stride_closes_in()
+	if _failed:
+		_quit()
+		return
 	await _test_player_minion_power()
 	_quit()
 
@@ -144,9 +152,11 @@ func _test_resolve_on_spawn() -> void:
 	if stats == null:
 		_fail("FAIL unit has no combat stats")
 		return
+	## Body row overrides the `minion` template's 0.5 — see kaykit/Skeleton_Minion in
+	## gamedata.json and tools/fixtures/combat_effective_stats.json.
 	var hp_mult := float(stats.get("hp_mult"))
-	if absf(hp_mult - 0.5) > 0.001:
-		_fail("FAIL minion hp_mult %.3f want 0.5" % hp_mult)
+	if absf(hp_mult - 0.6471) > 0.001:
+		_fail("FAIL minion hp_mult %.4f want 0.6471" % hp_mult)
 		return
 	var attacks: PackedStringArray = stats.get("attacks") as PackedStringArray
 	if not _has_str(attacks, "melee"):
@@ -367,6 +377,221 @@ func _test_factions_and_mob_melee() -> void:
 	_despawn(undead_a)
 	_despawn(undead_b)
 	_despawn(beast)
+
+
+## One shared recovery after any attack. A multi-attack kit used to empty its whole pool the
+## moment line of sight opened — the freed cage boss threw laser, blaster burst and charged
+## blast inside three seconds because every per-attack timer sat at zero.
+func _test_global_cooldown() -> void:
+	var walker := CityWalker.new()
+	walker.name = "GcdWalker"
+	add_child(walker)
+	walker.set_physics_process(false)
+	await get_tree().process_frame
+	walker.global_position = _w(Vector3i(20, 1, 60))
+	_city.bind_player(walker)
+	var unit := _spawn(
+		UndeadUnit.Role.MINION,
+		walker.global_position + Vector3(1.0, 0.0, 0.0),
+		"kaykit/Skeleton_Minion"
+	)
+	if unit == null:
+		walker.queue_free()
+		return
+	var combat: RefCounted = unit.combat()
+	unit.set_combat_prey(walker.global_position)
+	var before := walker.get_health()
+	if not bool(combat.call("try_attack_living", walker.global_position)):
+		_fail("FAIL first melee did not fire")
+		_despawn(unit)
+		walker.queue_free()
+		return
+	if walker.get_health() >= before:
+		_fail("FAIL first melee dealt no damage")
+		_despawn(unit)
+		walker.queue_free()
+		return
+	var gcd := float(combat.call("global_cooldown_left"))
+	if absf(gcd - MonsterCombat.GLOBAL_COOLDOWN_S) > 0.001:
+		_fail("FAIL global cooldown %.2f after a swing, want %.2f" % [gcd, MonsterCombat.GLOBAL_COOLDOWN_S])
+		_despawn(unit)
+		walker.queue_free()
+		return
+	## The point of the shared timer: melee recovers sooner than the GCD, and must still wait.
+	var melee_cd := CombatTable.monster_attack_cooldown_s("melee")
+	if melee_cd >= MonsterCombat.GLOBAL_COOLDOWN_S:
+		_fail("FAIL melee cooldown %.2f is not shorter than the GCD — nothing to prove" % melee_cd)
+		_despawn(unit)
+		walker.queue_free()
+		return
+	combat.call("tick", melee_cd + 0.05)
+	## Melee's own timer is up — only the shared recovery is holding the swing.
+	if not bool(combat.call("is_attack_ready", "melee")):
+		_fail("FAIL melee's own %.2f s cooldown did not drain" % melee_cd)
+		_despawn(unit)
+		walker.queue_free()
+		return
+	if float(combat.call("global_cooldown_left")) <= 0.0:
+		_fail("FAIL the GCD drained in %.2f s, want %.1f s" % [melee_cd, MonsterCombat.GLOBAL_COOLDOWN_S])
+		_despawn(unit)
+		walker.queue_free()
+		return
+	var held := walker.get_health()
+	combat.call("try_attack_living", walker.global_position)
+	if walker.get_health() < held - HEALTH_EPS:
+		_fail("FAIL a second swing landed while the GCD was still running")
+		_despawn(unit)
+		walker.queue_free()
+		return
+	## Past the shared recovery the same body swings again.
+	combat.call("tick", MonsterCombat.GLOBAL_COOLDOWN_S)
+	if float(combat.call("global_cooldown_left")) > 0.0:
+		_fail("FAIL global cooldown did not drain")
+		_despawn(unit)
+		walker.queue_free()
+		return
+	if not bool(combat.call("try_attack_living", walker.global_position)):
+		_fail("FAIL melee did not resume after the GCD")
+		_despawn(unit)
+		walker.queue_free()
+		return
+	if walker.get_health() >= held:
+		_fail("FAIL the post-GCD swing dealt no damage")
+		_despawn(unit)
+		walker.queue_free()
+		return
+	_despawn(unit)
+	walker.queue_free()
+
+	## Multi-attack kit: firing one power must lock the others that never fired.
+	var boss := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(28, 1, 60)), "big/CageDemon")
+	if boss == null:
+		return
+	var boss_combat: RefCounted = boss.combat()
+	for attack_id: String in ["blaster", "eye_laser", "charged_blast"]:
+		if not bool(boss_combat.call("has_attack", attack_id)):
+			_fail("FAIL big/CageDemon kit is missing %s" % attack_id)
+			_despawn(boss)
+			return
+		if not bool(boss_combat.call("is_attack_ready", attack_id)):
+			_fail("FAIL %s is not ready on a fresh CageDemon" % attack_id)
+			_despawn(boss)
+			return
+	## Stand in for one executed blaster — every `_execute_*` routes through here.
+	boss_combat.call("_set_cooldown", "blaster")
+	## The untouched powers keep their own timers at zero; the shared recovery is what stops
+	## the kit emptying itself, so the pick has to come back empty.
+	for attack_id: String in ["eye_laser", "charged_blast"]:
+		if not bool(boss_combat.call("is_attack_ready", attack_id)):
+			_fail("FAIL %s took a cooldown it never fired" % attack_id)
+			_despawn(boss)
+			return
+	if str(boss_combat.call("_pick_attack", 2.0)) != "":
+		_fail("FAIL the kit picked another attack inside the GCD")
+		_despawn(boss)
+		return
+	boss_combat.call("tick", MonsterCombat.GLOBAL_COOLDOWN_S + 0.01)
+	if str(boss_combat.call("_pick_attack", 2.0)) != "eye_laser":
+		_fail(
+			"FAIL after the GCD the kit picked '%s', want eye_laser"
+			% str(boss_combat.call("_pick_attack", 2.0))
+		)
+		_despawn(boss)
+		return
+	## The fired power keeps its own longer recovery on top of the shared one.
+	if bool(boss_combat.call("is_attack_ready", "blaster")):
+		_fail("FAIL blaster skipped its own %.1f s cooldown" % CombatTable.monster_attack_cooldown_s("blaster"))
+		_despawn(boss)
+		return
+	_despawn(boss)
+	print(
+		"gcd: %.1f s shared recovery holds melee past its %.1f s cooldown; one CageDemon power locks the rest"
+		% [MonsterCombat.GLOBAL_COOLDOWN_S, melee_cd]
+	)
+
+
+## A terrain-chewing body has to close in and be allowed to route through fabric. The cage boss
+## used to hold `ranged_boss` artillery range (28 m), which in a cave meant it was always
+## "already in range": the provider handed it no goal, it never moved, and `crumble_stride`
+## only fires on a stride — so it stood in the rock forever.
+func _test_crumble_stride_closes_in() -> void:
+	var boss := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(66, 1, 40)), "big/CageDemon")
+	if boss == null:
+		return
+	if not boss.chews_terrain():
+		_fail("FAIL big/CageDemon does not report a terrain-chewing aura")
+		_despawn(boss)
+		return
+	if boss.nav_profile_id() != NavProfile.Id.MONSTER_BREAKER:
+		_fail("FAIL cage boss navigates on profile %d, want MONSTER_BREAKER" % boss.nav_profile_id())
+		_despawn(boss)
+		return
+	var breaker := NavService.instance().profile(NavProfile.Id.MONSTER_BREAKER)
+	if breaker == null or not breaker.can_break:
+		_fail("FAIL MONSTER_BREAKER profile is missing or cannot break")
+		_despawn(boss)
+		return
+	var stand := float(boss.combat().call("hunt_standoff_m"))
+	if absf(stand - MonsterCombat.CHEWER_STANDOFF_M) > 0.001:
+		_fail("FAIL chewer stand-off %.2f, want %.2f" % [stand, MonsterCombat.CHEWER_STANDOFF_M])
+		_despawn(boss)
+		return
+	var preferred := float(boss.combat_stats().get("preferred_range_m"))
+	if stand >= preferred:
+		_fail("FAIL chewer holds %.1f m — no closer than its %.1f m artillery range" % [stand, preferred])
+		_despawn(boss)
+		return
+
+	## Pinned against fabric with prey out of reach: chew toward the prey, or the navigator
+	## never opens a corridor and the body never strides.
+	var aura: RefCounted = boss.get("_aura") as RefCounted
+	if aura == null:
+		_fail("FAIL cage boss has no aura kit")
+		_despawn(boss)
+		return
+	boss.velocity = Vector3.ZERO
+	boss.set_combat_prey(boss.global_position + Vector3(12.0, 0.0, 0.0))
+	var dir: Vector3 = aura.call("_stride_direction") as Vector3
+	if dir.distance_to(Vector3.RIGHT) > 0.01:
+		_fail("FAIL a pinned chewer digs toward %s, want %s" % [str(dir), str(Vector3.RIGHT)])
+		_despawn(boss)
+		return
+	## Already at its fighting distance — standing still must not grind the world away.
+	boss.set_combat_prey(boss.global_position + Vector3(1.0, 0.0, 0.0))
+	if (aura.call("_stride_direction") as Vector3) != Vector3.ZERO:
+		_fail("FAIL a chewer at contact range keeps chewing while standing still")
+		_despawn(boss)
+		return
+	boss.set_combat_prey(Vector3.INF)
+	if (aura.call("_stride_direction") as Vector3) != Vector3.ZERO:
+		_fail("FAIL a chewer with no prey still chews")
+		_despawn(boss)
+		return
+	_despawn(boss)
+
+	## A big body without the aura keeps "a wall is a wall" and its artillery stand-off.
+	var plain := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(70, 1, 40)), "big/Demon")
+	if plain == null:
+		return
+	if plain.chews_terrain():
+		_fail("FAIL big/Demon reports a terrain-chewing aura")
+		_despawn(plain)
+		return
+	if plain.nav_profile_id() != NavProfile.Id.MONSTER:
+		_fail("FAIL big/Demon navigates on profile %d, want MONSTER" % plain.nav_profile_id())
+		_despawn(plain)
+		return
+	var plain_stand := float(plain.combat().call("hunt_standoff_m"))
+	if plain_stand <= MonsterCombat.CHEWER_STANDOFF_M:
+		_fail("FAIL big/Demon holds only %.1f m — it should keep artillery range" % plain_stand)
+		_despawn(plain)
+		return
+	_despawn(plain)
+	print(
+		"crumble stride: cage boss closes to %.1f m on MONSTER_BREAKER (artillery %.0f m); "
+		% [stand, preferred]
+		+ "big/Demon still holds %.1f m on MONSTER" % plain_stand
+	)
 
 
 ## Minion power: half-size human ally; recast dismisses the previous body; 60s lifetime + HUD.

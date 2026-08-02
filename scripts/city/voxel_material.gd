@@ -140,12 +140,17 @@ const ZOO_TURF_LAST := ZOO_TURF_ARCANE
 ## Dark curb around an inset 2×2 turf well — the rim that makes a plate look placed,
 ## not painted onto the dirt.
 const ZOO_PLATE_RIM := 266
+## Hill-cave boss cage: zoo-fence look, but ROCK hardness so the player can blast it open.
+## Immune to monster crumble auras only — see `is_cave_cage`.
+const CAVE_CAGE_FRAME := 267
+const CAVE_CAGE_LINE := 268
+const CAVE_CAGE_GLASS := 269
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
 ## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-const COUNT := 267
+const COUNT := 270
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -332,6 +337,7 @@ static func hardness(id: int) -> Hardness:
 		or id == ROAD_LINE or id == CROSSWALK or id == ASPHALT or id == SIDEWALK
 		or id == PLAZA or id == PAINT or id == TIMBER or id == GRAVE_PATH
 		or id == ZOO_PLATE_RIM
+		or is_cave_cage(id)
 	):
 		return Hardness.ROCK
 	## Dirt, park, plaster, glass, leaves, bark, props, soil, …
@@ -366,6 +372,24 @@ static func is_fractal_band(id: int) -> bool:
 ## Containment ring voxels (posts, energy line, pane). None of them ever yield.
 static func is_zoo_fence(id: int) -> bool:
 	return id == ZOO_FENCE_FRAME or id == ZOO_FENCE_LINE or id == ZOO_FENCE_GLASS
+
+
+## Hill-cave boss cage (posts, energy line, pane). Blastable by the player; crumble auras skip it.
+static func is_cave_cage(id: int) -> bool:
+	return id == CAVE_CAGE_FRAME or id == CAVE_CAGE_LINE or id == CAVE_CAGE_GLASS
+
+
+## Player damage on this cell detonates a charged blast (see `explosive_radius_m`).
+static func is_explosive(id: int) -> bool:
+	return is_cave_cage(id)
+
+
+## Sphere radius (metres) when `id` detonates. Zero when not explosive.
+## Cave cage: ~7×7×8 voxels — cover the far corner from any surface hit.
+static func explosive_radius_m(id: int) -> float:
+	if is_cave_cage(id):
+		return 6.0
+	return 0.0
 
 
 static func is_zoo_turf(id: int) -> bool:
@@ -566,12 +590,12 @@ static func color(id: int) -> Color:
 		FRACTAL_INTERIOR:
 			## Mandelbrot set body — near-black, not the glowing deck.
 			return Color(0.04, 0.04, 0.06)
-		ZOO_FENCE_FRAME:
+		ZOO_FENCE_FRAME, CAVE_CAGE_FRAME:
 			return Color(0.14, 0.13, 0.15)
-		ZOO_FENCE_LINE:
+		ZOO_FENCE_LINE, CAVE_CAGE_LINE:
 			## The one saturated red in the district — the containment line reads at range.
 			return Color(0.95, 0.12, 0.16)
-		ZOO_FENCE_GLASS:
+		ZOO_FENCE_GLASS, CAVE_CAGE_GLASS:
 			return Color(0.72, 0.24, 0.26, 0.36)
 		ZOO_TURF_UNDEAD:
 			## Saturated enough to glow as emissive plates — muted earth tones vanished at range.

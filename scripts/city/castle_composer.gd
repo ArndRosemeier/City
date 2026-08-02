@@ -788,16 +788,67 @@ func _plan_keep_flights(out: CastleLayout, storeys: int) -> void:
 			floored.append(n)
 	var slots: Array[int] = [0, 1, 2, 3, 4, 5, 6, 7]
 	_shuffle_ints(slots)
+	## Bottom flight first, which is the order every castle is generated in. Where a lane lands
+	## moves the room subdivision, and the dice roll on from there through the whole dungeon, so
+	## an order that works is never traded for a tidier one.
+	if _lay_keep_flights(out, floored, slots.duplicate(), _storey_order(floored)):
+		return
+	## It did not fit, and it is always the same flight that misses: the one spanning the great
+	## hall climbs two storeys, so its lane is half again as long as a single-storey flight and
+	## its margin eats most of a face plus both neighbouring corners. Last in storey order it
+	## meets a plate the short flights have already fragmented, and on roughly one keep in a
+	## hundred there was nowhere left to put it — a storey with no way up. Taken first it fits,
+	## and short flights tuck around it far more easily than the other way round.
+	if _lay_keep_flights(out, floored, slots.duplicate(), _longest_first_order(floored)):
+		return
+	push_error(
+		"CastleComposer: no lane order fits %d flights in the %s keep plate"
+		% [floored.size() - 1, out.keep_plate_rect.size]
+	)
+
+
+## Flight indices into `floored`, bottom of the keep first.
+func _storey_order(floored: Array[int]) -> Array[int]:
+	var order: Array[int] = []
 	for i in range(floored.size() - 1):
+		order.append(i)
+	return order
+
+
+## The same flights, longest climb first.
+func _longest_first_order(floored: Array[int]) -> Array[int]:
+	var order := _storey_order(floored)
+	order.sort_custom(
+		func(x: int, y: int) -> bool:
+			return floored[x + 1] - floored[x] > floored[y + 1] - floored[y]
+	)
+	return order
+
+
+## One attempt at laying every flight, taking lanes in `order`. All or nothing: an attempt that
+## cannot place a flight leaves no claim behind, so the next order starts from the plate this
+## one saw. Costs no dice either — lanes are picked, never rolled.
+func _lay_keep_flights(
+	out: CastleLayout, floored: Array[int], slots: Array[int], order: Array[int]
+) -> bool:
+	var mark := _keep_reserved.size()
+	## from_storey → flight, so the layout lists its stairs bottom to top whatever order they
+	## were placed in.
+	var planned: Dictionary[int, CastleStair] = {}
+	for i: int in order:
 		var a: int = floored[i]
 		var b: int = floored[i + 1]
 		var st := _pick_stair_slot(
 			out, slots, (b - a) * KEEP_LEVEL_H, out.keep_floor_y(a), a, b
 		)
 		if st == null:
-			return
-		out.keep_stairs.append(st)
+			_keep_reserved.resize(mark)
+			return false
+		planned[a] = st
 		_keep_reserved.append(st.footprint().grow(LANE_MARGIN))
+	for i in range(floored.size() - 1):
+		out.keep_stairs.append(planned[floored[i]])
+	return true
 
 
 ## Takes the first free lane out of the shuffled slot order. Slots hug an inside face and
@@ -824,10 +875,7 @@ func _pick_stair_slot(
 				return st
 			off += LANE_MARGIN + 1
 			st = _stair_for_slot(out, slots[i], off, rise, y_from, a, b)
-	push_error(
-		"CastleComposer: no free lane in the %s keep plate for a %d voxel flight %d→%d"
-		% [out.keep_plate_rect.size, rise, a, b]
-	)
+	## Not fatal on its own — the caller has another lane order to try before it gives up.
 	return null
 
 
@@ -1688,6 +1736,9 @@ func _dungeon_cut(cell: Rect2i, axis: int, c: int, part_t: int) -> Array[Rect2i]
 func _plan_dungeon_doors(out: CastleLayout) -> void:
 	for l in range(out.dungeon_levels):
 		_plan_level_doors(out, _levels[l])
+	## Per-level trees can still leave a chamber only reachable via a flight the entry never
+	## meets. Trim to the component a body walking down from the bailey can actually enter.
+	_drop_unreachable_dungeon_vaults(out)
 
 
 func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
@@ -1704,7 +1755,19 @@ func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
 	var seen: Array[bool] = []
 	seen.resize(rooms.size())
 	seen.fill(false)
-	seen[0] = true
+	## One seed, and it has to be a chamber a body can arrive in. Growing from `rooms[0]`
+	## kept whichever component owned the first vault and dropped the one the courtyard stair
+	## actually landed in — stair carved, chambers around it gone. Marking every arrival as
+	## already-seen was the other failure mode: Prim never joined those components, so a
+	## flight foot on an island stayed "reachable" on its level and sealed from the entry.
+	var seed := _primary_arrival_vault(out, plan)
+	if seed < 0:
+		push_error(
+			"CastleComposer: dungeon level %d has no chamber under an entry or flight landing"
+			% plan.level
+		)
+		seed = 0
+	seen[seed] = true
 	var used: Array[bool] = []
 	used.resize(edges.size())
 	used.fill(false)
@@ -1713,6 +1776,17 @@ func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
 	## reserved lane than a chamber with no way in.
 	_grow_dungeon_tree(out, plan, rooms, edges, seen, used, false)
 	_grow_dungeon_tree(out, plan, rooms, edges, seen, used, true)
+	## Pull every other arrival on this level into the same component before anything is
+	## dropped — two flights that landed in facing-disconnected blobs would otherwise each
+	## look fine locally and leave a sealed branch off the bailey route.
+	for other: int in _arrival_vault_indices(out, plan):
+		if seen[other]:
+			continue
+		if not _attach_vault_to_seen(out, plan, rooms, edges, seen, used, other):
+			push_error(
+				"CastleComposer: dungeon level %d cannot join arrival chamber %d to the tree"
+				% [plan.level, other]
+			)
 	for k2 in range(edges.size()):
 		if used[k2] or rng.randf() >= DUNGEON_LOOP_CHANCE:
 			continue
@@ -1724,7 +1798,7 @@ func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
 			continue
 		used[k2] = true
 		out.dungeon_doorways.append(door2)
-	## Geometric islands (no facing wall to the reachable set) are dropped, not left as
+	## Geometric islands (no facing wall to the arrival tree) are dropped, not left as
 	## unreachable volumes that only exist to spam the error overlay on far bakes.
 	var dropped := 0
 	for i2 in range(rooms.size() - 1, -1, -1):
@@ -1741,6 +1815,238 @@ func _plan_level_doors(out: CastleLayout, plan: DungeonLevel) -> void:
 			"CastleComposer: dungeon level %d dropped %d chamber(s) with no facing link"
 			% [plan.level, dropped]
 		)
+
+
+## Preferred Prim seed: an entry foot on the top level, otherwise any flight landing.
+func _primary_arrival_vault(out: CastleLayout, plan: DungeonLevel) -> int:
+	if plan.level == out.dungeon_top_level():
+		for e: CastleDungeonEntry in out.dungeon_entries:
+			var at := _vault_index_at(plan.vaults, e.foot())
+			if at >= 0:
+				return at
+	var all := _arrival_vault_indices(out, plan)
+	return all[0] if not all.is_empty() else -1
+
+
+## Vault indices a body can arrive in without walking a door on this level: dungeon entry
+## feet on the top level, and every inter-level flight's tread that lands here.
+func _arrival_vault_indices(out: CastleLayout, plan: DungeonLevel) -> Array[int]:
+	var cols: Array[Vector2i] = []
+	if plan.level == out.dungeon_top_level():
+		for e: CastleDungeonEntry in out.dungeon_entries:
+			cols.append(e.foot())
+	for st: CastleStair in out.dungeon_stairs:
+		if st.from_storey == plan.level:
+			cols.append(st.center_column(0))
+		if st.to_storey == plan.level:
+			cols.append(st.center_column(st.run_len() - 1))
+	var seeds: Array[int] = []
+	for col: Vector2i in cols:
+		var idx := _vault_index_at(plan.vaults, col)
+		if idx < 0:
+			push_error(
+				"CastleComposer: dungeon level %d landing %s sits in no chamber"
+				% [plan.level, col]
+			)
+			continue
+		if not seeds.has(idx):
+			seeds.append(idx)
+	return seeds
+
+
+func _vault_index_at(rooms: Array[CastleVault], col: Vector2i) -> int:
+	for i in range(rooms.size()):
+		if rooms[i].rect.has_point(col):
+			return i
+	## Stair claims keep a margin the room rect may still cover once the tread itself sits
+	## on the claim edge — one column of slack covers the approach apron.
+	for i2 in range(rooms.size()):
+		if rooms[i2].rect.grow(1).has_point(col):
+			return i2
+	return -1
+
+
+## Join `target` to the already-seen tree along a facing path, forcing slots through claims
+## when a clear opening will not fit. Returns false only when no facing path exists at all.
+func _attach_vault_to_seen(
+	out: CastleLayout,
+	plan: DungeonLevel,
+	rooms: Array[CastleVault],
+	edges: Array[Vector3i],
+	seen: Array[bool],
+	used: Array[bool],
+	target: int
+) -> bool:
+	## parent_edge[i] = edge index used to reach i from the BFS root at target.
+	var parent_edge: PackedInt32Array = PackedInt32Array()
+	parent_edge.resize(rooms.size())
+	parent_edge.fill(-1)
+	var visited: Array[bool] = []
+	visited.resize(rooms.size())
+	visited.fill(false)
+	visited[target] = true
+	var queue: Array[int] = [target]
+	var qi := 0
+	var join := -1
+	while qi < queue.size() and join < 0:
+		var cur: int = queue[qi]
+		qi += 1
+		for k in range(edges.size()):
+			var e: Vector3i = edges[k]
+			var nxt := -1
+			if e.x == cur:
+				nxt = e.y
+			elif e.y == cur:
+				nxt = e.x
+			else:
+				continue
+			if visited[nxt]:
+				continue
+			visited[nxt] = true
+			parent_edge[nxt] = k
+			if seen[nxt]:
+				join = nxt
+				break
+			queue.append(nxt)
+	if join < 0:
+		return false
+	## Walk join → target, punching every unused edge as a tree door.
+	var at := join
+	while at != target:
+		var k2: int = parent_edge[at]
+		var e2: Vector3i = edges[k2]
+		var nxt2: int = e2.y if e2.x == at else e2.x
+		if not used[k2]:
+			var door := _dungeon_door_between(
+				rooms[e2.x], rooms[e2.y], e2.z, plan, CastleDoorway.LINK_TREE, false
+			)
+			if door == null:
+				door = _dungeon_door_between(
+					rooms[e2.x], rooms[e2.y], e2.z, plan, CastleDoorway.LINK_TREE, true
+				)
+			if door == null:
+				return false
+			out.dungeon_doorways.append(door)
+			used[k2] = true
+		seen[nxt2] = true
+		at = nxt2
+	seen[target] = true
+	_grow_dungeon_tree(out, plan, rooms, edges, seen, used, false)
+	_grow_dungeon_tree(out, plan, rooms, edges, seen, used, true)
+	return true
+
+
+## After every level has a tree, keep only chambers a body can walk to from a bailey entry.
+func _drop_unreachable_dungeon_vaults(out: CastleLayout) -> void:
+	var vaults := out.dungeon_vaults
+	if vaults.is_empty() or out.dungeon_entries.is_empty():
+		return
+	var adj: Array[PackedInt32Array] = []
+	adj.resize(vaults.size())
+	for i in range(vaults.size()):
+		adj[i] = PackedInt32Array()
+	for d: CastleDoorway in out.dungeon_doorways:
+		var a := _vault_index_at_level(vaults, d.storey, d.center - d.axis)
+		var b := _vault_index_at_level(vaults, d.storey, d.center + d.axis * d.depth)
+		if a < 0 or b < 0 or a == b:
+			continue
+		adj[a].append(b)
+		adj[b].append(a)
+	for st: CastleStair in out.dungeon_stairs:
+		if st.from_storey < 0 or st.to_storey < 0:
+			continue
+		var lo := _vault_index_at_level(vaults, st.from_storey, st.center_column(0))
+		var hi := _vault_index_at_level(
+			vaults, st.to_storey, st.center_column(st.run_len() - 1)
+		)
+		if lo < 0 or hi < 0:
+			continue
+		adj[lo].append(hi)
+		adj[hi].append(lo)
+	var seen: Array[bool] = []
+	seen.resize(vaults.size())
+	seen.fill(false)
+	var queue: Array[int] = []
+	for e: CastleDungeonEntry in out.dungeon_entries:
+		var start := _vault_index_at_level(vaults, out.dungeon_top_level(), e.foot())
+		if start < 0 or seen[start]:
+			continue
+		seen[start] = true
+		queue.append(start)
+	var qi := 0
+	while qi < queue.size():
+		var cur: int = queue[qi]
+		qi += 1
+		for nxt: int in adj[cur]:
+			if seen[nxt]:
+				continue
+			seen[nxt] = true
+			queue.append(nxt)
+	## A flight or entry landing that the bailey cannot reach is a plan bug, not an island —
+	## dropping it would leave the stair carving into empty mass. Loud, and keep the vault so
+	## the test's plan walk fails on the same seed instead of silently losing a route down.
+	for ai in range(vaults.size()):
+		if seen[ai]:
+			continue
+		if _vault_is_arrival(out, vaults[ai]):
+			push_error(
+				"CastleComposer: %s is under a route landing but unreachable from the bailey"
+				% vaults[ai].describe()
+			)
+			seen[ai] = true
+	var dropped := 0
+	for i2 in range(vaults.size() - 1, -1, -1):
+		if seen[i2]:
+			continue
+		var stranded: CastleVault = vaults[i2]
+		out.dungeon_vaults.remove_at(i2)
+		var plan: DungeonLevel = _levels[stranded.level]
+		var local := plan.vaults.find(stranded)
+		if local >= 0:
+			plan.vaults.remove_at(local)
+		dropped += 1
+	if dropped > 0:
+		## Doors into removed chambers would hang in solid mass.
+		for di in range(out.dungeon_doorways.size() - 1, -1, -1):
+			var door: CastleDoorway = out.dungeon_doorways[di]
+			var a2 := _vault_index_at_level(
+				out.dungeon_vaults, door.storey, door.center - door.axis
+			)
+			var b2 := _vault_index_at_level(
+				out.dungeon_vaults, door.storey, door.center + door.axis * door.depth
+			)
+			if a2 < 0 or b2 < 0:
+				out.dungeon_doorways.remove_at(di)
+		push_warning(
+			"CastleComposer: dropped %d dungeon chamber(s) unreachable from any route down"
+			% dropped
+		)
+
+
+func _vault_is_arrival(out: CastleLayout, v: CastleVault) -> bool:
+	if v.level == out.dungeon_top_level():
+		for e: CastleDungeonEntry in out.dungeon_entries:
+			if v.rect.grow(1).has_point(e.foot()):
+				return true
+	for st: CastleStair in out.dungeon_stairs:
+		if st.from_storey == v.level and v.rect.grow(1).has_point(st.center_column(0)):
+			return true
+		if (
+			st.to_storey == v.level
+			and v.rect.grow(1).has_point(st.center_column(st.run_len() - 1))
+		):
+			return true
+	return false
+
+
+func _vault_index_at_level(rooms: Array[CastleVault], level: int, col: Vector2i) -> int:
+	for i in range(rooms.size()):
+		var v: CastleVault = rooms[i]
+		if v.level != level:
+			continue
+		if v.rect.has_point(col) or v.rect.grow(1).has_point(col):
+			return i
+	return -1
 
 
 func _grow_dungeon_tree(

@@ -111,6 +111,16 @@
       "notes": "CityWalker Q → feet-centered crater; radius = charged_blast_radius_max_m×scale (2.52 at 1×), stomp_cooldown_sec=0.85, energy_cost_stomp=10, stomp_impact_ratio=0.48; DamageSource.PLAYER_STOMP=110. Player windup is anim-ratio (not seconds). Monsters: ~0.4s foot telegraph + 6s recovery."
     }
   },
+  "auras": {
+    "crumble_stride": {
+      "id": "crumble_stride",
+      "reach_m": 1.8,
+      "tick_s": 0.22,
+      "along_half": 1,
+      "depth_vox": 2,
+      "notes": "While walking, destructible voxels ahead crumble with cascades. Skips cave-cage materials."
+    }
+  },
   "behaviours": {
     "ambient": {
       "id": "ambient",
@@ -453,6 +463,27 @@
       "spawn_ready": true,
       "spawn_weight": 0.55,
       "notes": "Artillery demon — charged_blast sphere nuke + eye_laser; not the grown-giant boss path.",
+      "hp_mult": 1.8648,
+      "armor_mult": 1.4,
+      "damage_mult": 1.85
+    },
+    {
+      "id": "big/CageDemon",
+      "faction": "unique",
+      "templates": [
+        "ranged_boss"
+      ],
+      "spawn_ready": false,
+      "spawn_weight": 0.0,
+      "attacks_extra": [
+        "charged_blast"
+      ],
+      "auras": [
+        "crumble_stride"
+      ],
+      "kill_gems_min": 12,
+      "kill_gems_max": 18,
+      "notes": "Hill cave caged boss — Unique; crumble aura + charged blast.",
       "hp_mult": 1.8648,
       "armor_mult": 1.4,
       "damage_mult": 1.85

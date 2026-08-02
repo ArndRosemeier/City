@@ -19,12 +19,23 @@ const RANGED_KINDS: PackedStringArray = [
 	"eye_laser", "blaster", "orb_convert", "charged_blast", "stomp"
 ]
 
+## Shared recovery after ANY attack fires. Without it a multi-attack kit empties its whole
+## pool back to back the moment line of sight opens — a freed cage boss threw laser, blaster
+## burst and charged blast inside three seconds. Per-attack cooldowns still apply on top.
+const GLOBAL_COOLDOWN_S := 2.0
+
+## Stand-off for a terrain-chewing body: close enough to be a physical threat, far enough that
+## it is not standing inside the player.
+const CHEWER_STANDOFF_M := 3.0
+
 ## UndeadUnit that owns this kit.
 var _unit: CharacterBody3D = null
 ## CombatTable.EffectiveStats
 var _stats: RefCounted = null
 ## attack_id → seconds until ready
 var _cooldown: Dictionary = {}
+## Seconds left on the shared post-attack recovery (blocks every attack, see GLOBAL_COOLDOWN_S).
+var _global_cooldown: float = 0.0
 ## Seconds left on a telegraph before the pending attack fires.
 var _windup_left: float = 0.0
 var _windup_attack: String = ""
@@ -46,6 +57,7 @@ func bind(unit: CharacterBody3D, stats: RefCounted) -> void:
 	_unit = unit
 	_stats = stats
 	_cooldown.clear()
+	_global_cooldown = 0.0
 	_windup_left = 0.0
 	_windup_attack = ""
 	_windup_prey = Vector3.INF
@@ -139,16 +151,29 @@ func has_attack(attack_id: String) -> bool:
 	return false
 
 
+## Whether this one attack's own timer is up. Deliberately blind to the shared recovery:
+## callers ask about a specific tool (`UndeadUnit.can_cast`, orb stand-off), and folding the
+## GCD in here made a mage "done casting" the moment it fired anything at all.
 func is_attack_ready(attack_id: String) -> bool:
 	if not has_attack(attack_id):
 		return false
 	return float(_cooldown.get(attack_id, 0.0)) <= 0.0
 
 
+## Seconds left on the shared recovery — 0 when any attack may start.
+func global_cooldown_left() -> float:
+	return _global_cooldown
+
+
 ## Stand-off the navigator aims for while hunting living prey.
 func hunt_standoff_m() -> float:
 	if _stats == null:
 		return 2.0
+	## A body that chews terrain closes to contact. Holding artillery range meant the cage
+	## boss was already "in range" from across the cave, so the provider handed it no goal at
+	## all and it never took the step its aura needs.
+	if _unit != null and bool(_unit.call("chews_terrain")):
+		return CHEWER_STANDOFF_M
 	## Orb casters hold convert range when the orb is ready (legacy mage cadence).
 	if has_attack("orb_convert") and is_attack_ready("orb_convert"):
 		return CombatTableScript.monster_attack_range_m("orb_convert") * 0.92
@@ -165,6 +190,7 @@ func tick(delta: float) -> void:
 		return
 	for attack_id: String in _cooldown.keys():
 		_cooldown[attack_id] = maxf(0.0, float(_cooldown[attack_id]) - delta)
+	_global_cooldown = maxf(0.0, _global_cooldown - delta)
 	_blaster_burst_cd = maxf(0.0, _blaster_burst_cd - delta)
 	if _blaster_burst_left > 0 and _blaster_burst_cd <= 0.0:
 		_fire_blaster_bolt(_windup_prey if _windup_prey != Vector3.INF else _unit.global_position)
@@ -184,6 +210,9 @@ func try_attack_living(prey: Vector3) -> bool:
 		return false
 	if _windup_left > 0.0 or _blaster_burst_left > 0:
 		return true
+	## Still recovering from the last attack — busy, not out of options.
+	if _global_cooldown > 0.0:
+		return true
 	var dist := _flat_distance(_unit.global_position, prey)
 	var attack_id := _pick_attack(dist)
 	if attack_id.is_empty():
@@ -195,6 +224,8 @@ func try_attack_living(prey: Vector3) -> bool:
 
 
 func _pick_attack(dist_m: float) -> String:
+	if _global_cooldown > 0.0:
+		return ""
 	var attacks: PackedStringArray = _stats.get("attacks") as PackedStringArray
 	var best := ""
 	var best_score := -1.0
@@ -224,6 +255,9 @@ func _pick_attack(dist_m: float) -> String:
 	return best
 
 
+## Ranged tool whose own timer is up, for the stand-off the navigator holds. Like
+## `is_attack_ready` this ignores the shared recovery — a two-second GCD must not make a
+## ranged body abandon its distance and charge.
 func _ready_ranged_attack() -> String:
 	for attack_id: String in RANGED_KINDS:
 		if not has_attack(attack_id):
@@ -488,8 +522,8 @@ func _execute_charged_blast(prey: Vector3) -> bool:
 	_sfx("play_charged_blast_throw", at, scale)
 	_sfx("play_charged_blast_impact", prey, scale)
 	## Vertical slice: telegraphed hit on the player / hostile if still near the aim point.
+	var city: Node = _unit.call("city") as Node
 	if _is_player_prey(prey):
-		var city: Node = _unit.call("city") as Node
 		if city != null and bool(city.call("is_player_alive")):
 			var ppos: Vector3 = city.call("get_player_target_position") as Vector3
 			if prey.distance_to(ppos) <= radius + 1.2:
@@ -497,6 +531,13 @@ func _execute_charged_blast(prey: Vector3) -> bool:
 	var mob := _hostile_monster_near(prey, radius + 1.2)
 	if mob != null and prey.distance_to(mob.global_position) <= radius + 1.2:
 		_hurt_monster(mob, "charged_blast")
+	## Always carve when the attack row says so — caves need the sphere to open rock.
+	if bool(row.get("carves_voxels", false)):
+		if city == null or not city.has_method("apply_charged_blast"):
+			push_error("MonsterCombat: CityRoot missing apply_charged_blast")
+			assert(false, "MonsterCombat: no charged blast carve")
+		else:
+			city.call("apply_charged_blast", prey, radius * scale)
 	return true
 
 
@@ -580,8 +621,12 @@ func _player_near_los(hit_point: Vector3, radius_m: float) -> bool:
 	return bool(city.call("has_voxel_line_of_sight", hit_point, ppos))
 
 
+## Every `_execute_*` path routes here, so the shared recovery starts with the per-attack one
+## and no execute site can forget it. A blaster burst already in flight is not cut short —
+## remaining bolts run off `_blaster_burst_left`, not attack selection.
 func _set_cooldown(attack_id: String) -> void:
 	_cooldown[attack_id] = CombatTableScript.monster_attack_cooldown_s(attack_id)
+	_global_cooldown = GLOBAL_COOLDOWN_S
 
 
 func _is_player_prey(prey: Vector3) -> bool:

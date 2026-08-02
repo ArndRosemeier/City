@@ -3,8 +3,8 @@
 
 Open field: fighters start `--start-dist` metres apart, no obstacles, voxel LOS
 always clear. Movement aims at the live hunt standoff distance (same rules as
-MonsterCombat.hunt_standoff_m). Attack pick / windup / cooldown / blaster burst
-mirror scripts/city/monster_combat.gd. Damage is
+MonsterCombat.hunt_standoff_m). Attack pick / windup / per-attack cooldown /
+global cooldown / blaster burst mirror scripts/city/monster_combat.gd. Damage is
 `damage_vs_mob * attacker.damage_mult / victim.armor_mult`.
 
 HP uses CreatureHealth family bases × height curve × hp_mult (catalog heights
@@ -63,6 +63,9 @@ ATTACK_SCORE = {
 
 LETHAL_EPS = 1e-4
 
+# MonsterCombat.GLOBAL_COOLDOWN_S — shared recovery after any attack fires.
+GLOBAL_COOLDOWN_S = 2.0
+
 
 @dataclass(frozen=True)
 class CatalogBody:
@@ -106,6 +109,7 @@ class FighterState:
     x: float
     hp: float
     cooldown: dict[str, float] = field(default_factory=dict)
+    global_cooldown: float = 0.0
     windup_left: float = 0.0
     windup_attack: str = ""
     windup_aim_x: float = 0.0
@@ -158,6 +162,14 @@ def parse_catalog_bodies(path: Path = CATALOG_PATH) -> dict[str, CatalogBody]:
         text,
     ):
         mid = f"{family_dir}/{name}"
+        out[mid] = CatalogBody(mid, family_dir, float(height))
+
+    # Aliases carry their own monster id on a shared mesh:
+    # _alias_quaternius("big/CageDemon", "big", "Demon", 3.120, …)
+    for mid, family_dir, _mesh, height in re.findall(
+        r'_alias_quaternius\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*([0-9.]+)',
+        text,
+    ):
         out[mid] = CatalogBody(mid, family_dir, float(height))
 
     if len(out) < 40:
@@ -278,6 +290,8 @@ def monster_attack_range(attack_rows: dict[str, AttackRow], attack_id: str) -> f
 
 
 def hunt_standoff_m(fighter: FighterState, attack_rows: dict[str, AttackRow]) -> float:
+    # Stand-off reads per-attack timers only: the shared GCD must not make a ranged body
+    # abandon its distance and charge (mirrors MonsterCombat._ready_ranged_attack).
     d = fighter.defn
     if "orb_convert" in d.attacks and fighter.cooldown.get("orb_convert", 0.0) <= 0.0:
         return monster_attack_range(attack_rows, "orb_convert") * 0.92
@@ -294,6 +308,8 @@ def hunt_standoff_m(fighter: FighterState, attack_rows: dict[str, AttackRow]) ->
 def pick_attack(
     fighter: FighterState, dist_m: float, attack_rows: dict[str, AttackRow]
 ) -> str:
+    if fighter.global_cooldown > 0.0:
+        return ""
     best = ""
     best_score = -1.0
     for aid in fighter.defn.attacks:
@@ -366,6 +382,7 @@ def simulate_duel(
 
     def set_cooldown(fighter: FighterState, attack_id: str) -> None:
         fighter.cooldown[attack_id] = attack_rows[attack_id].cooldown_s
+        fighter.global_cooldown = GLOBAL_COOLDOWN_S
 
     def queue_or_land(
         attacker: FighterState, foe: FighterState, attack_id: str, dist: float
@@ -424,6 +441,8 @@ def simulate_duel(
             return
         if attacker.windup_left > 0.0 or attacker.blaster_burst_left > 0:
             return
+        if attacker.global_cooldown > 0.0:
+            return
         dist = abs(foe.x - attacker.x)
         aid = pick_attack(attacker, dist, attack_rows)
         if not aid:
@@ -467,6 +486,7 @@ def simulate_duel(
         for f in order:
             for aid in list(f.cooldown.keys()):
                 f.cooldown[aid] = max(0.0, f.cooldown[aid] - dt)
+            f.global_cooldown = max(0.0, f.global_cooldown - dt)
         for f, foe in ((left, right), (right, left)):
             apply_pending(f, foe)
         if not left.alive or not right.alive:

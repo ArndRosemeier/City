@@ -71,6 +71,9 @@ static func summonable_groups() -> Array[Dictionary]:
 		buckets[fname] = arr
 	var groups: Array[Dictionary] = []
 	for fid: MonsterFaction.Id in MonsterFactionScript.all():
+		## Unique is encounter-only — never arena pads or the N-key catalogue.
+		if fid == MonsterFaction.Id.UNIQUE:
+			continue
 		var name := MonsterFactionScript.faction_name(fid)
 		if not buckets.has(name):
 			continue

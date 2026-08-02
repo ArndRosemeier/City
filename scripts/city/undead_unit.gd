@@ -27,6 +27,7 @@ const CreatureClipsScript := preload("res://scripts/city/creature_clips.gd")
 const CreatureHealthScript := preload("res://scripts/city/creature_health.gd")
 const CreatureVariationScript := preload("res://scripts/city/creature_variation.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
+const MonsterAuraScript := preload("res://scripts/city/monster_aura.gd")
 const MonsterCombatScript := preload("res://scripts/city/monster_combat.gd")
 const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.gd")
@@ -141,6 +142,8 @@ var _combat_anim_left: float = 0.0
 var _cast_fired: bool = false
 ## Resolved combat kit (MonsterCombat). Null only before setup finishes.
 var _combat: RefCounted = null
+## Passive-driven passives (MonsterAura). Null when the body has no auras.
+var _aura: RefCounted = null
 ## MonsterFaction.Id for this body. Set once the catalogue entry is known.
 var _faction: int = -1
 ## Cached living-prey aim for the combat tick (refreshed with the goal provider).
@@ -521,6 +524,8 @@ func kill_from_player() -> void:
 	_dispose_nav()
 	_drop_health_bar()
 	_play_action(CreatureClips.Action.DEATH)
+	if _city != null and _entry != null and _city.has_method("grant_monster_kill_haul"):
+		_city.call("grant_monster_kill_haul", global_position, _entry.id)
 	died.emit(self, is_giant())
 	var tree := get_tree()
 	if tree != null:
@@ -712,6 +717,12 @@ func _bind_combat() -> void:
 		return
 	_combat = MonsterCombatScript.new()
 	_combat.call("bind", self, stats)
+	var aura_list: PackedStringArray = stats.get("auras") as PackedStringArray
+	if aura_list != null and not aura_list.is_empty():
+		_aura = MonsterAuraScript.new()
+		_aura.call("bind", self, stats)
+	else:
+		_aura = null
 
 
 func _reset_health() -> void:
@@ -823,7 +834,17 @@ func nav_profile_id() -> int:
 		return NavProfile.Id.GIANT
 	if _entry == null:
 		return NavProfile.Id.UNDEAD
+	## A body that eats its way forward needs a navigator willing to route it into fabric.
+	## On the plain monster profile a walled-in body is handed no goal, so it never strides
+	## and its aura never fires — see NavProfile.monster_breaker.
+	if _entry.nav_profile == NavProfile.Id.MONSTER and chews_terrain():
+		return NavProfile.Id.MONSTER_BREAKER
 	return _entry.nav_profile
+
+
+## True when an aura on this body carves terrain as it advances (MonsterAura.chews_terrain).
+func chews_terrain() -> bool:
+	return _aura != null and bool(_aura.call("chews_terrain"))
 
 
 func _build_nav() -> void:
@@ -999,6 +1020,8 @@ func tick(delta: float) -> void:
 		_provider.tick_pursuit(delta)
 	if _combat != null:
 		_combat.call("tick", delta)
+	if _aura != null:
+		_aura.call("tick", delta)
 
 	## Far units: skip anim switches most frames.
 	var far := _distance_to_player() > ANIM_FAR_DIST_M

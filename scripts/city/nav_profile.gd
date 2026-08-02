@@ -16,6 +16,7 @@ enum Id {
 	GIANT = 2,
 	CAR = 3,
 	MONSTER = 4,
+	MONSTER_BREAKER = 5,
 }
 
 var id: int = Id.PEDESTRIAN
@@ -75,7 +76,7 @@ func duplicate_as(new_id: int, new_name: String) -> _Self:
 
 ## Everything NavService registers at boot.
 static func defaults() -> Array[_Self]:
-	return [pedestrian(), undead(), giant(), car(), monster()]
+	return [pedestrian(), undead(), giant(), car(), monster(), monster_breaker()]
 
 
 ## A person: 1 m across, 2 m tall, steps a curb, drops off a kerb but not a roof.
@@ -166,6 +167,17 @@ static func monster() -> _Self:
 	return p
 
 
+## `monster()`, except destructible fabric is a priced route instead of a dead end. For bodies
+## whose aura chews terrain as they walk: on the plain monster profile the navigator hands a
+## walled-in body no corridor at all, so it never takes the step the aura fires on — the cage
+## boss stood still in its cave forever. Breaking also wires up the entombment dig-out, which
+## `NavAgent._report_trapped` only offers to a `can_break` profile.
+static func monster_breaker() -> _Self:
+	var p: _Self = monster().duplicate_as(Id.MONSTER_BREAKER, "monster_breaker")
+	p.can_break = true
+	return p
+
+
 ## A car: 2.3 m across, no climbing, no jumping, and it drowns. `max_step` clears the
 ## painted kerb line, which `voxel_block_library` gives a 0.4 collision top while the
 ## asphalt and pavement either side of it are full cells — a 0.3 m gutter dip that runs
@@ -187,19 +199,26 @@ static func car() -> _Self:
 	p.max_wade = 0
 	## Fractal glow / sculpture bands are a hard no-go for traffic (edge roads only).
 	## Cost must beat a short cut across the plaza vs driving around the stubs.
+	##
+	## Everything off the carriageway is priced well above it, because the corridor is what
+	## decides where between two lane points the car goes and VehicleMotor's lane glue steps
+	## aside once the corridor detours far enough: a path that pays for pavement is a path the
+	## car will be held on. CURB is the exception and stays cheap — the painted kerb line runs
+	## between every cell's carriageway and the asphalt of the junction it meets, so a car
+	## crosses one on any normal drive.
 	var car_costs := {
-		VoxelMaterial.SIDEWALK: 4.0,
+		VoxelMaterial.SIDEWALK: 8.0,
 		VoxelMaterial.CURB: 2.0,
-		VoxelMaterial.PLAZA: 4.0,
-		VoxelMaterial.TILES: 4.0,
-		VoxelMaterial.PARK: 6.0,
-		VoxelMaterial.DIRT: 4.0,
-		VoxelMaterial.GRAVEL: 3.0,
-		VoxelMaterial.GRAVE_PATH: 6.0,
-		VoxelMaterial.GRAVE_SOIL: 6.0,
-		VoxelMaterial.CAVE_FLOOR: 6.0,
-		VoxelMaterial.ROOF: 8.0,
-		VoxelMaterial.ROOF_CLAY: 8.0,
+		VoxelMaterial.PLAZA: 8.0,
+		VoxelMaterial.TILES: 8.0,
+		VoxelMaterial.PARK: 12.0,
+		VoxelMaterial.DIRT: 8.0,
+		VoxelMaterial.GRAVEL: 6.0,
+		VoxelMaterial.GRAVE_PATH: 12.0,
+		VoxelMaterial.GRAVE_SOIL: 12.0,
+		VoxelMaterial.CAVE_FLOOR: 12.0,
+		VoxelMaterial.ROOF: 16.0,
+		VoxelMaterial.ROOF_CLAY: 16.0,
 		VoxelMaterial.FRACTAL_GLOW: 16.0,
 		VoxelMaterial.FRACTAL_INTERIOR: 16.0,
 	}

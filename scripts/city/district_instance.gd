@@ -93,6 +93,9 @@ var elevator_shafts: Array = []
 ## Hill gem ore in world voxel coords (empty outside Hill districts).
 var hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var hill_gem_mats: PackedInt32Array = PackedInt32Array()
+## World stand inside the Unique cave-cage boss enclosure. INF when this tile has none.
+var cave_cage_stand_world: Vector3 = Vector3.INF
+const CAGE_DEMON_BODY_ID := "big/CageDemon"
 
 
 func bind_live_brush(brush: CityBrush) -> void:
@@ -276,6 +279,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		arena_controller.queue_free()
 	arena_controller = null
 	_clear_zoo_controller()
+	cave_cage_stand_world = Vector3.INF
 	_topology = null
 	generator = null
 	_terrain_ref = terrain
@@ -330,6 +334,7 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		arena_controller.queue_free()
 	arena_controller = null
 	_clear_zoo_controller()
+	cave_cage_stand_world = Vector3.INF
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
 		building_lod.queue_free()
@@ -587,6 +592,11 @@ func _stamp_detail_async() -> void:
 	CityProfiler.begin("stream_zoo_war")
 	_spawn_zoo_controller(generator)
 	CityProfiler.end("stream_zoo_war")
+	await get_tree().process_frame
+
+	CityProfiler.begin("stream_cave_cage")
+	_spawn_cave_cage_boss(generator, origin_vox)
+	CityProfiler.end("stream_cave_cage")
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_impostors")
@@ -865,6 +875,30 @@ func _clear_zoo_controller() -> void:
 		zoo_controller.shutdown()
 		zoo_controller.queue_free()
 	zoo_controller = null
+
+
+## One Unique CageDemon per Hill — stands inside the blastable red cage baked by HillComposer.
+func _spawn_cave_cage_boss(gen: DistrictGenerator, p_origin_vox: Vector3i) -> void:
+	cave_cage_stand_world = Vector3.INF
+	if gen == null:
+		return
+	var stand := gen.get_hill_cave_cage_stand()
+	if stand.x < 0:
+		return
+	cave_cage_stand_world = _landmark_world(Vector2i(stand.x, stand.z), stand.y, p_origin_vox)
+	var city := _find_city_root()
+	if city == null:
+		push_error("DistrictInstance: cave cage boss needs CityRoot to spawn")
+		assert(false, "DistrictInstance: no CityRoot for cage boss")
+		return
+	## No nav snap — the stand is inside the blastable cage; snapping would free the boss.
+	var unit: UndeadUnit = city.spawn_monster_at(
+		CAGE_DEMON_BODY_ID, cave_cage_stand_world, false
+	)
+	if unit == null:
+		push_warning(
+			"DistrictInstance: failed to spawn %s at %s" % [CAGE_DEMON_BODY_ID, str(cave_cage_stand_world)]
+		)
 
 
 func _find_city_root() -> CityRoot:

@@ -38,6 +38,10 @@ var route_version: int = 0
 ## Lane node the car is currently driving to, or -1. This is what gets closed when there turns
 ## out to be no road under it.
 var lane_node: int = -1
+## Lane node the current leg started at, or -1. Together with `lane_node` it names the lane
+## line VehicleMotor holds the car on, which is why it is only set for legs of a planned drive:
+## a flee goal is a far-away lane point with no single carriageway between here and there.
+var lane_from: int = -1
 
 ## True while flooring it away from a threat.
 var fleeing: bool = false
@@ -82,3 +86,4 @@ func clear_route() -> void:
 	route = PackedInt32Array()
 	legs = PackedInt32Array()
 	lane_node = -1
+	lane_from = -1

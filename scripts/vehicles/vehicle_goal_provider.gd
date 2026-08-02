@@ -158,6 +158,10 @@ func _plan_drive(car: VehicleAgent) -> bool:
 		car.legs = _lanes.route_to_legs(route)
 		car.route_version = _lanes.version()
 		if not car.legs.is_empty():
+			## The drive starts at the lane point it was planned from, so the first leg already
+			## has both ends of a lane line for VehicleMotor to hold the car on.
+			car.lane_from = route[0]
+			car.lane_node = -1
 			_trips += 1
 			return true
 	_stranded += 1
@@ -180,27 +184,30 @@ func _goal_for_next_leg(car: VehicleAgent) -> NavGoal:
 		car.clear_route()
 		car.paused_until = _time + FAILED_PAUSE_SEC
 		return null
+	## The leg just finished is the near end of the one starting now, so the lane line the car
+	## is held on moves along the drive with it.
+	if car.lane_node >= 0:
+		car.lane_from = car.lane_node
 	car.lane_node = node
 	_issued += 1
 	return NavGoalScript.go_to_point(hit.position, arrive_radius_m)
 
 
-## The goal a frightened driver wants. Public because VehicleDirector pushes one in through
-## `NavAgent.set_goal` the moment destruction happens, instead of waiting to be asked.
+## The goal a frightened driver wants, or nothing when there is nowhere on the road to run to.
+## Public because VehicleDirector pushes one in through `NavAgent.set_goal` the moment
+## destruction happens, instead of waiting to be asked.
 ##
-## Prefer a far open lane point so cars stay on carriageways (fractal plazas and other
-## open reserves are not for traffic). Fall back to an open-field flee only when the
-## lane graph has nothing usable.
+## A far open lane point, always: an open-field flee is a licence to drive across a plaza, a
+## park or somebody's forecourt, and a frightened driver is still a driver. With no lane point
+## to run to the car waits instead, and the panic ends by distance the way it always did.
 func flee_goal(car: VehicleAgent) -> NavGoal:
 	car.clear_route()
 	var run := _rng.randf_range(flee_run_min_m, flee_run_max_m)
 	var lane_goal := _flee_via_lanes(car, run)
 	if lane_goal != null:
 		return lane_goal
-	var goal := NavGoalScript.flee_point(car.flee_from, run)
-	goal.tag = TAG_FLEE
-	_issued += 1
-	return goal
+	car.paused_until = _time + FAILED_PAUSE_SEC
+	return null
 
 
 func _flee_via_lanes(car: VehicleAgent, min_clear_m: float) -> NavGoal:

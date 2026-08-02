@@ -74,6 +74,7 @@ ALLOWED_FACTIONS = frozenset(
         "beast",
         "grove",
         "arcane",
+        "unique",
     }
 )
 
@@ -158,6 +159,9 @@ def extract_catalog_ids(source: str) -> list[str]:
     blob_section = family_bodies["blob"]
     for name in re.findall(r'_quaternius\(\s*"blob"\s*,\s*"([^"]+)"', blob_section):
         ids.append(f"blob/{name}")
+
+    for mid in re.findall(r'_alias_quaternius\(\s*"([^"]+)"', source):
+        ids.append(mid)
 
     return ids
 
@@ -439,6 +443,7 @@ def validate_monster(
     attack_ids: set[str],
     behaviour_ids: set[str],
     errors: list[str],
+    aura_ids: set[str] | None = None,
 ) -> str | None:
     if not isinstance(mon, dict):
         fail("monster entry is not an object", errors)
@@ -477,12 +482,27 @@ def validate_monster(
     for key in LIST_KEYS:
         if key in mon:
             values = require_string_list(mon, key, where, errors)
-            _check_list_enums(where, key, values, attack_ids, behaviour_ids, errors)
+            _check_list_enums(
+                where, key, values, attack_ids, behaviour_ids, errors, aura_ids
+            )
     for key in LIST_EXTRA_KEYS:
         if key in mon:
             values = require_string_list(mon, key, where, errors)
             base = key.removesuffix("_extra")
-            _check_list_enums(where, base, values, attack_ids, behaviour_ids, errors)
+            _check_list_enums(
+                where, base, values, attack_ids, behaviour_ids, errors, aura_ids
+            )
+    if "kill_gems_min" in mon or "kill_gems_max" in mon:
+        require_non_negative_number(mon, "kill_gems_min", where, errors)
+        require_non_negative_number(mon, "kill_gems_max", where, errors)
+        if (
+            "kill_gems_min" in mon
+            and "kill_gems_max" in mon
+            and isinstance(mon["kill_gems_min"], (int, float))
+            and isinstance(mon["kill_gems_max"], (int, float))
+            and float(mon["kill_gems_min"]) > float(mon["kill_gems_max"])
+        ):
+            fail(f"{where}: kill_gems_min must be <= kill_gems_max", errors)
     return mid
 
 
@@ -493,6 +513,7 @@ def _check_list_enums(
     attack_ids: set[str],
     behaviour_ids: set[str],
     errors: list[str],
+    aura_ids: set[str] | None = None,
 ) -> None:
     if key == "behaviour":
         for b in values:
@@ -508,6 +529,11 @@ def _check_list_enums(
         for c in values:
             if c not in ALLOWED_CROWD_ROLES:
                 fail(f"{where}: crowd_role '{c}' not allowed", errors)
+    elif key == "auras":
+        known = aura_ids or set()
+        for aura in values:
+            if aura not in known:
+                fail(f"{where}: aura '{aura}' not defined in auras table", errors)
 
 
 def validate_attacks_document(data: object, errors: list[str]) -> dict[str, dict]:
@@ -576,14 +602,36 @@ def validate_combat_table_document(
 
     behaviour_ids = set(behaviours.keys())
     template_ids = set(templates.keys())
+    aura_ids: set[str] = set()
+    if GAMEDATA_PATH.is_file():
+        root = gd.load_gamedata()
+        auras_raw = root.get("auras") if isinstance(root, dict) else None
+        if isinstance(auras_raw, dict):
+            aura_ids = {str(k) for k in auras_raw.keys()}
+            for aid, row in auras_raw.items():
+                if not isinstance(aid, str) or not aid:
+                    fail("auras table has a non-string key", errors)
+                elif not isinstance(row, dict):
+                    fail(f"aura '{aid}' must be an object", errors)
+        else:
+            fail("gamedata.json: top-level 'auras' must be an object", errors)
     for tid, tmpl in templates.items():
         validate_template(tid, tmpl, attack_ids, behaviour_ids, errors)
+        if isinstance(tmpl, dict):
+            for aura in optional_string_list(tmpl, "auras", f"template '{tid}'", errors):
+                if aura not in aura_ids:
+                    fail(
+                        f"template '{tid}': aura '{aura}' not defined in auras table",
+                        errors,
+                    )
 
     validate_boss_tier_parity(templates, errors)
 
     seen: dict[str, int] = {}
     for mon in monsters:
-        mid = validate_monster(mon, template_ids, attack_ids, behaviour_ids, errors)
+        mid = validate_monster(
+            mon, template_ids, attack_ids, behaviour_ids, errors, aura_ids
+        )
         if mid is None:
             continue
         seen[mid] = seen.get(mid, 0) + 1

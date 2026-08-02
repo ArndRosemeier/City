@@ -30,7 +30,7 @@ const SCALAR_KEYS: PackedStringArray = [
 ]
 
 ## Keep aligned with tools/combat_resolve.py LIST_KEYS
-const LIST_KEYS: PackedStringArray = ["behaviour", "attacks", "tags", "crowd_roles"]
+const LIST_KEYS: PackedStringArray = ["behaviour", "attacks", "tags", "crowd_roles", "auras"]
 
 const SYNC_FLOAT_DECIMALS := 6
 
@@ -50,6 +50,7 @@ class EffectiveStats:
 	var attacks: PackedStringArray = PackedStringArray()
 	var tags: PackedStringArray = PackedStringArray()
 	var crowd_roles: PackedStringArray = PackedStringArray()
+	var auras: PackedStringArray = PackedStringArray()
 	## attack_id → { "vs_player": float, "vs_mob": float } (base × damage_mult)
 	var attack_damage: Dictionary = {}
 
@@ -114,6 +115,10 @@ class EffectiveStats:
 			roles.append(r)
 		roles.sort()
 		beh.sort()
+		var aura_list: Array = []
+		for aura_id: String in auras:
+			aura_list.append(aura_id)
+		aura_list.sort()
 		var dmg_out: Dictionary = {}
 		var dmg_keys: Array = attack_damage.keys()
 		dmg_keys.sort()
@@ -143,6 +148,7 @@ class EffectiveStats:
 			"attack_damage": dmg_out,
 			"tags": tag_list,
 			"crowd_roles": roles,
+			"auras": aura_list,
 		}
 
 	func _round_sync(value: float) -> float:
@@ -152,6 +158,7 @@ class EffectiveStats:
 
 static var _loaded: bool = false
 static var _attacks: Dictionary = {}
+static var _auras: Dictionary = {}
 static var _behaviours: Dictionary = {}
 static var _templates: Dictionary = {}
 ## monster_id → body Dictionary from gamedata.json
@@ -162,6 +169,7 @@ static var _monster_ids: PackedStringArray = PackedStringArray()
 static func reload() -> void:
 	_loaded = false
 	_attacks.clear()
+	_auras.clear()
 	_behaviours.clear()
 	_templates.clear()
 	_monsters.clear()
@@ -176,6 +184,7 @@ static func ensure_loaded() -> void:
 	## Authored rows live in gamedata.json — GameData is the only JSON reader.
 	GameDataScript.ensure_loaded()
 	_attacks = GameDataScript.attacks()
+	_auras = GameDataScript.auras()
 	_behaviours = GameDataScript.behaviours()
 	_templates = GameDataScript.templates()
 	_monsters.clear()
@@ -301,6 +310,38 @@ static func attack_def(attack_id: String) -> Dictionary:
 	return _attacks[attack_id]
 
 
+static func aura_def(aura_id: String) -> Dictionary:
+	ensure_loaded()
+	if not _auras.has(aura_id):
+		push_error("CombatTable: unknown aura '%s'" % aura_id)
+		assert(false, "CombatTable: unknown aura")
+		return {}
+	return _auras[aura_id]
+
+
+## Off-budget gem haul on player kill. Returns Vector2i(min, max); both 0 when none.
+static func kill_gems_range(monster_id: String) -> Vector2i:
+	ensure_loaded()
+	if not _monsters.has(monster_id):
+		push_error("CombatTable.kill_gems_range: unknown monster '%s'" % monster_id)
+		assert(false, "CombatTable: unknown monster for kill gems")
+		return Vector2i.ZERO
+	var body: Dictionary = _monsters[monster_id]
+	var gmin := int(body.get("kill_gems_min", 0))
+	var gmax := int(body.get("kill_gems_max", 0))
+	if gmin < 0 or gmax < 0:
+		push_error("CombatTable.kill_gems_range: negative haul on '%s'" % monster_id)
+		assert(false, "CombatTable: bad kill_gems")
+		return Vector2i.ZERO
+	if gmin > gmax:
+		push_error(
+			"CombatTable.kill_gems_range: kill_gems_min > max on '%s'" % monster_id
+		)
+		assert(false, "CombatTable: bad kill_gems range")
+		return Vector2i.ZERO
+	return Vector2i(gmin, gmax)
+
+
 ## Python: combat_resolve.effective_attack_damage
 static func effective_attack_damage(attack_id: String, damage_mult: float) -> Dictionary:
 	if damage_mult <= 0.0:
@@ -389,6 +430,7 @@ static func effective_monster_combat(
 	eff.attacks = attacks
 	eff.tags = lists["tags"] as PackedStringArray
 	eff.crowd_roles = lists["crowd_roles"] as PackedStringArray
+	eff.auras = lists["auras"] as PackedStringArray
 	eff.attack_damage = effective_attack_damages(attacks, eff.damage_mult)
 	return eff
 

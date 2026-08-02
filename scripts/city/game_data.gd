@@ -87,6 +87,10 @@ static func attacks() -> Dictionary:
 	return _section("attacks")
 
 
+static func auras() -> Dictionary:
+	return _section("auras")
+
+
 static func behaviours() -> Dictionary:
 	return _section("behaviours")
 

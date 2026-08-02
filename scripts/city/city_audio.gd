@@ -69,6 +69,8 @@ var _whine_follow: Node3D
 var _crash_player: AudioStreamPlayer3D
 var _blast_charge_player: AudioStreamPlayer3D
 var _blast_impact_player: AudioStreamPlayer3D
+var _explosive_boom_player: AudioStreamPlayer3D
+var _explosive_boom_stream: AudioStream
 var _tendril_voices: Dictionary = {}  # tendril_id → AudioStreamPlayer3D
 
 
@@ -114,6 +116,11 @@ func _ready() -> void:
 	_blast_impact_player.max_db = 12.0
 	_blast_impact_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	_blast_impact_player.attenuation_filter_cutoff_hz = 14000.0
+	## Material detonations (cage, etc.) — carries farther than a normal charged impact.
+	_explosive_boom_player = _make_dedicated_player("ExplosiveBoom", 420.0, 28.0)
+	_explosive_boom_player.max_db = 14.0
+	_explosive_boom_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	_explosive_boom_player.attenuation_filter_cutoff_hz = 6000.0
 
 
 func _process(delta: float) -> void:
@@ -355,6 +362,21 @@ func play_charged_blast_impact(world_pos: Vector3, character_scale: float = 1.0)
 		_blast_impact_player.max_db = 12.0
 		_blast_impact_player.volume_db = 4.0
 		_blast_impact_player.play()
+
+
+## Fat low boom for explosive materials (cage detonation, etc.).
+func play_explosive_boom(world_pos: Vector3) -> void:
+	if not enabled:
+		return
+	if _explosive_boom_stream == null or _explosive_boom_player == null:
+		play_charged_blast_impact(world_pos, 3.0)
+		return
+	_explosive_boom_player.stream = _explosive_boom_stream
+	_explosive_boom_player.global_position = world_pos
+	_explosive_boom_player.pitch_scale = _rng.randf_range(0.88, 1.02)
+	_explosive_boom_player.max_db = 14.0
+	_explosive_boom_player.volume_db = 5.0
+	_explosive_boom_player.play()
 
 
 ## Whoosh of a claw / fist swing. Scale drops the pitch for giants.
@@ -665,6 +687,7 @@ func _load_banks() -> void:
 	## Infection set is always procedural (no Kenney pack for this mood).
 	_meteor_whine_stream = _build_meteor_whine()
 	_meteor_crash_stream = _build_meteor_crash()
+	_explosive_boom_stream = _build_explosive_boom()
 	_tendril_drone_stream = _build_tendril_drone()
 	_tendril_tick_stream = _build_tendril_tick()
 	_gem_pickup_stream = _build_gem_pickup()
@@ -798,6 +821,20 @@ func _build_meteor_crash() -> AudioStreamWAV:
 		var rubble := (_rng.randf() * 2.0 - 1.0) * 0.7 * exp(-t * 4.5)
 		var rumble := sin(TAU * 22.0 * t + sin(TAU * 7.0 * t)) * 0.4 * exp(-t * 1.6)
 		return (boom + slab + crack * 0.65 + rubble + rumble) * env
+	)
+
+
+func _build_explosive_boom() -> AudioStreamWAV:
+	## Cage / material detonation — deep pressure thump, glass snap, short ringing tail.
+	return _synthesize(1.15, func(t: float, _i: int) -> float:
+		var env := exp(-t * 3.1) * smoothstep(0.0, 0.015, t)
+		var boom := sin(TAU * 42.0 * t) * 0.9 + sin(TAU * 68.0 * t) * 0.5
+		var pressure := sin(TAU * 28.0 * t) * 0.55 * exp(-t * 2.2)
+		var glass := sin(TAU * 1400.0 * t) * exp(-t * 36.0) * 0.45
+		var crack := sin(TAU * 620.0 * t) * exp(-t * 22.0) * 0.55
+		var grit := (_rng.randf() * 2.0 - 1.0) * 0.55 * exp(-t * 5.5)
+		var ring := sin(TAU * 210.0 * t) * exp(-t * 4.0) * 0.28
+		return (boom + pressure + glass + crack + grit + ring) * env
 	)
 
 

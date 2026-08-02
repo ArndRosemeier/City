@@ -4,8 +4,9 @@
 ## Cars are the one consumer that keeps a graph, so this test is in two halves. The first is
 ## the lane semantics the span field cannot carry, on a stated five-by-five street grid: which
 ## side of the carriageway runs which way, that a U-turn has no edge to take, that a cul-de-sac
-## is not a sink, and that a lane point over a destroyed road goes out of service and comes
-## back. None of that needs a voxel.
+## is not a sink, that a car is held on its lane line rather than on whatever corridor it was
+## handed, and that a lane point over a destroyed road goes out of service and comes back. None
+## of that needs a voxel.
 ##
 ## The second half is a real district: 32 cars sharing one NavService with the rest of the
 ## world, and the three questions a port has to answer — do they drive, do they stop for a
@@ -18,6 +19,9 @@ const DistrictBakeJobScript := preload("res://scripts/city/district_bake_job.gd"
 const CarLaneGraphScript := preload("res://scripts/city/car_lane_graph.gd")
 const StreetTopologyScript := preload("res://scripts/city/street_topology.gd")
 const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
+const VehicleAgentScript := preload("res://scripts/vehicles/vehicle_agent.gd")
+const VehicleMotorScript := preload("res://scripts/vehicles/vehicle_motor.gd")
+const VehicleGoalProviderScript := preload("res://scripts/vehicles/vehicle_goal_provider.gd")
 
 const VOXEL_SIZE := 0.5
 const WORLD_SEED := 42
@@ -44,6 +48,17 @@ const GROUND_THICKNESS := 6
 ## street deck without the building shells.
 const TILE := Vector2i(0, 0)
 const CARS := 32
+
+## How far off its lane the stated corridor runs: a whole lane width, so the car is
+## unambiguously on the wrong paint rather than wobbling on the right one.
+const OFF_LANE_M := 2.5
+## Metres the stated corridor climbs over its length, so the height checks are against a slope
+## rather than a constant any implementation would pass.
+const RAMP_M := 2.0
+## Ticks the glue is given to pull a car back into lane. Well short of the run it drives along.
+const GLUE_TICKS := 20
+const GLUE_TOLERANCE_M := 0.35
+const GLUE_HEIGHT_TOLERANCE_M := 0.1
 
 ## Fixed step, so nothing here depends on the headless frame rate.
 const SIM_DT := 0.05
@@ -75,6 +90,9 @@ func _ready() -> void:
 	_test_no_u_turns()
 	_test_cul_de_sac_turns_around()
 	_test_legs_split_at_turns()
+	_test_lane_projection()
+	_test_glue_holds_the_lane()
+	_test_flee_stays_on_the_lanes()
 	_test_destruction_closes_and_reopens_lanes()
 	if _failed:
 		_quit()
@@ -200,6 +218,144 @@ func _test_legs_split_at_turns() -> void:
 		_fail("FAIL a straight two-point route became more than one leg")
 		return
 	print("legs: a turn is two legs and a straight run is one")
+
+
+## The lane line a car is held on: sideways onto the paint, never forwards or backwards along
+## it, and never off the end of the run the leg covers.
+func _test_lane_projection() -> void:
+	var lanes := _stated_lanes()
+	var from_node := _node_at(lanes, Vector2i(1, CROSS_ROW), EAST)
+	var to_node := _node_at(lanes, Vector2i(GRID_CELLS - 1, CROSS_ROW), EAST)
+	if from_node < 0 or to_node < 0:
+		_fail("FAIL the stated grid has no straight eastbound run to project onto")
+		return
+	var a := lanes.positions[from_node]
+	var b := lanes.positions[to_node]
+	var side := _lane_side(lanes, from_node)
+
+	var quarter := a.lerp(b, 0.25)
+	var strayed := quarter + side * (OFF_LANE_M + 1.5)
+	var back := lanes.project_onto_segment(strayed, from_node, to_node)
+	if _flat_distance(back, quarter) > 0.01:
+		_fail(
+			"FAIL a point %.2f m off the lane came back to %s instead of %s, so the pull is"
+			% [OFF_LANE_M + 1.5, str(back), str(quarter)]
+			+ " not square to the lane"
+		)
+		return
+
+	## Clamped to the run: past the far gate is the gate, not somewhere off the end of the leg.
+	var beyond := b + lanes.heading_of(to_node) * 20.0
+	var clamped := lanes.project_onto_segment(beyond, from_node, to_node)
+	if _flat_distance(clamped, b) > 0.01:
+		_fail("FAIL a point 20 m past the far gate projected to %s" % str(clamped))
+		return
+	print("lane line: a stray car is pulled square onto its lane, and never past its gates")
+
+
+## The corridor between two lane points is span data — smoothed, pricing pavement rather than
+## fencing it off, and a chord at the far tier. Handed one that runs a lane width off the
+## carriageway, the car still has to drive on the carriageway, and it has to sit on the floor
+## the corridor names rather than sinking towards it over the rest of the leg.
+func _test_glue_holds_the_lane() -> void:
+	var lanes := _stated_lanes()
+	var from_node := _node_at(lanes, Vector2i(1, CROSS_ROW), EAST)
+	var to_node := _node_at(lanes, Vector2i(GRID_CELLS - 1, CROSS_ROW), EAST)
+	if from_node < 0 or to_node < 0:
+		_fail("FAIL the stated grid has no straight eastbound run to be held on")
+		return
+	var profile := _nav.profile(NavProfile.Id.CAR)
+	if profile == null:
+		_fail("FAIL NavService has no car profile to drive with")
+		return
+
+	var side := _lane_side(lanes, from_node)
+	var start := lanes.positions[from_node] + side * OFF_LANE_M
+	var finish := lanes.positions[to_node] + side * OFF_LANE_M + Vector3(0.0, RAMP_M, 0.0)
+
+	var car: VehicleAgent = VehicleAgentScript.new()
+	car.name = "GluedCar"
+	add_child(car)
+	car.global_position = start
+	car.lane_from = from_node
+	car.lane_node = to_node
+
+	var motor: VehicleMotor = VehicleMotorScript.new()
+	motor.setup(car, profile)
+	motor.bind_lanes(lanes)
+	motor.speed_mps = 8.0
+	motor.waypoint_radius_m = 1.2
+	motor.arrive_radius_m = 1.5
+	motor.set_path(_straight_corridor(start, finish))
+	car.motor = motor
+
+	for _tick in range(GLUE_TICKS):
+		motor.advance(SIM_DT)
+	var on_lane := lanes.project_onto_segment(car.global_position, from_node, to_node)
+	var off_m := _flat_distance(car.global_position, on_lane)
+	if off_m > GLUE_TOLERANCE_M:
+		_fail(
+			"FAIL a car given a corridor %.2f m off its lane is still %.2f m off it after %.1f s"
+			% [OFF_LANE_M, off_m, float(GLUE_TICKS) * SIM_DT]
+		)
+		car.queue_free()
+		return
+	if motor.remaining_m() <= 0.0:
+		_fail("FAIL the glue test consumed its whole corridor, so it proved nothing")
+		car.queue_free()
+		return
+
+	## Height come adrift — a repath, a tier switch, a pull across a camber — is corrected on
+	## the next tick rather than over the rest of the leg.
+	car.global_position += Vector3(0.0, 3.0, 0.0)
+	motor.advance(SIM_DT)
+	var want_y := _corridor_y_at(start, finish, car.global_position)
+	var off_y := absf(car.global_position.y - want_y)
+	if off_y > GLUE_HEIGHT_TOLERANCE_M:
+		_fail(
+			"FAIL a car lifted 3 m off its corridor is %.2f m above the %.2f m under it"
+			% [off_y, want_y]
+		)
+		car.queue_free()
+		return
+	print(
+		"glue: a corridor %.1f m off the lane drives %.2f m off it, and 3 m of height is put"
+		% [OFF_LANE_M, off_m]
+		+ " back in one tick"
+	)
+	car.queue_free()
+
+
+## A frightened driver is still a driver. With every lane point out of service there is nowhere
+## on the road to run to, and the answer is to wait — not to bolt across whatever open ground
+## the span field is willing to route a car over.
+func _test_flee_stays_on_the_lanes() -> void:
+	var lanes := _stated_lanes()
+	if lanes.is_empty():
+		return
+	for node in range(lanes.node_count):
+		lanes.close_node(node)
+	var provider: VehicleGoalProvider = VehicleGoalProviderScript.new()
+	provider.setup(_nav, NavProfile.Id.CAR, 7)
+	if provider.bind_lanes(lanes) <= 0:
+		_fail("FAIL the stated grid bound no lanes to flee along")
+		return
+	var car: VehicleAgent = VehicleAgentScript.new()
+	car.name = "ScaredCar"
+	add_child(car)
+	car.global_position = lanes.positions[0]
+	car.fleeing = true
+	car.flee_from = lanes.positions[0]
+	var goal := provider.flee_goal(car)
+	if goal != null:
+		_fail(
+			"FAIL a car with every lane closed was sent to %s, which is not on a road"
+			% str(goal.point)
+		)
+		car.queue_free()
+		return
+	print("flee: with no open lane to run to a car waits instead of leaving the carriageway")
+	car.queue_free()
 
 
 ## Destroying a road has to reach the lanes, because the span field will happily route a car
@@ -581,6 +737,36 @@ func _stated_lanes() -> CarLaneGraph:
 	if lanes.is_empty():
 		_fail("FAIL the stated grid produced no lanes at all")
 	return lanes
+
+
+## Square across a lane, to the right of travel: which way a corridor has to be pushed for the
+## car following it to end up on the wrong paint.
+func _lane_side(lanes: CarLaneGraph, node: int) -> Vector3:
+	var head := lanes.heading_of(node)
+	return Vector3(-head.z, 0.0, head.x)
+
+
+## The corridor a stated test hands a motor: two points and plain walking between them.
+func _straight_corridor(from: Vector3, to: Vector3) -> NavPathResult:
+	var path := NavPathResult.new()
+	path.status = NavPathResult.Status.OK
+	path.points = PackedVector3Array([from, to])
+	path.link_kinds = PackedByteArray([
+		NavPathResult.LINK_WALK, NavPathResult.LINK_WALK
+	])
+	return path
+
+
+## The height a two-point corridor has under `at`, worked out here rather than asked of the
+## motor, so the test states the answer instead of agreeing with the implementation.
+func _corridor_y_at(from: Vector3, to: Vector3, at: Vector3) -> float:
+	var run_x := to.x - from.x
+	var run_z := to.z - from.z
+	var run2 := run_x * run_x + run_z * run_z
+	if run2 < 0.000001:
+		return to.y
+	var along := (at.x - from.x) * run_x + (at.z - from.z) * run_z
+	return lerpf(from.y, to.y, clampf(along / run2, 0.0, 1.0))
 
 
 func _node_at(lanes: CarLaneGraph, cell: Vector2i, direction: int) -> int:

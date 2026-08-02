@@ -143,6 +143,18 @@ func _check_hill_is_constant_minus_harvested() -> void:
 	if left.size() != want - 1:
 		_fail("FAIL after one harvest the bake list is %d, want %d" % [left.size(), want - 1])
 		return
+	## What the short list is short by. `CityRoot.hill_gem_paint_list` reads this to tell a
+	## mined hill from a ledger rolled against another theme's total, so a hill somebody has
+	## dug in must not be reported as a defect.
+	if eco.harvested_total(COORD) != 1:
+		_fail("FAIL one harvested gem counted as %d" % eco.harvested_total(COORD))
+		return
+	if left.size() + eco.harvested_total(COORD) != want:
+		_fail(
+			"FAIL a mined hill accounts for %d of %d gems"
+			% [left.size() + eco.harvested_total(COORD), want]
+		)
+		return
 	print("OK a hill paints the constant, then constant minus harvested")
 
 

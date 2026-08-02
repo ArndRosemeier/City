@@ -206,6 +206,17 @@ func remaining_total(coord: Vector2i) -> int:
 	return n
 
 
+## Gems already dug out of this tile: what the row was rolled for, less what is left of it.
+## A tile with no row has nothing rolled and so nothing taken.
+func harvested_total(coord: Vector2i) -> int:
+	var key := coord_key(coord)
+	if not _rows.has(key):
+		return 0
+	var row: Dictionary = _rows[key]
+	var left := remaining_total(coord)
+	return maxi(int(row.get(OWED_KEY, left)) - left, 0)
+
+
 ## One mat id per gem still owed — the exact list a hill bake should paint.
 func remaining_flat_list(coord: Vector2i) -> PackedInt32Array:
 	var budgets := _empty_budget()

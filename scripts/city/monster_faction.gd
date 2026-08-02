@@ -20,6 +20,9 @@ enum Id {
 	## Not a side in the fight: the Monster Zoo's cloak, worn by the player to watch a war
 	## nobody invited them to. No body may be authored into it — it is granted and expires.
 	SPECTATOR,
+	## Scripted encounter bodies (hill cave cage, …). Own no zoo turf; excluded from arena
+	## / N-key summon lists. Hostile like any other combat side.
+	UNIQUE,
 }
 
 ## The six sides that actually hold ground. Order matches the zoo's turf plate materials.
@@ -36,6 +39,7 @@ static func all() -> Array[Id]:
 		Id.ARCANE,
 		Id.HUMAN,
 		Id.SPECTATOR,
+		Id.UNIQUE,
 	]
 
 
@@ -57,6 +61,8 @@ static func faction_name(id: Id) -> String:
 			return "human"
 		Id.SPECTATOR:
 			return "spectator"
+		Id.UNIQUE:
+			return "unique"
 	push_error("MonsterFaction: no name for id %d" % int(id))
 	return "?"
 
@@ -79,6 +85,8 @@ static func from_name(name: String) -> Id:
 			return Id.HUMAN
 		"spectator":
 			return Id.SPECTATOR
+		"unique":
+			return Id.UNIQUE
 	push_error("MonsterFaction.from_name: unknown faction '%s'" % name)
 	assert(false, "MonsterFaction: unknown faction name")
 	return Id.UNDEAD

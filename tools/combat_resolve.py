@@ -31,12 +31,13 @@ SCALAR_KEYS = (
     "score_mult",
 )
 
-LIST_KEYS = ("behaviour", "attacks", "tags", "crowd_roles")
+LIST_KEYS = ("behaviour", "attacks", "tags", "crowd_roles", "auras")
 LIST_EXTRA_KEYS = (
     "behaviour_extra",
     "attacks_extra",
     "tags_extra",
     "crowd_roles_extra",
+    "auras_extra",
 )
 
 # Multi-template scalar merge: highest value wins (never average).
@@ -255,6 +256,7 @@ def sync_payload(eff: dict[str, Any], attacks: dict[str, dict]) -> dict[str, Any
     }
     out["tags"] = sorted(lists["tags"])
     out["crowd_roles"] = sorted(lists["crowd_roles"])
+    out["auras"] = sorted(lists.get("auras", []))
     return out
 
 

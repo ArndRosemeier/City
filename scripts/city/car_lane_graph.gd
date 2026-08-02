@@ -215,6 +215,33 @@ func heading_of(node: int) -> Vector3:
 	return Vector3(float(d.x), 0.0, float(d.y))
 
 
+## Where `world` sits on the lane line between two gates, clamped to the run between them.
+##
+## This is the ribbon a car is held on: the corridor decides how to get from one gate to the
+## next, and this decides that the car does it while staying in its lane rather than wherever
+## span smoothing happened to route. XZ is the answer; the Y that comes back is the planner's
+## nominal height and the caller is expected to keep the span floor it is driving on.
+func project_onto_segment(world: Vector3, from_node: int, to_node: int) -> Vector3:
+	if from_node < 0 or from_node >= node_count:
+		push_error(
+			"CarLaneGraph.project_onto_segment: from %d of %d" % [from_node, node_count]
+		)
+		return world
+	if to_node < 0 or to_node >= node_count:
+		push_error("CarLaneGraph.project_onto_segment: to %d of %d" % [to_node, node_count])
+		return world
+	var a := positions[from_node]
+	var b := positions[to_node]
+	var run_x := b.x - a.x
+	var run_z := b.z - a.z
+	var run2 := run_x * run_x + run_z * run_z
+	if run2 < 0.000001:
+		## The two gates are the same place, so there is no lane line to be held on.
+		return world
+	var t := clampf(((world.x - a.x) * run_x + (world.z - a.z) * run_z) / run2, 0.0, 1.0)
+	return Vector3(a.x + run_x * t, lerpf(a.y, b.y, t), a.z + run_z * t)
+
+
 func direction_id(node: int) -> int:
 	if node < 0 or node >= node_count:
 		push_error("CarLaneGraph.direction_id: %d of %d" % [node, node_count])

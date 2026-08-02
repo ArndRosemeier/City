@@ -181,6 +181,19 @@ static func _build() -> Array[Entry]:
 				NavProfileScript.Id.MONSTER, ""
 			)
 		)
+	## Hill-cave caged boss — same Demon mesh, distinct combat id / Unique faction.
+	out.append(
+		_alias_quaternius(
+			"big/CageDemon",
+			"big",
+			"Demon",
+			3.120,
+			Family.QUATERNIUS_BIG,
+			fodder_brute,
+			NavProfileScript.Id.MONSTER,
+			"hill cave cage boss — Demon mesh alias"
+		)
+	)
 
 	## Quaternius Blob: a four-bone rig (Body/Head/Head2/Head3) that shares nothing with the
 	## Big one, 9 clips, 1.0-4.9k triangles. Cheap enough to spawn in packs.
@@ -275,4 +288,20 @@ static func _quaternius(
 	e.collider_height = height
 	e.nav_profile = nav_profile
 	e.note = note
+	return e
+
+
+## Same mesh path as `family_dir/name`, but a distinct catalogue id (encounter variants).
+static func _alias_quaternius(
+	id: String,
+	family_dir: String,
+	name: String,
+	height: float,
+	family: Family,
+	slots: PackedInt32Array,
+	nav_profile: int,
+	note: String
+) -> Entry:
+	var e := _quaternius(family_dir, name, height, family, slots, nav_profile, note)
+	e.id = id
 	return e

@@ -91,6 +91,15 @@ const CAVE_HOLLOW_TARGET := 0.30
 ## Keep gems off the meadow skin and the outer CAVE_SHELL band.
 const GEM_SURFACE_MARGIN := 3
 
+## Blastable red cage for the Unique cave boss. Interior fits a Big Demon (~3.1 u).
+const CAGE_INNER_HALF := 2
+const CAGE_WALL := 1
+const CAGE_INNER_H := 6
+const CAGE_POST_PITCH := 3
+const CAGE_LINE_OFFSETS: Array[int] = [2, 5]
+## Prefer sites at least this far (voxels) from a daylight mouth.
+const CAGE_MOUTH_CLEAR_M := 18.0
+
 ## Region bounds (local district voxel coords) and the per-column fields.
 var _ox: int = 0
 var _oz: int = 0
@@ -122,6 +131,9 @@ var cave_summit: Vector2i = Vector2i(-1, -1)
 ## deck in `y`. `x` is -1 when the tile grew no hill at all. This is the true peak of the
 ## finished heightfield rather than a summit seed, so something standing on it is on the top.
 var summit_top: Vector3i = Vector3i(-1, 0, -1)
+## Stand pose inside the caged boss enclosure: district-local X, floor voxel Y, district-local Z.
+## `x` is -1 when the hill has no cave cage (no mouths / no suitable chamber).
+var cave_cage_stand: Vector3i = Vector3i(-1, -1, -1)
 
 ## Rock beds from the bottom of the stack upward, repeated all the way to the summits
 ## so every hill in the tile shows the same geology.
@@ -176,6 +188,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	## Hollow first, then bury the district quota in whatever solid host remains. Ore ends up
 	## in cave walls and unopened rock — never deleted by a later cheese pass.
 	_carve_caves(summits)
+	_place_cave_cage()
 	_scatter_gems_from_quota()
 	_scatter_boulders()
 	_plant_trees(1.0)
@@ -245,6 +258,7 @@ func _begin(min_v: Vector3i, max_v: Vector3i, need_brush: bool = true) -> bool:
 	cave_mouths = PackedVector2Array()
 	cave_summit = Vector2i(-1, -1)
 	summit_top = Vector3i(-1, 0, -1)
+	cave_cage_stand = Vector3i(-1, -1, -1)
 	_shell_guard = true
 	_build_bed_dip()
 	return true
@@ -1436,6 +1450,126 @@ func _is_cave_shellable(id: int) -> bool:
 			return true
 		_:
 			return false
+
+
+## One blastable red cage per hill, partially exposed in open cave so the glow reads from a passage.
+func _place_cave_cage() -> void:
+	cave_cage_stand = Vector3i(-1, -1, -1)
+	if cave_mouths.is_empty():
+		return
+	var half := CAGE_INNER_HALF + CAGE_WALL
+	var need_h := CAGE_INNER_H + 2
+	var best_score := -1.0
+	var best := Vector3i(-1, -1, -1)
+	var step := 3
+	for z in range(half + 2, _d - half - 2, step):
+		for x in range(half + 2, _w - half - 2, step):
+			var idx := z * _w + x
+			var lo := _cave_lo[idx]
+			var hi := _cave_hi[idx]
+			if lo < 0 or hi < 0:
+				continue
+			if hi - lo < need_h:
+				continue
+			var floor_y := lo
+			var wx := _ox + x
+			var wz := _oz + z
+			## Prefer inland chambers — mouth-adjacent cages read as outdoor props.
+			var mouth_d := _min_mouth_distance(float(wx), float(wz))
+			if mouth_d < CAGE_MOUTH_CLEAR_M:
+				continue
+			if not _cage_site_has_cave_air(wx, floor_y, wz, half):
+				continue
+			var score := mouth_d + float(hi - lo) * 0.25
+			if score > best_score:
+				best_score = score
+				best = Vector3i(wx, floor_y, wz)
+	if best.x < 0:
+		## Second pass: drop the mouth-clear requirement so a cramped network still gets a cage.
+		for z2 in range(half + 2, _d - half - 2, step):
+			for x2 in range(half + 2, _w - half - 2, step):
+				var idx2 := z2 * _w + x2
+				var lo2 := _cave_lo[idx2]
+				var hi2 := _cave_hi[idx2]
+				if lo2 < 0 or hi2 < 0 or hi2 - lo2 < need_h:
+					continue
+				var wx2 := _ox + x2
+				var wz2 := _oz + z2
+				if not _cage_site_has_cave_air(wx2, lo2, wz2, half):
+					continue
+				var score2 := _min_mouth_distance(float(wx2), float(wz2))
+				if score2 > best_score:
+					best_score = score2
+					best = Vector3i(wx2, lo2, wz2)
+	if best.x < 0:
+		push_warning("HillComposer: no chamber tall enough for the cave cage")
+		return
+	_stamp_cave_cage(best)
+	cave_cage_stand = Vector3i(best.x, best.y + 1, best.z)
+	print(
+		"HillComposer: cave cage at %s (mouth clear %.0f)"
+		% [str(cave_cage_stand), best_score]
+	)
+
+
+func _min_mouth_distance(wx: float, wz: float) -> float:
+	var best := 1.0e9
+	for mi in range(cave_mouths.size()):
+		var m: Vector2 = cave_mouths[mi]
+		best = minf(best, Vector2(wx, wz).distance_to(m))
+	return best
+
+
+## True when at least one cell just outside the proposed cage footprint is open cave air.
+func _cage_site_has_cave_air(cx: int, floor_y: int, cz: int, half: int) -> bool:
+	var mid_y := floor_y + 1 + CAGE_INNER_H / 2
+	var probes: Array[Vector3i] = [
+		Vector3i(cx - half - 1, mid_y, cz),
+		Vector3i(cx + half + 1, mid_y, cz),
+		Vector3i(cx, mid_y, cz - half - 1),
+		Vector3i(cx, mid_y, cz + half + 1),
+	]
+	for p: Vector3i in probes:
+		if brush.get_vox(p) == VoxelMaterial.AIR:
+			return true
+	return false
+
+
+func _stamp_cave_cage(center_floor: Vector3i) -> void:
+	var cx := center_floor.x
+	var floor_y := center_floor.y
+	var cz := center_floor.z
+	var half := CAGE_INNER_HALF + CAGE_WALL
+	var top_y := floor_y + 1 + CAGE_INNER_H
+	brush.begin_edit()
+	for z in range(cz - half, cz + half + 1):
+		for x in range(cx - half, cx + half + 1):
+			var on_x_face := x == cx - half or x == cx + half
+			var on_z_face := z == cz - half or z == cz + half
+			var on_ring := on_x_face or on_z_face
+			var along := z if on_x_face else x
+			var post := along % CAGE_POST_PITCH == 0
+			## Floor under the whole footprint so the boss has a deck.
+			var floor_vox := Vector3i(x, floor_y, z)
+			if not VoxelMaterial.is_gem(brush.get_vox(floor_vox)):
+				brush.set_vox(floor_vox, VoxelMaterial.CAVE_FLOOR)
+			for y in range(floor_y + 1, top_y + 1):
+				var vox := Vector3i(x, y, z)
+				if VoxelMaterial.is_gem(brush.get_vox(vox)):
+					continue
+				if not on_ring:
+					brush.set_vox(vox, VoxelMaterial.AIR)
+					continue
+				var mat := VoxelMaterial.CAVE_CAGE_FRAME
+				var above_deck := y - floor_y
+				if CAGE_LINE_OFFSETS.has(above_deck):
+					mat = VoxelMaterial.CAVE_CAGE_LINE
+				elif not post and y != top_y and above_deck != 1:
+					## Outer pane between posts; corners stay frame.
+					if not (on_x_face and on_z_face):
+						mat = VoxelMaterial.CAVE_CAGE_GLASS
+				brush.set_vox(vox, mat)
+	brush.end_edit()
 
 
 func _carve_passage_slice(cx: int, cy: int, cz: int, rxz: int) -> void:
