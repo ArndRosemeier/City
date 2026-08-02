@@ -5360,6 +5360,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if ek == null or not ek.pressed or ek.echo:
 		return
 	## Debug: Ctrl+Shift+F12 toggles the cheat modal. Not remappable on purpose.
+	## Checked before bare F12 (screenshot) so the modifier chord is not eaten as a shot.
 	if (
 		ek.keycode == KEY_F12
 		and ek.ctrl_pressed
@@ -5368,6 +5369,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	):
 		if _cheat_panel != null and not _booting and not is_splash_open():
 			_cheat_panel.toggle_panel()
+		get_viewport().set_input_as_handled()
+		return
+	## F12 → PNG under <install>/screenshots/. Steam-style; OBS covers video.
+	if ek.keycode == KEY_F12 and not ek.ctrl_pressed and not ek.alt_pressed:
+		_take_screenshot()
 		get_viewport().set_input_as_handled()
 		return
 	var ctl := _player_controls()
@@ -5440,6 +5446,92 @@ func _unhandled_input(event: InputEvent) -> void:
 	if ctl.matches_key_pressed(ek, "nav_overlay"):
 		print("CityRoot: nav overlay %s" % ("on" if _nav_overlay.toggle() else "off"))
 		get_viewport().set_input_as_handled()
+
+
+## Grab the game viewport into `<install>/screenshots/` and toast the filename.
+## Names are `{DistrictName}_{n}.png` — n counts up from 1 for that district name.
+func _take_screenshot() -> void:
+	var viewport := get_viewport()
+	if viewport == null:
+		push_error("CityRoot._take_screenshot: no viewport")
+		return
+	var tex := viewport.get_texture()
+	if tex == null:
+		push_error("CityRoot._take_screenshot: viewport has no texture")
+		return
+	var img := tex.get_image()
+	if img == null or img.is_empty():
+		push_error("CityRoot._take_screenshot: empty image")
+		return
+	var dir_abs := _screenshot_dir_abs()
+	if not DirAccess.dir_exists_absolute(dir_abs):
+		var mk := DirAccess.make_dir_recursive_absolute(dir_abs)
+		if mk != OK:
+			push_error(
+				"CityRoot._take_screenshot: could not create %s (%s)"
+				% [dir_abs, error_string(mk)]
+			)
+			return
+	var base := _screenshot_district_base()
+	var file_name := _next_screenshot_file_name(dir_abs, base)
+	var abs_path := "%s/%s" % [dir_abs, file_name]
+	var err := img.save_png(abs_path)
+	if err != OK:
+		push_error("CityRoot._take_screenshot: save failed %s (%s)" % [abs_path, error_string(err)])
+		if _loot_toast != null:
+			_loot_toast.show_message("Screenshot failed")
+		return
+	print("CityRoot: screenshot → %s" % abs_path)
+	if _loot_toast != null:
+		_loot_toast.show_message("Screenshot · %s" % file_name)
+
+
+## Exported build: next to the .exe. Editor / project runs: project root.
+func _screenshot_dir_abs() -> String:
+	if OS.has_feature("editor"):
+		return ProjectSettings.globalize_path("res://screenshots")
+	return OS.get_executable_path().get_base_dir().path_join("screenshots")
+
+
+## Place-name slug for the tile the walker is standing in (filesystem-safe).
+func _screenshot_district_base() -> String:
+	if _walker == null or not is_instance_valid(_walker):
+		return "district"
+	var here := DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE)
+	return _sanitize_screenshot_base(DistrictName.for_district(city_seed, here))
+
+
+func _sanitize_screenshot_base(raw: String) -> String:
+	var out := ""
+	for i in raw.length():
+		var ch := raw[i]
+		var code := ch.unicode_at(0)
+		var letter := (
+			(code >= 48 and code <= 57)
+			or (code >= 65 and code <= 90)
+			or (code >= 97 and code <= 122)
+		)
+		if letter:
+			out += ch
+		elif ch == " " or ch == "-" or ch == "_":
+			if out.is_empty() or out[out.length() - 1] != "_":
+				out += "_"
+	while out.ends_with("_"):
+		out = out.substr(0, out.length() - 1)
+	if out.is_empty():
+		return "district"
+	return out
+
+
+## Smallest unused `{base}_{n}.png` in the screenshots folder (n starts at 1).
+func _next_screenshot_file_name(dir_abs: String, base: String) -> String:
+	var n := 1
+	while FileAccess.file_exists("%s/%s_%d.png" % [dir_abs, base, n]):
+		n += 1
+		if n > 9999:
+			push_error("CityRoot._next_screenshot_file_name: ran out of numbers for %s" % base)
+			return "%s_%d.png" % [base, Time.get_ticks_msec()]
+	return "%s_%d.png" % [base, n]
 
 
 func _on_cheat_fill_gems() -> void:

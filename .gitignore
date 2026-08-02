@@ -13,6 +13,9 @@
 .godot_check_out/
 *.translation
 
+# Player Print Screen captures (project root while editing; next to .exe when exported)
+screenshots/
+
 # Legacy Godot 3 import cache name
 .import/
 

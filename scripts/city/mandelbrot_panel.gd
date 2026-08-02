@@ -72,7 +72,7 @@ var _native: Object = null
 ## Bumped on every rebuild; worker results with an older gen are discarded.
 var _bake_gen: int = 0
 var _baking: bool = false
-var _instant: bool = false
+var _instant: bool = true
 var _instant_rect: Rect2 = Rect2()
 
 ## Curated postcard this panel offers. Empty until the arena assigns one.

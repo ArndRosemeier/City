@@ -36,7 +36,7 @@ var _voxel_size: float = 0.5
 var _ui_phase: StringName = &"idle"
 var _ui_pulse_t: float = 0.0
 ## Shared Instant checkbox across all four panels.
-var _instant: bool = false
+var _instant: bool = true
 var _district_seed: int = 0
 var _district_coord: Vector2i = Vector2i.ZERO
 ## Panel that started the in-flight Create; used to decide whether a peak recipe pays.

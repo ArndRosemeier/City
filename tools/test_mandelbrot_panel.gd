@@ -306,8 +306,8 @@ func _check_instant_toggle() -> void:
 		_fail("FAIL instant-test initial bake did not finish")
 		panel.queue_free()
 		return
-	if bool(panel.call("instant_mode")):
-		_fail("FAIL Instant should start off")
+	if not bool(panel.call("instant_mode")):
+		_fail("FAIL Instant should start on")
 		panel.queue_free()
 		return
 	var n := {"n": 0}
@@ -315,16 +315,16 @@ func _check_instant_toggle() -> void:
 		"instant_changed",
 		func(enabled: bool) -> void:
 			n["n"] = int(n["n"]) + 1
-			if not enabled:
-				_fail("FAIL instant_changed expected true")
+			if enabled:
+				_fail("FAIL instant_changed expected false (toggle off)")
 	)
 	var hit: Vector3 = panel.to_global(panel.call("_uv_to_local", Vector2(0.78, 0.86)) as Vector3)
 	if not bool(panel.call("press_at_world", hit)):
 		_fail("FAIL Instant press_at_world rejected")
 		panel.queue_free()
 		return
-	if int(n["n"]) != 1 or not bool(panel.call("instant_mode")):
-		_fail("FAIL Instant toggle did not enable (n=%d)" % int(n["n"]))
+	if int(n["n"]) != 1 or bool(panel.call("instant_mode")):
+		_fail("FAIL Instant toggle did not disable (n=%d)" % int(n["n"]))
 		panel.queue_free()
 		return
 	var tex: Texture2D = panel.call("bake_texture") as Texture2D
@@ -335,7 +335,12 @@ func _check_instant_toggle() -> void:
 	var arena: Node3D = MandelbrotArenaScript.new() as Node3D
 	add_child(arena)
 	arena.call("setup", Vector3(0.0, 0.0, 0.0), Vector3(40.0, 0.0, 40.0), 3.0)
-	## Flip Instant on one panel — arena should sync the other three.
+	if not bool(arena.call("instant_mode")):
+		_fail("FAIL arena Instant should default on")
+		panel.queue_free()
+		arena.queue_free()
+		return
+	## Flip Instant off on one panel — arena should sync the other three.
 	var first_panel: Node = null
 	for child in arena.get_children():
 		if child.has_method("set_instant_mode"):
@@ -346,15 +351,15 @@ func _check_instant_toggle() -> void:
 		panel.queue_free()
 		arena.queue_free()
 		return
-	first_panel.call("set_instant_mode", true)
+	first_panel.call("set_instant_mode", false)
 	for child2 in arena.get_children():
-		if child2.has_method("instant_mode") and not bool(child2.call("instant_mode")):
-			_fail("FAIL Instant sync left a panel off")
+		if child2.has_method("instant_mode") and bool(child2.call("instant_mode")):
+			_fail("FAIL Instant sync left a panel on")
 			panel.queue_free()
 			arena.queue_free()
 			return
-	if not bool(arena.call("instant_mode")):
-		_fail("FAIL arena Instant flag not set")
+	if bool(arena.call("instant_mode")):
+		_fail("FAIL arena Instant flag not cleared")
 		panel.queue_free()
 		arena.queue_free()
 		return
