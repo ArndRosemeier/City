@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eccentri City</title>
+    <meta
+      name="description"
+      content="Eccentri City — a truly infinite procedural voxel city of weird ideas. Spelunk caves, join monster wars, walk inside fractals. Download the Windows portable build."
+    />
+    <meta property="og:title" content="Eccentri City" />
+    <meta
+      property="og:description"
+      content="A truly infinite procedural voxel city of weird ideas. Caves, monster factions, fractals, and mini games to discover."
+    />
+    <meta property="og:image" content="media/art/og.jpg" />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#17140f" />
+    <link rel="icon" href="media/art/og.jpg" type="image/jpeg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=Syne:wght@700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand-mark" href="#top">Eccentri City</a>
+      <nav class="site-nav" aria-label="Primary">
+        <a href="#clips">Clips</a>
+        <a href="#districts">Districts</a>
+        <a class="nav-download" href="#download">Download</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-label="Eccentri City">
+        <div class="hero-media">
+          <img
+            src="media/art/hero.jpg"
+            alt="Monumental voxel letters spelling Eccentri City in a sunset street canyon"
+            width="1536"
+            height="1024"
+            fetchpriority="high"
+          />
+        </div>
+        <div class="hero-shade" aria-hidden="true"></div>
+        <div class="hero-copy">
+          <h1 class="hero-brand">Eccentri City</h1>
+          <p class="hero-lead">A truly infinite procedural city of weird ideas.</p>
+          <div class="hero-actions">
+            <a
+              class="button button-primary"
+              href="https://github.com/ArndRosemeier/City/releases/latest/download/EccentriCityPortable-windows.zip"
+              >Download for Windows</a
+            >
+            <a class="button button-ghost" href="#clips">Watch clips</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section clips" id="clips">
+        <div class="section-inner">
+          <header class="section-head">
+            <p class="section-kicker">Footage</p>
+            <h2 class="section-title">Clips from the city</h2>
+            <p class="section-text">
+              Short captures from inside the world. More coming — a longer cinematic pass later.
+            </p>
+          </header>
+          <div class="clip-grid" id="clip-grid"></div>
+        </div>
+      </section>
+
+      <section class="city-break" aria-label="The city at dusk">
+        <div class="city-break-media">
+          <img
+            src="media/art/skyline.jpg"
+            alt="Dusk panorama of castles, towers, water, and distant arenas"
+            width="1536"
+            height="1024"
+            loading="lazy"
+          />
+        </div>
+        <div class="city-break-shade" aria-hidden="true"></div>
+        <div class="city-break-copy">
+          <p class="section-kicker">Truly infinite</p>
+          <h2 class="section-title">Districts that refuse to match</h2>
+          <p class="section-text">
+            The grid does not end. Castles beside lakes, arenas, graves, and gardens keep tiling
+            outward — a new seed, another city, no edge of the map.
+          </p>
+        </div>
+      </section>
+
+      <section class="section districts" id="districts">
+        <div class="section-inner">
+          <header class="section-head">
+            <p class="section-kicker">Places</p>
+            <h2 class="section-title">Walk a few blocks</h2>
+            <p class="section-text">
+              Named places from a seeded city. Most of what you see can be blasted apart.
+            </p>
+          </header>
+          <div class="district-stage">
+            <div class="district-visual">
+              <img id="district-image" alt="" width="1920" height="759" />
+            </div>
+            <ul class="district-list" role="listbox" aria-label="Screenshots" id="district-list"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section play" id="play">
+        <div class="section-inner">
+          <header class="section-head">
+            <p class="section-kicker">In the loop</p>
+            <h2 class="section-title">What you do here</h2>
+            <p class="section-text">
+              This is not a build game. The city is mostly destroyable — the toys are exploration,
+              creatures, and strange things you find under and inside the world.
+            </p>
+          </header>
+          <div class="beat-row">
+            <article class="beat">
+              <h3>Spelunk</h3>
+              <p>
+                Drop into huge, truly 3D caves. Collect gems, blast open new rooms, and keep going
+                where the street grid never reaches.
+              </p>
+            </article>
+            <article class="beat">
+              <h3>Monster mayhem</h3>
+              <p>
+                Visit — or take part in — the forever war between monster factions. The city does
+                not stay polite for long.
+              </p>
+            </article>
+            <article class="beat">
+              <h3>Fractal worlds</h3>
+              <p>
+                Create 3D fractal masterpieces and walk around inside them. Architecture that is
+                also mathematics.
+              </p>
+            </article>
+            <article class="beat">
+              <h3>Mini games</h3>
+              <p>
+                Scattered through the city: cabinets, odd machines, and side diversions waiting to
+                be discovered.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section download" id="download">
+        <div class="section-inner">
+          <div class="download-panel">
+            <div>
+              <p class="section-kicker">Windows</p>
+              <h2 class="section-title">Get the portable build</h2>
+              <p class="section-text">
+                Unzip and run. First launch fetches the engine once, imports assets, then you are in
+                the city. Later launches work offline.
+              </p>
+              <ol class="download-steps">
+                <li>Download <strong>EccentriCityPortable-windows.zip</strong></li>
+                <li>Unzip anywhere you like</li>
+                <li>Double-click <strong>EccentriCity.bat</strong></li>
+              </ol>
+              <p class="download-note">Hosted on GitHub Releases — always the latest portable package.</p>
+            </div>
+            <div class="hero-actions">
+              <a
+                class="button button-primary"
+                href="https://github.com/ArndRosemeier/City/releases/latest/download/EccentriCityPortable-windows.zip"
+                >Download zip</a
+              >
+              <a
+                class="button button-ghost"
+                href="https://github.com/ArndRosemeier/City/releases/latest"
+                >Release notes</a
+              >
+              <a class="button button-ghost" href="https://github.com/ArndRosemeier/City">GitHub</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <div><strong>Eccentri City</strong> · procedural voxel city</div>
+        <div>
+          <a href="https://github.com/ArndRosemeier/City">Source</a>
+          ·
+          <a href="https://github.com/ArndRosemeier/City/releases/latest">Releases</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="gallery-data.js"></script>
+    <script src="main.js" defer></script>
+  </body>
+</html>

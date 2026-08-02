@@ -1,0 +1,159 @@
+"""Rebuild website screenshots + clips from repo source folders.
+
+Sources (tracked):
+  screenshots/*.png  -> web/media/screenshots/<stem>.jpg
+  videos/*.{mp4,webm,mov} -> web/media/clips/<web-safe name>
+
+Also refreshes optimized art JPEGs and writes web/media/gallery.json
+for the landing page to load.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+from pathlib import Path
+
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[2]
+WEB = ROOT / "web"
+SHOT_SRC = ROOT / "screenshots"
+VIDEO_SRC = ROOT / "videos"
+SHOT_OUT = WEB / "media" / "screenshots"
+CLIP_OUT = WEB / "media" / "clips"
+MANIFEST = WEB / "media" / "gallery.json"
+GALLERY_JS = WEB / "gallery-data.js"
+
+VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv"}
+
+
+def fit_rgb(im: Image.Image, size: tuple[int, int]) -> Image.Image:
+    out = im.convert("RGB")
+    out.thumbnail(size, Image.Resampling.LANCZOS)
+    return out
+
+
+def web_safe_name(name: str) -> str:
+    """Keep a stable, URL-friendly filename (preserve extension)."""
+    stem = Path(name).stem
+    ext = Path(name).suffix.lower()
+    safe = re.sub(r"[^\w.\-]+", "_", stem, flags=re.UNICODE)
+    safe = re.sub(r"_+", "_", safe).strip("._")
+    if not safe:
+        raise ValueError(f"cannot derive web-safe name from {name!r}")
+    return f"{safe}{ext}"
+
+
+def reset_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def rebuild_art() -> None:
+    art_jobs = [
+        ("art/eccentricity_hero_concept_a.png", "media/art/hero.jpg", (2560, 1440), 86),
+        ("art/eccentricity_skyline_concept_b.png", "media/art/skyline.jpg", (2400, 1350), 85),
+        ("art/eccentricity_plaza_concept_c.png", "media/art/plaza.jpg", (2400, 1350), 85),
+        ("art/eccentricity_og_concept.png", "media/art/og.jpg", (1200, 1200), 84),
+    ]
+    for src_rel, dst_rel, size, quality in art_jobs:
+        src = WEB / src_rel
+        if not src.is_file():
+            print(f"skip missing art {src_rel}")
+            continue
+        dest = WEB / dst_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        out = fit_rgb(Image.open(src), size)
+        out.save(dest, "JPEG", quality=quality, optimize=True, progressive=True)
+        print(f"art {dst_rel} {dest.stat().st_size // 1024}KB {out.size}")
+
+
+def rebuild_screenshots() -> list[dict[str, str]]:
+    if not SHOT_SRC.is_dir():
+        raise FileNotFoundError(f"missing source folder: {SHOT_SRC}")
+
+    reset_dir(SHOT_OUT)
+    # Drop legacy output folder from earlier site drafts.
+    legacy = WEB / "media" / "districts"
+    if legacy.exists():
+        shutil.rmtree(legacy)
+
+    entries: list[dict[str, str]] = []
+    sources = sorted(SHOT_SRC.glob("*.png"), key=lambda p: p.name.lower())
+    if not sources:
+        raise FileNotFoundError(f"no .png files in {SHOT_SRC}")
+
+    for src in sources:
+        label = src.stem
+        out_name = f"{label}.jpg"
+        im = Image.open(src).convert("RGB")
+        w, h = im.size
+        # Trim in-game HUD chrome (top stats/buttons, bottom bars/hotbar).
+        im = im.crop((int(w * 0.01), int(h * 0.09), int(w * 0.99), int(h * 0.72)))
+        im.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
+        dest = SHOT_OUT / out_name
+        im.save(dest, "JPEG", quality=82, optimize=True, progressive=True)
+        rel = f"media/screenshots/{out_name}"
+        entries.append({"label": label, "src": rel})
+        print(f"shot {src.name} -> {rel} {dest.stat().st_size // 1024}KB {im.size}")
+
+    return entries
+
+
+def rebuild_clips() -> list[dict[str, str]]:
+    if not VIDEO_SRC.is_dir():
+        raise FileNotFoundError(f"missing source folder: {VIDEO_SRC}")
+
+    reset_dir(CLIP_OUT)
+    entries: list[dict[str, str]] = []
+    sources = sorted(
+        (p for p in VIDEO_SRC.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTS),
+        key=lambda p: p.name.lower(),
+    )
+    if not sources:
+        print(f"no videos in {VIDEO_SRC}")
+        return entries
+
+    used_names: set[str] = set()
+    for src in sources:
+        out_name = web_safe_name(src.name)
+        if out_name in used_names:
+            raise ValueError(f"duplicate web-safe clip name: {out_name}")
+        used_names.add(out_name)
+        dest = CLIP_OUT / out_name
+        shutil.copy2(src, dest)
+        rel = f"media/clips/{out_name}"
+        entries.append({"label": src.stem, "src": rel})
+        print(f"clip {src.name} -> {rel} {dest.stat().st_size // 1024}KB")
+
+    return entries
+
+
+def main() -> None:
+    rebuild_art()
+    screenshots = rebuild_screenshots()
+    clips = rebuild_clips()
+    manifest = {
+        "screenshots": screenshots,
+        "clips": clips,
+    }
+    MANIFEST.parent.mkdir(parents=True, exist_ok=True)
+    MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    # Embedded JS so the page does not depend on fetch() (file:// and stale caches).
+    gallery_js = (
+        "/* Generated by web/tools/rebuild_media.py - do not edit. */\n"
+        "window.ECCENTRI_GALLERY = "
+        + json.dumps(manifest, indent=2)
+        + ";\n"
+    )
+    GALLERY_JS.write_text(gallery_js, encoding="utf-8")
+    print(f"wrote {MANIFEST.relative_to(ROOT)} ({len(screenshots)} shots, {len(clips)} clips)")
+    print(f"wrote {GALLERY_JS.relative_to(ROOT)}")
+    print("done")
+
+
+if __name__ == "__main__":
+    main()

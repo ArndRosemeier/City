@@ -1652,6 +1652,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			and int(mb.button_index) == int(beam_bind.get("code", -2))
 		)
 		if mb.pressed:
+			## Shift+combat-chord is tray assign (AbilityTray) — do not spend the shot.
+			if ctl.is_build_assign_held(mb):
+				return
 			var combat := ctl.resolve_mouse_action(
 				mb, ["laser", "beam", "fire"] as Array[String]
 			)

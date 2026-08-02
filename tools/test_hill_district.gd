@@ -184,13 +184,12 @@ func _ready() -> void:
 	var gen: DistrictGenerator = res.get("generator") as DistrictGenerator
 	var gems_payload: Dictionary = gen.get_hill_gems()
 	var gem_list: PackedVector3Array = gems_payload.get("positions", PackedVector3Array())
+	## Quota is painted after the cheese carve into remaining host, so every budgeted gem
+	## must still be standing — a registry miss is ore the player can never dig.
 	if gem_list.size() != quota:
 		_fail("FAIL hill gem registry lists %d of its %d budgeted voxels" % [gem_list.size(), quota])
 		_quit()
 		return
-	## The ledger is the promise: a tile owes exactly this many gems, so every one of them has to
-	## be standing in the finished bake. A registry entry pointing at something else is ore the
-	## player can never dig, and the tile owes it forever.
 	var lost := _count_lost_gems(gen, gems_payload)
 	if lost > 0:
 		_fail("FAIL %d of %d budgeted gems did not survive the bake" % [lost, quota])

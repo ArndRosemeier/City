@@ -77,6 +77,10 @@ var _bake_blocks: Dictionary = {}
 var _bake_block_keys: Array[Vector3i] = []
 var _bake_key_index: int = 0
 var _bake_impostors: Array = []
+## Local block positions already written to the live terrain. Cleared on unload; wiped to
+## AIR before a far→full upgrade so leftover far carve cannot survive as landscape holes.
+var _committed_block_keys: Array[Vector3i] = []
+var _wipe_before_stamp: bool = false
 ## JIT subdivision + furniture targets (BuildingInterior), keyed by district cell.
 ## Empty on far / non-lot tiles.
 var interior_buildings: Dictionary = {}
@@ -223,6 +227,9 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	is_ready = false
 	is_ground_ready = false
 	bake_quality = "full"
+	## Wipe previously committed far blocks before the full stamp — sparse export cannot
+	## overwrite AIR the far pass left in columns the full pass never retouches.
+	_wipe_before_stamp = not _committed_block_keys.is_empty()
 	_bake_blocks.clear()
 	_bake_block_keys.clear()
 	_bake_key_index = 0
@@ -289,6 +296,8 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	is_ready = false
 	is_busy = false
 	is_ground_ready = false
+	_committed_block_keys.clear()
+	_wipe_before_stamp = false
 	if crowd != null and is_instance_valid(crowd):
 		crowd.clear_crowd()
 		crowd.queue_free()
@@ -351,6 +360,11 @@ func _stamp_ground_async() -> void:
 		is_busy = false
 		failed.emit(self, "area not editable")
 		return
+	if _wipe_before_stamp:
+		_wipe_before_stamp = false
+		await _wipe_committed_blocks_to_air()
+		if not is_instance_valid(self):
+			return
 
 	CityProfiler.set_counter("stream_phase", 1)  ## 1=ground bake
 	var payload := await _bake_on_worker()
@@ -965,6 +979,51 @@ func _notification(what: int) -> void:
 		_unregister_nav()
 
 
+func _remember_committed_block(bp: Vector3i) -> void:
+	## Dedup: ground and detail phases never share a local Y band, so append is enough.
+	_committed_block_keys.append(bp)
+
+
+## Paint previously committed blocks back to AIR so a full restamp starts from a clean slate.
+func _wipe_committed_blocks_to_air() -> void:
+	var terrain := _terrain_ref
+	if terrain == null or _committed_block_keys.is_empty():
+		_committed_block_keys.clear()
+		return
+	## Do not CityProfiler.begin/end across awaits — streamer._process nests scopes each frame.
+	var wipe_t0 := Time.get_ticks_usec()
+	## Uniform AIR block sentinel (see OfflineVolumeCommitter.make_buffer_u16).
+	var air_sentinel := PackedByteArray([0, 0])
+	const BUDGET_MSEC := 4
+	var i := 0
+	while i < _committed_block_keys.size():
+		if not is_instance_valid(self):
+			CityProfiler.scope_us("stream_upgrade_wipe", Time.get_ticks_usec() - wipe_t0)
+			return
+		if not OfflineVolumeCommitterScript.try_acquire_commit(coord):
+			await get_tree().process_frame
+			continue
+		var t0 := Time.get_ticks_msec()
+		while i < _committed_block_keys.size() and Time.get_ticks_msec() - t0 < BUDGET_MSEC:
+			var bp: Vector3i = _committed_block_keys[i]
+			var ok := OfflineVolumeCommitterScript.commit_block(
+				terrain, origin_vox, bp, air_sentinel
+			)
+			var attempts := 0
+			while not ok and attempts < 30:
+				await get_tree().process_frame
+				ok = OfflineVolumeCommitterScript.commit_block(
+					terrain, origin_vox, bp, air_sentinel
+				)
+				attempts += 1
+			i += 1
+		OfflineVolumeCommitterScript.release_commit(coord)
+		await get_tree().process_frame
+	_committed_block_keys.clear()
+	CityProfiler.scope_us("stream_upgrade_wipe", Time.get_ticks_usec() - wipe_t0)
+	print("DistrictInstance wiped far blocks for upgrade %s" % str(coord))
+
+
 func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 	## Time-budgeted commits. Keys must already be nearest-first for this phase.
 	## Remesh backpressure: do not outrun VoxelTools — feeding more blocks while
@@ -1012,6 +1071,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 				push_error("DistrictInstance commit failed at %s local block %s" % [str(coord), str(bp)])
 				OfflineVolumeCommitterScript.release_commit(coord)
 				return false
+			_remember_committed_block(bp)
 			_bake_key_index += 1
 			committed += 1
 			if Time.get_ticks_msec() - t0 >= budget_ms:

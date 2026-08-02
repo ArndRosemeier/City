@@ -308,7 +308,10 @@ fn place_gem_cluster(
 }
 
 fn is_gem_host(id: i32) -> bool {
-    matches!(id, materials::STONE | materials::BRICK | materials::GRAVEL)
+    matches!(
+        id,
+        materials::STONE | materials::BRICK | materials::GRAVEL | materials::DIRT
+    )
 }
 
 fn pick_gem(rng: &mut Rng) -> i32 {

@@ -743,9 +743,12 @@ func decorate_open_spaces_far() -> void:
 		_arena.compose_far_sparse(amin, amax)
 		_arena_layout = _arena.layout
 		return
+	## Feature seeds MUST match decorate_open_spaces(). A different salt makes the far
+	## silhouette disagree with the full bake; upgrade then leaves AIR holes where the old
+	## far carve was never overwritten.
 	var lf := _planner.large_fractal
 	if lf.size.x > 0:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 37)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 7)
 		var fmin := Vector3i(
 			lf.position.x * cell_size, ground_thickness, lf.position.y * cell_size
 		)
@@ -773,7 +776,7 @@ func decorate_open_spaces_far() -> void:
 		return
 	var ll := _planner.large_lake
 	if ll.size.x > 0:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 35)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 5)
 		var lmin := Vector3i(
 			ll.position.x * cell_size, ground_thickness, ll.position.y * cell_size
 		)
@@ -784,14 +787,14 @@ func decorate_open_spaces_far() -> void:
 		return
 	var lh := _planner.large_hill
 	if lh.size.x > 0:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 33)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 3)
 		var hmin := Vector3i(lh.position.x * cell_size, ground_thickness, lh.position.y * cell_size)
 		var hmax := Vector3i(lh.end.x * cell_size, ground_thickness + 1, lh.end.y * cell_size)
 		_hill.compose_far_sparse(hmin, hmax)
 		return
 	var lg := _planner.large_graveyard
 	if lg.size.x > 0:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 34)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 4)
 		var gmin_gy := Vector3i(
 			lg.position.x * cell_size, ground_thickness, lg.position.y * cell_size
 		)
@@ -802,26 +805,26 @@ func decorate_open_spaces_far() -> void:
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 31)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 1)
 		var gmin := Vector3i(g.position.x * cell_size, ground_thickness, g.position.y * cell_size)
 		var gmax := Vector3i(g.end.x * cell_size, ground_thickness + 1, g.end.y * cell_size)
 		_plaza.compose_far_sparse(gmin, gmax)
 	var sat_i := 0
 	for s in _planner.satellite_plazas:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 130 + sat_i)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 100 + sat_i)
 		sat_i += 1
 		var smin := Vector3i(s.position.x * cell_size, ground_thickness, s.position.y * cell_size)
 		var smax := Vector3i(s.end.x * cell_size, ground_thickness + 1, s.end.y * cell_size)
 		_plaza.compose_far_sparse(smin, smax)
 	var lp := _planner.large_park
 	if lp.size.x > 0:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 32)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 2)
 		var pmin := Vector3i(lp.position.x * cell_size, ground_thickness, lp.position.y * cell_size)
 		var pmax := Vector3i(lp.end.x * cell_size, ground_thickness + 1, lp.end.y * cell_size)
 		_park.compose_far_sparse(pmin, pmax)
 	var pocket_i := 0
 	for p in _planner.pocket_parks:
-		_rng.seed = DistrictCoord.feature_seed(city_seed, 230 + pocket_i)
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 200 + pocket_i)
 		pocket_i += 1
 		var qmin := Vector3i(p.x * cell_size, ground_thickness, p.y * cell_size)
 		var qmax := Vector3i((p.x + 1) * cell_size, ground_thickness + 1, (p.y + 1) * cell_size)
@@ -1257,40 +1260,75 @@ func _find_zoo_gate_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
 	return Vector3(INF, INF, INF)
 
 
-## Stand on the terrace just outside the gatehouse, facing the passage.
+## Stand at the foot of the approach stairs (causeway), facing up toward the gate.
+## The old "just outside the gatehouse" spot often landed inside turret / leaf geometry.
 func _find_castle_gate_spawn(headroom_vox: int) -> Vector3:
 	if _castle_layout == null or _castle_layout.gate_dir == Vector2i.ZERO:
 		return Vector3(INF, INF, INF)
 	var layout := _castle_layout
+	var at_foot := _castle_spawn_at_causeway_foot(layout, headroom_vox)
+	if is_finite(at_foot.x):
+		return at_foot
+	## Fallback: terrace just outside the gatehouse.
+	return _castle_spawn_outside_gatehouse(layout, headroom_vox)
+
+
+## Street-end of `causeway_line` — flat pad before the climb, clear of the gatehouse mass.
+func _castle_spawn_at_causeway_foot(layout: CastleLayout, headroom_vox: int) -> Vector3:
+	if layout.causeway_line.is_empty():
+		return Vector3(INF, INF, INF)
+	var d := layout.gate_dir
+	var side := Vector2i(-d.y, d.x)
+	var foot: Vector2i = layout.causeway_line[0]
+	var prefer_y := ground_thickness
+	## Prefer the true foot; also try a couple of columns further out toward the road.
+	for along: int in [0, 1, 2, 3, 4, 6, 8]:
+		for lateral: int in [0, 1, -1, 2, -2]:
+			var x: int = foot.x + d.x * along + side.x * lateral
+			var z: int = foot.y + d.y * along + side.y * lateral
+			var spawn := _castle_spawn_column(layout, x, z, prefer_y, headroom_vox)
+			if is_finite(spawn.x):
+				return spawn
+	return Vector3(INF, INF, INF)
+
+
+func _castle_spawn_outside_gatehouse(layout: CastleLayout, headroom_vox: int) -> Vector3:
 	var d := layout.gate_dir
 	var side := Vector2i(-d.y, d.x)
 	var face := _castle_gatehouse_face(layout)
-	var vs := voxel_size
-	## A few columns past the outer face clears the flanking turrets; then widen the search.
-	for dist: int in range(2, 36):
+	for dist: int in range(4, 40):
 		for lateral: int in [0, 1, -1, 2, -2, 3, -3]:
 			var x: int = face.x + d.x * dist + side.x * lateral
 			var z: int = face.y + d.y * dist + side.y * lateral
-			if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
-				continue
-			var floor_y: int = _castle_spawn_floor_y(x, z, layout.courtyard_y)
-			if floor_y < 0:
-				continue
-			if not _has_spawn_headroom_above(x, floor_y, z, headroom_vox):
-				continue
-			## Face the gate (walker forward is −Z at yaw 0).
-			var look_x := float(layout.gate_center.x) - float(x)
-			var look_z := float(layout.gate_center.y) - float(z)
-			if look_x * look_x + look_z * look_z < 0.25:
-				continue
-			last_spawn_yaw = atan2(-look_x, -look_z)
-			var feet_y := float(floor_y + 1) * vs + 0.85
-			return Vector3(
-				(float(origin_vox.x + x) + 0.5) * vs,
-				feet_y,
-				(float(origin_vox.z + z) + 0.5) * vs
-			)
+			var spawn := _castle_spawn_column(layout, x, z, layout.courtyard_y, headroom_vox)
+			if is_finite(spawn.x):
+				return spawn
 	return Vector3(INF, INF, INF)
+
+
+func _castle_spawn_column(
+	layout: CastleLayout, x: int, z: int, prefer_y: int, headroom_vox: int
+) -> Vector3:
+	if x < 1 or z < 1 or x >= size_x - 1 or z >= size_z - 1:
+		return Vector3(INF, INF, INF)
+	var floor_y: int = _castle_spawn_floor_y(x, z, prefer_y)
+	if floor_y < 0:
+		return Vector3(INF, INF, INF)
+	if not _has_spawn_headroom_above(x, floor_y, z, headroom_vox):
+		return Vector3(INF, INF, INF)
+	## Face the gate (walker forward is −Z at yaw 0).
+	var look_x := float(layout.gate_center.x) - float(x)
+	var look_z := float(layout.gate_center.y) - float(z)
+	if look_x * look_x + look_z * look_z < 0.25:
+		return Vector3(INF, INF, INF)
+	last_spawn_yaw = atan2(-look_x, -look_z)
+	var vs := voxel_size
+	var feet_y := float(floor_y + 1) * vs + 0.85
+	return Vector3(
+		(float(origin_vox.x + x) + 0.5) * vs,
+		feet_y,
+		(float(origin_vox.z + z) + 0.5) * vs
+	)
 
 
 ## Outer face of the gatehouse on the gate axis, on the passage centre line.

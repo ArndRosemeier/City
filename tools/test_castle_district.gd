@@ -469,7 +469,7 @@ func _check_causeway(layout: CastleLayout) -> void:
 		)
 
 
-## Spawn stands just outside the gatehouse on the approach, facing the passage.
+## Spawn stands at the foot of the causeway stairs, facing up toward the gate.
 func _check_spawn_at_gate(gen: DistrictGenerator, layout: CastleLayout) -> void:
 	var spawn := gen.find_spawn_world(null)
 	if not is_finite(spawn.x):
@@ -485,13 +485,6 @@ func _check_spawn_at_gate(gen: DistrictGenerator, layout: CastleLayout) -> void:
 		float(layout.gate_center.y) - float(lz)
 	)
 	var reach := to_gate.length()
-	## Outside the gatehouse face, close enough that the leaves fill the view.
-	if reach > 28.0:
-		_fail(
-			"FAIL castle spawn at (%d,%d) is %.0f voxels from the gate — not in front of it"
-			% [lx, lz, reach]
-		)
-		return
 	var outward := Vector2(float(layout.gate_dir.x), float(layout.gate_dir.y))
 	if to_gate.dot(outward) > -0.5:
 		_fail(
@@ -499,6 +492,25 @@ func _check_spawn_at_gate(gen: DistrictGenerator, layout: CastleLayout) -> void:
 			% [lx, lz, layout.gate_dir]
 		)
 		return
+	## Foot of the ramp is about `causeway_run` out; allow a little road-side slack.
+	var max_reach := float(layout.causeway_run + 16)
+	if layout.causeway_line.is_empty():
+		max_reach = 40.0
+	if reach > max_reach:
+		_fail(
+			"FAIL castle spawn at (%d,%d) is %.0f voxels from the gate — past the approach"
+			% [lx, lz, reach]
+		)
+		return
+	if not layout.causeway_line.is_empty():
+		var foot: Vector2i = layout.causeway_line[0]
+		var from_foot := Vector2(float(lx - foot.x), float(lz - foot.y)).length()
+		if from_foot > 12.0:
+			_fail(
+				"FAIL castle spawn at (%d,%d) is %.0f voxels from causeway foot %s"
+				% [lx, lz, from_foot, foot]
+			)
+			return
 	print(
 		"spawn=(%.1f, %.1f, %.1f) yaw=%.2f at (%d,%d) %.0f voxels from gate"
 		% [spawn.x, spawn.y, spawn.z, float(gen.last_spawn_yaw), lx, lz, reach]

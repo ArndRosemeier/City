@@ -67,6 +67,7 @@ func _ready() -> void:
 	_wipe_scratch()
 	_check_roll_is_deterministic()
 	_check_hill_is_constant_minus_harvested()
+	_check_hill_repairs_foreign_budget()
 	_check_take_depletes_and_then_refuses()
 	_check_revisit_keeps_the_ledger()
 	_check_explore_pays_once()
@@ -143,6 +144,47 @@ func _check_hill_is_constant_minus_harvested() -> void:
 		_fail("FAIL after one harvest the bake list is %d, want %d" % [left.size(), want - 1])
 		return
 	print("OK a hill paints the constant, then constant minus harvested")
+
+
+## A hill whose ledger was seeded with another theme's total (e.g. waterfront 28) must be
+## rewritten to the hill constant before the bake paints that short list forever.
+func _check_hill_repairs_foreign_budget() -> void:
+	var want := preload("res://scripts/city/game_data.gd").theme_gem_total(DistrictTheme.HILL)
+	var foreign := preload("res://scripts/city/game_data.gd").theme_gem_total(
+		DistrictTheme.WATERFRONT_INDUSTRIAL
+	)
+	if foreign <= 0 or foreign >= want:
+		_fail("FAIL need a foreign theme total below the hill constant for this check")
+		return
+	var eco := DistrictEconomyScript.new() as DistrictEconomy
+	var dseed := DistrictCoord.district_seed(WORLD_SEED, COORD)
+	var wrong := DistrictEconomy.roll_budgets(DistrictTheme.WATERFRONT_INDUSTRIAL, dseed)
+	eco.ensure_row(COORD, wrong, DistrictTheme.WATERFRONT_INDUSTRIAL)
+	if eco.remaining_total(COORD) != foreign:
+		_fail(
+			"FAIL seeded a foreign hill row at %d, want %d"
+			% [eco.remaining_total(COORD), foreign]
+		)
+		return
+	if not eco.ensure_hill_row(COORD, dseed):
+		_fail("FAIL ensure_hill_row did not repair a foreign budget")
+		return
+	if eco.remaining_total(COORD) != want:
+		_fail(
+			"FAIL repaired hill owes %d, want %d"
+			% [eco.remaining_total(COORD), want]
+		)
+		return
+	## Harvested hills must not be refilled.
+	eco.try_take(COORD, VoxelMaterial.GEM_QUARTZ)
+	var after_take := eco.remaining_total(COORD)
+	if eco.ensure_hill_row(COORD, dseed):
+		_fail("FAIL ensure_hill_row refilled a harvested hill")
+		return
+	if eco.remaining_total(COORD) != after_take:
+		_fail("FAIL harvested hill remaining changed without a take")
+		return
+	print("OK a foreign hill budget is repaired once, then harvest sticks")
 
 
 # ---------------------------------------------------------------------------

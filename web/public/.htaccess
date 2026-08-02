@@ -1,0 +1,23 @@
+# Apache (domainfactory) — Eccentri City static site
+DirectoryIndex index.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # RewriteBase is patched by deploy-clean.ps1 to match -BasePath
+  RewriteBase /EccentriCity/
+
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|css|gif|png|jpe?g|svg|woff2?|mp4|webm)$">
+    Header set Cache-Control "public, max-age=86400"
+  </FilesMatch>
+  <FilesMatch "\.(html|json)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

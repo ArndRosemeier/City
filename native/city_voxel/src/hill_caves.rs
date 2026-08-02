@@ -199,6 +199,14 @@ impl NativeHillCaves {
         );
         let stats = ctx.carve_cheese(&portals);
         let ms = started.elapsed().as_millis() as i64;
+        let mut cave_lo = PackedInt32Array::new();
+        let mut cave_hi = PackedInt32Array::new();
+        for v in &ctx.cave_lo {
+            cave_lo.push(*v);
+        }
+        for v in &ctx.cave_hi {
+            cave_hi.push(*v);
+        }
         out.set("ok", true);
         out.set("chambers", stats.chambers as i64);
         out.set("links", stats.links as i64);
@@ -207,6 +215,9 @@ impl NativeHillCaves {
         out.set("hollow", stats.hollow as f64);
         out.set("reachable", stats.reachable as f64);
         out.set("ms", ms);
+        // Per-column hollow band so GDScript gem scatter can prefer chamber walls.
+        out.set("cave_lo", &cave_lo);
+        out.set("cave_hi", &cave_hi);
         out
     }
 }
@@ -1023,10 +1034,7 @@ impl<'a> Ctx<'a> {
                     if nx * nx + ny * ny + nz * nz > 1.0 {
                         continue;
                     }
-                    let id = self.get(x, y, z);
-                    if materials::is_gem(id) {
-                        continue;
-                    }
+                    // Ore was buried before this pass — chambers delete whatever they open.
                     self.set(x, y, z, materials::AIR);
                     let col = (row + lx) as usize;
                     if self.cave_hi[col] < 0 {

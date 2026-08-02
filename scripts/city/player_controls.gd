@@ -387,18 +387,22 @@ func build_slot_for_key(event: InputEventKey) -> int:
 	return -1
 
 
-func is_build_assign_held(event: InputEventKey) -> bool:
+func is_build_assign_held(event: InputEvent) -> bool:
+	## True when the build-assign modifier is down for this event (Shift by default).
+	## Works for keys and mouse so Shift+F1 and Shift+Ctrl+LMB can both open assign.
 	var b := get_binding("build_assign")
 	if str(b.get("device", "")) != "key":
-		return event.shift_pressed
+		var with_mods := event as InputEventWithModifiers
+		return with_mods != null and with_mods.shift_pressed
 	var code := int(b.get("code", KEY_SHIFT)) as Key
 	## When assign modifier is Shift/Ctrl/Alt, use the event flag so slot key+mod works.
+	var with_m := event as InputEventWithModifiers
 	match code:
 		KEY_SHIFT:
-			return event.shift_pressed
+			return with_m != null and with_m.shift_pressed
 		KEY_CTRL:
-			return event.ctrl_pressed
+			return with_m != null and with_m.ctrl_pressed
 		KEY_ALT:
-			return event.alt_pressed
+			return with_m != null and with_m.alt_pressed
 		_:
 			return Input.is_key_pressed(code)

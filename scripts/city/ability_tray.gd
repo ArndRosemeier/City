@@ -1,6 +1,7 @@
 ## Nine-slot ability bar: F1–F6 plus LMB / Ctrl+LMB / Alt+LMB labels.
 ##
-## Replaces the build-only action bar. Shift+slot assigns from unlocked abilities (and free builds).
+## Shift+F1–F6 assigns those keys. Mouse slots use Shift+click on the tray button, or
+## Shift+ the combat chord (Shift+LMB / Shift+Ctrl+LMB / Shift+Alt+LMB).
 class_name AbilityTray
 extends CanvasLayer
 
@@ -57,10 +58,18 @@ func refresh() -> void:
 			key = ctl.binding_label("build_%d" % (i + 1))
 		var label := def.display_name if def != null else "—"
 		_buttons[i].text = "%s\n%s" % [key, _short_label(label)]
-		_buttons[i].tooltip_text = (
-			"%s\n%s activate · %s+%s assign"
-			% [def.hint if def != null else "Empty", key, assign, key]
-		)
+		var hint := def.hint if def != null else "Empty"
+		if i < 6:
+			_buttons[i].tooltip_text = (
+				"%s\n%s activate · %s+%s assign"
+				% [hint, key, assign, key]
+			)
+		else:
+			## Mouse chords need the assign mod on the click — bare "Shift+Ctrl" is a no-op.
+			_buttons[i].tooltip_text = (
+				"%s\n%s activate · %s+click or %s+%s assign"
+				% [hint, _mouse_chord_label(i), assign, assign, _mouse_chord_label(i)]
+			)
 	if _hint != null:
 		_hint.text = (
 			"Sandbox · all powers"
@@ -78,18 +87,35 @@ func _ctl() -> PlayerControls:
 func _unhandled_input(event: InputEvent) -> void:
 	if UiInputGate.gameplay_blocked(_walker):
 		return
-	var ek := event as InputEventKey
-	if ek == null or not ek.pressed or ek.echo:
-		return
 	var ctl := _ctl()
-	var slot := ctl.build_slot_for_key(ek)
-	if slot < 0:
+	if event is InputEventKey:
+		var ek := event as InputEventKey
+		if not ek.pressed or ek.echo:
+			return
+		var slot := ctl.build_slot_for_key(ek)
+		if slot < 0:
+			return
+		if ctl.is_build_assign_held(ek):
+			_open_assign_menu(slot)
+		else:
+			_activate_slot(slot)
+		get_viewport().set_input_as_handled()
 		return
-	if ctl.is_build_assign_held(ek):
-		_open_assign_menu(slot)
-	else:
-		_activate_slot(slot)
-	get_viewport().set_input_as_handled()
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if not mb.pressed:
+			return
+		## Assign only — bare combat clicks stay with the walker.
+		if not ctl.is_build_assign_held(mb):
+			return
+		var action := ctl.resolve_mouse_action(
+			mb, ["laser", "beam", "fire"] as Array[String]
+		)
+		var mouse_slot := AbilityRegistry.mouse_slot_for_action(action)
+		if mouse_slot < 0:
+			return
+		_open_assign_menu(mouse_slot)
+		get_viewport().set_input_as_handled()
 
 
 func _build_ui() -> void:
@@ -166,8 +192,23 @@ func _on_slot_gui_input(event: InputEvent, slot: int) -> void:
 	var mb := event as InputEventMouseButton
 	if not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
 		return
-	_activate_slot(slot)
+	if _ctl().is_build_assign_held(mb):
+		_open_assign_menu(slot)
+	else:
+		_activate_slot(slot)
 	get_viewport().set_input_as_handled()
+
+
+func _mouse_chord_label(slot: int) -> String:
+	match slot:
+		AbilityRegistry.SLOT_MOUSE_LMB:
+			return "LMB"
+		AbilityRegistry.SLOT_MOUSE_CTRL:
+			return "Ctrl+LMB"
+		AbilityRegistry.SLOT_MOUSE_ALT:
+			return "Alt+LMB"
+		_:
+			return AbilityRegistry.slot_label(slot)
 
 
 func _activate_slot(slot: int) -> void:

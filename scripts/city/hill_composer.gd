@@ -88,10 +88,6 @@ const CAVE_STEEP_DROP := 7
 ## Share of the protected core (deck → shell) that should end up hollow.
 const CAVE_HOLLOW_TARGET := 0.30
 
-## Gem ore: one cluster seed per this many solid host voxels (interior only).
-const GEM_VOXELS_PER_CLUSTER := 250
-## Max cluster seeds attempted relative to the estimate (caps runaway rolls).
-const GEM_CLUSTER_CAP := 880
 ## Keep gems off the meadow skin and the outer CAVE_SHELL band.
 const GEM_SURFACE_MARGIN := 3
 
@@ -177,9 +173,10 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 		_paint_terrain_native()
 	else:
 		_paint_terrain()
-	## Budget owns the count: paint exactly the remaining list, never a host-estimate ghost vein.
-	_scatter_gems_from_quota()
+	## Hollow first, then bury the district quota in whatever solid host remains. Ore ends up
+	## in cave walls and unopened rock — never deleted by a later cheese pass.
 	_carve_caves(summits)
+	_scatter_gems_from_quota()
 	_scatter_boulders()
 	_plant_trees(1.0)
 
@@ -675,39 +672,6 @@ func _paint_terrain_native() -> void:
 	)
 
 
-func _scatter_gems_native() -> void:
-	var native := _native_hill()
-	var road_mask := PackedByteArray()
-	road_mask.resize(_w * _d)
-	for z in range(_d):
-		for x in range(_w):
-			road_mask[z * _w + x] = 1 if _is_road_cell(x, z) else 0
-	var seed_i: int = rng.randi()
-	var stats: Dictionary = native.call(
-		"scatter_gems",
-		brush.volume,
-		_ox,
-		_oz,
-		_w,
-		_d,
-		ground_y,
-		_height,
-		road_mask,
-		seed_i
-	) as Dictionary
-	assert(bool(stats.get("ok", false)), "HillComposer: native scatter_gems failed")
-	gem_positions = stats.get("positions", PackedVector3Array()) as PackedVector3Array
-	gem_mats = stats.get("mats", PackedInt32Array()) as PackedInt32Array
-	print(
-		"HillComposer: gem[native] clusters=%d voxels=%d in %d ms"
-		% [
-			int(stats.get("clusters", 0)),
-			int(stats.get("voxels", 0)),
-			int(stats.get("ms", 0)),
-		]
-	)
-
-
 func _carve_cheese_native(portals: Array[Vector2i]) -> void:
 	var native := _native_hill()
 	var portals_xz := PackedInt32Array()
@@ -729,6 +693,14 @@ func _carve_cheese_native(portals: Array[Vector2i]) -> void:
 		seed_i
 	) as Dictionary
 	assert(bool(stats.get("ok", false)), "HillComposer: native carve_cheese failed")
+	## Native keeps the hollow band internally — copy it back so gem scatter can prefer
+	## chamber columns (without this, `_cave_hi` stays all -1 after a native carve).
+	if stats.has("cave_lo") and stats.has("cave_hi"):
+		var lo := stats["cave_lo"] as PackedInt32Array
+		var hi := stats["cave_hi"] as PackedInt32Array
+		if lo.size() == _cave_lo.size() and hi.size() == _cave_hi.size():
+			_cave_lo = lo
+			_cave_hi = hi
 	print(
 		(
 			"HillComposer: cheese[native] chambers=%d links=%d mouths=%d swells=%d"
@@ -1519,9 +1491,7 @@ func _carve_ellipsoid(center: Vector3i, radii: Vector3i, floor_min_y: int) -> vo
 				if nx * nx + ny * ny + nz * nz > 1.0:
 					continue
 				var at := Vector3i(x, y, z)
-				## Leave gem ore as protruding nuggets instead of deleting it with the cave.
-				if VoxelMaterial.is_gem(brush.get_vox(at)):
-					continue
+				## Ore was buried before the hollow pass — chambers delete whatever they open.
 				brush.set_vox(at, VoxelMaterial.AIR)
 				if _cave_hi[row + lx] < 0:
 					_cave_lo[row + lx] = y
@@ -1531,26 +1501,45 @@ func _carve_ellipsoid(center: Vector3i, radii: Vector3i, floor_min_y: int) -> vo
 				_cave_hi[row + lx] = maxi(_cave_hi[row + lx], y)
 
 
-## Embed exactly `gem_mats_to_place` in solid rock before caves open. Carve skips gem voxels
-## so nuggets stick into chambers; buried ones stay excavatable.
+## Embed exactly `gem_mats_to_place` in solid hillside that survived the cave carve
+## (strata rock, and cave wall / floor lining — those are the diggable chamber faces).
+## Most of the quota prefers columns the cheese pass opened so cave walking finds ore.
 func _scatter_gems_from_quota() -> void:
 	gem_positions = PackedVector3Array()
 	gem_mats = PackedInt32Array()
 	var quota := gem_mats_to_place.size()
 	if quota <= 0:
 		return
+	var any_hollow := false
+	for i in range(_cave_hi.size()):
+		if int(_cave_hi[i]) >= 0:
+			any_hollow = true
+			break
+	var cave_target := int(quota * 2 / 3) if any_hollow else 0
 	var placed := 0
+	var cave_placed := 0
 	var tries := 0
-	var max_tries := maxi(quota * 24, 64)
+	var max_tries := maxi(quota * 64, 256)
 	while placed < quota and tries < max_tries:
 		tries += 1
+		var want_cave := cave_placed < cave_target
 		var x := rng.randi_range(2, _w - 3)
 		var z := rng.randi_range(2, _d - 3)
 		if _is_road_cell(x, z):
 			continue
-		var h := _height[z * _w + x]
+		var col := z * _w + x
+		var cave_lo := int(_cave_lo[col])
+		var cave_hi := int(_cave_hi[col])
+		var hollowed := cave_hi >= 0
+		if want_cave and not hollowed:
+			continue
+		var h := _height[col]
 		var y_lo := ground_y + GEM_SURFACE_MARGIN
 		var y_hi := ground_y + h - GEM_SURFACE_MARGIN
+		if hollowed:
+			## Bias into the chamber band (±2) so lining voxels are common hits.
+			y_lo = maxi(y_lo, cave_lo - 2)
+			y_hi = mini(y_hi, cave_hi + 2)
 		if y_hi <= y_lo:
 			continue
 		var y := rng.randi_range(y_lo, y_hi)
@@ -1562,44 +1551,28 @@ func _scatter_gems_from_quota() -> void:
 		gem_positions.append(Vector3(float(cursor.x), float(cursor.y), float(cursor.z)))
 		gem_mats.append(gem)
 		placed += 1
+		if hollowed:
+			cave_placed += 1
 	if placed < quota:
 		push_error(
 			"HillComposer: only placed %d of %d budgeted gem voxels after %d tries"
 			% [placed, quota, tries]
 		)
-	print("HillComposer: gem voxels=%d (quota %d)" % [gem_mats.size(), quota])
+	print(
+		"HillComposer: buried gem voxels=%d (quota %d, cave-band %d)"
+		% [gem_mats.size(), quota, cave_placed]
+	)
 
 
 func _is_gem_host(id: int) -> bool:
+	## Solid massif plus the diggable cave lining — so chamber faces can hold ore.
 	match id:
-		VoxelMaterial.STONE, VoxelMaterial.BRICK, VoxelMaterial.GRAVEL:
+		VoxelMaterial.STONE, VoxelMaterial.BRICK, VoxelMaterial.GRAVEL, VoxelMaterial.DIRT:
+			return true
+		VoxelMaterial.CAVE_WALL, VoxelMaterial.CAVE_FLOOR:
 			return true
 		_:
 			return false
-
-
-func _place_gem_cluster(origin: Vector3i, gem: int, count: int) -> void:
-	var cursor := origin
-	for i in range(count):
-		var here := brush.get_vox(cursor)
-		if _is_gem_host(here):
-			brush.set_vox(cursor, gem)
-			gem_positions.append(Vector3(float(cursor.x), float(cursor.y), float(cursor.z)))
-			gem_mats.append(gem)
-		## Step to a random 6-neighbour for the next nugget.
-		match rng.randi() % 6:
-			0:
-				cursor.x += 1
-			1:
-				cursor.x -= 1
-			2:
-				cursor.y += 1
-			3:
-				cursor.y -= 1
-			4:
-				cursor.z += 1
-			_:
-				cursor.z -= 1
 
 
 func _scatter_boulders() -> void:

@@ -1,0 +1,82 @@
+{
+  "screenshots": [
+    {
+      "label": "Castle_Glirras_1",
+      "src": "media/screenshots/Castle_Glirras_1.jpg"
+    },
+    {
+      "label": "Drume_Square_1",
+      "src": "media/screenshots/Drume_Square_1.jpg"
+    },
+    {
+      "label": "Feme_Graves_1",
+      "src": "media/screenshots/Feme_Graves_1.jpg"
+    },
+    {
+      "label": "Lake_Morram_1",
+      "src": "media/screenshots/Lake_Morram_1.jpg"
+    },
+    {
+      "label": "Meseze_Gardens_1",
+      "src": "media/screenshots/Meseze_Gardens_1.jpg"
+    },
+    {
+      "label": "Old_Glokezi_1",
+      "src": "media/screenshots/Old_Glokezi_1.jpg"
+    },
+    {
+      "label": "Old_Glokezi_2",
+      "src": "media/screenshots/Old_Glokezi_2.jpg"
+    },
+    {
+      "label": "Port_Draepind_1",
+      "src": "media/screenshots/Port_Draepind_1.jpg"
+    },
+    {
+      "label": "Rifi_Hill_1",
+      "src": "media/screenshots/Rifi_Hill_1.jpg"
+    },
+    {
+      "label": "Rifi_Hill_2",
+      "src": "media/screenshots/Rifi_Hill_2.jpg"
+    },
+    {
+      "label": "Rifi_Hill_3",
+      "src": "media/screenshots/Rifi_Hill_3.jpg"
+    },
+    {
+      "label": "Rifi_Hill_4",
+      "src": "media/screenshots/Rifi_Hill_4.jpg"
+    },
+    {
+      "label": "Tugate_Arena_1",
+      "src": "media/screenshots/Tugate_Arena_1.jpg"
+    },
+    {
+      "label": "Viaminon_Menagerie_1",
+      "src": "media/screenshots/Viaminon_Menagerie_1.jpg"
+    },
+    {
+      "label": "Zidimam_Anomaly_1",
+      "src": "media/screenshots/Zidimam_Anomaly_1.jpg"
+    },
+    {
+      "label": "Zukoath_Central_1",
+      "src": "media/screenshots/Zukoath_Central_1.jpg"
+    },
+    {
+      "label": "Zukoath_Central_2",
+      "src": "media/screenshots/Zukoath_Central_2.jpg"
+    }
+  ],
+  "clips": [
+    {
+      "label": "2026-08-02 11-44-19",
+      "src": "media/clips/2026-08-02_11-44-19.mp4"
+    },
+    {
+      "label": "2026-08-02 11-52-22",
+      "src": "media/clips/2026-08-02_11-52-22.mp4"
+    }
+  ]
+}

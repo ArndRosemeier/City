@@ -26,6 +26,10 @@ const GEM_IDS: Array[int] = [
 ## into, and a long run touches hundreds of them.
 const GEM_KEYS: Array[String] = ["q", "a", "t", "s", "e", "d"]
 const EXPLORED_KEY := "explored"
+## Theme id that rolled this row (so a Hill bake can detect a wrong-theme seed).
+const THEME_KEY := "theme"
+## Original total when the row was created (remaining + harvested).
+const OWED_KEY := "owed"
 
 const GameDataScript := preload("res://scripts/city/game_data.gd")
 
@@ -104,15 +108,83 @@ func row_count() -> int:
 
 ## Create the row for a coord the run has just reached for the first time. Does nothing when the
 ## coord already has one: re-entering a tile must never re-roll what is left in it.
-func ensure_row(coord: Vector2i, budgets: Dictionary[int, int]) -> bool:
+## Pass `theme_id` whenever the caller knows it (Adventure district create / hill paint).
+func ensure_row(
+	coord: Vector2i, budgets: Dictionary[int, int], theme_id: int = -1
+) -> bool:
 	var key := coord_key(coord)
 	if _rows.has(key):
 		return false
+	var total := 0
 	var row: Dictionary = {EXPLORED_KEY: false}
 	for i in range(GEM_IDS.size()):
-		row[GEM_KEYS[i]] = int(budgets.get(GEM_IDS[i], 0))
+		var n := int(budgets.get(GEM_IDS[i], 0))
+		row[GEM_KEYS[i]] = n
+		total += n
+	row[OWED_KEY] = total
+	if theme_id >= 0:
+		row[THEME_KEY] = theme_id
 	_rows[key] = row
 	return true
+
+
+## Hill bake entry: create the hill constant, or replace a stale wrong-theme row that was
+## never harvested (classic bug: waterfront's 28 locked in before the hill paint ran).
+## Returns true when the row was created or repaired.
+func ensure_hill_row(coord: Vector2i, district_seed: int) -> bool:
+	var want := GameDataScript.theme_gem_total(DistrictTheme.HILL)
+	var budgets := roll_budgets(DistrictTheme.HILL, district_seed)
+	if not has_row(coord):
+		return ensure_row(coord, budgets, DistrictTheme.HILL)
+	var left := remaining_total(coord)
+	if left >= want:
+		return false
+	var row: Dictionary = _rows[coord_key(coord)]
+	var owed := int(row.get(OWED_KEY, left))
+	var taken := owed - left
+	## Only refill when nothing has been dug from this ledger — harvested hills stay spent.
+	if taken > 0:
+		return false
+	var row_theme := int(row.get(THEME_KEY, -1))
+	var wrong_theme := row_theme >= 0 and row_theme != DistrictTheme.HILL
+	var looks_foreign := _remaining_matches_foreign_theme_total(left, want)
+	## Untouched and either tagged wrong, or a legacy total that equals another theme.
+	if not wrong_theme and not looks_foreign:
+		return false
+	var explored := bool(row.get(EXPLORED_KEY, false))
+	_write_row(coord, budgets, DistrictTheme.HILL, explored)
+	print(
+		"DistrictEconomy: repaired hill %s budget %d → %d (was theme %d)"
+		% [str(coord), left, want, row_theme]
+	)
+	return true
+
+
+func _write_row(
+	coord: Vector2i, budgets: Dictionary[int, int], theme_id: int, explored: bool
+) -> void:
+	var total := 0
+	var row: Dictionary = {EXPLORED_KEY: explored}
+	for i in range(GEM_IDS.size()):
+		var n := int(budgets.get(GEM_IDS[i], 0))
+		row[GEM_KEYS[i]] = n
+		total += n
+	row[OWED_KEY] = total
+	row[THEME_KEY] = theme_id
+	_rows[coord_key(coord)] = row
+
+
+func _remaining_matches_foreign_theme_total(left: int, hill_want: int) -> bool:
+	if left <= 0 or left >= hill_want:
+		return false
+	var totals: Dictionary = GameDataScript.district_gems().get("theme_totals", {}) as Dictionary
+	for name: Variant in GameDataScript.THEME_NAME_TO_ID.keys():
+		var tid := int(GameDataScript.THEME_NAME_TO_ID[name])
+		if tid == DistrictTheme.HILL:
+			continue
+		if int(totals.get(str(name), -1)) == left:
+			return true
+	return false
 
 
 func remaining(coord: Vector2i, gem_mat: int) -> int:
@@ -242,6 +314,13 @@ func load_save_dict(data: Dictionary) -> void:
 			continue
 		var src: Dictionary = raw
 		var row: Dictionary = {EXPLORED_KEY: bool(src.get(EXPLORED_KEY, false))}
+		var total := 0
 		for gem_key in GEM_KEYS:
-			row[gem_key] = maxi(int(src.get(gem_key, 0)), 0)
+			var n := maxi(int(src.get(gem_key, 0)), 0)
+			row[gem_key] = n
+			total += n
+		## Legacy saves omit these; default owed to what's left so "taken" stays 0.
+		row[OWED_KEY] = maxi(int(src.get(OWED_KEY, total)), total)
+		if src.has(THEME_KEY):
+			row[THEME_KEY] = int(src[THEME_KEY])
 		_rows[key] = row

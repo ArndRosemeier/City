@@ -13,9 +13,6 @@
 .godot_check_out/
 *.translation
 
-# Player Print Screen captures (project root while editing; next to .exe when exported)
-screenshots/
-
 # Legacy Godot 3 import cache name
 .import/
 
@@ -44,6 +41,10 @@ tools/godot/
 
 # Portable install / pack output
 dist/
+
+# Website FTP staging / deploy manifest (local only)
+web/dist/
+.deploy/
 
 # Mixamo raw FBX (Adobe terms — keep local; bake to mixamo_actions.tres)
 assets/humans/animations/mixamo/raw/*.fbx

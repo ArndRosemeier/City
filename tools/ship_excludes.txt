@@ -3,6 +3,11 @@
 # Matching is prefix or glob (* and ?). Used by tools/pack_release.ps1.
 
 .cursor/
+web/
+screenshots/
+videos/
+.deploy/
+deploy-clean.ps1
 native/
 publish_portable_release.bat
 make_installer.bat

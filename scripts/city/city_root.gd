@@ -853,11 +853,19 @@ func build_cheat_district_report() -> String:
 	lines.append("%s (%s) at %s" % [place, theme.display_name, str(here)])
 	lines.append("")
 
+	var theme_budget := preload("res://scripts/city/game_data.gd").theme_gem_total(theme.id)
 	if _loadout != null and _loadout.uses_gem_budgets():
 		var left := 0
 		if _economy != null:
 			left = _economy.remaining_total(here)
-		lines.append("Hidden gems: %d" % left)
+		lines.append("Hidden gems: %d (theme budget %d)" % [left, theme_budget])
+		if theme.id == DistrictTheme.HILL:
+			var hill_inst := _district_at_coord(here)
+			if hill_inst != null:
+				lines.append(
+					"Hill ore voxels: %d"
+					% hill_inst.hill_gem_mats.size()
+				)
 	else:
 		lines.append("Hidden gems: n/a (no gem budgets in this mode)")
 	lines.append("")
@@ -1740,6 +1748,13 @@ func _tick_district_economy() -> void:
 			continue
 		if _loadout.uses_gem_budgets():
 			_ensure_district_row(inst)
+	## After the sweep so we never unload a district mid-iteration.
+	if not _hill_budget_reloads.is_empty() and _streamer != null:
+		var pending := _hill_budget_reloads.duplicate()
+		_hill_budget_reloads.clear()
+		for coord: Vector2i in pending:
+			print("CityRoot: reloading hill %s to stamp repaired gem budget" % str(coord))
+			_streamer.reload_district(coord)
 	if _game_over or _walker == null or not is_instance_valid(_walker):
 		return
 	if not _loadout.scores():
@@ -1768,21 +1783,44 @@ func _tick_district_economy() -> void:
 		)
 
 
+## Hill tiles whose ledger was repaired while already stamped — re-bake so ore matches.
+var _hill_budget_reloads: Array[Vector2i] = []
+
+
 ## First create of a coord in this run: fix what it will ever pay out from the theme constant.
 ## Hills use the same table; the bake paints exactly whatever is still remaining.
 func _ensure_district_row(inst: DistrictInstance) -> void:
 	if inst == null or inst.generator == null or inst.generator.theme == null:
 		return
+	## Seed + coord decide the theme — never trust a stale generator field for the budget.
+	var theme := DistrictTheme.for_district(city_seed, inst.coord)
+	var dseed := DistrictCoord.district_seed(city_seed, inst.coord)
+	if theme.id == DistrictTheme.HILL:
+		## May repair a stale wrong-theme row left by an earlier bug / save.
+		if _economy.ensure_hill_row(inst.coord, dseed):
+			var want := preload("res://scripts/city/game_data.gd").theme_gem_total(
+				DistrictTheme.HILL
+			)
+			print(
+				"CityRoot: district %s (%s) owes %d gems"
+				% [str(inst.coord), theme.display_name, _economy.remaining_total(inst.coord)]
+			)
+			## Ledger alone is not enough — a ready hill still has the short ore stamp.
+			if (
+				inst.is_ready
+				and not inst.is_busy
+				and inst.hill_gem_mats.size() < want
+				and not _hill_budget_reloads.has(inst.coord)
+			):
+				_hill_budget_reloads.append(inst.coord)
+		return
 	if _economy.has_row(inst.coord):
 		return
-	var theme_id: int = inst.generator.theme.id
-	var budgets := DistrictEconomy.roll_budgets(
-		theme_id, DistrictCoord.district_seed(city_seed, inst.coord)
-	)
-	_economy.ensure_row(inst.coord, budgets)
+	var budgets := DistrictEconomy.roll_budgets(theme.id, dseed)
+	_economy.ensure_row(inst.coord, budgets, theme.id)
 	print(
 		"CityRoot: district %s (%s) owes %d gems"
-		% [str(inst.coord), inst.generator.theme.display_name, _economy.remaining_total(inst.coord)]
+		% [str(inst.coord), theme.display_name, _economy.remaining_total(inst.coord)]
 	)
 
 
@@ -1790,18 +1828,29 @@ func _ensure_district_row(inst: DistrictInstance) -> void:
 ## Called on the main thread before the worker starts so the ledger and voxels stay one thing.
 func hill_gem_paint_list(coord: Vector2i) -> PackedInt32Array:
 	var dseed := DistrictCoord.district_seed(city_seed, coord)
+	var theme := DistrictTheme.for_district(city_seed, coord)
+	assert(
+		theme.id == DistrictTheme.HILL,
+		"hill_gem_paint_list called for non-hill %s (%s)" % [str(coord), theme.display_name]
+	)
 	if _loadout == null or not _loadout.uses_gem_budgets():
 		## Sandbox: always the full mine.
 		return DistrictEconomy.flat_gem_list(
 			DistrictEconomy.roll_budgets(DistrictTheme.HILL, dseed)
 		)
-	if not _economy.has_row(coord):
-		_economy.ensure_row(coord, DistrictEconomy.roll_budgets(DistrictTheme.HILL, dseed))
+	if _economy.ensure_hill_row(coord, dseed):
 		print(
 			"CityRoot: district %s (Hill) owes %d gems"
 			% [str(coord), _economy.remaining_total(coord)]
 		)
-	return _economy.remaining_flat_list(coord)
+	var paint := _economy.remaining_flat_list(coord)
+	var want := preload("res://scripts/city/game_data.gd").theme_gem_total(DistrictTheme.HILL)
+	if paint.size() < want:
+		push_error(
+			"CityRoot: hill %s paint list is %d, theme budget %d"
+			% [str(coord), paint.size(), want]
+		)
+	return paint
 
 
 ## Spend one gem of `mat_id` from the district that holds `world_vox`.
@@ -2747,13 +2796,12 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 	## Wall-clock, not frames: headed runs sit at hundreds of FPS, so a 3600-frame
 	## budget was only a few seconds — too short for Hill / Graveyard bakes.
 	const HOP_WAIT_MS := 180_000
-	const HOP_EARLY_GROUND_MS := 4_000
 	const HOP_STATUS_EVERY_MS := 500
 	var hop_started := Time.get_ticks_msec()
 	var hop_deadline := hop_started + HOP_WAIT_MS
 	var last_status_ms := 0
-	## Check validity before any property access — a failed bake frees the instance
-	## between frames and `while not inst.is_ready` would then dereference a freed object.
+	## Wait for full ready — landing on ground-only left upper block rows as AIR holes
+	## (hills, castle plinths, etc.) until detail caught up under remesh pressure.
 	while Time.get_ticks_msec() < hop_deadline:
 		if not is_instance_valid(inst):
 			await _finish_district_hop_fail("district unloaded while hopping", origin_pos)
@@ -2771,26 +2819,10 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 				"Loading %s %s (%s, %ds)…"
 				% [theme.display_name, dest, phase, elapsed_ms / 1000]
 			)
-		## Ground is enough to find a street spawn once the stamp job has paused.
-		## Hill / Graveyard usually stay busy until full ready — that path waits below.
-		if (
-			inst.is_ground_ready
-			and inst.generator != null
-			and not inst.is_busy
-			and elapsed_ms >= HOP_EARLY_GROUND_MS
-		):
-			break
 		await get_tree().process_frame
-	if not is_instance_valid(inst) or inst.generator == null:
+	if not is_instance_valid(inst) or inst.generator == null or not inst.is_ready:
 		await _finish_district_hop_fail(
 			"district never became ready after %ds"
-			% [(Time.get_ticks_msec() - hop_started) / 1000],
-			origin_pos
-		)
-		return
-	if not inst.is_ready and not inst.is_ground_ready:
-		await _finish_district_hop_fail(
-			"district still empty after %ds"
 			% [(Time.get_ticks_msec() - hop_started) / 1000],
 			origin_pos
 		)
