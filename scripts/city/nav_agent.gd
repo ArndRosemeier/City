@@ -48,8 +48,6 @@ const LADDER_RESET_M := 2.5
 const LADDER_MOVE_EPSILON_M := 0.5
 ## Tries at picking a standable point for a WANDER goal.
 const WANDER_TRIES := 6
-## How far from a picked wander point a span may be and still count.
-const WANDER_SNAP_M := 6.0
 ## Nearest fraction of the wander radius a pick may land at, so wandering means going
 ## somewhere.
 const WANDER_MIN_FRACTION := 0.35
@@ -459,14 +457,20 @@ func _resolve_destination() -> bool:
 		## it cannot, which is the answer the ladder wants.
 		_destination = _goal.raw_destination(pos)
 		return true
+	## Horizontal ring first, then every standable height in that column inside the wander
+	## radius. That keeps the probe cheap (one column, no ring search) while still letting
+	## crypt undead pick the chapel floor above them.
 	for _try in range(WANDER_TRIES):
 		var angle := _rng.randf() * TAU
 		var reach := _goal.radius * lerpf(WANDER_MIN_FRACTION, 1.0, _rng.randf())
 		var probe := _goal.point + Vector3(sin(angle) * reach, 0.0, cos(angle) * reach)
-		var hit := _nav.nearest_surface(_profile_id, probe, WANDER_SNAP_M)
-		if hit.found:
-			_destination = hit.position
-			return true
+		var surfaces: PackedVector3Array = _nav.column_surfaces(
+			_profile_id, probe, _goal.radius
+		)
+		if surfaces.is_empty():
+			continue
+		_destination = surfaces[_rng.randi_range(0, surfaces.size() - 1)]
+		return true
 	push_warning(
 		"NavAgent %d: no %s span within %.1f m of the wander anchor %.1f,%.1f"
 		% [_agent_id, _profile.display_name, _goal.radius, _goal.point.x, _goal.point.z]

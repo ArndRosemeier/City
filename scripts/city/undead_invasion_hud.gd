@@ -26,7 +26,7 @@ func _ready() -> void:
 	_panel.name = "InvasionPanel"
 	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.add_theme_constant_override("separation", 2)
-	## Top-right under the checkbox strip — keeps left free for tendril HUD.
+	## Top-right under Game/Settings — keeps left free for tendril HUD.
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
 	_panel.offset_left = -220.0

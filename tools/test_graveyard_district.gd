@@ -170,7 +170,8 @@ func _ready() -> void:
 		return
 	var roofed := _count_roofed_air(res["blocks"], int(res["ground_thickness"]))
 	print("roofed air voxels (crypt volume) = %d" % roofed)
-	if roofed < 400:
+	## Hub + chambers grew; a dropdown well alone must not pass this floor.
+	if roofed < 2500:
 		_fail("FAIL only %d roofed air voxels — crypts too small" % roofed)
 		_quit()
 		return
@@ -181,6 +182,27 @@ func _ready() -> void:
 		_fail("FAIL yard not elevated enough (fill=%d)" % elevated)
 		_quit()
 		return
+	var gen := res.get("generator") as DistrictGenerator
+	if gen == null:
+		_fail("FAIL bake missing generator — cannot probe crypt stair")
+		_quit()
+		return
+	if not _has_crypt_stair(gen):
+		_fail("FAIL no one-voxel chapel→crypt stair flight (dropdown well?)")
+		_quit()
+		return
+	print("OK crypt stair flight present")
+	if not _crypt_stair_inside_chapel(gen):
+		_fail("FAIL crypt stair is not enclosed by the chapel (outdoor pit)")
+		_quit()
+		return
+	print("OK crypt stair enclosed inside chapel")
+	var spawner := gen.get_crypt_spawner()
+	if spawner.x < 0:
+		_fail("FAIL crypt undead spawner pad missing under the chapel")
+		_quit()
+		return
+	print("OK crypt spawner at %s" % spawner)
 
 	print("RESULT: OK")
 	_quit()
@@ -264,6 +286,105 @@ func _is_foliage(id: int) -> bool:
 		or id == VoxelMaterial.YEW
 		or id == VoxelMaterial.BARK
 	)
+
+
+## One-voxel risers, and crypt-height hall air beside the flight (not a wall-tight shaft).
+func _has_crypt_stair(gen: DistrictGenerator) -> bool:
+	var volume: NativeOfflineVoxelVolume = gen.get_offline_volume()
+	if volume == null:
+		return false
+	var gy := gen.ground_thickness
+	const RISE := 8  ## GraveyardComposer.YARD_RISE
+	const CLEAR := 5  ## GraveyardComposer.CRYPT_STAIR_CLEAR
+	var deck := gy + RISE
+	var crypt_floor := gy + 2
+	for z0 in range(4, gen.size_z - RISE - 4):
+		for x in range(4, gen.size_x - 4):
+			if not _is_crypt_stair_run(volume, x, z0, deck, RISE):
+				continue
+			## Hall must leave walkable crypt air beside the mid-flight.
+			var mid_z := z0 + RISE / 2
+			var side := int(volume.get_vox(Vector3i(x + CLEAR, crypt_floor, mid_z)))
+			if side == VoxelMaterial.AIR:
+				return true
+	return false
+
+
+## Stair flight must sit under the nave (side wall + roof + south wall past the foot).
+## The failure mode this catches is the outdoor pit in front of the chapel door.
+func _crypt_stair_inside_chapel(gen: DistrictGenerator) -> bool:
+	var volume: NativeOfflineVoxelVolume = gen.get_offline_volume()
+	if volume == null:
+		return false
+	var gy := gen.ground_thickness
+	const RISE := 8  ## GraveyardComposer.YARD_RISE
+	const CHAPEL_HALF_X := 10  ## GraveyardComposer.CHAPEL_HALF_X
+	var deck := gy + RISE
+	for z0 in range(4, gen.size_z - RISE - 12):
+		for x in range(4, gen.size_x - 4):
+			if not _is_crypt_stair_run(volume, x, z0, deck, RISE):
+				continue
+			var mid_z := z0 + RISE / 2
+			var foot_z := z0 + RISE
+			var wall_x := x + CHAPEL_HALF_X
+			if wall_x >= gen.size_x:
+				wall_x = x - CHAPEL_HALF_X
+			## Below lancet band — glass there is still an enclosing wall.
+			var side := int(volume.get_vox(Vector3i(wall_x, deck + 2, mid_z)))
+			if not _is_chapel_wall(side):
+				continue
+			var roofed := false
+			for y in range(deck + 8, deck + 28):
+				var above := int(volume.get_vox(Vector3i(x, y, mid_z)))
+				if (
+					above == VoxelMaterial.ROOF
+					or VoxelMaterial.is_roof_slope(above)
+					or _is_chapel_wall(above)
+				):
+					roofed = true
+					break
+			if not roofed:
+				continue
+			## South wall past the foot — skip the door gap (±1 from the flight centre).
+			var south := false
+			for dx in [3, -3, 4, -4]:
+				for z in range(foot_z + 1, mini(foot_z + 12, gen.size_z)):
+					var mat := int(volume.get_vox(Vector3i(x + dx, deck + 2, z)))
+					if _is_chapel_wall(mat):
+						south = true
+						break
+				if south:
+					break
+			if south:
+				return true
+	return false
+
+
+func _is_chapel_wall(id: int) -> bool:
+	return (
+		id == VoxelMaterial.STONE
+		or id == VoxelMaterial.GRAVE_STONE
+		or id == VoxelMaterial.GLASS_LIT
+	)
+
+
+func _is_crypt_stair_run(
+	volume: NativeOfflineVoxelVolume, x: int, z0: int, deck: int, rise: int
+) -> bool:
+	for i in range(rise + 1):
+		var tread_top := (deck + 1) - i
+		var z := z0 + i
+		var solid := int(volume.get_vox(Vector3i(x, tread_top, z)))
+		var above := int(volume.get_vox(Vector3i(x, tread_top + 1, z)))
+		if (
+			solid != VoxelMaterial.GRAVE_STONE
+			and solid != VoxelMaterial.GRAVE_MARBLE
+			and solid != VoxelMaterial.STONE
+		):
+			return false
+		if above != VoxelMaterial.AIR:
+			return false
+	return true
 
 
 func _count_roofed_air(blocks: Dictionary, ground_thickness: int) -> int:

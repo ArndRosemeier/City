@@ -668,10 +668,6 @@ func _build_hud() -> void:
 	_settings_panel.closed.connect(_on_settings_closed)
 	if _settings_panel.has_signal("controls_changed"):
 		_settings_panel.controls_changed.connect(_on_controls_changed)
-	if _settings_panel.has_signal("spawn_meteors_toggled"):
-		_settings_panel.spawn_meteors_toggled.connect(_on_spawn_meteors_toggled)
-	if _settings_panel.has_signal("undead_invasion_toggled"):
-		_settings_panel.undead_invasion_toggled.connect(_on_undead_invasion_toggled)
 	_settings_panel.game_menu_requested.connect(_on_game_menu_requested)
 
 	_game_menu = GameMenuPanelScript.new() as GameMenuPanel
@@ -877,30 +873,6 @@ func _on_boot_fail_new_game() -> void:
 
 func _on_boot_fail_quit() -> void:
 	get_tree().quit()
-
-
-func _on_spawn_meteors_toggled(enabled: bool) -> void:
-	_spawn_meteors_enabled = enabled
-	if enabled:
-		_meteor_spawn_accum = 0.0
-		_try_auto_spawn_meteor()
-		_roll_meteor_spawn_interval()
-		print("CityRoot: auto meteor spawns ON (next in %.0fs)" % _meteor_spawn_interval_sec)
-	else:
-		_meteor_spawn_accum = 0.0
-		print("CityRoot: auto meteor spawns OFF")
-
-
-func _on_undead_invasion_toggled(enabled: bool) -> void:
-	_undead_invasion_enabled = enabled
-	_ensure_undead_director()
-	if _undead != null and _undead.has_method("set_enabled"):
-		_undead.call("set_enabled", enabled)
-	if _undead_hud != null and is_instance_valid(_undead_hud):
-		if enabled:
-			_undead_hud.call("bind_director", _undead)
-		else:
-			_undead_hud.call("clear_display")
 
 
 func _roll_meteor_spawn_interval() -> void:
@@ -2659,12 +2631,6 @@ func _retry_after_game_over() -> void:
 	## Clear immediately so double-Enter / _input+_unhandled can't double-fire.
 	_game_over = false
 	_respawning = true
-	var want_undead := _undead_invasion_enabled
-	if _settings_panel != null and _settings_panel.has_method("is_undead_invasion_enabled"):
-		want_undead = bool(_settings_panel.call("is_undead_invasion_enabled"))
-	_undead_invasion_enabled = want_undead
-	if _settings_panel != null and _settings_panel.has_method("is_spawn_meteors_enabled"):
-		_spawn_meteors_enabled = bool(_settings_panel.call("is_spawn_meteors_enabled"))
 	_hide_game_over_overlay()
 	## Stay in the current world — teleport to this district's spawn point.
 	_respawn_at_zone_spawn()

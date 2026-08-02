@@ -3,7 +3,7 @@
 
 Edits every authored section: combat (attacks / behaviours / templates / monsters),
 items, craft/build recipes, district gems, abilities + constants, chest loot,
-recipe sites, and Mandelbrot spots.
+recipe sites, Monster Zoo / crypt spawn tuning, and Mandelbrot spots.
 
 Combat validation uses tools/validate_combat_tables.py. Non-combat tabs use light
 schema checks in this module. The Monsters tab shows live EFFECTIVE STATS from
@@ -321,6 +321,8 @@ class GameDataEditor(tk.Tk):
         self._constants_panel: panels.NestedJsonPanel | None = None
         self._chest_panel: panels.NestedJsonPanel | None = None
         self._recipe_sites_panel: panels.NestedJsonPanel | None = None
+        self._zoo_panel: panels.NestedJsonPanel | None = None
+        self._crypt_panel: panels.NestedJsonPanel | None = None
         self._spots_panel: panels.SpotsPanel | None = None
 
         self._build_chrome()
@@ -358,6 +360,7 @@ class GameDataEditor(tk.Tk):
         self._tab_abilities = ttk.Frame(nb)
         self._tab_constants = ttk.Frame(nb)
         self._tab_discovery = ttk.Frame(nb)
+        self._tab_world = ttk.Frame(nb)
         self._tab_spots = ttk.Frame(nb)
         nb.add(self._tab_attacks, text="Attacks")
         nb.add(self._tab_behaviours, text="Behaviours")
@@ -370,6 +373,7 @@ class GameDataEditor(tk.Tk):
         nb.add(self._tab_abilities, text="Abilities")
         nb.add(self._tab_constants, text="Constants")
         nb.add(self._tab_discovery, text="Discovery")
+        nb.add(self._tab_world, text="World")
         nb.add(self._tab_spots, text="Spots")
         self._build_attacks_tab()
         self._build_behaviours_tab()
@@ -458,6 +462,28 @@ class GameDataEditor(tk.Tk):
             json_fields=panels.RECIPE_SITE_JSON,
             on_dirty=self._mark_dirty,
         )
+
+        world = ttk.Panedwindow(self._tab_world, orient="vertical")
+        world.pack(fill="both", expand=True)
+        zoo_frame = ttk.LabelFrame(world, text="zoo (Monster Zoo forever-war)", padding=4)
+        crypt_frame = ttk.LabelFrame(
+            world, text="crypt (Graveyard chapel undead station)", padding=4
+        )
+        world.add(zoo_frame, weight=1)
+        world.add(crypt_frame, weight=1)
+        self._zoo_panel = panels.NestedJsonPanel(
+            zoo_frame,
+            scalar_fields=panels.ZOO_SCALARS,
+            json_fields=panels.ZOO_JSON,
+            on_dirty=self._mark_dirty,
+        )
+        self._crypt_panel = panels.NestedJsonPanel(
+            crypt_frame,
+            scalar_fields=panels.CRYPT_SCALARS,
+            json_fields=panels.CRYPT_JSON,
+            on_dirty=self._mark_dirty,
+        )
+
         self._spots_panel = panels.SpotsPanel(self._tab_spots, on_dirty=self._mark_dirty)
 
     def _mark_dirty(self, *_args: object) -> None:
@@ -1109,12 +1135,19 @@ class GameDataEditor(tk.Tk):
             "crowd_roles": enums["crowd_roles"],
             "attacks": enums["attacks"],
             "tags": tags,
+            "auras": self._collect_known_auras(),
         }
         for key, check in self._template_checklists.items():
             selected = check.get_selected()
             check.set_options(option_map[key])
             check.set_selected(selected)
             self._wire_checklist_dirty(check)
+
+    def _collect_known_auras(self) -> list[str]:
+        auras = self._gamedata_root.get("auras")
+        if not isinstance(auras, dict):
+            return []
+        return sorted(str(k) for k in auras.keys())
 
     def _collect_known_tags(self) -> list[str]:
         tags: set[str] = set()
@@ -1641,6 +1674,7 @@ class GameDataEditor(tk.Tk):
             "crowd_roles": enums["crowd_roles"],
             "attacks": enums["attacks"],
             "tags": tags,
+            "auras": self._collect_known_auras(),
         }
         for key, check in self._monster_list_checks.items():
             selected = check.get_selected()
@@ -2103,6 +2137,8 @@ class GameDataEditor(tk.Tk):
         assert self._constants_panel is not None
         assert self._chest_panel is not None
         assert self._recipe_sites_panel is not None
+        assert self._zoo_panel is not None
+        assert self._crypt_panel is not None
         assert self._spots_panel is not None
         self._items_panel.set_data(root.get("items") or {})
         self._craft_panel.set_data(root.get("craft_recipes") or {})
@@ -2112,6 +2148,8 @@ class GameDataEditor(tk.Tk):
         self._constants_panel.set_data(root.get("ability_constants") or {})
         self._chest_panel.set_data(root.get("chest_loot") or {})
         self._recipe_sites_panel.set_data(root.get("recipe_sites") or {})
+        self._zoo_panel.set_data(root.get("zoo") or {})
+        self._crypt_panel.set_data(root.get("crypt") or {})
         self._spots_panel.set_data(root.get("mandelbrot_spots") or {})
 
     def _collect_noncombat(self) -> dict[str, Any]:
@@ -2123,6 +2161,8 @@ class GameDataEditor(tk.Tk):
         assert self._constants_panel is not None
         assert self._chest_panel is not None
         assert self._recipe_sites_panel is not None
+        assert self._zoo_panel is not None
+        assert self._crypt_panel is not None
         assert self._spots_panel is not None
         return {
             "items": self._items_panel.get_data(),
@@ -2133,6 +2173,8 @@ class GameDataEditor(tk.Tk):
             "ability_constants": self._constants_panel.get_data(),
             "chest_loot": self._chest_panel.get_data(),
             "recipe_sites": self._recipe_sites_panel.get_data(),
+            "zoo": self._zoo_panel.get_data(),
+            "crypt": self._crypt_panel.get_data(),
             "mandelbrot_spots": self._spots_panel.get_data(),
         }
 
@@ -2241,6 +2283,43 @@ class GameDataEditor(tk.Tk):
             elif items and any(g not in items for g in fallback):
                 missing = [g for g in fallback if g not in items]
                 errors.append(f"recipe_sites.fallback_gems: unknown {missing}")
+
+        errors.extend(
+            _validate_forever_war_section(
+                "zoo",
+                sections.get("zoo"),
+                {
+                    "cloak_duration_sec": float,
+                    "plate_damage_interval_sec": float,
+                    "base_spawn_interval_sec": float,
+                    "spawn_pressure_k": float,
+                    "per_territory_cap": int,
+                    "district_alive_cap": int,
+                },
+            )
+        )
+        errors.extend(
+            _validate_forever_war_section(
+                "crypt",
+                sections.get("crypt"),
+                {
+                    "spawn_lift_m": float,
+                    "base_spawn_interval_sec": float,
+                    "spawn_pressure_k": float,
+                    "alive_cap": int,
+                    "first_spawn_fraction": float,
+                    "faction": str,
+                },
+            )
+        )
+        crypt = sections.get("crypt")
+        if isinstance(crypt, dict):
+            frac = crypt.get("first_spawn_fraction")
+            if isinstance(frac, (int, float)) and not (0.0 < float(frac) <= 1.0):
+                errors.append("crypt.first_spawn_fraction must be in (0, 1]")
+            faction = str(crypt.get("faction", "")).strip()
+            if faction and faction not in ALLOWED_FACTIONS:
+                errors.append(f"crypt.faction: unknown '{faction}'")
 
         spots = sections["mandelbrot_spots"]
         if not isinstance(spots, dict):
@@ -2416,6 +2495,8 @@ class GameDataEditor(tk.Tk):
                     "ability_constants": disk_root.get("ability_constants") or {},
                     "chest_loot": disk_root.get("chest_loot") or {},
                     "recipe_sites": disk_root.get("recipe_sites") or {},
+                    "zoo": disk_root.get("zoo") or {},
+                    "crypt": disk_root.get("crypt") or {},
                     "mandelbrot_spots": disk_root.get("mandelbrot_spots") or {},
                 }
             )
@@ -2671,6 +2752,8 @@ def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
     assert app._constants_panel is not None
     assert app._chest_panel is not None
     assert app._recipe_sites_panel is not None
+    assert app._zoo_panel is not None
+    assert app._crypt_panel is not None
     assert app._spots_panel is not None
     items = app._items_panel.get_data()
     if "gem_quartz" not in items:
@@ -2681,6 +2764,14 @@ def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
     districts = app._district_panel.get_data()
     if "theme_totals" not in districts:
         raise RuntimeError("smoke: district panel missing theme_totals")
+    zoo = app._zoo_panel.get_data()
+    if float(zoo.get("base_spawn_interval_sec", 0.0)) <= 0.0:
+        raise RuntimeError("smoke: zoo panel missing base_spawn_interval_sec")
+    crypt = app._crypt_panel.get_data()
+    if int(crypt.get("alive_cap", 0)) < 1:
+        raise RuntimeError("smoke: crypt panel missing alive_cap")
+    if str(crypt.get("faction", "")) != "undead":
+        raise RuntimeError("smoke: crypt faction should be undead")
     spots = app._spots_panel.get_data()
     spot_list = spots.get("spots")
     if not isinstance(spot_list, list) or len(spot_list) < 80:
@@ -2690,6 +2781,38 @@ def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
         raise RuntimeError(
             "smoke: full gamedata validation failed:\n" + "\n".join(errors[:20])
         )
+
+
+def _validate_forever_war_section(
+    name: str,
+    section: Any,
+    schema: dict[str, type],
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(section, dict) or not section:
+        errors.append(f"{name}: must be a non-empty object")
+        return errors
+    for key, kind in schema.items():
+        if key not in section:
+            errors.append(f"{name}.{key}: required")
+            continue
+        value = section[key]
+        if kind is float:
+            if not isinstance(value, (int, float)):
+                errors.append(f"{name}.{key}: must be a number")
+            elif float(value) < 0.0:
+                errors.append(f"{name}.{key}: must be >= 0")
+        elif kind is int:
+            if not isinstance(value, int) or isinstance(value, bool):
+                errors.append(f"{name}.{key}: must be an integer")
+            elif int(value) < 0:
+                errors.append(f"{name}.{key}: must be >= 0")
+        elif kind is str:
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{name}.{key}: must be a non-empty string")
+        else:
+            errors.append(f"{name}.{key}: unsupported schema type")
+    return errors
 
 
 def main(argv: list[str] | None = None) -> int:

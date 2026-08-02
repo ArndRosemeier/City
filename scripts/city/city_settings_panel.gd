@@ -6,8 +6,6 @@ signal closed
 signal opened
 signal settings_applied(settings: Dictionary)
 signal controls_changed(controls: PlayerControls)
-signal spawn_meteors_toggled(enabled: bool)
-signal undead_invasion_toggled(enabled: bool)
 ## The Game button shares this bar but belongs to CityRoot's save modal, not to this panel.
 signal game_menu_requested
 
@@ -22,8 +20,6 @@ const CONTROLS_VERSION := 5
 var _btn: Button
 var _game_btn: Button
 var _top_bar: HBoxContainer
-var _spawn_meteors_check: CheckBox
-var _undead_invasion_check: CheckBox
 var _panel: PanelContainer
 var _dim: ColorRect
 var _open: bool = false
@@ -55,8 +51,8 @@ func is_open() -> bool:
 	return _open
 
 
-## The Settings button and the two world toggles are HUD, but they ride this panel's layer so
-## the button still reaches the dim that closes the panel. Another modal hides them instead.
+## Game + Settings ride this panel's layer so the button still reaches the dim that closes
+## the panel. Another modal hides the bar instead.
 func set_top_bar_visible(on: bool) -> void:
 	_top_bar.visible = on
 
@@ -67,14 +63,6 @@ func get_settings() -> Dictionary:
 
 func get_player_controls() -> PlayerControls:
 	return _player_controls
-
-
-func is_spawn_meteors_enabled() -> bool:
-	return _spawn_meteors_check != null and _spawn_meteors_check.button_pressed
-
-
-func is_undead_invasion_enabled() -> bool:
-	return _undead_invasion_check != null and _undead_invasion_check.button_pressed
 
 
 func open_panel() -> void:
@@ -180,29 +168,13 @@ func _build_ui() -> void:
 	_top_bar.focus_mode = Control.FOCUS_NONE
 	_top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_top_bar.offset_left = -520.0
+	_top_bar.offset_left = -240.0
 	_top_bar.offset_top = 12.0
 	_top_bar.offset_right = -16.0
 	_top_bar.offset_bottom = 44.0
 	_top_bar.add_theme_constant_override("separation", 10)
 	_top_bar.alignment = BoxContainer.ALIGNMENT_END
 	add_child(_top_bar)
-
-	_spawn_meteors_check = CheckBox.new()
-	_spawn_meteors_check.name = "SpawnMeteorsCheck"
-	_spawn_meteors_check.text = "Spawn meteors"
-	_spawn_meteors_check.focus_mode = Control.FOCUS_NONE
-	_spawn_meteors_check.button_pressed = false
-	_spawn_meteors_check.toggled.connect(_on_spawn_meteors_toggled)
-	_top_bar.add_child(_spawn_meteors_check)
-
-	_undead_invasion_check = CheckBox.new()
-	_undead_invasion_check.name = "UndeadInvasionCheck"
-	_undead_invasion_check.text = "Undead invasion"
-	_undead_invasion_check.focus_mode = Control.FOCUS_NONE
-	_undead_invasion_check.button_pressed = false
-	_undead_invasion_check.toggled.connect(_on_undead_invasion_toggled)
-	_top_bar.add_child(_undead_invasion_check)
 
 	## Session lifecycle rides this bar but opens its own modal — see GameMenuPanel for why saving
 	## and loading are not a tab in here.
@@ -506,14 +478,6 @@ func _on_check(key: String, on: bool) -> void:
 		return
 	_settings[key] = on
 	_emit_applied()
-
-
-func _on_spawn_meteors_toggled(on: bool) -> void:
-	spawn_meteors_toggled.emit(on)
-
-
-func _on_undead_invasion_toggled(on: bool) -> void:
-	undead_invasion_toggled.emit(on)
 
 
 func _on_reset_controls() -> void:

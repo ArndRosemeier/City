@@ -36,9 +36,9 @@ const MonsterHealthBarScript := preload("res://scripts/city/monster_health_bar.g
 ## the ped/car warm-up pattern. First load of each path is still sync on the summon thread.
 static var _scene_cache: Dictionary = {}  ## String path -> PackedScene
 
-## Slightly slower than the slowest walking pedestrian (1.15–1.85).
-const MOVE_SPEED_MAGE := 1.05
-const MOVE_SPEED_MINION := 4.2
+## Default ground speed for ordinary undead bodies. Role no longer halves mages —
+## catalogue `speed_mult` is the only throttle.
+const MOVE_SPEED := 4.2
 const MOVE_SPEED_GIANT := 5.5
 ## KayKit walk cycle authored roughly around this ground speed.
 const WALK_ANIM_REF_MPS := 1.55
@@ -1139,15 +1139,10 @@ func _distance_to_player() -> float:
 
 
 func _move_speed() -> float:
-	var base := MOVE_SPEED_MINION
-	match role:
-		Role.MAGE:
-			base = MOVE_SPEED_MAGE
-		Role.GIANT:
-			## Cover ground at giant size without becoming unreadable.
-			base = MOVE_SPEED_GIANT * clampf(0.55 + 0.12 * character_scale, 1.0, 2.4)
-		_:
-			base = MOVE_SPEED_MINION
+	var base := MOVE_SPEED
+	if role == Role.GIANT:
+		## Cover ground at giant size without becoming unreadable.
+		base = MOVE_SPEED_GIANT * clampf(0.55 + 0.12 * character_scale, 1.0, 2.4)
 	var mult := 1.0
 	if _combat != null:
 		mult = float(_combat.call("speed_mult"))

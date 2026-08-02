@@ -389,6 +389,42 @@ impl NavWorld {
         best.map(|(k, _)| k)
     }
 
+    /// Every standable surface in one column within `radius_cells` of `y`.
+    ///
+    /// Wander picks an XZ probe first, then uses this instead of `nearest_span` so a crypt
+    /// floor and the chapel above it are both candidates — nearest_span's vertical weight
+    /// would almost always keep the body on its current storey.
+    pub fn column_surfaces(
+        &self,
+        x: f32,
+        y: f32,
+        z: f32,
+        profile: &Profile,
+        radius_cells: i32,
+    ) -> Vec<[f32; 3]> {
+        let wx = x.floor() as i32;
+        let wz = z.floor() as i32;
+        let Some(slot) = self.slot_of_column(wx, wz) else {
+            return Vec::new();
+        };
+        let field = self.field_of(slot);
+        let mut ids: Vec<SpanId> = Vec::new();
+        field.column_spans(wx, wz, &mut ids);
+        let mut out: Vec<[f32; 3]> = Vec::new();
+        let radius = radius_cells as f32;
+        for id in ids {
+            let s = field.span(id);
+            if !profile.accepts(s) {
+                continue;
+            }
+            if (s.surface_y - y).abs() > radius {
+                continue;
+            }
+            out.push([wx as f32 + 0.5, s.surface_y, wz as f32 + 0.5]);
+        }
+        out
+    }
+
     // -----------------------------------------------------------------------
     // High level graph
     // -----------------------------------------------------------------------
@@ -2181,5 +2217,17 @@ mod tests {
         assert_eq!(ids.len(), 2, "ground and slab top are separate spans");
         let ys: Vec<f32> = ids.iter().map(|i| f.span(*i).surface_y).collect();
         assert!(ys.contains(&1.0) && ys.contains(&9.0), "got {ys:?}");
+
+        let profile = w.profile(0).unwrap();
+        let both = w.column_surfaces(20.2, 1.0, 20.2, profile, 12);
+        let both_ys: Vec<f32> = both.iter().map(|p| p[1]).collect();
+        assert_eq!(both.len(), 2, "vertical band must list both floors: {both_ys:?}");
+        let ground_only = w.column_surfaces(20.2, 1.0, 20.2, profile, 2);
+        assert_eq!(
+            ground_only.len(),
+            1,
+            "tight vertical band must not reach the slab"
+        );
+        assert!((ground_only[0][1] - 1.0).abs() < 0.01);
     }
 }

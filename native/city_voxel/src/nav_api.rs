@@ -492,6 +492,36 @@ impl NativeNavWorld {
         d
     }
 
+    /// Standable surfaces in the column under `world_pos`, within `radius_m` vertically.
+    ///
+    /// One column only — no ring search. Wander uses this after picking an XZ probe so
+    /// multi-level destinations stay cheap.
+    #[func]
+    fn column_surfaces(
+        &self,
+        profile_id: i32,
+        world_pos: Vector3,
+        radius_m: f32,
+    ) -> PackedVector3Array {
+        let mut out = PackedVector3Array::new();
+        let vs = self.world.voxel_size;
+        let Some(profile) = self.world.profile(profile_id) else {
+            godot_error!("NativeNavWorld.column_surfaces: unknown profile {profile_id}");
+            return out;
+        };
+        let radius_cells = ((radius_m / vs).ceil() as i32).clamp(0, 64);
+        for p in self.world.column_surfaces(
+            world_pos.x / vs,
+            world_pos.y / vs,
+            world_pos.z / vs,
+            profile,
+            radius_cells,
+        ) {
+            out.push(Vector3::new(p[0] * vs, p[1] * vs, p[2] * vs));
+        }
+        out
+    }
+
     /// Rebuild navigation for a voxel box after the world changed there.
     ///
     /// `materials` is a dense Y-major box copied from the terrain. `stride` is 1 for an

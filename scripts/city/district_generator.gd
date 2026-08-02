@@ -111,6 +111,8 @@ var _lake_island_crowns: Array[Vector3i] = []
 var _park_gazebo: Vector3i = Vector3i(-1, 0, -1)
 var _fractal_niche: Vector3i = Vector3i(-1, 0, -1)
 var _crypt_rooms: Array[Vector3i] = []
+## Undead station under the chapel crypt hub (district-local). x=-1 outside Graveyard.
+var _crypt_spawner_vox: Vector3i = Vector3i(-1, -1, -1)
 var _tall_roofs: Array[Vector3i] = []
 ## Castle plan from the compose pass; outlives the composer so the bake can hand it on.
 var _castle_layout: CastleLayout = null
@@ -236,6 +238,12 @@ func get_crypt_rooms() -> Array[Vector3i]:
 	return _crypt_rooms.duplicate()
 
 
+## Undead spawn pad in the crypt hub under the chapel (district-local x, floor Y, z).
+## `x` is -1 outside Graveyard districts.
+func get_crypt_spawner() -> Vector3i:
+	return _crypt_spawner_vox
+
+
 ## Roofs of this tile's tallest buildings in district-local voxels (x, roof surface Y, z),
 ## tallest first. Only rect-shell lots report one — round archetypes paint no storey plates,
 ## so there is no recorded surface up there to stand anything on.
@@ -297,6 +305,7 @@ func _setup_composers() -> void:
 	_park_gazebo = Vector3i(-1, 0, -1)
 	_fractal_niche = Vector3i(-1, 0, -1)
 	_crypt_rooms = []
+	_crypt_spawner_vox = Vector3i(-1, -1, -1)
 	_tall_roofs = []
 
 	_graveyard = GraveyardComposerScript.new()
@@ -685,6 +694,7 @@ func decorate_open_spaces() -> void:
 		)
 		_graveyard.compose(gmin_gy, gmax_gy)
 		_crypt_rooms = _graveyard.crypt_rooms.duplicate()
+		_crypt_spawner_vox = _graveyard.crypt_spawner_vox
 		return
 	var g := _planner.grand_plaza
 	if g.size.x > 0:

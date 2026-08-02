@@ -528,6 +528,17 @@ func nearest_surface(profile_id: int, world_pos: Vector3, radius_m: float) -> Su
 	return hit
 
 
+## Standable surfaces in the single column under `world_pos`, within `radius_m` vertically.
+##
+## Cheap on purpose: wander probes XZ first, then picks among these instead of paying for
+## a nearest-surface ring that prefers the body's current storey.
+func column_surfaces(profile_id: int, world_pos: Vector3, radius_m: float) -> PackedVector3Array:
+	if _world == null:
+		push_error("NavService.column_surfaces: call ensure_configured first")
+		return PackedVector3Array()
+	return _world.column_surfaces(profile_id, world_pos, radius_m)
+
+
 ## Mark the column under a world position impassable for a while, so one agent's discovery
 ## steers the others too.
 func block_column(world_pos: Vector3, seconds: float) -> void:

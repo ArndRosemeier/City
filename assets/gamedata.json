@@ -111,16 +111,6 @@
       "notes": "CityWalker Q → feet-centered crater; radius = charged_blast_radius_max_m×scale (2.52 at 1×), stomp_cooldown_sec=0.85, energy_cost_stomp=10, stomp_impact_ratio=0.48; DamageSource.PLAYER_STOMP=110. Player windup is anim-ratio (not seconds). Monsters: ~0.4s foot telegraph + 6s recovery."
     }
   },
-  "auras": {
-    "crumble_stride": {
-      "id": "crumble_stride",
-      "reach_m": 1.8,
-      "tick_s": 0.22,
-      "along_half": 1,
-      "depth_vox": 2,
-      "notes": "While walking, destructible voxels ahead crumble with cascades. Skips cave-cage materials."
-    }
-  },
   "behaviours": {
     "ambient": {
       "id": "ambient",
@@ -214,6 +204,9 @@
       "behaviour": [
         "chase"
       ],
+      "attacks": [
+        "stomp"
+      ],
       "tags": [
         "elite",
         "giant"
@@ -221,9 +214,7 @@
       "crowd_roles": [
         "wave_hunter"
       ],
-      "attacks": [
-        "stomp"
-      ]
+      "auras": []
     },
     "ranged_boss": {
       "intent": "Artillery elite — skirmish behaviour may use charged_blast / eye_laser (and the rest of the skirmish pool); AI selection deferred. Stack with boss when a body should be both giant and artillery (scalars take max).",
@@ -276,7 +267,7 @@
       "intent": "Standoff caster/skirmisher — skirmish attack pool (orb/blaster/eye_laser/charged_blast) plus chase melee when closing.",
       "hp_mult": 1.0,
       "damage_mult": 1.0,
-      "speed_mult": 0.55,
+      "speed_mult": 1.0,
       "aggro_range_m": 40.0,
       "leash_m": 60.0,
       "preferred_range_m": 27.6,
@@ -344,11 +335,11 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
+      "hp_mult": 1.2353,
       "attacks_extra": [
         "orb_convert"
       ],
-      "notes": "Live wave caster body; also eligible for BRUTE slot. Kit from behaviours: rangestriker/skirmish (blaster|eye_laser) + chase melee, plus the orb_convert specialty. Leans full ranged roster.",
-      "hp_mult": 1.2353
+      "notes": "Live wave caster body; also eligible for BRUTE slot. Kit from behaviours: rangestriker/skirmish (blaster|eye_laser) + chase melee, plus the orb_convert specialty. Leans full ranged roster."
     },
     {
       "id": "kaykit/Skeleton_Minion",
@@ -358,8 +349,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
-      "notes": "Reference-height fodder body the capsule numbers were measured on.",
-      "hp_mult": 0.6471
+      "hp_mult": 0.6471,
+      "notes": "Reference-height fodder body the capsule numbers were measured on."
     },
     {
       "id": "kaykit/Skeleton_Rogue",
@@ -369,7 +360,7 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
-      "speed_mult": 0.85,
+      "hp_mult": 1.2353,
       "preferred_range_m": 24.0,
       "attacks": [
         "blaster",
@@ -381,8 +372,7 @@
         "hybrid",
         "skirmisher"
       ],
-      "notes": "Caster-slot hybrid: hard-replaces behaviour-derived attacks to drop blaster/charged_blast (rapid/nuke feel wrong on a sword skirmisher) but keeps orb_convert, adds melee + eye_laser single-shot poke. Closer preferred_range; orb scalars stay intact (single template).",
-      "hp_mult": 1.2353
+      "notes": "Caster-slot hybrid: hard-replaces behaviour-derived attacks to drop blaster/charged_blast (rapid/nuke feel wrong on a sword skirmisher) but keeps orb_convert, adds melee + eye_laser single-shot poke. Closer preferred_range; orb scalars stay intact (single template)."
     },
     {
       "id": "kaykit/Skeleton_Warrior",
@@ -393,8 +383,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
-      "notes": "FODDER+BRUTE slots — max-scalar pack hunter / tank (hp/damage from brute).",
-      "hp_mult": 2.0588
+      "hp_mult": 2.0588,
+      "notes": "FODDER+BRUTE slots — max-scalar pack hunter / tank (hp/damage from brute)."
     },
     {
       "id": "big/Alien",
@@ -425,10 +415,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.55,
-      "notes": "Dungeon stomper — melee_boss + guard (scalars max: hp/damage 2.0/2.2, leash max(70,22)=70). Kit: stomp + melee.",
       "hp_mult": 2.0479,
       "damage_mult": 2.55,
-      "armor_mult": 1.85
+      "armor_mult": 1.85,
+      "notes": "Dungeon stomper — melee_boss + guard (scalars max: hp/damage 2.0/2.2, leash max(70,22)=70). Kit: stomp + melee."
     },
     {
       "id": "big/Bunny",
@@ -449,10 +439,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.5,
-      "notes": "Tall grown-giant path candidate.",
       "hp_mult": 1.4704,
       "damage_mult": 2.55,
-      "armor_mult": 1.85
+      "armor_mult": 1.85,
+      "notes": "Tall grown-giant path candidate."
     },
     {
       "id": "big/Demon",
@@ -462,10 +452,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.55,
-      "notes": "Artillery demon — charged_blast sphere nuke + eye_laser; not the grown-giant boss path.",
       "hp_mult": 1.8648,
+      "damage_mult": 1.85,
       "armor_mult": 1.4,
-      "damage_mult": 1.85
+      "notes": "Artillery demon — charged_blast sphere nuke + eye_laser; not the grown-giant boss path."
     },
     {
       "id": "big/CageDemon",
@@ -475,18 +465,18 @@
       ],
       "spawn_ready": false,
       "spawn_weight": 0.0,
-      "attacks_extra": [
-        "charged_blast"
-      ],
+      "hp_mult": 1.8648,
+      "damage_mult": 1.85,
+      "armor_mult": 1.4,
       "auras": [
         "crumble_stride"
       ],
-      "kill_gems_min": 12,
-      "kill_gems_max": 18,
+      "attacks_extra": [
+        "charged_blast"
+      ],
       "notes": "Hill cave caged boss — Unique; crumble aura + charged blast.",
-      "hp_mult": 1.8648,
-      "armor_mult": 1.4,
-      "damage_mult": 1.85
+      "kill_gems_min": 12,
+      "kill_gems_max": 18
     },
     {
       "id": "big/Dino",
@@ -538,10 +528,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.4,
-      "notes": "Giant + artillery stack: scalars take max (hp_mult 2.5, damage_mult 2.2); attacks union debris|melee|charged_blast|eye_laser. Magical elite silhouette.",
       "hp_mult": 1.6121,
+      "damage_mult": 1.85,
       "armor_mult": 1.4,
-      "damage_mult": 1.85
+      "notes": "Giant + artillery stack: scalars take max (hp_mult 2.5, damage_mult 2.2); attacks union debris|melee|charged_blast|eye_laser. Magical elite silhouette."
     },
     {
       "id": "big/Ninja",
@@ -551,10 +541,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
+      "hp_mult": 1.3963,
       "tags_extra": [
         "agile"
-      ],
-      "hp_mult": 1.3963
+      ]
     },
     {
       "id": "big/Orc",
@@ -564,10 +554,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.55,
-      "notes": "Melee elite — stomp crater + contact melee; not grown-giant boss path.",
       "hp_mult": 1.8131,
       "damage_mult": 2.55,
-      "armor_mult": 1.85
+      "armor_mult": 1.85,
+      "notes": "Melee elite — stomp crater + contact melee; not grown-giant boss path."
     },
     {
       "id": "big/Orc_Skull",
@@ -602,10 +592,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.5,
-      "notes": "Tanky stomper — melee_boss+brute (damage_mult max 2.2); body hp_mult 2.7 replaces merged max(2.0,1.4).",
+      "hp_mult": 2.0573,
       "damage_mult": 2.55,
       "armor_mult": 1.85,
-      "hp_mult": 2.0573
+      "notes": "Tanky stomper — melee_boss+brute (damage_mult max 2.2); body hp_mult 2.7 replaces merged max(2.0,1.4)."
     },
     {
       "id": "blob/Alien",
@@ -635,10 +625,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.9,
+      "hp_mult": 0.4006,
       "tags_extra": [
         "relentless"
-      ],
-      "hp_mult": 0.4006
+      ]
     },
     {
       "id": "blob/Cat",
@@ -648,10 +638,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
+      "hp_mult": 0.5432,
       "tags_extra": [
         "small"
-      ],
-      "hp_mult": 0.5432
+      ]
     },
     {
       "id": "blob/Chicken",
@@ -661,10 +651,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
+      "hp_mult": 0.4944,
       "tags_extra": [
         "small"
-      ],
-      "hp_mult": 0.4944
+      ]
     },
     {
       "id": "blob/Dog",
@@ -674,10 +664,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
+      "hp_mult": 0.5602,
       "tags_extra": [
         "small"
-      ],
-      "hp_mult": 0.5602
+      ]
     },
     {
       "id": "blob/Fish",
@@ -697,8 +687,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.2,
-      "notes": "Cheapest pack silhouette in the blob family.",
-      "hp_mult": 0.5564
+      "hp_mult": 0.5564,
+      "notes": "Cheapest pack silhouette in the blob family."
     },
     {
       "id": "blob/GreenSpikyBlob",
@@ -709,8 +699,8 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.7,
-      "notes": "Tall spikes — hybrid fodder/tank; height decoration still goes through CreatureHealth's blob sqrt.",
-      "hp_mult": 1.184
+      "hp_mult": 1.184,
+      "notes": "Tall spikes — hybrid fodder/tank; height decoration still goes through CreatureHealth's blob sqrt."
     },
     {
       "id": "blob/Mushnub",
@@ -751,10 +741,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.0,
+      "hp_mult": 0.5642,
       "tags_extra": [
         "small"
-      ],
-      "hp_mult": 0.5642
+      ]
     },
     {
       "id": "blob/PinkBlob",
@@ -764,10 +754,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 1.1,
+      "hp_mult": 0.5344,
       "tags_extra": [
         "small"
-      ],
-      "hp_mult": 0.5344
+      ]
     },
     {
       "id": "blob/Yeti",
@@ -788,10 +778,10 @@
       ],
       "spawn_ready": true,
       "spawn_weight": 0.6,
-      "notes": "Promoted from rangestriker convert kit to ranged_boss artillery — charged_blast + eye_laser (no orb_convert).",
       "hp_mult": 4.2693,
+      "damage_mult": 1.85,
       "armor_mult": 1.4,
-      "damage_mult": 1.85
+      "notes": "Promoted from rangestriker convert kit to ranged_boss artillery — charged_blast + eye_laser (no orb_convert)."
     },
     {
       "id": "blob/Ninja",
@@ -801,8 +791,8 @@
       ],
       "spawn_ready": false,
       "spawn_weight": 0.0,
-      "notes": "Catalog note: rest pose sits 0.23 units below y=0 — vendored, not spawnable until fixed.",
-      "hp_mult": 0.4365
+      "hp_mult": 0.4365,
+      "notes": "Catalog note: rest pose sits 0.23 units below y=0 — vendored, not spawnable until fixed."
     },
     {
       "id": "flying/Alpaking",
@@ -811,13 +801,13 @@
         "boss"
       ],
       "spawn_ready": false,
+      "hp_mult": 4.7078,
+      "damage_mult": 2.55,
+      "armor_mult": 1.85,
       "crowd_roles": [
         "ambient"
       ],
-      "notes": "Flying rig — no ground locomotion; table row only.",
-      "hp_mult": 4.7078,
-      "damage_mult": 2.55,
-      "armor_mult": 1.85
+      "notes": "Flying rig — no ground locomotion; table row only."
     },
     {
       "id": "flying/Alpaking_Evolved",
@@ -826,12 +816,12 @@
         "boss"
       ],
       "spawn_ready": false,
-      "crowd_roles": [
-        "ambient"
-      ],
       "hp_mult": 3.8538,
       "damage_mult": 2.55,
-      "armor_mult": 1.85
+      "armor_mult": 1.85,
+      "crowd_roles": [
+        "ambient"
+      ]
     },
     {
       "id": "flying/Armabee",
@@ -840,10 +830,10 @@
         "minion"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.5515,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 0.5515
+      ]
     },
     {
       "id": "flying/Armabee_Evolved",
@@ -852,10 +842,10 @@
         "minion"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.518,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 0.518
+      ]
     },
     {
       "id": "flying/Demon",
@@ -864,10 +854,10 @@
         "brute"
       ],
       "spawn_ready": false,
+      "hp_mult": 3.8559,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 3.8559
+      ]
     },
     {
       "id": "flying/Dragon",
@@ -877,13 +867,13 @@
         "rangestriker"
       ],
       "spawn_ready": false,
+      "hp_mult": 5.5465,
+      "damage_mult": 1.85,
+      "armor_mult": 1.4,
       "crowd_roles": [
         "ambient"
       ],
-      "notes": "Fantasy flyer: elite + ranged; not spawnable until flight exists.",
-      "hp_mult": 5.5465,
-      "armor_mult": 1.4,
-      "damage_mult": 1.85
+      "notes": "Fantasy flyer: elite + ranged; not spawnable until flight exists."
     },
     {
       "id": "flying/Dragon_Evolved",
@@ -893,12 +883,12 @@
         "rangestriker"
       ],
       "spawn_ready": false,
+      "hp_mult": 4.0728,
+      "damage_mult": 1.85,
+      "armor_mult": 1.4,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 4.0728,
-      "armor_mult": 1.4,
-      "damage_mult": 1.85
+      ]
     },
     {
       "id": "flying/Ghost",
@@ -907,10 +897,10 @@
         "rangestriker"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.8211,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 0.8211
+      ]
     },
     {
       "id": "flying/Ghost_Skull",
@@ -919,10 +909,10 @@
         "rangestriker"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.8211,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 0.8211
+      ]
     },
     {
       "id": "flying/Glub",
@@ -931,10 +921,10 @@
         "minion"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.494,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 0.494
+      ]
     },
     {
       "id": "flying/Glub_Evolved",
@@ -944,10 +934,10 @@
         "brute"
       ],
       "spawn_ready": false,
+      "hp_mult": 1.2516,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 1.2516
+      ]
     },
     {
       "id": "flying/Goleling",
@@ -957,10 +947,10 @@
         "guard"
       ],
       "spawn_ready": false,
+      "hp_mult": 4.007,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 4.007
+      ]
     },
     {
       "id": "flying/Goleling_Evolved",
@@ -970,10 +960,10 @@
         "guard"
       ],
       "spawn_ready": false,
+      "hp_mult": 3.115,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 3.115
+      ]
     },
     {
       "id": "flying/Hywirl",
@@ -982,10 +972,10 @@
         "rangestriker"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.8727,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 0.8727
+      ]
     },
     {
       "id": "flying/Pigeon",
@@ -994,11 +984,11 @@
         "minion"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.6471,
       "crowd_roles": [
         "ambient"
       ],
-      "notes": "Authored hovering ~1.57 units up — ambient table only.",
-      "hp_mult": 0.6471
+      "notes": "Authored hovering ~1.57 units up — ambient table only."
     },
     {
       "id": "flying/Squidle",
@@ -1007,10 +997,10 @@
         "minion"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.5373,
       "crowd_roles": [
         "ambient"
-      ],
-      "hp_mult": 0.5373
+      ]
     },
     {
       "id": "flying/Tribal",
@@ -1020,51 +1010,33 @@
         "demolisher"
       ],
       "spawn_ready": false,
-      "crowd_roles": [
-        "ambient"
-      ],
       "hp_mult": 3.3971,
       "damage_mult": 2.55,
-      "armor_mult": 1.85
+      "armor_mult": 1.85,
+      "crowd_roles": [
+        "ambient"
+      ]
     }
   ],
   "items": {
-    "gem_quartz": {
-      "display_name": "Quartz",
+    "boost_regen": {
+      "display_name": "Regen tonic",
       "stack_max": 99,
-      "gem_mat_id": 49,
       "flags": [
-        "gem"
+        "boost"
+      ]
+    },
+    "boost_speed": {
+      "display_name": "Speed tonic",
+      "stack_max": 99,
+      "flags": [
+        "boost"
       ]
     },
     "gem_amber": {
       "display_name": "Amber",
       "stack_max": 99,
       "gem_mat_id": 50,
-      "flags": [
-        "gem"
-      ]
-    },
-    "gem_topaz": {
-      "display_name": "Topaz",
-      "stack_max": 99,
-      "gem_mat_id": 51,
-      "flags": [
-        "gem"
-      ]
-    },
-    "gem_sapphire": {
-      "display_name": "Sapphire",
-      "stack_max": 99,
-      "gem_mat_id": 52,
-      "flags": [
-        "gem"
-      ]
-    },
-    "gem_emerald": {
-      "display_name": "Emerald",
-      "stack_max": 99,
-      "gem_mat_id": 53,
       "flags": [
         "gem"
       ]
@@ -1077,35 +1049,54 @@
         "gem"
       ]
     },
+    "gem_emerald": {
+      "display_name": "Emerald",
+      "stack_max": 99,
+      "gem_mat_id": 53,
+      "flags": [
+        "gem"
+      ]
+    },
+    "gem_quartz": {
+      "display_name": "Quartz",
+      "stack_max": 99,
+      "gem_mat_id": 49,
+      "flags": [
+        "gem"
+      ]
+    },
+    "gem_sapphire": {
+      "display_name": "Sapphire",
+      "stack_max": 99,
+      "gem_mat_id": 52,
+      "flags": [
+        "gem"
+      ]
+    },
+    "gem_topaz": {
+      "display_name": "Topaz",
+      "stack_max": 99,
+      "gem_mat_id": 51,
+      "flags": [
+        "gem"
+      ]
+    },
     "trap": {
       "display_name": "Trap",
       "stack_max": 99,
       "flags": [
         "trap"
       ]
-    },
-    "boost_speed": {
-      "display_name": "Speed tonic",
-      "stack_max": 99,
-      "flags": [
-        "boost"
-      ]
-    },
-    "boost_regen": {
-      "display_name": "Regen tonic",
-      "stack_max": 99,
-      "flags": [
-        "boost"
-      ]
     }
   },
   "craft_recipes": {
-    "trap_from_quartz": {
-      "display_name": "Trap",
+    "boost_regen_craft": {
+      "display_name": "Regen tonic",
       "inputs": {
-        "gem_quartz": 5
+        "gem_topaz": 3,
+        "gem_amber": 2
       },
-      "output_id": "trap",
+      "output_id": "boost_regen",
       "output_count": 1
     },
     "boost_speed_craft": {
@@ -1117,13 +1108,12 @@
       "output_id": "boost_speed",
       "output_count": 1
     },
-    "boost_regen_craft": {
-      "display_name": "Regen tonic",
+    "trap_from_quartz": {
+      "display_name": "Trap",
       "inputs": {
-        "gem_topaz": 3,
-        "gem_amber": 2
+        "gem_quartz": 5
       },
-      "output_id": "boost_regen",
+      "output_id": "trap",
       "output_count": 1
     }
   },
@@ -37411,6 +37401,163 @@
       ]
     }
   },
+  "abilities": {
+    "blaster": {
+      "display_name": "Blaster",
+      "kind": "weapon",
+      "unlock_cost": {},
+      "energy_cost": 1.0,
+      "gated": true,
+      "hint": "Hold primary fire — starter weapon"
+    },
+    "charged_blast": {
+      "display_name": "Charged blast",
+      "kind": "weapon",
+      "unlock_cost": {
+        "gem_amber": 6,
+        "gem_topaz": 4,
+        "gem_sapphire": 2
+      },
+      "energy_cost": 20.0,
+      "gated": true,
+      "hint": "Hold Alt fire, release to throw"
+    },
+    "district_hop": {
+      "display_name": "District hop",
+      "kind": "power",
+      "unlock_cost": {
+        "gem_amber": 3,
+        "gem_quartz": 6
+      },
+      "energy_cost": 0.0,
+      "gated": true,
+      "hint": "Teleport to a known district"
+    },
+    "grow": {
+      "display_name": "Grow",
+      "kind": "power",
+      "unlock_cost": {
+        "gem_emerald": 3,
+        "gem_amber": 4
+      },
+      "energy_cost": 12.0,
+      "gated": true,
+      "hint": "Temporary size up"
+    },
+    "hardness_exotic": {
+      "display_name": "Hardness: Exotic",
+      "kind": "meta",
+      "unlock_cost": {
+        "gem_diamond": 4,
+        "gem_sapphire": 4,
+        "gem_quartz": 15
+      },
+      "energy_cost": 0.0,
+      "gated": true,
+      "hint": "Carve meteor rock and infection"
+    },
+    "hardness_reinforced": {
+      "display_name": "Hardness: Reinforced",
+      "kind": "meta",
+      "unlock_cost": {
+        "gem_diamond": 2,
+        "gem_quartz": 20
+      },
+      "energy_cost": 0.0,
+      "gated": true,
+      "hint": "Carve concrete and steel"
+    },
+    "laser": {
+      "display_name": "Laser",
+      "kind": "weapon",
+      "unlock_cost": {
+        "gem_quartz": 8,
+        "gem_topaz": 3
+      },
+      "energy_cost": 1.0,
+      "gated": true,
+      "hint": "Eye beam"
+    },
+    "minion": {
+      "display_name": "Minion",
+      "kind": "power",
+      "unlock_cost": {
+        "gem_emerald": 4,
+        "gem_quartz": 12
+      },
+      "energy_cost": 40.0,
+      "gated": true,
+      "hint": "Summon a half-strength ally (replaces the previous)"
+    },
+    "shield": {
+      "display_name": "Shield",
+      "kind": "power",
+      "unlock_cost": {
+        "gem_sapphire": 5,
+        "gem_topaz": 4
+      },
+      "energy_cost": 0.0,
+      "gated": true,
+      "hint": "Toggle — drains energy while up and blunts hits"
+    },
+    "shrink": {
+      "display_name": "Shrink",
+      "kind": "power",
+      "unlock_cost": {
+        "gem_emerald": 2,
+        "gem_amber": 4
+      },
+      "energy_cost": 12.0,
+      "gated": true,
+      "hint": "Temporary size down"
+    },
+    "stomp": {
+      "display_name": "Stomp",
+      "kind": "weapon",
+      "unlock_cost": {
+        "gem_quartz": 10,
+        "gem_emerald": 2
+      },
+      "energy_cost": 10.0,
+      "gated": true,
+      "hint": "Ground slam"
+    },
+    "tetris": {
+      "display_name": "Tetris",
+      "kind": "power",
+      "unlock_cost": {
+        "gem_amber": 2,
+        "gem_quartz": 8
+      },
+      "energy_cost": 0.0,
+      "gated": true,
+      "hint": "Summon a cabinet"
+    },
+    "use_boost_regen": {
+      "display_name": "Regen boost",
+      "kind": "consumable",
+      "unlock_cost": {},
+      "energy_cost": 0.0,
+      "gated": false,
+      "hint": "Drink a regen tonic"
+    },
+    "use_boost_speed": {
+      "display_name": "Speed boost",
+      "kind": "consumable",
+      "unlock_cost": {},
+      "energy_cost": 0.0,
+      "gated": false,
+      "hint": "Drink a speed tonic"
+    },
+    "use_trap": {
+      "display_name": "Throw trap",
+      "kind": "consumable",
+      "unlock_cost": {},
+      "energy_cost": 0.0,
+      "gated": false,
+      "hint": "Aim at a world voxel and lob a hold trap there"
+    }
+  },
   "district_gems": {
     "explore_score": 50,
     "theme_totals": {
@@ -37436,183 +37583,18 @@
       "gem_diamond": 2
     }
   },
-  "zoo": {
-    "cloak_duration_sec": 120.0,
-    "plate_damage_interval_sec": 1.0,
-    "base_spawn_interval_sec": 14.0,
-    "spawn_pressure_k": 0.9,
-    "per_territory_cap": 2,
-    "district_alive_cap": 34
-  },
-  "abilities": {
-    "blaster": {
-      "display_name": "Blaster",
-      "kind": "weapon",
-      "unlock_cost": {},
-      "energy_cost": 1.0,
-      "gated": true,
-      "hint": "Hold primary fire — starter weapon"
-    },
-    "laser": {
-      "display_name": "Laser",
-      "kind": "weapon",
-      "unlock_cost": {
-        "gem_quartz": 8,
-        "gem_topaz": 3
-      },
-      "energy_cost": 1.0,
-      "gated": true,
-      "hint": "Eye beam"
-    },
-    "charged_blast": {
-      "display_name": "Charged blast",
-      "kind": "weapon",
-      "unlock_cost": {
-        "gem_amber": 6,
-        "gem_topaz": 4,
-        "gem_sapphire": 2
-      },
-      "energy_cost": 20.0,
-      "gated": true,
-      "hint": "Hold Alt fire, release to throw"
-    },
-    "stomp": {
-      "display_name": "Stomp",
-      "kind": "weapon",
-      "unlock_cost": {
-        "gem_quartz": 10,
-        "gem_emerald": 2
-      },
-      "energy_cost": 10.0,
-      "gated": true,
-      "hint": "Ground slam"
-    },
-    "shield": {
-      "display_name": "Shield",
-      "kind": "power",
-      "unlock_cost": {
-        "gem_sapphire": 5,
-        "gem_topaz": 4
-      },
-      "energy_cost": 0.0,
-      "gated": true,
-      "hint": "Toggle — drains energy while up and blunts hits"
-    },
-    "grow": {
-      "display_name": "Grow",
-      "kind": "power",
-      "unlock_cost": {
-        "gem_emerald": 3,
-        "gem_amber": 4
-      },
-      "energy_cost": 12.0,
-      "gated": true,
-      "hint": "Temporary size up"
-    },
-    "shrink": {
-      "display_name": "Shrink",
-      "kind": "power",
-      "unlock_cost": {
-        "gem_emerald": 2,
-        "gem_amber": 4
-      },
-      "energy_cost": 12.0,
-      "gated": true,
-      "hint": "Temporary size down"
-    },
-    "minion": {
-      "display_name": "Minion",
-      "kind": "power",
-      "unlock_cost": {
-        "gem_emerald": 4,
-        "gem_quartz": 12
-      },
-      "energy_cost": 40.0,
-      "gated": true,
-      "hint": "Summon a half-strength ally (replaces the previous)"
-    },
-    "district_hop": {
-      "display_name": "District hop",
-      "kind": "power",
-      "unlock_cost": {
-        "gem_amber": 3,
-        "gem_quartz": 6
-      },
-      "energy_cost": 0.0,
-      "gated": true,
-      "hint": "Teleport to a known district"
-    },
-    "tetris": {
-      "display_name": "Tetris",
-      "kind": "power",
-      "unlock_cost": {
-        "gem_amber": 2,
-        "gem_quartz": 8
-      },
-      "energy_cost": 0.0,
-      "gated": true,
-      "hint": "Summon a cabinet"
-    },
-    "use_trap": {
-      "display_name": "Throw trap",
-      "kind": "consumable",
-      "unlock_cost": {},
-      "energy_cost": 0.0,
-      "gated": false,
-      "hint": "Aim at a world voxel and lob a hold trap there"
-    },
-    "use_boost_speed": {
-      "display_name": "Speed boost",
-      "kind": "consumable",
-      "unlock_cost": {},
-      "energy_cost": 0.0,
-      "gated": false,
-      "hint": "Drink a speed tonic"
-    },
-    "use_boost_regen": {
-      "display_name": "Regen boost",
-      "kind": "consumable",
-      "unlock_cost": {},
-      "energy_cost": 0.0,
-      "gated": false,
-      "hint": "Drink a regen tonic"
-    },
-    "hardness_reinforced": {
-      "display_name": "Hardness: Reinforced",
-      "kind": "meta",
-      "unlock_cost": {
-        "gem_diamond": 2,
-        "gem_quartz": 20
-      },
-      "energy_cost": 0.0,
-      "gated": true,
-      "hint": "Carve concrete and steel"
-    },
-    "hardness_exotic": {
-      "display_name": "Hardness: Exotic",
-      "kind": "meta",
-      "unlock_cost": {
-        "gem_diamond": 4,
-        "gem_sapphire": 4,
-        "gem_quartz": 15
-      },
-      "energy_cost": 0.0,
-      "gated": true,
-      "hint": "Carve meteor rock and infection"
-    }
-  },
   "ability_constants": {
-    "starter_unlocks": [
-      "blaster",
-      "hardness_reinforced",
-      "hardness_exotic"
-    ],
     "trap_hostile_score": 25,
     "boost_duration_sec": 20.0,
     "grow_shrink_duration_sec": 25.0,
     "shield_drain_per_sec": 8.0,
     "minion_max": 1,
     "minion_duration_sec": 60.0,
+    "starter_unlocks": [
+      "blaster",
+      "hardness_reinforced",
+      "hardness_exotic"
+    ],
     "default_sandbox_builds": [
       "cottage",
       "pool",
@@ -37649,6 +37631,22 @@
       "gem_emerald",
       "gem_diamond"
     ]
+  },
+  "zoo": {
+    "cloak_duration_sec": 120.0,
+    "plate_damage_interval_sec": 1.0,
+    "base_spawn_interval_sec": 14.0,
+    "spawn_pressure_k": 0.9,
+    "per_territory_cap": 2,
+    "district_alive_cap": 34
+  },
+  "crypt": {
+    "spawn_lift_m": 0.2,
+    "base_spawn_interval_sec": 30.0,
+    "spawn_pressure_k": 0.9,
+    "alive_cap": 20,
+    "first_spawn_fraction": 0.25,
+    "faction": "undead"
   },
   "mandelbrot_spots": {
     "scale_max": 0.0001,
@@ -38284,5 +38282,15 @@
         "scale": "0.00000009007199254741"
       }
     ]
+  },
+  "auras": {
+    "crumble_stride": {
+      "id": "crumble_stride",
+      "reach_m": 1.8,
+      "tick_s": 0.22,
+      "along_half": 1,
+      "depth_vox": 2,
+      "notes": "While walking, destructible voxels ahead crumble with cascades. Skips cave-cage materials."
+    }
   }
 }

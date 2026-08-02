@@ -1397,7 +1397,7 @@
     "flying/Ghost": {
       "hp_mult": 0.8211,
       "damage_mult": 1.0,
-      "speed_mult": 0.55,
+      "speed_mult": 1.0,
       "aggro_range_m": 40.0,
       "leash_m": 60.0,
       "preferred_range_m": 27.6,
@@ -1438,7 +1438,7 @@
     "flying/Ghost_Skull": {
       "hp_mult": 0.8211,
       "damage_mult": 1.0,
-      "speed_mult": 0.55,
+      "speed_mult": 1.0,
       "aggro_range_m": 40.0,
       "leash_m": 60.0,
       "preferred_range_m": 27.6,
@@ -1604,7 +1604,7 @@
     "flying/Hywirl": {
       "hp_mult": 0.8727,
       "damage_mult": 1.0,
-      "speed_mult": 0.55,
+      "speed_mult": 1.0,
       "aggro_range_m": 40.0,
       "leash_m": 60.0,
       "preferred_range_m": 27.6,
@@ -1743,7 +1743,7 @@
     "kaykit/Skeleton_Mage": {
       "hp_mult": 1.2353,
       "damage_mult": 1.0,
-      "speed_mult": 0.55,
+      "speed_mult": 1.0,
       "aggro_range_m": 40.0,
       "leash_m": 60.0,
       "preferred_range_m": 27.6,
@@ -1821,7 +1821,7 @@
     "kaykit/Skeleton_Rogue": {
       "hp_mult": 1.2353,
       "damage_mult": 1.0,
-      "speed_mult": 0.85,
+      "speed_mult": 1.0,
       "aggro_range_m": 40.0,
       "leash_m": 60.0,
       "preferred_range_m": 24.0,

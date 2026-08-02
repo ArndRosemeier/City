@@ -381,6 +381,18 @@ def _zoo() -> dict:
     }
 
 
+def _crypt() -> dict:
+    """Graveyard chapel crypt undead station — zoo-style refill, no gazebo."""
+    return {
+        "spawn_lift_m": 0.2,
+        "base_spawn_interval_sec": 30.0,
+        "spawn_pressure_k": 0.9,
+        "alive_cap": 20,
+        "first_spawn_fraction": 0.25,
+        "faction": "undead",
+    }
+
+
 def main() -> int:
     if LEGACY_ATTACKS.is_file():
         attacks = _load(LEGACY_ATTACKS)["attacks"]
@@ -409,6 +421,7 @@ def main() -> int:
         "build_recipes": _dump_build_recipes(),
         "district_gems": _district_gems(),
         "zoo": _zoo(),
+        "crypt": _crypt(),
         "abilities": abilities,
         "ability_constants": ability_constants,
         "chest_loot": _chest_loot(),

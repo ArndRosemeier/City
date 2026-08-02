@@ -15,6 +15,7 @@ const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.g
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
 const ZooControllerScript := preload("res://scripts/city/zoo_controller.gd")
+const CryptSpawnerScript := preload("res://scripts/city/crypt_spawner.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -50,6 +51,8 @@ var mandelbrot_arena: Node3D
 var arena_controller: ArenaController
 ## Forever-war spawners + turf hazards + cloak gate. Null outside Monster Zoo districts.
 var zoo_controller: ZooController
+## Undead station under the chapel crypt. Null outside Graveyard districts.
+var crypt_spawner: CryptSpawner
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -285,6 +288,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		arena_controller.queue_free()
 	arena_controller = null
 	_clear_zoo_controller()
+	_clear_crypt_spawner()
 	cave_cage_stand_world = Vector3.INF
 	_topology = null
 	generator = null
@@ -341,6 +345,7 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		arena_controller.queue_free()
 	arena_controller = null
 	_clear_zoo_controller()
+	_clear_crypt_spawner()
 	cave_cage_stand_world = Vector3.INF
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
@@ -603,6 +608,11 @@ func _stamp_detail_async() -> void:
 	CityProfiler.begin("stream_zoo_war")
 	_spawn_zoo_controller(generator)
 	CityProfiler.end("stream_zoo_war")
+	await get_tree().process_frame
+
+	CityProfiler.begin("stream_crypt_spawner")
+	_spawn_crypt_spawner(generator, origin_vox)
+	CityProfiler.end("stream_crypt_spawner")
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_cave_cage")
@@ -886,6 +896,37 @@ func _clear_zoo_controller() -> void:
 		zoo_controller.shutdown()
 		zoo_controller.queue_free()
 	zoo_controller = null
+
+
+## Undead forever-war pad in the crypt hub under the chapel — no gazebo, just the station.
+func _spawn_crypt_spawner(gen: DistrictGenerator, p_origin_vox: Vector3i) -> void:
+	if gen == null:
+		return
+	var pad := gen.get_crypt_spawner()
+	if pad.x < 0:
+		return
+	_clear_crypt_spawner()
+	var city := _find_city_root()
+	if city == null:
+		push_error("DistrictInstance: crypt undead station needs CityRoot to spawn")
+		return
+	var world := _landmark_world(Vector2i(pad.x, pad.z), pad.y, p_origin_vox)
+	crypt_spawner = CryptSpawnerScript.new() as CryptSpawner
+	add_child(crypt_spawner)
+	crypt_spawner.setup(
+		world,
+		_dseed,
+		Callable(city, "spawn_monster_at"),
+		Callable(city, "alive_undead_units"),
+		Callable(city, "despawn_undead_unit")
+	)
+
+
+func _clear_crypt_spawner() -> void:
+	if crypt_spawner != null and is_instance_valid(crypt_spawner):
+		crypt_spawner.shutdown()
+		crypt_spawner.queue_free()
+	crypt_spawner = null
 
 
 ## One Unique CageDemon per Hill — stands inside the blastable red cage baked by HillComposer.

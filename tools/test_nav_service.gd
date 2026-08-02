@@ -48,6 +48,14 @@ const LAKE_SHORE_X := 24
 const LAKE_BAND_X := 12
 const LAKE_DEPTH_MAX := 5
 
+## Ground plus a raised slab, so one column holds two standable surfaces.
+const STACK_TILE := Vector2i(70, 70)
+const STACK_ORIGIN := Vector3i(45000, 0, 45000)
+const STACK_X := 48
+const STACK_Z := 48
+const STACK_SLAB_Y := 8
+const STACK_PROBE := Vector3i(24, 1, 24)
+
 ## Seconds a test block lives. Long enough to survive the frames the assertions need, short
 ## enough that waiting it out does not dominate the scene.
 const BLOCK_SEC := 0.4
@@ -103,6 +111,10 @@ func _ready() -> void:
 		_quit()
 		return
 	_test_water_depth()
+	if _failed:
+		_quit()
+		return
+	_test_column_surfaces()
 	if _failed:
 		_quit()
 		return
@@ -701,6 +713,54 @@ func _test_water_depth() -> void:
 		return
 
 
+# ---------------------------------------------------------------------------
+# Column surfaces (multi-level wander)
+# ---------------------------------------------------------------------------
+
+func _test_column_surfaces() -> void:
+	var field := _bake_stack()
+	if field == null:
+		_fail("FAIL stacked-floor bake produced no field")
+		return
+	if not _nav.register_district(STACK_TILE, field):
+		_fail("FAIL NavService refused the stacked-floor tile")
+		return
+
+	var probe := _vox_to_world(STACK_ORIGIN + STACK_PROBE)
+	var both: PackedVector3Array = _nav.column_surfaces(
+		NavProfile.Id.PEDESTRIAN, probe, 12.0
+	)
+	if both.size() != 2:
+		_fail("FAIL column_surfaces found %d surfaces, expected ground + slab" % both.size())
+		return
+	var ys: Array[float] = []
+	for p: Vector3 in both:
+		ys.append(p.y)
+	var ground_y := float(STACK_ORIGIN.y + 1) * VOXEL_SIZE
+	var slab_y := float(STACK_ORIGIN.y + STACK_SLAB_Y + 1) * VOXEL_SIZE
+	if not ys.has(ground_y) or not ys.has(slab_y):
+		_fail("FAIL column_surfaces ys=%s, expected %.2f and %.2f" % [str(ys), ground_y, slab_y])
+		return
+
+	var tight: PackedVector3Array = _nav.column_surfaces(
+		NavProfile.Id.PEDESTRIAN, probe, 1.0
+	)
+	if tight.size() != 1:
+		_fail("FAIL tight vertical band returned %d surfaces, expected only ground" % tight.size())
+		return
+	if absf(tight[0].y - ground_y) > 0.01:
+		_fail("FAIL tight band snapped to y=%.2f, expected ground %.2f" % [tight[0].y, ground_y])
+		return
+	print(
+		"column_surfaces: ground=%.2f slab=%.2f (tight=%d)"
+		% [ground_y, slab_y, tight.size()]
+	)
+
+	if not _nav.unregister_district(STACK_TILE):
+		_fail("FAIL the stacked-floor tile would not unregister")
+		return
+
+
 ## Middle of the band that holds `depth` cells of water.
 func _band_centre_x(depth: int) -> int:
 	if depth < 1 or depth > LAKE_DEPTH_MAX:
@@ -718,6 +778,18 @@ func _bake_flat(origin: Vector3i, size_x: int, size_z: int) -> NativeNavBake:
 	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(size_x, 1, size_z), VoxelMaterial.CONCRETE)
 	return _bake_volume(volume, origin, size_x, size_z)
+
+
+## Flat ground with a raised slab over the centre, so one column has two walkable floors.
+func _bake_stack() -> NativeNavBake:
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
+	volume.fill_box(Vector3i.ZERO, Vector3i(STACK_X, 1, STACK_Z), VoxelMaterial.CONCRETE)
+	volume.fill_box(
+		Vector3i(8, STACK_SLAB_Y, 8),
+		Vector3i(STACK_X - 8, STACK_SLAB_Y + 1, STACK_Z - 8),
+		VoxelMaterial.CONCRETE
+	)
+	return _bake_volume(volume, STACK_ORIGIN, STACK_X, STACK_Z)
 
 
 ## The same deck, split by a sheer brick wall with one 3 m gap in it.

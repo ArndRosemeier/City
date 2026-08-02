@@ -233,6 +233,40 @@ static func zoo_int(key: String) -> int:
 	return int(sec[key])
 
 
+# --- Graveyard crypt undead station ----------------------------------------
+
+## Chapel-crypt forever-war pad: interval, pressure, alive cap, faction roster.
+static func crypt() -> Dictionary:
+	return _section("crypt")
+
+
+static func crypt_float(key: String) -> float:
+	var sec := crypt()
+	if not sec.has(key):
+		push_error("GameData.crypt_float: missing 'crypt.%s'" % key)
+		assert(false, "GameData: missing crypt constant")
+		return 0.0
+	return float(sec[key])
+
+
+static func crypt_int(key: String) -> int:
+	var sec := crypt()
+	if not sec.has(key):
+		push_error("GameData.crypt_int: missing 'crypt.%s'" % key)
+		assert(false, "GameData: missing crypt constant")
+		return 0
+	return int(sec[key])
+
+
+static func crypt_string(key: String) -> String:
+	var sec := crypt()
+	if not sec.has(key):
+		push_error("GameData.crypt_string: missing 'crypt.%s'" % key)
+		assert(false, "GameData: missing crypt constant")
+		return ""
+	return str(sec[key])
+
+
 static func ability(id: String) -> Dictionary:
 	var m := abilities()
 	if not m.has(id):

@@ -56,9 +56,23 @@ const BLOCK_GROVE := 3
 ## Built crypts: fixed clear height (air voxels) and corridor half-width.
 ## Walker crown needs ~6 air; keep one extra for lintels.
 const CRYPT_H := 7
-const CRYPT_CORRIDOR_HW := 1
+## Corridors are a full body wide (5) so the crypt reads as architecture, not a crawl.
+const CRYPT_CORRIDOR_HW := 2
 ## Rock kept between crypt air and the yard surface / mound skin.
 const CRYPT_SHELL := 2
+## Chapel→crypt flight: one-voxel risers, lane half-width (5-wide tread).
+const CRYPT_STAIR_HW := 2
+## Stair head local-Z offset from the chapel centre (south nave).
+const CRYPT_STAIR_Z0_OFF := 3
+## Crypt hall extends this many voxels past the stair on every side so the flight is not
+## a wall-tight shaft — the hall entrance sits clear of the treads.
+const CRYPT_STAIR_CLEAR := 5
+## Chapel footprint from `_chapel` centre. South must clear the stair foot
+## (`CRYPT_STAIR_Z0_OFF + YARD_RISE`) plus a short interior landing — otherwise the flight
+## walks out through the south door into an outdoor pit.
+const CHAPEL_HALF_X := 10
+const CHAPEL_NORTH := 7
+const CHAPEL_SOUTH := 18
 
 var _ox: int = 0
 var _oz: int = 0
@@ -86,6 +100,9 @@ var _chapel: Vector3i = Vector3i.ZERO
 ## Side chambers of the catacombs in district-local voxels (x, floor Y, z). The hub under the
 ## chapel stair is deliberately left out — the first room off the steps is not a find.
 var crypt_rooms: Array[Vector3i] = []
+## Undead station pad in the crypt hub under the chapel (district-local x, floor Y, z).
+## x = -1 until catacombs carve.
+var crypt_spawner_vox: Vector3i = Vector3i(-1, -1, -1)
 
 
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -105,6 +122,8 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_plant_trees(1.0)
 	_carve_catacombs()
 	_dress_catacombs()
+	## Stairs after the carve — catacomb air used to erase the chapel flight into a well.
+	_build_crypt_stair()
 	print(
 		(
 			"GraveyardComposer: yard rise=%d chapel=(%d,%d) aisles=%dx%d blocks=%d"
@@ -162,6 +181,7 @@ func _begin(min_v: Vector3i, max_v: Vector3i) -> bool:
 	_crypt_lo.fill(-1)
 	_crypt_hi.fill(-1)
 	crypt_rooms.clear()
+	crypt_spawner_vox = Vector3i(-1, -1, -1)
 	_chapel = Vector3i(_w / 2, ground_y + YARD_RISE, _d / 2)
 	return true
 
@@ -568,10 +588,10 @@ func _build_chapel() -> void:
 				break
 	_chapel = Vector3i(cx, ground_y + YARD_RISE, cz)
 	var deck := ground_y + YARD_RISE
-	var wx0 := _ox + cx - 10
-	var wz0 := _oz + cz - 7
-	var wx1 := _ox + cx + 11
-	var wz1 := _oz + cz + 8
+	var wx0 := _ox + cx - CHAPEL_HALF_X
+	var wz0 := _oz + cz - CHAPEL_NORTH
+	var wx1 := _ox + cx + CHAPEL_HALF_X + 1
+	var wz1 := _oz + cz + CHAPEL_SOUTH
 	## Clear footprint of graves / hedge leftovers.
 	brush.fill_box(
 		Vector3i(wx0 - 1, deck + 1, wz0 - 1),
@@ -591,7 +611,7 @@ func _build_chapel() -> void:
 			var edge := x == wx0 or x == wx1 - 1 or z == wz0 or z == wz1 - 1
 			if not edge:
 				continue
-			## Door on the south face.
+			## Door on the south face (past the enclosed crypt stair).
 			if z == wz1 - 1 and absi(x - (_ox + cx)) <= 1:
 				continue
 			var long_wall := x == wx0 or x == wx1 - 1
@@ -613,9 +633,11 @@ func _build_chapel() -> void:
 		Vector3i(wx1 - 1, deck + 2, wz1 - 1),
 		VoxelMaterial.GRAVE_MARBLE
 	)
-	## Pitched roof ridge along X — solid fill under a 45° slope skin.
-	var roof_peak := wall_top + 4
-	var ridge_z := _oz + cz
+	## Pitched roof ridge along X — centred on the nave, tall enough that the 45° skin
+	## still reaches both gable walls after the south bay grew to enclose the crypt stair.
+	var ridge_z := (wz0 + wz1 - 1) / 2
+	var roof_half := maxi(ridge_z - wz0, (wz1 - 1) - ridge_z)
+	var roof_peak := wall_top + roof_half
 	for z in range(wz0 - 1, wz1 + 1):
 		for x in range(wx0 - 1, wx1 + 1):
 			var dist := absi(z - ridge_z)
@@ -653,50 +675,20 @@ func _build_chapel() -> void:
 		brush.set_vox(Vector3i(sx, cross_y + dy, sz), VoxelMaterial.WROUGHT_IRON)
 	brush.set_vox(Vector3i(sx - 1, cross_y + 2, sz), VoxelMaterial.WROUGHT_IRON)
 	brush.set_vox(Vector3i(sx + 1, cross_y + 2, sz), VoxelMaterial.WROUGHT_IRON)
-	## Rectangular stair shaft: one step per voxel of rise, straight south into the crypt.
-	var crypt_floor := _crypt_floor_y()
-	var stair_w0 := _ox + cx - 1
-	var stair_w1 := _ox + cx + 2
-	var stair_z0 := _oz + cz - 1
-	brush.fill_box(
-		Vector3i(stair_w0, crypt_floor, stair_z0),
-		Vector3i(stair_w1, deck + 2, stair_z0 + YARD_RISE + 2),
-		VoxelMaterial.AIR
-	)
-	for i in range(YARD_RISE + 1):
-		var step_y := deck - i
-		var step_z := stair_z0 + i
-		brush.fill_box(
-			Vector3i(stair_w0, crypt_floor - 1, step_z),
-			Vector3i(stair_w1, step_y + 1, step_z + 1),
-			VoxelMaterial.GRAVE_STONE
-		)
-		brush.fill_box(
-			Vector3i(stair_w0, step_y + 1, step_z),
-			Vector3i(stair_w1, deck + 2, step_z + 1),
-			VoxelMaterial.AIR
-		)
-		## Track the shaft so dressing lines the walls.
-		for x in range(cx - 1, cx + 2):
-			for z in range(cz - 1 + i, cz + 1 + i):
-				if x < 0 or z < 0 or x >= _w or z >= _d:
-					continue
-				var i2 := z * _w + x
-				var lo := crypt_floor
-				var hi := deck + 1
-				if _crypt_hi[i2] < 0:
-					_crypt_lo[i2] = lo
-					_crypt_hi[i2] = hi
-				else:
-					_crypt_lo[i2] = mini(_crypt_lo[i2], lo)
-					_crypt_hi[i2] = maxi(_crypt_hi[i2], hi)
+	## Crypt stair is laid after `_carve_catacombs` — building it here used to leave a
+	## dropdown well once the hub corridor punched the treads out.
 
 
 ## ── Plot blocks ────────────────────────────────────────────────────────────
 
 
 func _dress_blocks() -> void:
-	var chapel_keep := Rect2i(_chapel.x - 14, _chapel.z - 10, 29, 22 + YARD_RISE)
+	var chapel_keep := Rect2i(
+		_chapel.x - CHAPEL_HALF_X - 4,
+		_chapel.z - CHAPEL_NORTH - 3,
+		CHAPEL_HALF_X * 2 + 9,
+		CHAPEL_NORTH + CHAPEL_SOUTH + 6
+	)
 	for block: Rect2i in _blocks:
 		if chapel_keep.intersects(block):
 			continue
@@ -1145,39 +1137,51 @@ func _crypt_floor_y() -> int:
 func _carve_catacombs() -> void:
 	var floor_y := _crypt_floor_y()
 	var rooms: Array[Dictionary] = []
-	## Hub under the chapel stair — rectangular hall, grid-aligned.
+	## Stair hall: crypt-height room larger than the flight so treads sit clear of the walls.
+	var stair_z0 := _chapel.z + CRYPT_STAIR_Z0_OFF
+	var stair_foot_z := stair_z0 + YARD_RISE
+	var clear := CRYPT_STAIR_CLEAR
+	var hall_x0 := _chapel.x - CRYPT_STAIR_HW - clear
+	var hall_x1 := _chapel.x + CRYPT_STAIR_HW + clear
+	var hall_z0 := stair_z0 - clear
+	var hall_z1 := stair_foot_z + clear
+	_carve_crypt_box(hall_x0, hall_z0, hall_x1, hall_z1, floor_y, floor_y + CRYPT_H - 1)
+	## Hub south of the hall — leave flight columns for the later stair pass.
 	var hub := {
 		"x": _chapel.x,
-		"z": _chapel.z + 8,
-		"rx": 6,
-		"rz": 5,
+		"z": hall_z1 + 10,
+		"rx": 10,
+		"rz": 8,
 		"kind": "hub",
 	}
 	rooms.append(hub)
+	## Forever-war pad sits in the hub centre (no gazebo — crypt floor is the station).
+	crypt_spawner_vox = Vector3i(_ox + int(hub["x"]), floor_y, _oz + int(hub["z"]))
 	## Side chambers on a cardinal lattice — no polar jitter, no diagonal corridors.
 	var slots: Array[Vector2i] = [
-		Vector2i(0, 22), Vector2i(0, -22), Vector2i(24, 0), Vector2i(-24, 0),
-		Vector2i(20, 18), Vector2i(-20, 18), Vector2i(20, -18), Vector2i(-20, -18),
+		Vector2i(0, 32), Vector2i(0, -28), Vector2i(34, 0), Vector2i(-34, 0),
+		Vector2i(28, 24), Vector2i(-28, 24), Vector2i(28, -22), Vector2i(-28, -22),
+		Vector2i(0, 48), Vector2i(40, 16), Vector2i(-40, 16),
 	]
 	for i in range(slots.size() - 1, 0, -1):
 		var j := rng.randi() % (i + 1)
 		var swap := slots[i]
 		slots[i] = slots[j]
 		slots[j] = swap
-	var want := 4 + rng.randi() % 3
+	var want := 6 + rng.randi() % 3
 	for slot: Vector2i in slots:
 		if rooms.size() > want:
 			break
-		var rx := clampi(_chapel.x + slot.x, 14, _w - 15)
-		var rz := clampi(_chapel.z + slot.y, 14, _d - 15)
+		var rx := clampi(_chapel.x + slot.x, 16, _w - 17)
+		var rz := clampi(_chapel.z + slot.y, 16, _d - 17)
 		if _height_at(rx, rz) < YARD_RISE - 1:
 			continue
 		## Snap chamber sizes to odd widths so walls sit on whole voxels.
 		rooms.append({
 			"x": rx,
 			"z": rz,
-			"rx": 3 + (rng.randi() % 3),
-			"rz": 3 + (rng.randi() % 3),
+			"rx": 5 + (rng.randi() % 4),
+			"rz": 5 + (rng.randi() % 4),
 			"kind": "chamber",
 		})
 	for room: Dictionary in rooms:
@@ -1208,12 +1212,55 @@ func _carve_catacombs() -> void:
 			Vector2i(int(rooms[b]["x"]), int(rooms[b]["z"])),
 			floor_y
 		)
-	## Stair landing → hub, axis-aligned.
+	## Hall south edge → hub (not through the stair columns).
 	_carve_crypt_corridor(
-		Vector2i(_chapel.x, _chapel.z),
+		Vector2i(_chapel.x, hall_z1 - 1),
 		Vector2i(int(hub["x"]), int(hub["z"])),
 		floor_y
 	)
+
+
+## One-voxel-riser flight from the chapel into the stair hall. Must run after carve/dress.
+## Only the stair lane punches the chapel floor — the hall around it stays crypt-height so
+## bodies have floor beside the flight instead of a wall-tight shaft.
+func _build_crypt_stair() -> void:
+	var cx := _chapel.x
+	var cz := _chapel.z
+	var deck := ground_y + YARD_RISE
+	var crypt_floor := _crypt_floor_y()
+	## Chapel marble is at deck+1; crypt marble at crypt_floor-1. One riser per column.
+	var rise := YARD_RISE
+	var hw := CRYPT_STAIR_HW
+	var stair_z0 := cz + CRYPT_STAIR_Z0_OFF
+	var w0 := _ox + cx - hw
+	var w1 := _ox + cx + hw + 1
+	for i in range(rise + 1):
+		var tread_top := (deck + 1) - i
+		var step_z := _oz + stair_z0 + i
+		brush.fill_box(
+			Vector3i(w0, crypt_floor - 1, step_z),
+			Vector3i(w1, tread_top + 1, step_z + 1),
+			VoxelMaterial.GRAVE_STONE
+		)
+		brush.fill_box(
+			Vector3i(w0, tread_top + 1, step_z),
+			Vector3i(w1, deck + 3, step_z + 1),
+			VoxelMaterial.AIR
+		)
+		## Track the shaft so later probes still see these columns as crypt volume.
+		for x in range(cx - hw, cx + hw + 1):
+			var lz := stair_z0 + i
+			if x < 0 or lz < 0 or x >= _w or lz >= _d:
+				continue
+			var i2 := lz * _w + x
+			var lo := crypt_floor
+			var hi := deck + 1
+			if _crypt_hi[i2] < 0:
+				_crypt_lo[i2] = lo
+				_crypt_hi[i2] = hi
+			else:
+				_crypt_lo[i2] = mini(_crypt_lo[i2], lo)
+				_crypt_hi[i2] = maxi(_crypt_hi[i2], hi)
 
 
 ## Inclusive XZ box of air at a flat floor / ceiling — masonry, not an ellipsoid.

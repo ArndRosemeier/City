@@ -47,9 +47,8 @@ EXP_PROPORTIONAL = 1.0
 EXP_DECORATED = 0.5
 GIANT_SCALE_EXP = 0.85
 
-# undead_unit.gd role walk bases (sim uses MINION unless body tags say caster)
-MOVE_SPEED_MAGE = 1.05
-MOVE_SPEED_MINION = 4.2
+# undead_unit.gd walk base — catalogue speed_mult is the only throttle (no mage base).
+MOVE_SPEED = 4.2
 
 RANGED_ATTACKS = ("eye_laser", "blaster", "orb_convert", "charged_blast", "stomp")
 ATTACK_SCORE = {
@@ -263,8 +262,7 @@ def load_fighter_defs_from_root(
         tags = tuple(eff["lists"]["tags"])
         hp = base_hp(catalog[mid]) * float(scalars["hp_mult"])
         speed_mult = float(scalars["speed_mult"])
-        caster = "caster" in tags or mid.endswith("Mage") or mid.endswith("Wizard")
-        move = (MOVE_SPEED_MAGE if caster else MOVE_SPEED_MINION) * speed_mult
+        move = MOVE_SPEED * speed_mult
         fighters[mid] = FighterDef(
             monster_id=mid,
             templates=tuple(tids),

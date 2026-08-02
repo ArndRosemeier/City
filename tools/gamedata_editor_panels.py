@@ -744,3 +744,47 @@ RECIPE_SITE_JSON = (
         "fallback_gems", "fallback_gems (JSON array)", "json", required=True, default=[], height=4
     ),
 )
+
+ZOO_SCALARS = (
+    FieldSpec("cloak_duration_sec", "cloak_duration_sec", "float", required=True, default=120.0),
+    FieldSpec(
+        "plate_damage_interval_sec",
+        "plate_damage_interval_sec",
+        "float",
+        required=True,
+        default=1.0,
+    ),
+    FieldSpec(
+        "base_spawn_interval_sec",
+        "base_spawn_interval_sec",
+        "float",
+        required=True,
+        default=14.0,
+    ),
+    FieldSpec("spawn_pressure_k", "spawn_pressure_k", "float", required=True, default=0.9),
+    FieldSpec("per_territory_cap", "per_territory_cap", "int", required=True, default=2),
+    FieldSpec("district_alive_cap", "district_alive_cap", "int", required=True, default=34),
+)
+ZOO_JSON: tuple[FieldSpec, ...] = ()
+
+CRYPT_SCALARS = (
+    FieldSpec("spawn_lift_m", "spawn_lift_m", "float", required=True, default=0.2),
+    FieldSpec(
+        "base_spawn_interval_sec",
+        "base_spawn_interval_sec",
+        "float",
+        required=True,
+        default=30.0,
+    ),
+    FieldSpec("spawn_pressure_k", "spawn_pressure_k", "float", required=True, default=0.9),
+    FieldSpec("alive_cap", "alive_cap", "int", required=True, default=20),
+    FieldSpec(
+        "first_spawn_fraction",
+        "first_spawn_fraction",
+        "float",
+        required=True,
+        default=0.25,
+    ),
+    FieldSpec("faction", "faction", "str", required=True, default="undead"),
+)
+CRYPT_JSON: tuple[FieldSpec, ...] = ()
