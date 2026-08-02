@@ -20,6 +20,9 @@ var _spawn_lift_m: float = 0.2
 var _base_interval_sec: float = 30.0
 var _pressure_k: float = 0.9
 var _alive_cap: int = 20
+## Tallest body this pad's room can take, in metres. Anything drawn taller is shrunk to fit
+## on spawn instead of standing wedged in the slab.
+var _max_height_m: float = 0.0
 var _tuning_section: String = "dungeon_summoner"
 var _owner_meta: StringName = &"faction_pad_owned"
 
@@ -82,6 +85,13 @@ func _read_constants() -> void:
 	_base_interval_sec = GameData.section_float(_tuning_section, "base_spawn_interval_sec")
 	_pressure_k = GameData.section_float(_tuning_section, "spawn_pressure_k")
 	_alive_cap = GameData.section_int(_tuning_section, "alive_cap")
+	_max_height_m = GameData.section_float(_tuning_section, "max_height_m")
+	if _max_height_m <= 0.0:
+		push_error(
+			"FactionPadSpawner: %s.max_height_m must be positive, got %.2f"
+			% [_tuning_section, _max_height_m]
+		)
+		assert(false, "FactionPadSpawner: bad max_height_m")
 
 
 func _process(delta: float) -> void:
@@ -135,9 +145,10 @@ func _spawn_one() -> bool:
 		return false
 	var at := spawn_world + Vector3(0.0, _spawn_lift_m, 0.0)
 	## No nav snap — pads are underground; snapping can yank the body through the ceiling.
-	var unit: Node = _spawn_cb.call(body, at, false) as Node
+	var unit: UndeadUnit = _spawn_cb.call(body, at, false) as UndeadUnit
 	if unit == null or not is_instance_valid(unit):
 		return false
+	unit.clamp_standing_height(_max_height_m)
 	tag_unit(unit)
 	return true
 

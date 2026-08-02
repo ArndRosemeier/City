@@ -75,6 +75,8 @@ const COL_HEIGHT_BASE_M := 1.15
 const HIT_RADIUS_BASE_M := 0.55
 const HIT_HALF_HEIGHT_BASE_M := 0.95
 const MUZZLE_BASE_M := 1.35
+## Floor on every shrink, so no clamp can collapse a body to nothing.
+const MIN_CHARACTER_SCALE := 0.05
 ## How often prey is re-acquired for a running hunt.
 const PED_QUERY_INTERVAL_SEC := 0.28
 const ANIM_FAR_DIST_M := 90.0
@@ -109,6 +111,9 @@ var _model: Node3D
 var _col_shape: CollisionShape3D
 var _capsule: CapsuleShape3D
 var _nav_agent: NavAgent
+## Set when a spawner shrinks this body out of the envelope its catalogue profile assumes.
+## Negative means "ask the catalogue", which is what every body does until then.
+var _nav_profile_override: int = -1
 var _nav_motor: NavMotor
 var _provider: UndeadGoalProvider
 var _cast_cd: float = 0.0
@@ -222,6 +227,44 @@ func creature_variation() -> CreatureVariation:
 	return _variation
 
 
+## How tall the drawn body stands, in metres, at the scale it wears now.
+##
+## Measured off the mesh rather than the collider on purpose: headgear is what fouls a low
+## ceiling, and all four KayKit skeletons declare the same `collider_height` no matter how
+## tall they are actually drawn.
+func standing_height_m() -> float:
+	if _entry == null:
+		push_error("UndeadUnit %s: standing_height_m before the body is bound" % name)
+		assert(false, "UndeadUnit: no entry to measure")
+		return 0.0
+	var build_h := 1.0 if _variation == null else _variation.height
+	return _entry.measured_height * build_h * character_scale
+
+
+## Shrink until this body is at most `max_m` tall. Bodies already shorter are left as they are.
+##
+## For spawners that own a cramped room. A four-metre body dropped into a dungeon corridor
+## with 2.5 m of headroom is wedged between slab and ceiling and never walks, so the pad that
+## placed it says how tall its room can take. The collider and hit volume come along with the
+## mesh, and a body that no longer needs monster headroom is handed the undead profile —
+## otherwise the corridor has no walkable span for it at all and it stands still anyway.
+func clamp_standing_height(max_m: float) -> void:
+	if max_m <= 0.0:
+		push_error("UndeadUnit %s: clamp_standing_height needs a positive limit" % name)
+		assert(false, "UndeadUnit: bad height clamp")
+		return
+	var tall := standing_height_m()
+	if tall <= max_m:
+		return
+	character_scale = maxf(character_scale * (max_m / tall), MIN_CHARACTER_SCALE)
+	_apply_scale()
+	## MONSTER_BREAKER keeps its own profile: that body is meant to make its own room, and
+	## without `can_break` a walled-in chewer is handed no corridor and stands there forever.
+	if nav_profile_id() == NavProfile.Id.MONSTER:
+		_nav_profile_override = NavProfile.Id.UNDEAD
+		_rebuild_nav()
+
+
 func combat() -> RefCounted:
 	return _combat
 
@@ -256,7 +299,7 @@ func become_player_minion() -> void:
 	_faction = int(MonsterFactionScript.Id.HUMAN)
 	var target_hp := _health_max * MULT
 	_combat.call("multiply_damage_mult", MULT)
-	character_scale = maxf(character_scale * MULT, 0.05)
+	character_scale = maxf(character_scale * MULT, MIN_CHARACTER_SCALE)
 	var base := CreatureHealthScript.for_scale(_entry, character_scale)
 	if base <= 0.0:
 		push_error("UndeadUnit %s: minion scale has no health base" % name)
@@ -772,13 +815,18 @@ func _apply_scale() -> void:
 func _update_collision_for_scale() -> void:
 	if _capsule == null or _col_shape == null:
 		return
-	## Grow with sqrt so giants stay street-capable; hard-clamp for 10×. The floor is this
+	## Grow with sqrt so giants stay street-capable; hard-clamp for 10×. The base is this
 	## body's own size rather than the reference skeleton's, so a three-metre monster never
 	## collides as if it were a minion.
+	##
+	## Shrinking is linear and is allowed to go under that base: a body a spawner squeezed
+	## into a low room has to collide small too, or it keeps the capsule that wedged it into
+	## the floor and the clamp buys nothing but a smaller drawing.
 	var base_r := COL_RADIUS_BASE_M * _span_wide()
 	var base_h := COL_HEIGHT_BASE_M * _span_tall()
-	var r := clampf(base_r * sqrt(character_scale), base_r, COL_RADIUS_MAX_M)
-	var h := clampf(base_h * sqrt(character_scale), base_h, COL_HEIGHT_MAX_M)
+	var factor := sqrt(character_scale) if character_scale > 1.0 else character_scale
+	var r := minf(base_r * factor, COL_RADIUS_MAX_M)
+	var h := minf(base_h * factor, COL_HEIGHT_MAX_M)
 	_capsule.radius = r
 	_capsule.height = maxf(h, r * 2.0 + 0.05)
 	_col_shape.position = Vector3(0.0, h * 0.5, 0.0)
@@ -832,6 +880,8 @@ func _drop_health_bar() -> void:
 func nav_profile_id() -> int:
 	if role == Role.GIANT:
 		return NavProfile.Id.GIANT
+	if _nav_profile_override >= 0:
+		return _nav_profile_override
 	if _entry == null:
 		return NavProfile.Id.UNDEAD
 	## A body that eats its way forward needs a navigator willing to route it into fabric.

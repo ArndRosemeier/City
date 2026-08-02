@@ -13,6 +13,7 @@ var _mover: VoxelBoxMover = VoxelBoxMover.new()
 var _terrain: VoxelTerrain
 var _on_floor: bool = false
 var _stepped_up: bool = false
+var _stepped_down: bool = false
 ## Last requested step height in world metres (export-facing); converted for the mover.
 var _step_height_m: float = 0.55
 var _collide_with_water: bool = true
@@ -65,6 +66,10 @@ func is_on_floor() -> bool:
 
 func has_stepped_up() -> bool:
 	return _stepped_up
+
+
+func has_stepped_down() -> bool:
+	return _stepped_down
 
 
 func has_terrain() -> bool:
@@ -124,6 +129,7 @@ func move(
 ) -> Vector3:
 	_on_floor = false
 	_stepped_up = false
+	_stepped_down = false
 	if not has_terrain() or capsule == null or capsule.shape == null:
 		var fallback := velocity * delta
 		body.global_position += fallback
@@ -146,6 +152,16 @@ func move(
 		_on_floor = true
 	elif velocity.y <= 0.0 and _probe_floor(body.global_position, aabb):
 		_on_floor = true
+	## VoxelBoxMover only climbs up. A one-voxel stair down would otherwise be a free-fall
+	## for a few frames (jump anim, gravity build-up). Snap down by the same height we can
+	## step up so a curb is a curb from either direction.
+	if not _on_floor and velocity.y <= 0.0:
+		var drop := _step_down_delta(body.global_position, aabb)
+		if drop < 0.0:
+			body.global_position.y += drop
+			allowed.y += drop
+			_on_floor = true
+			_stepped_down = true
 	return allowed
 
 
@@ -165,6 +181,18 @@ func _probe_floor(pos: Vector3, local_aabb: AABB) -> bool:
 	var probe := Vector3(0.0, -0.06, 0.0)
 	var allowed: Vector3 = _mover.get_motion(pos, probe, local_aabb, _terrain)
 	return allowed.y > probe.y + 0.0001
+
+
+## Negative Y to the nearest stand within `max_step_height`, or 0 if none (cliff / open air).
+func _step_down_delta(pos: Vector3, local_aabb: AABB) -> float:
+	if _step_height_m <= 0.0001:
+		return 0.0
+	var probe := Vector3(0.0, -_step_height_m, 0.0)
+	var allowed: Vector3 = _mover.get_motion(pos, probe, local_aabb, _terrain)
+	## A hit shortens the probe. A free fall through the whole step means keep falling.
+	if allowed.y > probe.y + 0.0001 and allowed.y < -0.0001:
+		return allowed.y
+	return 0.0
 
 
 func _capsule_aabb(shape: CapsuleShape3D, capsule_local_pos: Vector3) -> AABB:

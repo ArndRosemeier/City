@@ -807,5 +807,6 @@ DUNGEON_SUMMONER_SCALARS = (
         required=True,
         default=0.25,
     ),
+    FieldSpec("max_height_m", "max_height_m", "float", required=True, default=1.5),
 )
 DUNGEON_SUMMONER_JSON: tuple[FieldSpec, ...] = ()

@@ -191,8 +191,20 @@ const SWIM_EXIT_IMMUNE_SEC := 0.55
 const CAPSULE_FOOT_CLEARANCE := 0.05
 const FLOOR_SNAP_M := 0.2
 const SAFE_MARGIN_M := 0.06
-const SPRING_MARGIN_DEFAULT := 0.2
-const SPRING_MARGIN_CLIMB := 0.55
+## What the camera arm sweeps to find its stopping point.
+##
+## Left to itself a SpringArm3D with a direct Camera3D child casts that camera's near-plane
+## pyramid, which parks the lens two millimetres off the surface it hit — measured, not
+## guessed, in tools/test_camera_clearance.gd. Under a low ceiling that is nothing: a shake
+## offset (up to 0.18 m of lift), or the pivot swinging between two physics ticks, walks the
+## near plane straight through the roof and the room flickers away for a frame.
+##
+## The arm's own `margin` cannot buy that clearance back — godotengine/godot#76220, and the
+## same probe test shows margin 0.0 and 0.2 landing on the identical spring length — so the
+## slack has to come from the swept shape instead. This radius covers the near plane's corner
+## (0.163 m at 21:9 with a 70° fov and near 0.08) plus a full-trauma shake, and a sphere also
+## tests sideways, which a ray down the arm never did.
+const SPRING_PROBE_RADIUS_M := 0.3
 
 enum ClimbMode { NONE, UP, DOWN }
 
@@ -243,7 +255,8 @@ var _auto_run: bool = false
 const VOID_FLOOR_TOP_Y := 0.5
 ## Street deck top (ground_thickness=6 → world y 3.5). Climb-down needs a real drop.
 const STREET_DECK_TOP_Y := 3.5
-## One voxel is 0.5 m; match max_step_height so curb/scarp walk-offs stay walk anims.
+## One voxel is 0.5 m; match max_step_height. Belt-and-braces for jump anims — the real
+## curb walk-off is snapped by VoxelBodyMotion now, so this only covers a missed snap.
 const MICRO_DROP_ANIM_M := 0.55
 ## Physics layer 8 — player safety deck only (not voxel terrain layer 1).
 const SAFETY_DECK_LAYER := 128
@@ -386,8 +399,14 @@ func _ready() -> void:
 	_spring = SpringArm3D.new()
 	_spring.name = "SpringArm"
 	_spring.spring_length = _zoom
-	_spring.margin = SPRING_MARGIN_DEFAULT
+	var probe := SphereShape3D.new()
+	probe.radius = SPRING_PROBE_RADIUS_M
+	_spring.shape = probe
 	_spring.collision_mask = 1
+	## The pivot sits inside our own capsule. A sweep that starts overlapping a shape ignores
+	## it, so this is belt and braces rather than a fix — but leaning on that quirk to stay out
+	## of our own body is not something to leave unsaid.
+	_spring.add_excluded_object(get_rid())
 	_pivot.add_child(_spring)
 
 	_camera = Camera3D.new()
@@ -2236,7 +2255,6 @@ func _start_climb(mode: ClimbMode, wall_n: Vector3) -> void:
 		_climb_ignore_ground_sec = 0.0
 	_face_into_wall(_climb_wall_n)
 	velocity = Vector3.ZERO
-	_set_climb_camera_margin(true)
 	_play_climb_anim()
 
 
@@ -2248,7 +2266,6 @@ func _end_climb(push_off: bool) -> void:
 	_climb_wall_grace_sec = 0.0
 	_moving = false
 	_set_physics_terrain_collision(false)
-	_set_climb_camera_margin(false)
 	_restore_body_after_climb()
 	if push_off and n.length_squared() > 0.0001:
 		## Small outward hop so we don't immediately re-stick.
@@ -2260,13 +2277,6 @@ func _end_climb(push_off: bool) -> void:
 			velocity.y = 0.0
 	## Hard-cut climb pose — Mixamo keys bones Quaternius loco may not overwrite.
 	_play_post_climb_locomotion()
-
-
-func _set_climb_camera_margin(climbing: bool) -> void:
-	if _spring == null:
-		return
-	## Extra margin while on a facade — flush hangs made the spring length chatter.
-	_spring.margin = SPRING_MARGIN_CLIMB if climbing else SPRING_MARGIN_DEFAULT
 
 
 func _restore_body_after_climb() -> void:

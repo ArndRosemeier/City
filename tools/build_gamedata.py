@@ -401,6 +401,9 @@ def _dungeon_summoner() -> dict:
         "spawn_pressure_k": 0.9,
         "alive_cap": 12,
         "first_spawn_fraction": 0.25,
+        # Dungeon storeys give 2.5 m of headroom. Bodies drawn taller than this stand wedged
+        # between slab and ceiling, so the pad shrinks them on spawn; 1.5 m leaves wiggle room.
+        "max_height_m": 1.5,
     }
 
 

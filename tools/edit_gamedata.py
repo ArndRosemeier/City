@@ -2345,6 +2345,7 @@ class GameDataEditor(tk.Tk):
                     "spawn_pressure_k": float,
                     "alive_cap": int,
                     "first_spawn_fraction": float,
+                    "max_height_m": float,
                 },
             )
         )
@@ -2353,6 +2354,9 @@ class GameDataEditor(tk.Tk):
             frac = dungeon_summoner.get("first_spawn_fraction")
             if isinstance(frac, (int, float)) and not (0.0 < float(frac) <= 1.0):
                 errors.append("dungeon_summoner.first_spawn_fraction must be in (0, 1]")
+            tall = dungeon_summoner.get("max_height_m")
+            if isinstance(tall, (int, float)) and float(tall) <= 0.0:
+                errors.append("dungeon_summoner.max_height_m must be positive")
 
         spots = sections["mandelbrot_spots"]
         if not isinstance(spots, dict):

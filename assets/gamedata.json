@@ -37653,7 +37653,8 @@
     "base_spawn_interval_sec": 30.0,
     "spawn_pressure_k": 0.9,
     "alive_cap": 12,
-    "first_spawn_fraction": 0.25
+    "first_spawn_fraction": 0.25,
+    "max_height_m": 1.5
   },
   "mandelbrot_spots": {
     "scale_max": 0.0001,
