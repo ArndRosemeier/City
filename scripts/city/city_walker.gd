@@ -28,6 +28,7 @@ signal aim_panel_requested(hit_point: Vector3, hit_normal: Vector3)
 signal pedestrian_requested(hit_point: Vector3, hit_normal: Vector3)
 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
+const GameSaveScript := preload("res://scripts/city/game_save.gd")
 const ProportionModifierScript := preload("res://scripts/humans/proportion_modifier.gd")
 const BodyProportionsScript := preload("res://scripts/humans/body_proportions.gd")
 const EyeLaserVfxScript := preload("res://scripts/city/eye_laser_vfx.gd")
@@ -229,6 +230,9 @@ var _was_airborne: bool = false
 var _land_anim_left: float = 0.0
 ## Feet Y when last grounded — used to ignore 1-voxel walk-offs for jump anims.
 var _last_grounded_y: float = 0.0
+## Last place we stood above the void clamp — cave fall recovery snaps back here.
+var _last_solid_footing: Vector3 = Vector3.ZERO
+var _has_solid_footing: bool = false
 ## Set on Space jump so same-height landings still play Jump_Land.
 var _airborne_was_jump: bool = false
 var _safety_deck: StaticBody3D
@@ -243,6 +247,12 @@ const STREET_DECK_TOP_Y := 3.5
 const MICRO_DROP_ANIM_M := 0.55
 ## Physics layer 8 — player safety deck only (not voxel terrain layer 1).
 const SAFETY_DECK_LAYER := 128
+## Matches CityRoot.VOXEL_SIZE — used when resolving a walkable stand after a void fall.
+const VOXEL_SIZE_M := 0.5
+const VOID_RESCUE_BODY_VOX := 4
+## Tall enough to climb from bedrock back onto a hill-cave deck (~48 m).
+const VOID_RESCUE_UP_VOX := 96
+const VOID_RESCUE_DOWN_VOX := 8
 ## One-shot / emote override from the action bar; blocks Idle/Walk until done.
 var _action_playing: bool = false
 var _action_anim: String = ""
@@ -1652,9 +1662,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			and int(mb.button_index) == int(beam_bind.get("code", -2))
 		)
 		if mb.pressed:
-			## Shift+combat-chord is tray assign (AbilityTray) — do not spend the shot.
-			if ctl.is_build_assign_held(mb):
-				return
+			## Mouse slots assign only from the tray UI — Shift+LMB must still fire while sprinting.
 			var combat := ctl.resolve_mouse_action(
 				mb, ["laser", "beam", "fire"] as Array[String]
 			)
@@ -1839,6 +1847,10 @@ func _physics_process(delta: float) -> void:
 	if grounded and not _jumping:
 		_coyote_left = coyote_time_sec
 		_last_grounded_y = global_position.y
+		## Remember a stand above the bedrock clamp so cave shaft falls can snap back.
+		if global_position.y > VOID_FLOOR_TOP_Y + 1.0:
+			_last_solid_footing = global_position
+			_has_solid_footing = true
 		if velocity.y < 0.0:
 			velocity.y = 0.0
 	else:
@@ -1953,11 +1965,8 @@ func _physics_process(delta: float) -> void:
 		and _skeleton != null
 	):
 		_align_soles_to_floor()
-	## Absolute floor — never fall through the world into the void.
-	if global_position.y < VOID_FLOOR_TOP_Y - 0.15:
-		global_position.y = VOID_FLOOR_TOP_Y
-		velocity.y = 0.0
-		_was_ray_grounded = true
+	## Absolute floor — never park under the hill looking at cave undersides.
+	_enforce_void_floor()
 	if _unstuck_cooldown > 0.0:
 		_unstuck_cooldown = maxf(_unstuck_cooldown - delta, 0.0)
 
@@ -2071,7 +2080,7 @@ func _physics_climb(
 	_play_climb_anim()
 	_update_blast_charge(delta, false)
 	if global_position.y < VOID_FLOOR_TOP_Y - 0.15:
-		global_position.y = VOID_FLOOR_TOP_Y
+		_enforce_void_floor()
 		_end_climb(false)
 
 
@@ -2632,15 +2641,75 @@ func _clamp_wish_to_solid_ground() -> void:
 	pass
 
 
-func _rescue_from_void() -> void:
-	## Last-resort snap if we somehow fell through checkerboard collision gaps.
-	## Only accept surfaces at or below us — never teleport upward onto a roof.
-	var hit := _find_ground_below(50.0)
-	if hit.is_empty():
+## Hit the bedrock band → snap back into the world (last stand / voxel footing).
+## Returns after clamping only when no stand can be resolved.
+func _enforce_void_floor() -> void:
+	if global_position.y >= VOID_FLOOR_TOP_Y - 0.15:
 		return
-	global_position = Vector3(hit.position.x, hit.position.y, hit.position.z)
+	if _rescue_from_void():
+		return
+	global_position.y = VOID_FLOOR_TOP_Y
 	velocity = Vector3.ZERO
 	_was_ray_grounded = true
+
+
+## Snap out of a through-floor cave fall. Prefers last solid footing; remesh rays often
+## miss underground, so the fallback walks the live voxel column upward.
+func _rescue_from_void() -> bool:
+	var stand := _find_void_rescue_stand()
+	if stand == Vector3.INF:
+		return false
+	global_position = stand
+	velocity = Vector3.ZERO
+	_was_ray_grounded = true
+	_last_solid_footing = stand
+	_has_solid_footing = true
+	_last_grounded_y = stand.y
+	return true
+
+
+func _find_void_rescue_stand() -> Vector3:
+	var tool: VoxelTool = null
+	if _voxel_motion != null and bool(_voxel_motion.call("has_terrain")):
+		tool = _voxel_motion.call("get_voxel_tool") as VoxelTool
+	var seed_y := maxf(global_position.y, STREET_DECK_TOP_Y + 2.0)
+	if _last_grounded_y > VOID_FLOOR_TOP_Y + 1.0:
+		seed_y = maxf(seed_y, _last_grounded_y)
+	if _has_solid_footing:
+		seed_y = maxf(seed_y, _last_solid_footing.y)
+	var hints: Array[Vector3] = []
+	if _has_solid_footing and _last_solid_footing.y > VOID_FLOOR_TOP_Y + 0.5:
+		hints.append(_last_solid_footing)
+	var base := Vector3(global_position.x, seed_y, global_position.z)
+	hints.append(base)
+	for offset in [
+		Vector3(-3.0, 0.0, 0.0),
+		Vector3(3.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, -3.0),
+		Vector3(0.0, 0.0, 3.0),
+		Vector3(-6.0, 0.0, 0.0),
+		Vector3(6.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, -6.0),
+		Vector3(0.0, 0.0, 6.0),
+	]:
+		hints.append(base + offset)
+	if tool == null:
+		## No live voxels — last stand is still better than the beige void clamp.
+		if _has_solid_footing and _last_solid_footing.y > VOID_FLOOR_TOP_Y + 0.5:
+			return _last_solid_footing
+		return Vector3.INF
+	for hint in hints:
+		var footing := GameSaveScript.first_free_footing(
+			tool,
+			hint,
+			VOXEL_SIZE_M,
+			VOID_RESCUE_BODY_VOX,
+			VOID_RESCUE_UP_VOX,
+			VOID_RESCUE_DOWN_VOX
+		)
+		if footing != Vector3.INF and footing.y > VOID_FLOOR_TOP_Y + 0.5:
+			return footing
+	return Vector3.INF
 
 
 func _find_ground_below(down_m: float) -> Dictionary:

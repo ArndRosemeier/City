@@ -1,7 +1,8 @@
 ## Play mode, unlocks, tray binds, and carve hardness for one run.
 ##
 ## Owned by CityRoot and written into GameSave v3. Sandbox pretends every gated ability is
-## unlocked and never depletes district gem budgets; Adventure starts with the blaster alone.
+## unlocked and never depletes district gem budgets; Adventure starts from
+## AbilityRegistry.STARTER_UNLOCKS (authored in gamedata ability_constants.starter_unlocks).
 class_name PlayerLoadout
 extends RefCounted
 
@@ -46,13 +47,21 @@ func reset_sandbox() -> void:
 func reset_adventure() -> void:
 	mode = MODE_ADVENTURE
 	unlocks.clear()
-	for id in AbilityRegistry.STARTER_UNLOCKS:
-		unlocks[id] = true
-	tray = AbilityRegistry.default_adventure_tray()
 	hardness_tier = HARDNESS_ROCK
-	## An Adventure cookbook starts empty: every craft and every power schematic is a find.
+	## Cookbook starts empty, then starters grant their schematics so the Unlock list can show them.
 	known_recipes.clear()
 	looted_recipe_sites.clear()
+	for id in AbilityRegistry.STARTER_UNLOCKS:
+		grant_starter(id)
+	tray = AbilityRegistry.default_adventure_tray()
+
+
+## Starter kit entry: unlock + teach the schematic (inventory Unlock list is schematic-gated).
+func grant_starter(ability_id: String) -> void:
+	mark_unlocked(ability_id)
+	var schematic_id := InventoryCatalog.schematic_id_for_ability(ability_id)
+	if InventoryCatalog.has_recipe(schematic_id):
+		known_recipes[schematic_id] = true
 
 
 func is_sandbox() -> bool:
@@ -234,6 +243,11 @@ func load_save_dict(data: Dictionary) -> void:
 			known_recipes[str(entry)] = true
 	if is_sandbox():
 		learn_every_recipe()
+	## Starters always keep their schematics visible in the Unlock list.
+	for id in AbilityRegistry.STARTER_UNLOCKS:
+		var schematic_id := InventoryCatalog.schematic_id_for_ability(id)
+		if InventoryCatalog.has_recipe(schematic_id):
+			known_recipes[schematic_id] = true
 	looted_recipe_sites.clear()
 	var raw_sites: Variant = data.get("recipe_sites", [])
 	if typeof(raw_sites) == TYPE_ARRAY:

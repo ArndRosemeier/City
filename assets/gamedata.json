@@ -37572,7 +37572,9 @@
   },
   "ability_constants": {
     "starter_unlocks": [
-      "blaster"
+      "blaster",
+      "hardness_reinforced",
+      "hardness_exotic"
     ],
     "trap_hostile_score": 25,
     "boost_duration_sec": 20.0,

@@ -316,7 +316,11 @@ def _abilities() -> tuple[dict, dict]:
         },
     }
     constants = {
-        "starter_unlocks": ["blaster"],
+        "starter_unlocks": [
+            "blaster",
+            "hardness_reinforced",
+            "hardness_exotic",
+        ],
         "trap_hostile_score": 25,
         "boost_duration_sec": 20.0,
         "grow_shrink_duration_sec": 25.0,

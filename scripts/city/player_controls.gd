@@ -389,7 +389,7 @@ func build_slot_for_key(event: InputEventKey) -> int:
 
 func is_build_assign_held(event: InputEvent) -> bool:
 	## True when the build-assign modifier is down for this event (Shift by default).
-	## Works for keys and mouse so Shift+F1 and Shift+Ctrl+LMB can both open assign.
+	## Used for Shift+F1–F6 and Shift+click on tray buttons — not for world mouse combat.
 	var b := get_binding("build_assign")
 	if str(b.get("device", "")) != "key":
 		var with_mods := event as InputEventWithModifiers

@@ -71,11 +71,18 @@ func has_terrain() -> bool:
 	return _terrain != null and is_instance_valid(_terrain)
 
 
+## Live VoxelTool for the bound terrain, or null when unbound.
+func get_voxel_tool() -> VoxelTool:
+	if not has_terrain():
+		return null
+	return _terrain.get_voxel_tool()
+
+
 ## Voxel material id at a world-space point, or -1 if terrain/tool unavailable.
 func get_voxel_at_world(world_pos: Vector3) -> int:
 	if not has_terrain():
 		return -1
-	var tool := _terrain.get_voxel_tool()
+	var tool := get_voxel_tool()
 	if tool == null:
 		return -1
 	var local := _terrain.to_local(world_pos)

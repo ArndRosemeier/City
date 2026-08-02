@@ -1,7 +1,7 @@
 ## Nine-slot ability bar: F1–F6 plus LMB / Ctrl+LMB / Alt+LMB labels.
 ##
-## Shift+F1–F6 assigns those keys. Mouse slots use Shift+click on the tray button, or
-## Shift+ the combat chord (Shift+LMB / Shift+Ctrl+LMB / Shift+Alt+LMB).
+## Shift+F1–F6 assigns key slots. Mouse slots assign only via Shift+click on the tray
+## button — never via Shift+combat chords (those must keep working for sprint+fire).
 class_name AbilityTray
 extends CanvasLayer
 
@@ -65,10 +65,9 @@ func refresh() -> void:
 				% [hint, key, assign, key]
 			)
 		else:
-			## Mouse chords need the assign mod on the click — bare "Shift+Ctrl" is a no-op.
 			_buttons[i].tooltip_text = (
-				"%s\n%s activate · %s+click or %s+%s assign"
-				% [hint, _mouse_chord_label(i), assign, assign, _mouse_chord_label(i)]
+				"%s\n%s activate · %s+click tray to assign"
+				% [hint, _mouse_chord_label(i), assign]
 			)
 	if _hint != null:
 		_hint.text = (
@@ -99,22 +98,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			_open_assign_menu(slot)
 		else:
 			_activate_slot(slot)
-		get_viewport().set_input_as_handled()
-		return
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if not mb.pressed:
-			return
-		## Assign only — bare combat clicks stay with the walker.
-		if not ctl.is_build_assign_held(mb):
-			return
-		var action := ctl.resolve_mouse_action(
-			mb, ["laser", "beam", "fire"] as Array[String]
-		)
-		var mouse_slot := AbilityRegistry.mouse_slot_for_action(action)
-		if mouse_slot < 0:
-			return
-		_open_assign_menu(mouse_slot)
 		get_viewport().set_input_as_handled()
 
 

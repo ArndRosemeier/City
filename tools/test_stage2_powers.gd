@@ -151,13 +151,29 @@ func _check_hardness_tiers() -> void:
 		_fail("FAIL bedrock should be Never")
 	var loadout: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 	loadout.reset_adventure()
-	if loadout.hardness_tier != PlayerLoadout.HARDNESS_ROCK:
-		_fail("FAIL adventure starts at Rock hardness")
-	loadout.mark_unlocked(AbilityRegistry.ID_HARDNESS_REINFORCED)
-	if loadout.hardness_tier < PlayerLoadout.HARDNESS_REINFORCED:
-		_fail("FAIL reinforced unlock did not raise tier")
-	loadout.mark_unlocked(AbilityRegistry.ID_HARDNESS_EXOTIC)
+	## Starter kit is data-driven; current gamedata grants both hardness meta unlocks.
+	if not loadout.is_unlocked(AbilityRegistry.ID_HARDNESS_REINFORCED):
+		_fail("FAIL adventure starter should unlock hardness_reinforced")
+	if not loadout.is_unlocked(AbilityRegistry.ID_HARDNESS_EXOTIC):
+		_fail("FAIL adventure starter should unlock hardness_exotic")
 	if loadout.hardness_tier < PlayerLoadout.HARDNESS_EXOTIC:
+		_fail("FAIL adventure starter hardness should reach Exotic")
+	if not loadout.knows_ability_schematic(AbilityRegistry.ID_HARDNESS_REINFORCED):
+		_fail("FAIL adventure starter should know hardness_reinforced schematic")
+	if not loadout.knows_ability_schematic(AbilityRegistry.ID_HARDNESS_EXOTIC):
+		_fail("FAIL adventure starter should know hardness_exotic schematic")
+
+	## Progression still works from a bare Rock kit (system stays in place).
+	var bare: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
+	bare.mode = PlayerLoadout.MODE_ADVENTURE
+	bare.unlocks.clear()
+	bare.unlocks[AbilityRegistry.ID_BLASTER] = true
+	bare.hardness_tier = PlayerLoadout.HARDNESS_ROCK
+	bare.mark_unlocked(AbilityRegistry.ID_HARDNESS_REINFORCED)
+	if bare.hardness_tier < PlayerLoadout.HARDNESS_REINFORCED:
+		_fail("FAIL reinforced unlock did not raise tier")
+	bare.mark_unlocked(AbilityRegistry.ID_HARDNESS_EXOTIC)
+	if bare.hardness_tier < PlayerLoadout.HARDNESS_EXOTIC:
 		_fail("FAIL exotic unlock did not raise tier")
 
 	## One gate for blaster / blast / dig: Rock tool vs Reinforced is CHIP, vs Exotic is REFUSE.
@@ -165,7 +181,10 @@ func _check_hardness_tiers() -> void:
 	var city := TestCity.new()
 	add_child(city)
 	city._loadout = PlayerLoadoutScript.new() as PlayerLoadout
-	city._loadout.reset_adventure()
+	city._loadout.mode = PlayerLoadout.MODE_ADVENTURE
+	city._loadout.unlocks.clear()
+	city._loadout.unlocks[AbilityRegistry.ID_BLASTER] = true
+	city._loadout.hardness_tier = PlayerLoadout.HARDNESS_ROCK
 	if int(city.call("_carve_verdict", VoxelMaterial.STONE)) != int(CityRoot.CarveVerdict.OK):
 		_fail("FAIL stone at Rock tier is not OK")
 	if int(city.call("_carve_verdict", VoxelMaterial.CONCRETE)) != int(CityRoot.CarveVerdict.CHIP):
