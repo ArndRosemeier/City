@@ -16,6 +16,7 @@ const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
 const ZooControllerScript := preload("res://scripts/city/zoo_controller.gd")
 const CryptSpawnerScript := preload("res://scripts/city/crypt_spawner.gd")
+const FactionPadSpawnerScript := preload("res://scripts/city/faction_pad_spawner.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -53,6 +54,8 @@ var arena_controller: ArenaController
 var zoo_controller: ZooController
 ## Undead station under the chapel crypt. Null outside Graveyard districts.
 var crypt_spawner: CryptSpawner
+## Two opposing forever-war pads inside a Castle dungeon. Empty outside Castle districts.
+var dungeon_summoners: Array[Node3D] = []
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -280,15 +283,13 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		recipe_pickups.clear_pickups()
 		recipe_pickups.queue_free()
 	recipe_pickups = null
-	if castle_doors != null and is_instance_valid(castle_doors):
-		castle_doors.clear_doors()
-		castle_doors.queue_free()
-	castle_doors = null
+	_clear_castle_doors()
 	if arena_controller != null and is_instance_valid(arena_controller):
 		arena_controller.queue_free()
 	arena_controller = null
 	_clear_zoo_controller()
 	_clear_crypt_spawner()
+	_clear_dungeon_summoners()
 	cave_cage_stand_world = Vector3.INF
 	_topology = null
 	generator = null
@@ -337,15 +338,13 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		recipe_pickups.clear_pickups()
 		recipe_pickups.queue_free()
 	recipe_pickups = null
-	if castle_doors != null and is_instance_valid(castle_doors):
-		castle_doors.clear_doors()
-		castle_doors.queue_free()
-	castle_doors = null
+	_clear_castle_doors()
 	if arena_controller != null and is_instance_valid(arena_controller):
 		arena_controller.queue_free()
 	arena_controller = null
 	_clear_zoo_controller()
 	_clear_crypt_spawner()
+	_clear_dungeon_summoners()
 	cave_cage_stand_world = Vector3.INF
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
@@ -471,6 +470,11 @@ func _stamp_detail_async() -> void:
 			is_busy = false
 			failed.emit(self, "upgrade orphan wipe failed")
 			return
+	## Every block of this tile is written by now, so a reschedule can no longer be dropped
+	## over a district neighbour that had not landed yet when the block was first committed.
+	var retouch_ok := await _reschedule_meshed_commits()
+	if not retouch_ok or not is_instance_valid(self):
+		return
 	_bake_blocks.clear()
 	_bake_block_keys.clear()
 
@@ -574,17 +578,17 @@ func _stamp_detail_async() -> void:
 		CityProfiler.end("stream_signposts")
 		await get_tree().process_frame
 
-	## Mesh doors + DOOR voxel barriers (castle layout and/or city lot façades).
+	## City lot façade doors only. Castle keep/dungeon openings stay open AIR — hung leaves
+	## and DOOR barriers blocked dungeon forever-war circulation, so castle layouts are not hung.
 	CityProfiler.begin("stream_castle_doors")
-	castle_doors = CastleDoorPlacerScript.new()
-	castle_doors.name = "CastleDoors"
-	add_child(castle_doors)
-	var door_brush: CityBrush = live_brush()
-	castle_doors.place_from_layout(
-		generator.get_castle_layout(), _voxel_size, origin_vox, camera, door_brush
-	)
+	_clear_castle_doors()
 	if not lot_doorways.is_empty():
-		castle_doors.hang_lot_doorways(lot_doorways, _voxel_size, camera, door_brush)
+		castle_doors = CastleDoorPlacerScript.new()
+		castle_doors.name = "CastleDoors"
+		add_child(castle_doors)
+		castle_doors.hang_lot_doorways(
+			lot_doorways, _voxel_size, camera, live_brush()
+		)
 	CityProfiler.end("stream_castle_doors")
 	await get_tree().process_frame
 
@@ -613,6 +617,11 @@ func _stamp_detail_async() -> void:
 	CityProfiler.begin("stream_crypt_spawner")
 	_spawn_crypt_spawner(generator, origin_vox)
 	CityProfiler.end("stream_crypt_spawner")
+	await get_tree().process_frame
+
+	CityProfiler.begin("stream_dungeon_summoners")
+	_spawn_dungeon_summoners(generator, origin_vox)
+	CityProfiler.end("stream_dungeon_summoners")
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_cave_cage")
@@ -922,11 +931,68 @@ func _spawn_crypt_spawner(gen: DistrictGenerator, p_origin_vox: Vector3i) -> voi
 	)
 
 
+func _clear_castle_doors() -> void:
+	if castle_doors != null and is_instance_valid(castle_doors):
+		castle_doors.clear_doors()
+		castle_doors.queue_free()
+	castle_doors = null
+
+
 func _clear_crypt_spawner() -> void:
 	if crypt_spawner != null and is_instance_valid(crypt_spawner):
 		crypt_spawner.shutdown()
 		crypt_spawner.queue_free()
 	crypt_spawner = null
+
+
+## Two opposing forever-war pads inside the castle dungeon vaults.
+func _spawn_dungeon_summoners(gen: DistrictGenerator, p_origin_vox: Vector3i) -> void:
+	_clear_dungeon_summoners()
+	if gen == null:
+		return
+	var layout: CastleLayout = gen.get_castle_layout()
+	if layout == null:
+		return
+	if layout.dungeon_summoners.size() != layout.dungeon_summoner_factions.size():
+		push_error(
+			"DistrictInstance: dungeon summoner pads/factions mismatch (%d vs %d)"
+			% [layout.dungeon_summoners.size(), layout.dungeon_summoner_factions.size()]
+		)
+		assert(false, "DistrictInstance: bad dungeon summoner plan")
+		return
+	if layout.dungeon_summoners.is_empty():
+		return
+	var city := _find_city_root()
+	if city == null:
+		push_error("DistrictInstance: castle dungeon summoners need CityRoot to spawn")
+		return
+	for i in range(layout.dungeon_summoners.size()):
+		var pad: Vector3i = layout.dungeon_summoners[i]
+		var faction := String(layout.dungeon_summoner_factions[i])
+		var world := _landmark_world(Vector2i(pad.x, pad.z), pad.y, p_origin_vox)
+		var spawner: Node3D = FactionPadSpawnerScript.new() as Node3D
+		add_child(spawner)
+		spawner.call(
+			"setup",
+			world,
+			_dseed,
+			Callable(city, "spawn_monster_at"),
+			Callable(city, "alive_undead_units"),
+			Callable(city, "despawn_undead_unit"),
+			faction,
+			"dungeon_summoner",
+			StringName("dungeon_summoner_%d" % i),
+			"DungeonSummoner_%s" % faction
+		)
+		dungeon_summoners.append(spawner)
+
+
+func _clear_dungeon_summoners() -> void:
+	for spawner: Node3D in dungeon_summoners:
+		if spawner != null and is_instance_valid(spawner):
+			spawner.call("shutdown")
+			spawner.queue_free()
+	dungeon_summoners.clear()
 
 
 ## One Unique CageDemon per Hill — stands inside the blastable red cage baked by HillComposer.
@@ -1125,6 +1191,60 @@ func _wipe_orphan_committed_blocks() -> bool:
 	return true
 
 
+## Re-ask VoxelTerrain to mesh the committed blocks that already carry a mesh.
+##
+## A commit requests a remesh, but VoxelTerrain discards the request unless all 27 data
+## blocks around the mesh block are loaded, and nothing re-issues it later. A tile stamped
+## while the player already stands in it can therefore keep the mesh it had from before the
+## stamp — correct voxels underfoot, because the walker moves with VoxelBoxMover against
+## data rather than against geometry, over a surface that is missing or stale on screen
+## until some unrelated edit nearby happens to reschedule it.
+##
+## `is_area_meshed` cannot find those blocks: it reports whether a mesh block exists, not
+## whether it is current, so a stale mesh answers true. It is used here only to skip the
+## rest of the tile, where the anchor is data-only, no mesh block exists, and the engine
+## would drop the request anyway.
+func _reschedule_meshed_commits() -> bool:
+	var terrain := _terrain_ref
+	var tool := _tool_ref
+	var t0 := Time.get_ticks_usec()
+	const BUDGET_MSEC := 3
+	var touched := 0
+	var unloaded := 0
+	var i := 0
+	while i < _committed_block_keys.size():
+		if not is_instance_valid(self):
+			OfflineVolumeCommitterScript.release_commit(coord)
+			CityProfiler.scope_us("stream_mesh_retouch", Time.get_ticks_usec() - t0)
+			return false
+		if not OfflineVolumeCommitterScript.try_acquire_commit(coord):
+			await get_tree().process_frame
+			continue
+		var t_slice := Time.get_ticks_msec()
+		while (
+			i < _committed_block_keys.size()
+			and Time.get_ticks_msec() - t_slice < BUDGET_MSEC
+		):
+			var bp: Vector3i = _committed_block_keys[i]
+			i += 1
+			var area := OfflineVolumeCommitterScript.block_voxel_aabb(origin_vox, bp)
+			if not terrain.is_area_meshed(area):
+				continue
+			if OfflineVolumeCommitterScript.retouch_block(terrain, tool, origin_vox, bp):
+				touched += 1
+			else:
+				unloaded += 1
+		OfflineVolumeCommitterScript.release_commit(coord)
+		await get_tree().process_frame
+	CityProfiler.scope_us("stream_mesh_retouch", Time.get_ticks_usec() - t0)
+	if touched > 0 or unloaded > 0:
+		print(
+			"DistrictInstance re-meshed %d stamped blocks %s (%d unloaded meanwhile)"
+			% [touched, str(coord), unloaded]
+		)
+	return true
+
+
 func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 	## Time-budgeted commits. Keys must already be nearest-first for this phase.
 	## Remesh backpressure: do not outrun VoxelTools — feeding more blocks while
@@ -1263,16 +1383,6 @@ func _ensure_anchor() -> void:
 	_anchor.requires_collisions = false
 	add_child(_anchor)
 	_anchor.global_position = world_aabb_center() + Vector3(0.0, 40.0, 0.0)
-
-
-func _ensure_generate_viewer() -> void:
-	## Temporary collisions near the tile while stamping so ground can mesh for spawn/nav.
-	## Swapped back to data-only after detail finishes.
-	_ensure_anchor()
-	if _anchor == null:
-		return
-	_anchor.requires_visuals = true
-	_anchor.requires_collisions = true
 
 
 func _pin_data_only() -> void:

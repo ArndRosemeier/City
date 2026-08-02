@@ -128,3 +128,35 @@ static func commit_block(terrain: VoxelTerrain, origin_vox: Vector3i, local_bp: 
 	if buf == null:
 		return false
 	return terrain.try_set_block_data(wbp, buf)
+
+
+## Voxel-space extent of one committed block, for VoxelTerrain.is_area_meshed queries.
+static func block_voxel_aabb(origin_vox: Vector3i, local_bp: Vector3i) -> AABB:
+	var wbp := world_block_pos(origin_vox, local_bp)
+	return AABB(Vector3(wbp * BLOCK), Vector3(BLOCK, BLOCK, BLOCK))
+
+
+## Writes a block's current voxels back unchanged so VoxelTerrain reschedules its mesh.
+##
+## `try_set_block_data` does request a remesh, but VoxelTerrain drops that request unless all
+## 27 data blocks around the mesh block are loaded, and nothing re-issues it afterwards.
+## Re-reading through the tool rather than replaying the baked payload keeps whatever the
+## player shot away while the tile was still streaming.
+##
+## False means the block left every viewer's data box while we were working — it is being
+## unloaded, so it has no mesh left to fix.
+static func retouch_block(
+	terrain: VoxelTerrain, tool: VoxelTool, origin_vox: Vector3i, local_bp: Vector3i
+) -> bool:
+	var wbp := world_block_pos(origin_vox, local_bp)
+	if wbp.y < 0:
+		return true
+	## Copying an area that is not resident yields AIR, and writing that back would carve
+	## the very hole this pass exists to close.
+	var area := block_voxel_aabb(origin_vox, local_bp)
+	if not tool.is_area_editable(area):
+		return false
+	var buf := VoxelBuffer.new()
+	buf.create(BLOCK, BLOCK, BLOCK)
+	tool.copy(wbp * BLOCK, buf, 1 << VoxelBuffer.CHANNEL_TYPE)
+	return terrain.try_set_block_data(wbp, buf)

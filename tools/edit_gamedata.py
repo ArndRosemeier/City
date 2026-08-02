@@ -323,6 +323,7 @@ class GameDataEditor(tk.Tk):
         self._recipe_sites_panel: panels.NestedJsonPanel | None = None
         self._zoo_panel: panels.NestedJsonPanel | None = None
         self._crypt_panel: panels.NestedJsonPanel | None = None
+        self._dungeon_summoner_panel: panels.NestedJsonPanel | None = None
         self._spots_panel: panels.SpotsPanel | None = None
 
         self._build_chrome()
@@ -469,8 +470,12 @@ class GameDataEditor(tk.Tk):
         crypt_frame = ttk.LabelFrame(
             world, text="crypt (Graveyard chapel undead station)", padding=4
         )
+        dungeon_frame = ttk.LabelFrame(
+            world, text="dungeon_summoner (Castle dungeon pads)", padding=4
+        )
         world.add(zoo_frame, weight=1)
         world.add(crypt_frame, weight=1)
+        world.add(dungeon_frame, weight=1)
         self._zoo_panel = panels.NestedJsonPanel(
             zoo_frame,
             scalar_fields=panels.ZOO_SCALARS,
@@ -481,6 +486,12 @@ class GameDataEditor(tk.Tk):
             crypt_frame,
             scalar_fields=panels.CRYPT_SCALARS,
             json_fields=panels.CRYPT_JSON,
+            on_dirty=self._mark_dirty,
+        )
+        self._dungeon_summoner_panel = panels.NestedJsonPanel(
+            dungeon_frame,
+            scalar_fields=panels.DUNGEON_SUMMONER_SCALARS,
+            json_fields=panels.DUNGEON_SUMMONER_JSON,
             on_dirty=self._mark_dirty,
         )
 
@@ -2139,6 +2150,7 @@ class GameDataEditor(tk.Tk):
         assert self._recipe_sites_panel is not None
         assert self._zoo_panel is not None
         assert self._crypt_panel is not None
+        assert self._dungeon_summoner_panel is not None
         assert self._spots_panel is not None
         self._items_panel.set_data(root.get("items") or {})
         self._craft_panel.set_data(root.get("craft_recipes") or {})
@@ -2150,6 +2162,7 @@ class GameDataEditor(tk.Tk):
         self._recipe_sites_panel.set_data(root.get("recipe_sites") or {})
         self._zoo_panel.set_data(root.get("zoo") or {})
         self._crypt_panel.set_data(root.get("crypt") or {})
+        self._dungeon_summoner_panel.set_data(root.get("dungeon_summoner") or {})
         self._spots_panel.set_data(root.get("mandelbrot_spots") or {})
 
     def _collect_noncombat(self) -> dict[str, Any]:
@@ -2163,6 +2176,7 @@ class GameDataEditor(tk.Tk):
         assert self._recipe_sites_panel is not None
         assert self._zoo_panel is not None
         assert self._crypt_panel is not None
+        assert self._dungeon_summoner_panel is not None
         assert self._spots_panel is not None
         return {
             "items": self._items_panel.get_data(),
@@ -2175,6 +2189,7 @@ class GameDataEditor(tk.Tk):
             "recipe_sites": self._recipe_sites_panel.get_data(),
             "zoo": self._zoo_panel.get_data(),
             "crypt": self._crypt_panel.get_data(),
+            "dungeon_summoner": self._dungeon_summoner_panel.get_data(),
             "mandelbrot_spots": self._spots_panel.get_data(),
         }
 
@@ -2320,6 +2335,24 @@ class GameDataEditor(tk.Tk):
             faction = str(crypt.get("faction", "")).strip()
             if faction and faction not in ALLOWED_FACTIONS:
                 errors.append(f"crypt.faction: unknown '{faction}'")
+        errors.extend(
+            _validate_forever_war_section(
+                "dungeon_summoner",
+                sections.get("dungeon_summoner"),
+                {
+                    "spawn_lift_m": float,
+                    "base_spawn_interval_sec": float,
+                    "spawn_pressure_k": float,
+                    "alive_cap": int,
+                    "first_spawn_fraction": float,
+                },
+            )
+        )
+        dungeon_summoner = sections.get("dungeon_summoner")
+        if isinstance(dungeon_summoner, dict):
+            frac = dungeon_summoner.get("first_spawn_fraction")
+            if isinstance(frac, (int, float)) and not (0.0 < float(frac) <= 1.0):
+                errors.append("dungeon_summoner.first_spawn_fraction must be in (0, 1]")
 
         spots = sections["mandelbrot_spots"]
         if not isinstance(spots, dict):
@@ -2497,6 +2530,7 @@ class GameDataEditor(tk.Tk):
                     "recipe_sites": disk_root.get("recipe_sites") or {},
                     "zoo": disk_root.get("zoo") or {},
                     "crypt": disk_root.get("crypt") or {},
+                    "dungeon_summoner": disk_root.get("dungeon_summoner") or {},
                     "mandelbrot_spots": disk_root.get("mandelbrot_spots") or {},
                 }
             )
@@ -2754,6 +2788,7 @@ def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
     assert app._recipe_sites_panel is not None
     assert app._zoo_panel is not None
     assert app._crypt_panel is not None
+    assert app._dungeon_summoner_panel is not None
     assert app._spots_panel is not None
     items = app._items_panel.get_data()
     if "gem_quartz" not in items:
@@ -2772,6 +2807,9 @@ def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
         raise RuntimeError("smoke: crypt panel missing alive_cap")
     if str(crypt.get("faction", "")) != "undead":
         raise RuntimeError("smoke: crypt faction should be undead")
+    dungeon_summoner = app._dungeon_summoner_panel.get_data()
+    if int(dungeon_summoner.get("alive_cap", 0)) < 1:
+        raise RuntimeError("smoke: dungeon_summoner panel missing alive_cap")
     spots = app._spots_panel.get_data()
     spot_list = spots.get("spots")
     if not isinstance(spot_list, list) or len(spot_list) < 80:

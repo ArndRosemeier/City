@@ -267,6 +267,32 @@ static func crypt_string(key: String) -> String:
 	return str(sec[key])
 
 
+# --- Castle dungeon summoner pads ------------------------------------------
+
+## Forever-war pads inside a castle dungeon — faction is rolled per pad, not authored here.
+static func dungeon_summoner() -> Dictionary:
+	return _section("dungeon_summoner")
+
+
+## Typed read from any authored top-level gamedata object section.
+static func section_float(section: String, key: String) -> float:
+	var sec := _section(section)
+	if not sec.has(key):
+		push_error("GameData.section_float: missing '%s.%s'" % [section, key])
+		assert(false, "GameData: missing section constant")
+		return 0.0
+	return float(sec[key])
+
+
+static func section_int(section: String, key: String) -> int:
+	var sec := _section(section)
+	if not sec.has(key):
+		push_error("GameData.section_int: missing '%s.%s'" % [section, key])
+		assert(false, "GameData: missing section constant")
+		return 0
+	return int(sec[key])
+
+
 static func ability(id: String) -> Dictionary:
 	var m := abilities()
 	if not m.has(id):

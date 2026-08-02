@@ -693,11 +693,16 @@ func _test_budget() -> void:
 ## One edit can straddle a district border: each side becomes its own region, and the side
 ## whose tile the nav world does not hold is counted and dropped. That happens whenever a
 ## tile is still baking or has already streamed out, so it is a counter, not an error.
+##
+## The edit has to paint material. Clearing to AIR publishes nothing across this border:
+## `CityBrush.fill_box` routes AIR through `_clear_box`, which skips cells that are already
+## empty, and nothing was ever painted past x=0 — the touched box would end at the border and
+## queue one region. The slab is left standing in mid-air, clear of every later probe.
 func _test_district_straddle() -> void:
 	var skipped_before := _nav.dirty().skipped_unregistered()
 	var rebuilds_before := _nav.dirty().rebuilds()
 	var version_before := _nav.version()
-	_brush.fill_box(Vector3i(-2, 20, 4), Vector3i(3, 21, 7), VoxelMaterial.AIR)
+	_brush.fill_box(Vector3i(-2, 20, 4), Vector3i(3, 21, 7), VoxelMaterial.BRICK)
 	if _nav.dirty().pending() != 2:
 		_fail(
 			"FAIL an edit across the district border queued %d regions, expected 2"

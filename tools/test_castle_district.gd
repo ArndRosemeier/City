@@ -23,6 +23,7 @@ const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
+const DoorBarrierScript := preload("res://scripts/city/door_barrier.gd")
 
 const VOXEL_SIZE := 0.5
 const BLOCK := 16
@@ -155,8 +156,9 @@ func _ready() -> void:
 	_check_dungeon_stairs(layout)
 	_check_dungeon_tall(layout)
 	_check_dungeon_tree("seed %d" % _world_seed, layout)
+	_check_dungeon_summoners(layout)
 	_check_doors(layout)
-	_check_door_meshes(layout, res)
+	_check_castle_doors_not_hung(layout, res)
 	if _failed:
 		_quit()
 		return
@@ -1224,6 +1226,71 @@ func _check_dungeon_tall(layout: CastleLayout) -> void:
 	)
 
 
+## Two forever-war pads on distinct monster factions, spaced across the vault set.
+func _check_dungeon_summoners(layout: CastleLayout) -> void:
+	const WANT := 2
+	const FORBIDDEN := ["human", "spectator", "unique"]
+	if layout.dungeon_summoners.size() != WANT:
+		_fail(
+			"FAIL dungeon has %d summoner pads, expected %d"
+			% [layout.dungeon_summoners.size(), WANT]
+		)
+		return
+	if layout.dungeon_summoner_factions.size() != WANT:
+		_fail(
+			"FAIL dungeon has %d summoner factions, expected %d"
+			% [layout.dungeon_summoner_factions.size(), WANT]
+		)
+		return
+	var a: Vector3i = layout.dungeon_summoners[0]
+	var b: Vector3i = layout.dungeon_summoners[1]
+	var fa := String(layout.dungeon_summoner_factions[0])
+	var fb := String(layout.dungeon_summoner_factions[1])
+	if fa == fb:
+		_fail("FAIL dungeon summoners share faction '%s'" % fa)
+		return
+	for f in [fa, fb]:
+		if FORBIDDEN.has(f):
+			_fail("FAIL dungeon summoner faction '%s' is not a combat side" % f)
+			return
+		var ok := false
+		for i in range(MonsterFaction.MONSTER_COUNT):
+			if MonsterFaction.faction_name(MonsterFaction.monster_faction_at(i)) == f:
+				ok = true
+				break
+		if not ok:
+			_fail("FAIL dungeon summoner faction '%s' is unknown" % f)
+			return
+	## Each pad must sit inside some vault's footprint on that vault's floor.
+	for pad: Vector3i in layout.dungeon_summoners:
+		var inside := false
+		for v: CastleVault in layout.dungeon_vaults:
+			if pad.y != v.floor_y:
+				continue
+			if (
+				pad.x >= v.rect.position.x
+				and pad.x < v.rect.end.x
+				and pad.z >= v.rect.position.y
+				and pad.z < v.rect.end.y
+			):
+				inside = true
+				break
+		if not inside:
+			_fail("FAIL dungeon summoner %s is not inside any vault floor" % pad)
+			return
+	var dx := a.x - b.x
+	var dz := a.z - b.z
+	var dy := a.y - b.y
+	var dist2 := dx * dx + dz * dz + dy * dy
+	if dist2 < 36:
+		_fail(
+			"FAIL dungeon summoners are too close (%s vs %s, dist2=%d)"
+			% [a, b, dist2]
+		)
+		return
+	print("OK dungeon summoners: %s@%s vs %s@%s" % [fa, a, fb, b])
+
+
 ## At least one route down always exists. Which ones, and how many, is the first thing that
 ## makes two castles different, so the mix is reported rather than merely asserted non-empty.
 func _check_dungeon_entries(layout: CastleLayout) -> void:
@@ -1394,14 +1461,10 @@ func _want_set(
 # Doors — Phase 4
 # ---------------------------------------------------------------------------
 
-## Every opening in the fortress carries a door, and every door fits the hole it hangs in.
+## Every planned opening is a clear walkable cut (no hung leaves / DOOR plugs on castles).
 ##
-## The whole risk of the phase is one number. `DUNGEON_DOOR_W` is five columns against a
-## `LANE_MARGIN` of three, so a leaf, frame or reveal that eats a column off either side takes
-## geodesic clearance to zero and the door silently becomes a wall. The fit is therefore
-## measured three ways — the opening against the arch the plan says was cut, the closed leaf
-## against the depth of that masonry, and the open leaf against the clearance apron the
-## composer already keeps around every doorway — and then every route test below walks it.
+## Doorway records still define circulation; sealed DOOR barriers are intentionally not hung
+## so dungeon forever-war mobs can path through the keep and crypt.
 func _check_doors(layout: CastleLayout) -> void:
 	## The apron is the composer's, not the door's. Asserted rather than imported, because a
 	## constant reaching from `CastleDoorway` into `CastleComposer` would close a cycle
@@ -1634,92 +1697,34 @@ func _check_door_tiers(what: String, layout: CastleLayout) -> void:
 		_fail("FAIL %s: %s is a loop edge and may_bar() refused it" % [what, a_loop.describe()])
 
 
-## The leaves as actually built, measured vertex by vertex against the opening each one hangs
-## in. `_check_doors` proves the plan is sound; this proves the mesh the placer made from that
-## plan is the shape the plan described, which is a different statement and the one that
-## catches a hinge on the wrong jamb or a course built to the wrong half-width.
-func _check_door_meshes(layout: CastleLayout, res: Dictionary) -> void:
+## Castle layouts must not hang sealed doors — openings stay AIR for dungeon circulation.
+func _check_castle_doors_not_hung(layout: CastleLayout, res: Dictionary) -> void:
 	var placer: CastleDoorPlacer = CastleDoorPlacerScript.new()
 	placer.name = "CastleDoors"
 	add_child(placer)
 	var origin: Vector3i = res["origin_vox"]
 	placer.place_from_layout(layout, VOXEL_SIZE, origin, null)
-	var all := layout.doorways()
-	if placer.door_count() != all.size():
+	if placer.door_count() != 0:
 		_fail(
-			"FAIL the placer hung %d of %d openings"
-			% [placer.door_count(), all.size()]
+			"FAIL castle placer hung %d doors; castle openings must stay unsealed"
+			% placer.door_count()
 		)
 		return
-	var pivots := placer.leaf_pivots()
-	if pivots.size() != all.size() * CastleDoorway.LEAVES:
-		_fail(
-			"FAIL %d leaves for %d openings, %d per opening expected"
-			% [pivots.size(), all.size(), CastleDoorway.LEAVES]
-		)
+	## Doorway clears in the bake must not be filled with DOOR plugs.
+	var plugged := 0
+	for d: CastleDoorway in layout.doorways():
+		for cell: Vector3i in DoorBarrierScript.barrier_cells(d, Vector3i.ZERO):
+			var id := _vox(cell.x, cell.y, cell.z)
+			if id == VoxelMaterial.DOOR:
+				plugged += 1
+	if plugged > 0:
+		_fail("FAIL bake sealed %d DOOR voxels in castle doorway clears" % plugged)
 		return
-	var verts := 0
-	var worst := 0.0
-	var worst_on := ""
-	for i in range(all.size()):
-		var d: CastleDoorway = all[i]
-		for k in range(CastleDoorway.LEAVES):
-			var pivot: Node3D = pivots[i * CastleDoorway.LEAVES + k]
-			var mi := pivot.get_child(0) as MeshInstance3D
-			if mi == null or mi.mesh == null:
-				_fail("FAIL %s leaf %d carries no mesh" % [d.describe(), k])
-				return
-			var mesh: ArrayMesh = mi.mesh
-			if mesh.get_surface_count() == 0:
-				_fail("FAIL %s leaf %d is an empty mesh" % [d.describe(), k])
-				return
-			for s in range(mesh.get_surface_count()):
-				var points: PackedVector3Array = mesh.surface_get_arrays(s)[Mesh.ARRAY_VERTEX]
-				verts += points.size()
-				for p: Vector3 in points:
-					var over := _leaf_overhang(d, origin, pivot.transform * p)
-					if over > worst:
-						worst = over
-						worst_on = "%s leaf %d" % [d.describe(), k]
 	print(
-		"door meshes: %d leaves over %d openings, %d vertices, worst overhang %.4f voxels%s"
-		% [
-			pivots.size(),
-			all.size(),
-			verts,
-			worst,
-			"" if worst_on.is_empty() else " on %s" % worst_on,
-		]
+		"OK castle doors not hung (%d openings stay open)"
+		% layout.doorways().size()
 	)
-	if worst > FIT_EPS:
-		_fail(
-			"FAIL a leaf stands %.3f voxels outside its own opening, on %s"
-			% [worst, worst_on]
-		)
-		return
 	placer.queue_free()
-
-
-## Voxels one point of a closed leaf lies outside the opening it hangs in — zero when it is
-## inside. Measured in the doorway's own frame: along the axis it must stay inside the
-## masonry, across it inside the arch *at that point's own course*, and vertically inside the
-## clear height. The per-course part is the whole point: a leaf sized to the full rectangle
-## would pass an envelope check and still cut through both shoulders of the arch.
-func _leaf_overhang(d: CastleDoorway, origin: Vector3i, at: Vector3) -> float:
-	var v := at / VOXEL_SIZE - Vector3(float(origin.x), float(origin.y), float(origin.z))
-	var flat := Vector2(v.x, v.z) - Vector2(float(d.center.x) + 0.5, float(d.center.y) + 0.5)
-	var sv := d.side()
-	var u := flat.dot(Vector2(float(d.axis.x), float(d.axis.y)))
-	var t := flat.dot(Vector2(float(sv.x), float(sv.y)))
-	var h := v.y - float(d.floor_y + 1)
-	## The course this point sits in. A point exactly on a course boundary is credited to the
-	## lower, wider one, which is where a box's bottom face legitimately is.
-	var row := clampi(int(ceil(h - FIT_EPS)), 1, d.height)
-	var across := float(d.row_half(row)) + 0.5
-	return maxf(
-		maxf(-0.5 - u, u - (float(d.depth) - 0.5)),
-		maxf(maxf(absf(t) - across, -h), h - float(d.height))
-	)
 
 
 # ---------------------------------------------------------------------------

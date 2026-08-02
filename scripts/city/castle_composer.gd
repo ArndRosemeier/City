@@ -1414,11 +1414,13 @@ func _dungeon_flight(
 ## Tall chambers, then the flights between levels, then the rooms and the openings that join
 ## them. In that order because a chamber reaching up through a level takes that level's floor
 ## away, and a flight needs both its levels floored before it can claim a lane between them.
+## Summoner pads come last — they need the finished vault set.
 func _plan_dungeon_interior(out: CastleLayout) -> void:
 	_plan_dungeon_tall(out)
 	_plan_dungeon_flights(out)
 	_plan_dungeon_rooms(out)
 	_plan_dungeon_doors(out)
+	_plan_dungeon_summoners(out)
 
 
 ## Bays promoted to chambers that reach up through the level above them, which is the single
@@ -1555,6 +1557,71 @@ func _dungeon_flight_in_bay(
 		if not picks.is_empty():
 			return picks[rng.randi() % picks.size()]
 	return null
+
+
+## Two forever-war pads in distant vaults, on two different monster factions. Human /
+## spectator / unique are never rolled — those are not sides that hold dungeon turf.
+func _plan_dungeon_summoners(out: CastleLayout) -> void:
+	const WANT := 2
+	out.dungeon_summoners.clear()
+	out.dungeon_summoner_factions.clear()
+	var vaults := out.dungeon_vaults
+	if vaults.size() < WANT:
+		push_error(
+			"CastleComposer: dungeon has %d vaults; need %d for summoners"
+			% [vaults.size(), WANT]
+		)
+		assert(false, "CastleComposer: not enough dungeon vaults for summoners")
+		return
+	## Prefer rooms that read as chambers, not closet cells — then fall back to every vault.
+	var pool: Array[int] = []
+	for i in range(vaults.size()):
+		if not vaults[i].is_small():
+			pool.append(i)
+	if pool.size() < WANT:
+		pool.clear()
+		for i in range(vaults.size()):
+			pool.append(i)
+	var best_a := pool[0]
+	var best_b := pool[1]
+	var best_score := -1.0
+	for ii in range(pool.size()):
+		for jj in range(ii + 1, pool.size()):
+			var score := _summoner_pair_score(vaults[pool[ii]], vaults[pool[jj]])
+			if score > best_score:
+				best_score = score
+				best_a = pool[ii]
+				best_b = pool[jj]
+	var fa := rng.randi() % MonsterFaction.MONSTER_COUNT
+	var fb := (
+		fa + 1 + rng.randi() % (MonsterFaction.MONSTER_COUNT - 1)
+	) % MonsterFaction.MONSTER_COUNT
+	_add_dungeon_summoner(
+		out,
+		vaults[best_a],
+		MonsterFaction.faction_name(MonsterFaction.monster_faction_at(fa))
+	)
+	_add_dungeon_summoner(
+		out,
+		vaults[best_b],
+		MonsterFaction.faction_name(MonsterFaction.monster_faction_at(fb))
+	)
+
+
+func _summoner_pair_score(a: CastleVault, b: CastleVault) -> float:
+	var ac: Vector2i = a.rect.get_center()
+	var bc: Vector2i = b.rect.get_center()
+	var dx := float(ac.x - bc.x)
+	var dz := float(ac.y - bc.y)
+	## Weight vertical separation so pads on different levels win over two next-door rooms.
+	var dy := float(a.floor_y - b.floor_y) * 3.0
+	return dx * dx + dz * dz + dy * dy
+
+
+func _add_dungeon_summoner(out: CastleLayout, vault: CastleVault, faction: String) -> void:
+	var c: Vector2i = vault.rect.get_center()
+	out.dungeon_summoners.append(Vector3i(c.x, vault.floor_y, c.y))
+	out.dungeon_summoner_factions.append(faction)
 
 
 ## Every bay on every level cut into the chambers that level has. A tall bay is never cut: it

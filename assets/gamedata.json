@@ -37648,6 +37648,13 @@
     "first_spawn_fraction": 0.25,
     "faction": "undead"
   },
+  "dungeon_summoner": {
+    "spawn_lift_m": 0.2,
+    "base_spawn_interval_sec": 30.0,
+    "spawn_pressure_k": 0.9,
+    "alive_cap": 12,
+    "first_spawn_fraction": 0.25
+  },
   "mandelbrot_spots": {
     "scale_max": 0.0001,
     "scale_min": 1e-08,

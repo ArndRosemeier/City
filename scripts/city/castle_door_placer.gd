@@ -1,4 +1,7 @@
-## Hangs mesh doors in castle / lot openings and seals them with solid DOOR voxels when closed.
+## Hangs mesh doors in lot openings and seals them with solid DOOR voxels when closed.
+##
+## Castle keep/dungeon layouts are intentionally not hung — openings stay open AIR so
+## forever-war mobs can circulate. City lot façades still use this placer.
 ##
 ## Leaves are visual only (no mesh colliders). Closed state writes `VoxelMaterial.DOOR` through
 ## CityBrush so VoxelBoxMover and nav both block; open restores AIR via destroy_vox.
@@ -89,38 +92,22 @@ func set_brush(brush: CityBrush) -> void:
 	_brush = brush
 
 
-## Hangs every doorway on a castle layout. `layout` may be null (non-castle districts).
+## Castle layout hangs are disabled — keep/dungeon openings stay open AIR.
+## Kept as an explicit no-op so call sites and geometry tests do not silently re-seal.
 func place_from_layout(
 	layout: CastleLayout,
-	voxel_size: float,
-	origin_vox: Vector3i,
-	camera: Camera3D,
-	brush: CityBrush = null
+	_voxel_size: float,
+	_origin_vox: Vector3i,
+	_camera: Camera3D,
+	_brush: CityBrush = null
 ) -> void:
 	clear_doors()
-	_camera = camera
-	_brush = brush
-	_vox = voxel_size
-	_origin_vox = origin_vox
-	_origin = Vector3(float(origin_vox.x), float(origin_vox.y), float(origin_vox.z)) * voxel_size
-	if layout == null:
-		set_process(false)
-		return
-	_ensure_mats()
-	for d: CastleDoorway in layout.doorways():
-		_hang(d, origin_vox)
-	_seal_all_closed()
-	set_process(not _doors.is_empty())
-	_refresh_visibility()
-	print(
-		"CastleDoorPlacer: %d doors (%d tree, %d loop), %d leaf profiles"
-		% [
-			_doors.size(),
-			layout.doorway_link_count(CastleDoorway.LINK_TREE),
-			layout.doorway_link_count(CastleDoorway.LINK_LOOP),
-			_meshes.size(),
-		]
-	)
+	set_process(false)
+	if layout != null:
+		print(
+			"CastleDoorPlacer: skipped %d castle openings (no hung doors by design)"
+			% layout.doorways().size()
+		)
 
 
 ## Hang city lot doorways (already in world voxel space). Does not clear castle doors.

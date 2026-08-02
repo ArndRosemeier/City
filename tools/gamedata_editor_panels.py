@@ -788,3 +788,24 @@ CRYPT_SCALARS = (
     FieldSpec("faction", "faction", "str", required=True, default="undead"),
 )
 CRYPT_JSON: tuple[FieldSpec, ...] = ()
+
+DUNGEON_SUMMONER_SCALARS = (
+    FieldSpec("spawn_lift_m", "spawn_lift_m", "float", required=True, default=0.2),
+    FieldSpec(
+        "base_spawn_interval_sec",
+        "base_spawn_interval_sec",
+        "float",
+        required=True,
+        default=30.0,
+    ),
+    FieldSpec("spawn_pressure_k", "spawn_pressure_k", "float", required=True, default=0.9),
+    FieldSpec("alive_cap", "alive_cap", "int", required=True, default=12),
+    FieldSpec(
+        "first_spawn_fraction",
+        "first_spawn_fraction",
+        "float",
+        required=True,
+        default=0.25,
+    ),
+)
+DUNGEON_SUMMONER_JSON: tuple[FieldSpec, ...] = ()

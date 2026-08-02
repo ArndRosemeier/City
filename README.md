@@ -332,6 +332,21 @@ frame, and `NavDirtyTracker` subscribes to both. District loading stays outside 
 signal: it commits whole 16³ blocks with `VoxelTerrain.try_set_block_data` rather than
 editing cells, and the tile it loads brings its own baked navigation.
 
+That commit path has one sharp edge. `try_set_block_data` does ask for a remesh, but
+VoxelTerrain throws the request away unless all 27 data blocks around the mesh block are
+loaded, and never re-issues it. A tile stamped while the player already stands in it can
+therefore keep the mesh it had from before the stamp — and because the walker moves with
+`VoxelBoxMover` against voxel *data* rather than against geometry, the ground stays solid
+underfoot while the surface on screen is stale or missing, until some unrelated edit nearby
+happens to reschedule it. `DistrictInstance._reschedule_meshed_commits` closes that at the
+end of a stamp by writing the committed blocks that already carry a mesh back unchanged.
+It re-reads each block through the tool instead of replaying the baked payload, so anything
+the player shot away mid-stamp survives, and it skips blocks whose data is not resident,
+because copying those yields AIR and would carve the very hole the pass exists to close.
+`is_area_meshed` only reports that a mesh block exists, not that it is current, so it is the
+filter for the rest of the tile — where the district anchor is data-only and no mesh exists
+— and never a staleness test.
+
 What a frame pays for that is bounded twice. `NavDirtyTracker` coalesces edits into queued
 *regions* of up to 2x2 navigation sectors, because a burst of writes in one place must not
 cost a rescan each — but it drains them one **sector** at a time, so a blast straddling a
@@ -342,7 +357,8 @@ unit reads spans the voxel rows the navigation field was baked over plus the lin
 reach above them (`NativeNavWorld.rebuild_y_range`), not the terrain's full 220 rows.
 
 Checks: `tools/test_voxel_write_funnel.tscn` for the brush funnel,
-`tools/test_nav_dirty_rebuild.tscn` for both signals reaching navigation (run as scenes).
+`tools/test_nav_dirty_rebuild.tscn` for both signals reaching navigation,
+`tools/test_stamp_mesh_retouch.tscn` for the post-stamp remesh (run as scenes).
 
 ## Navigation
 

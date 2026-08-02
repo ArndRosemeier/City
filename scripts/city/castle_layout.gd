@@ -71,6 +71,11 @@ var dungeon_doorways: Array[CastleDoorway] = []
 ## Flights between two dungeon levels. `from_storey`/`to_storey` are level indices here.
 var dungeon_stairs: Array[CastleStair] = []
 var dungeon_entries: Array[CastleDungeonEntry] = []
+## Forever-war pads inside the dungeon (district-local x, floor Y, z). Always two, on
+## different combat factions, placed as far apart as the vault set allows.
+var dungeon_summoners: Array[Vector3i] = []
+## Combat faction name per `dungeon_summoners` entry — never human / spectator / unique.
+var dungeon_summoner_factions: PackedStringArray = PackedStringArray()
 
 ## Cardinal direction the gate faces, chosen so it looks at a road stub.
 var gate_dir: Vector2i = Vector2i.ZERO
@@ -462,10 +467,14 @@ func dungeon_describe() -> String:
 	var per_level: Array[String] = []
 	for l in range(dungeon_levels):
 		per_level.append("%d" % dungeon_vaults_on(l).size())
+	var summon_bits: Array[String] = []
+	for i in range(mini(dungeon_summoners.size(), dungeon_summoner_factions.size())):
+		var p: Vector3i = dungeon_summoners[i]
+		summon_bits.append("%s@%d,%d,%d" % [dungeon_summoner_factions[i], p.x, p.y, p.z])
 	return (
 		(
 			"dungeon Y%d..%d %d levels plate=%s bays=%d(min=%d) rooms=%d [%s]"
-			+ " wide=%d small=%d tall=%d flights=%d entries=%s"
+			+ " wide=%d small=%d tall=%d flights=%d entries=%s summoners=[%s]"
 		)
 		% [
 			dungeon_y0,
@@ -481,6 +490,7 @@ func dungeon_describe() -> String:
 			dungeon_tall_count(),
 			dungeon_stairs.size(),
 			dungeon_entry_names(),
+			", ".join(summon_bits),
 		]
 	)
 
