@@ -42,9 +42,10 @@ void fragment() {
 	const float WIN_V1 = 0.88;
 
 	vec2 grid = vec2(uv_m.x / win_w, uv_m.y / floor_h);
-	/// Edge softness tracks the on-screen size of one window cell, so the pane borders
-	/// stay a fixed pixel width instead of aliasing into crawling patterns when moving.
-	vec2 aa = max(fwidth(grid), vec2(0.0005));
+	/// Cap the footprint: raw fwidth spikes on MultiMesh triangle seams and used to
+	/// widen pane borders into a crawling shimmer. Softness stays about a pixel, never
+	/// more than a third of a window cell.
+	vec2 aa = clamp(fwidth(grid), vec2(0.0005), vec2(0.35));
 	vec2 f = fract(grid);
 	float wx = (
 		smoothstep(WIN_U0 - aa.x, WIN_U0 + aa.x, f.x)
@@ -55,16 +56,20 @@ void fragment() {
 		* (1.0 - smoothstep(WIN_V1 - aa.y, WIN_V1 + aa.y, f.y))
 	);
 	// Skip ground retail band (first ~3.5 m) for cleaner podium read.
-	float band_aa = max(fwidth(uv_m.y), 0.01);
+	float band_aa = clamp(fwidth(uv_m.y), 0.01, 0.8);
 	float facade = smoothstep(3.4 - band_aa, 3.4 + band_aa, uv_m.y) * (1.0 - roof_w);
 
 	float window = wx * wy * facade;
 	/// What the grid averages out to once a cell is smaller than a pixel.
 	float window_avg = (WIN_U1 - WIN_U0) * (WIN_V1 - WIN_V0) * facade;
-	/// Ramps in as one window cell shrinks from ~3 px to ~1 px on screen. Below a pixel the
-	/// binary grid is pure noise that crawls with the camera, so fade it into its own
-	/// average and let the facade just glow; above it, keep the real windows.
-	float lod = smoothstep(0.35, 1.0, max(aa.x, aa.y));
+	/// Real cell size for LOD, but reject one-axis seam spikes that would stripe the facade.
+	vec2 fw = fwidth(grid);
+	float px_mean = 0.5 * (fw.x + fw.y);
+	float px_max = max(fw.x, fw.y);
+	float px_lod = px_max > px_mean * 2.5 ? px_mean : px_max;
+	/// Start collapsing once a cell is ~12 px; fully average by ~3 px. Waiting longer left
+	/// a crawling moire band across the whole mid-range skyline.
+	float lod = smoothstep(0.08, 0.35, px_lod);
 
 	float hash = fract(sin(dot(vec2(floor(grid.x), floor(grid.y)), vec2(12.9898, 78.233))) * 43758.5453);
 	float glass_mix = mix(window, window_avg, lod) * 0.88;

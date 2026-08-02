@@ -38,7 +38,8 @@ var grime: float = 0.0
 var grime_height: float = 4.0
 ## Vertical wash marks on upright faces.
 var streaks: float = 0.0
-## GLASS only: fraction of windows that may light up at night.
+## GLASS only: lamp strength at night (0 = dark pane, 1 = full lamp). Which windows lamp
+## is chosen by stamping GLASS vs GLASS_LIT — this is not a per-cell on/off chance.
 var lit_ratio: float = 0.0
 
 ## Prop stems that flower, by the prefix the generator names them with.
@@ -343,7 +344,9 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.tint = Color(0.82, 0.9, 1.0, 0.34)
 			s.roughness = 0.08
 			s.metallic = 0.06
-			s.lit_ratio = 0.62
+			## Full pane. Which windows lamp is decided by stamping GLASS vs GLASS_LIT in the
+			## grammar — a fractional lit_ratio here re-drew a 1 m on/off grid that flickered.
+			s.lit_ratio = 1.0
 		VoxelMaterial.WATER:
 			s.kind = Kind.WATER
 			s.albedo_file = "water.jpg"

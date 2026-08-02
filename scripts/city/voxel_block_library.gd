@@ -810,7 +810,7 @@ static func _build_surface_material(id: int, object_space: bool) -> ShaderMateri
 			mat.set_shader_parameter("lit_warm", Color(1.0, 0.82, 0.45, 1.0))
 			mat.set_shader_parameter("lit_cool", Color(0.72, 0.86, 1.0, 1.0))
 			mat.set_shader_parameter("lit_energy", 1.8)
-			## One lit/dark draw per 1 m of facade — roughly one punched window.
+			## Warm/cool variation cell — roughly one punched window.
 			mat.set_shader_parameter("window_meters", 1.0)
 			mat.set_shader_parameter("fresnel_strength", 0.85)
 			mat.set_shader_parameter("day_sky_tint", 0.4)
