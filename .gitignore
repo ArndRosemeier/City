@@ -58,6 +58,8 @@ native/**/target/
 addons/city_voxel/bin/*.so
 addons/city_voxel/bin/*.dylib
 addons/city_voxel/bin/*.pdb
+## Windows keeps a ~name.dll lock copy while the game has city_voxel.dll loaded.
+addons/city_voxel/bin/~*
 !addons/city_voxel/bin/city_voxel.dll
 !addons/city_voxel/bin/.gitkeep
 
