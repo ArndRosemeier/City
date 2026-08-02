@@ -77,10 +77,13 @@ var _bake_blocks: Dictionary = {}
 var _bake_block_keys: Array[Vector3i] = []
 var _bake_key_index: int = 0
 var _bake_impostors: Array = []
-## Local block positions already written to the live terrain. Cleared on unload; wiped to
-## AIR before a far→full upgrade so leftover far carve cannot survive as landscape holes.
+## Local block positions already written to the live terrain. Cleared on unload.
+## Far→full upgrade snapshots these, overwrites shared keys from the new bake, then wipes
+## only orphans (far-only blocks the full sparse export never retouches).
 var _committed_block_keys: Array[Vector3i] = []
-var _wipe_before_stamp: bool = false
+## Far keys captured at upgrade start; used for post-stamp orphan AIR wipe.
+var _upgrade_prev_committed: Array[Vector3i] = []
+var _orphan_wipe_after_stamp: bool = false
 ## JIT subdivision + furniture targets (BuildingInterior), keyed by district cell.
 ## Empty on far / non-lot tiles.
 var interior_buildings: Dictionary = {}
@@ -230,9 +233,12 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	is_ready = false
 	is_ground_ready = false
 	bake_quality = "full"
-	## Wipe previously committed far blocks before the full stamp — sparse export cannot
-	## overwrite AIR the far pass left in columns the full pass never retouches.
-	_wipe_before_stamp = not _committed_block_keys.is_empty()
+	## Snapshot far keys, then clear the live list so the full stamp records what it wrote.
+	## Do NOT paint those keys to AIR first — a failed/partial restamp used to leave
+	## rectangular ground pits with no bedrock. Orphans are wiped after a successful stamp.
+	_upgrade_prev_committed = _committed_block_keys.duplicate()
+	_committed_block_keys.clear()
+	_orphan_wipe_after_stamp = not _upgrade_prev_committed.is_empty()
 	_bake_blocks.clear()
 	_bake_block_keys.clear()
 	_bake_key_index = 0
@@ -301,7 +307,8 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	is_busy = false
 	is_ground_ready = false
 	_committed_block_keys.clear()
-	_wipe_before_stamp = false
+	_upgrade_prev_committed.clear()
+	_orphan_wipe_after_stamp = false
 	if crowd != null and is_instance_valid(crowd):
 		crowd.clear_crowd()
 		crowd.queue_free()
@@ -365,11 +372,6 @@ func _stamp_ground_async() -> void:
 		is_busy = false
 		failed.emit(self, "area not editable")
 		return
-	if _wipe_before_stamp:
-		_wipe_before_stamp = false
-		await _wipe_committed_blocks_to_air()
-		if not is_instance_valid(self):
-			return
 
 	CityProfiler.set_counter("stream_phase", 1)  ## 1=ground bake
 	var payload := await _bake_on_worker()
@@ -455,6 +457,15 @@ func _stamp_detail_async() -> void:
 		is_busy = false
 		failed.emit(self, "detail commit failed")
 		return
+	if _orphan_wipe_after_stamp:
+		_orphan_wipe_after_stamp = false
+		var wipe_ok := await _wipe_orphan_committed_blocks()
+		if not is_instance_valid(self):
+			return
+		if not wipe_ok:
+			is_busy = false
+			failed.emit(self, "upgrade orphan wipe failed")
+			return
 	_bake_blocks.clear()
 	_bake_block_keys.clear()
 
@@ -1018,44 +1029,59 @@ func _remember_committed_block(bp: Vector3i) -> void:
 	_committed_block_keys.append(bp)
 
 
-## Paint previously committed blocks back to AIR so a full restamp starts from a clean slate.
-func _wipe_committed_blocks_to_air() -> void:
+## After a far→full overwrite, paint far-only blocks to AIR. Shared keys were already
+## restamped; clearing them first is what used to open bedrock voids on commit failure.
+func _wipe_orphan_committed_blocks() -> bool:
 	var terrain := _terrain_ref
-	if terrain == null or _committed_block_keys.is_empty():
-		_committed_block_keys.clear()
-		return
+	var orphans: Array[Vector3i] = OfflineVolumeCommitterScript.orphan_block_keys(
+		_upgrade_prev_committed, _bake_blocks
+	)
+	_upgrade_prev_committed.clear()
+	if terrain == null or orphans.is_empty():
+		return true
 	## Do not CityProfiler.begin/end across awaits — streamer._process nests scopes each frame.
 	var wipe_t0 := Time.get_ticks_usec()
 	## Uniform AIR block sentinel (see OfflineVolumeCommitter.make_buffer_u16).
 	var air_sentinel := PackedByteArray([0, 0])
 	const BUDGET_MSEC := 4
 	var i := 0
-	while i < _committed_block_keys.size():
+	while i < orphans.size():
 		if not is_instance_valid(self):
 			CityProfiler.scope_us("stream_upgrade_wipe", Time.get_ticks_usec() - wipe_t0)
-			return
+			return false
 		if not OfflineVolumeCommitterScript.try_acquire_commit(coord):
 			await get_tree().process_frame
 			continue
 		var t0 := Time.get_ticks_msec()
-		while i < _committed_block_keys.size() and Time.get_ticks_msec() - t0 < BUDGET_MSEC:
-			var bp: Vector3i = _committed_block_keys[i]
+		while i < orphans.size() and Time.get_ticks_msec() - t0 < BUDGET_MSEC:
+			var bp: Vector3i = orphans[i]
 			var ok := OfflineVolumeCommitterScript.commit_block(
 				terrain, origin_vox, bp, air_sentinel
 			)
 			var attempts := 0
-			while not ok and attempts < 30:
+			while not ok and attempts < 90:
 				await get_tree().process_frame
 				ok = OfflineVolumeCommitterScript.commit_block(
 					terrain, origin_vox, bp, air_sentinel
 				)
 				attempts += 1
+			if not ok:
+				push_error(
+					"DistrictInstance orphan wipe failed at %s local block %s"
+					% [str(coord), str(bp)]
+				)
+				OfflineVolumeCommitterScript.release_commit(coord)
+				CityProfiler.scope_us("stream_upgrade_wipe", Time.get_ticks_usec() - wipe_t0)
+				return false
 			i += 1
 		OfflineVolumeCommitterScript.release_commit(coord)
 		await get_tree().process_frame
-	_committed_block_keys.clear()
 	CityProfiler.scope_us("stream_upgrade_wipe", Time.get_ticks_usec() - wipe_t0)
-	print("DistrictInstance wiped far blocks for upgrade %s" % str(coord))
+	print(
+		"DistrictInstance wiped %d orphan far blocks after upgrade %s"
+		% [orphans.size(), str(coord)]
+	)
+	return true
 
 
 func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
@@ -1093,7 +1119,14 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 		var committed := 0
 		while _bake_key_index < _bake_block_keys.size():
 			var bp: Vector3i = _bake_block_keys[_bake_key_index]
-			var data: PackedByteArray = _bake_blocks.get(bp, PackedByteArray())
+			if not _bake_blocks.has(bp):
+				push_error(
+					"DistrictInstance commit missing bake payload at %s local block %s"
+					% [str(coord), str(bp)]
+				)
+				OfflineVolumeCommitterScript.release_commit(coord)
+				return false
+			var data: PackedByteArray = _bake_blocks[bp] as PackedByteArray
 			var ok := OfflineVolumeCommitterScript.commit_block(terrain, origin_vox, bp, data)
 			var attempts := 0
 			while not ok and attempts < 90:

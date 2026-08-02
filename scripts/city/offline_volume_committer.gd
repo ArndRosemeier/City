@@ -81,20 +81,40 @@ static func world_block_pos(origin_vox: Vector3i, local_bp: Vector3i) -> Vector3
 
 
 static func make_buffer_u16(data: PackedByteArray) -> VoxelBuffer:
-	## `data` is either a 2-byte uniform sentinel [value,0] or full 8192-byte u16 channel
-	## (prepared off-thread).
+	## `data` is either a 2-byte uniform sentinel [lo, hi] or full 8192-byte u16 channel
+	## (prepared off-thread). Unexpected sizes used to fill AIR — that stamped rectangular
+	## bedrock voids into the live terrain whenever a payload was truncated.
 	var buf := VoxelBuffer.new()
 	buf.create(BLOCK, BLOCK, BLOCK)
 	if data.size() == 2:
 		## LE u16 sentinel [lo, hi].
 		buf.fill(int(data[0]) | (int(data[1]) << 8), VoxelBuffer.CHANNEL_TYPE)
 		return buf
-	if data.size() < BLOCK_VOXELS * 2:
-		buf.fill(0, VoxelBuffer.CHANNEL_TYPE)
-		return buf
+	if data.size() != BLOCK_VOXELS * 2:
+		push_error(
+			"OfflineVolumeCommitter.make_buffer_u16: unexpected payload size %d (want 2 or %d)"
+			% [data.size(), BLOCK_VOXELS * 2]
+		)
+		return null
 	buf.decompress_channel(VoxelBuffer.CHANNEL_TYPE)
 	buf.set_channel_from_byte_array(VoxelBuffer.CHANNEL_TYPE, data)
 	return buf
+
+
+## Blocks present in a prior stamp but absent from the new sparse bake — clear these after
+## overwriting shared keys, never before. Pre-clearing shared ground to AIR is what left
+## rectangular pits when restamp aborted.
+static func orphan_block_keys(prev: Array[Vector3i], bake_blocks: Dictionary) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	var seen: Dictionary = {}
+	for bp in prev:
+		if bake_blocks.has(bp):
+			continue
+		if seen.has(bp):
+			continue
+		seen[bp] = true
+		out.append(bp)
+	return out
 
 
 static func commit_block(terrain: VoxelTerrain, origin_vox: Vector3i, local_bp: Vector3i, data_u16: PackedByteArray) -> bool:
@@ -105,4 +125,6 @@ static func commit_block(terrain: VoxelTerrain, origin_vox: Vector3i, local_bp: 
 	if wbp.y < 0:
 		return true
 	var buf := make_buffer_u16(data_u16)
+	if buf == null:
+		return false
 	return terrain.try_set_block_data(wbp, buf)
