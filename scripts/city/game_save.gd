@@ -11,6 +11,10 @@
 ## That is enough for a stripped tile to stay stripped and for exploration to pay once, without
 ## a voxel edit stream anywhere in the format.
 ##
+## The other thing the world remembers is any match still in progress (see `WorldGames`): a Go
+## game is hours of play that regeneration cannot recover from a seed, so the board travels in
+## the save and the table is set back up on arrival.
+##
 ## Two kinds of slot share one format:
 ##   quicksave — `user://saves/quicksave.json`. Written by Quicksave, the periodic autosave and
 ##               the exit autosave; boot resumes from this file and no other.
@@ -28,7 +32,8 @@ const FILE_SUFFIX := ".json"
 ## 3 added `mode`, `unlocks`, `tray`, `hardness_tier` (Stage 2 loadout).
 ## 4 added `recipes` and `recipe_sites`: a v3 Adventure save has no cookbook, and silently
 ##   handing it an empty one would strip crafts the player had already earned.
-const VERSION := 4
+## 5 added `games`, the matches a run has going (see `WorldGames`).
+const VERSION := 5
 const NAME_MAX_LENGTH := 48
 
 ## Where slots live. A round-trip test points this at a scratch folder, because the alternative is
@@ -236,7 +241,8 @@ static func capture(
 	display_name: String,
 	economy: DistrictEconomy = null,
 	score: int = 0,
-	loadout: PlayerLoadout = null
+	loadout: PlayerLoadout = null,
+	games: WorldGames = null
 ) -> Dictionary:
 	if walker == null or not is_instance_valid(walker):
 		push_error("GameSave.capture: there is no walker to save")
@@ -284,6 +290,7 @@ static func capture(
 		"hardness_tier": int(loadout_data.get("hardness_tier", PlayerLoadout.HARDNESS_ROCK)),
 		"recipes": loadout_data.get("recipes", []),
 		"recipe_sites": loadout_data.get("recipe_sites", []),
+		"games": {} if games == null else games.to_save_dict(),
 	}
 
 
@@ -322,6 +329,19 @@ static func apply_districts(economy: DistrictEconomy, data: Dictionary) -> void:
 	economy.load_save_dict(raw as Dictionary)
 
 
+## Hand the saved matches back to the live registry. The games themselves are resumed later,
+## by whoever owns the table: this only restores the paperwork.
+static func apply_games(games: WorldGames, data: Dictionary) -> void:
+	if games == null:
+		push_error("GameSave.apply_games: no games registry")
+		return
+	var raw: Variant = data.get("games", null)
+	if typeof(raw) != TYPE_DICTIONARY:
+		push_error("GameSave.apply_games: the save has no games object")
+		return
+	games.load_save_dict(raw as Dictionary)
+
+
 ## Where the character stood. Vector3.INF when the payload has no usable position, which is a
 ## corrupt save rather than a spawn instruction.
 static func saved_position(data: Dictionary) -> Vector3:
@@ -358,7 +378,8 @@ static func apply_character(walker: CityWalker, data: Dictionary) -> void:
 		outfit_id = String(outfit_dict.get("variant_id", ""))
 		skin = Color.from_string(String(outfit_dict.get("skin", "")), skin)
 	walker.restore_look(bool(data.get("female", false)), props, outfit_id, skin)
-	walker.set_character_scale(float(data.get("character_scale", 1.0)), true)
+	## Force: a restore must not shrink the character because the mesh has not settled yet.
+	walker.set_character_scale(float(data.get("character_scale", 1.0)), true, true)
 	walker.set_health_points(float(data.get("health", walker.get_health_max())))
 	walker.set_energy_points(float(data.get("energy", walker.get_energy_max())))
 	walker.set_yaw(saved_yaw(data))

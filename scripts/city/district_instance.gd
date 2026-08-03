@@ -93,6 +93,10 @@ var _committed_block_keys: Array[Vector3i] = []
 ## Far keys captured at upgrade start; used for post-stamp orphan AIR wipe.
 var _upgrade_prev_committed: Array[Vector3i] = []
 var _orphan_wipe_after_stamp: bool = false
+## Bumped when this tile is torn down. In-flight bake/commit coroutines capture the value at
+## start and bail when it changes — otherwise an unload mid-await keeps writing (and can
+## hold the global commit lock) after `queue_free`.
+var _stamp_epoch: int = 0
 ## JIT subdivision + furniture targets (BuildingInterior), keyed by district cell.
 ## Empty on far / non-lot tiles.
 var interior_buildings: Dictionary = {}
@@ -218,7 +222,7 @@ func begin_ground(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D, qual
 	_terrain_ref = terrain
 	_tool_ref = tool
 	_camera_ref = camera
-	_stamp_ground_async()
+	_stamp_ground_async(_stamp_epoch)
 
 
 func begin_detail(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> void:
@@ -228,7 +232,7 @@ func begin_detail(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> v
 	_terrain_ref = terrain
 	_tool_ref = tool
 	_camera_ref = camera
-	_stamp_detail_async()
+	_stamp_detail_async(_stamp_epoch)
 
 
 func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> void:
@@ -301,7 +305,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_tool_ref = tool
 	_camera_ref = camera
 	CityProfiler.end("stream_upgrade_reset")
-	_stamp_ground_async()
+	_stamp_ground_async(_stamp_epoch)
 
 
 func begin_generate(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> void:
@@ -311,6 +315,9 @@ func begin_generate(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) ->
 
 func destroy_and_clear(_tool: VoxelTool) -> void:
 	CityProfiler.begin("stream_unload")
+	## Invalidate every await still parked inside bake/commit before we drop the lock.
+	_stamp_epoch += 1
+	OfflineVolumeCommitterScript.release_commit(coord)
 	_unregister_nav()
 	is_ready = false
 	is_busy = false
@@ -318,6 +325,9 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	_committed_block_keys.clear()
 	_upgrade_prev_committed.clear()
 	_orphan_wipe_after_stamp = false
+	_bake_blocks.clear()
+	_bake_block_keys.clear()
+	_bake_key_index = 0
 	if crowd != null and is_instance_valid(crowd):
 		crowd.clear_crowd()
 		crowd.queue_free()
@@ -366,7 +376,7 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	CityProfiler.end("stream_unload")
 
 
-func _stamp_ground_async() -> void:
+func _stamp_ground_async(epoch: int) -> void:
 	## Bake the whole district off-thread, then commit ground-layer blocks on main.
 	_ensure_anchor()
 	_pin_data_only()
@@ -376,6 +386,10 @@ func _stamp_ground_async() -> void:
 	while not tool.is_area_editable(box) and guard < 600:
 		guard += 1
 		await get_tree().process_frame
+		if not _stamp_still_current(epoch):
+			return
+	if not _stamp_still_current(epoch):
+		return
 	if not tool.is_area_editable(box):
 		is_busy = false
 		failed.emit(self, "area not editable")
@@ -383,7 +397,7 @@ func _stamp_ground_async() -> void:
 
 	CityProfiler.set_counter("stream_phase", 1)  ## 1=ground bake
 	var payload := await _bake_on_worker()
-	if not is_instance_valid(self):
+	if not _stamp_still_current(epoch):
 		return
 	if payload.is_empty() or not bool(payload.get("ok", false)):
 		is_busy = false
@@ -421,8 +435,8 @@ func _stamp_ground_async() -> void:
 	_bake_key_index = 0
 	CityProfiler.set_counter("stream_phase", 2)  ## 2=ground commit
 	CityProfiler.set_counter("stream_blocks_left", _bake_block_keys.size())
-	var ground_ok := await _commit_blocks_until("stream_commit_ground")
-	if not is_instance_valid(self):
+	var ground_ok := await _commit_blocks_until("stream_commit_ground", epoch)
+	if not _stamp_still_current(epoch):
 		return
 	if not ground_ok:
 		is_busy = false
@@ -438,7 +452,7 @@ func _stamp_ground_async() -> void:
 	ground_ready.emit(self)
 
 
-func _stamp_detail_async() -> void:
+func _stamp_detail_async(epoch: int) -> void:
 	var tool := _tool_ref
 	var camera := _camera_ref
 	if generator == null:
@@ -458,8 +472,8 @@ func _stamp_detail_async() -> void:
 	_bake_key_index = 0
 	CityProfiler.set_counter("stream_phase", 3)  ## 3=detail commit
 	CityProfiler.set_counter("stream_blocks_left", _bake_block_keys.size())
-	var detail_ok := await _commit_blocks_until("stream_commit_detail")
-	if not is_instance_valid(self):
+	var detail_ok := await _commit_blocks_until("stream_commit_detail", epoch)
+	if not _stamp_still_current(epoch):
 		return
 	if not detail_ok:
 		is_busy = false
@@ -468,7 +482,7 @@ func _stamp_detail_async() -> void:
 	if _orphan_wipe_after_stamp:
 		_orphan_wipe_after_stamp = false
 		var wipe_ok := await _wipe_orphan_committed_blocks()
-		if not is_instance_valid(self):
+		if not _stamp_still_current(epoch):
 			return
 		if not wipe_ok:
 			is_busy = false
@@ -477,7 +491,7 @@ func _stamp_detail_async() -> void:
 	## Every block of this tile is written by now, so a reschedule can no longer be dropped
 	## over a district neighbour that had not landed yet when the block was first committed.
 	var retouch_ok := await _reschedule_meshed_commits()
-	if not retouch_ok or not is_instance_valid(self):
+	if not retouch_ok or not _stamp_still_current(epoch):
 		return
 	_bake_blocks.clear()
 	_bake_block_keys.clear()
@@ -1268,15 +1282,21 @@ func _reschedule_meshed_commits() -> bool:
 	return true
 
 
-func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
+func _stamp_still_current(epoch: int) -> bool:
+	return is_instance_valid(self) and _stamp_epoch == epoch
+
+
+func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) -> bool:
 	## Time-budgeted commits. Keys must already be nearest-first for this phase.
 	## Remesh backpressure: do not outrun VoxelTools — feeding more blocks while
 	## remaining_main_thread_blocks is high produces 600ms+ unaccounted gaps.
 	const BUDGET_MSEC := 3
 	const BUDGET_MSEC_SOFT := 1
 	var terrain := _terrain_ref
+	if epoch < 0:
+		epoch = _stamp_epoch
 	while true:
-		if not is_instance_valid(self):
+		if not _stamp_still_current(epoch):
 			OfflineVolumeCommitterScript.release_commit(coord)
 			return false
 		## Hard pressure: release the lock so another district is not stuck waiting,
@@ -1293,6 +1313,9 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 		if not OfflineVolumeCommitterScript.try_acquire_commit(coord):
 			await get_tree().process_frame
 			continue
+		if not _stamp_still_current(epoch):
+			OfflineVolumeCommitterScript.release_commit(coord)
+			return false
 		if _bake_key_index >= _bake_block_keys.size():
 			break
 
@@ -1315,6 +1338,9 @@ func _commit_blocks_until(scope_name: String = "voxel_commit") -> bool:
 			var attempts := 0
 			while not ok and attempts < 90:
 				await get_tree().process_frame
+				if not _stamp_still_current(epoch):
+					OfflineVolumeCommitterScript.release_commit(coord)
+					return false
 				## Keep holding the commit lock while retrying this block.
 				ok = OfflineVolumeCommitterScript.commit_block(terrain, origin_vox, bp, data)
 				attempts += 1

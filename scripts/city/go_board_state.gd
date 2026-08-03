@@ -293,3 +293,94 @@ func _collect_group(x: int, y: int) -> Array[Vector2i]:
 
 func _group_size(x: int, y: int) -> int:
 	return _collect_group(x, y).size()
+
+
+# ---------------------------------------------------------------------------
+# Save
+# ---------------------------------------------------------------------------
+
+## Everything the position is. `move_list` rides along because KataGo is replayed move by
+## move on resume — a stone grid alone cannot tell the engine how the game got here.
+func to_save_dict() -> Dictionary:
+	var moves: Array = []
+	for m in move_list:
+		moves.append(
+			{
+				"color": int(m.get("color", BLACK)),
+				"vertex": str(m.get("vertex", "pass")),
+				"x": int(m.get("x", -1)),
+				"y": int(m.get("y", -1)),
+			}
+		)
+	return {
+		"size": size,
+		"stones": Array(stones),
+		"next_color": next_color,
+		"phase": String(phase),
+		"consecutive_passes": consecutive_passes,
+		"ko_x": ko_x,
+		"ko_y": ko_y,
+		"end_reason": end_reason,
+		"move_list": moves,
+	}
+
+
+## Rebuild a position from `to_save_dict`. Null when the payload is not a board — a caller
+## that resumed into a half-parsed grid would be playing a different game than the save.
+##
+## Fields are assigned rather than run through `setup`, which would wipe the grid it is
+## being handed and announce a reset to views that have not been bound yet.
+static func from_save_dict(data: Dictionary) -> GoBoardState:
+	var n := int(data.get("size", 0))
+	if n < 2 or n > 25:
+		push_error("GoBoardState.from_save_dict: bad size %d" % n)
+		return null
+	var raw_stones: Variant = data.get("stones", null)
+	if typeof(raw_stones) != TYPE_ARRAY:
+		push_error("GoBoardState.from_save_dict: the board has no stones array")
+		return null
+	var cells: Array = raw_stones
+	if cells.size() != n * n:
+		push_error(
+			"GoBoardState.from_save_dict: %d cells on a %dx%d board" % [cells.size(), n, n]
+		)
+		return null
+	var board := GoBoardState.new()
+	board.size = n
+	board.stones = PackedInt32Array()
+	board.stones.resize(n * n)
+	for i in range(cells.size()):
+		var c := int(cells[i])
+		if c != EMPTY and c != BLACK and c != WHITE:
+			push_error("GoBoardState.from_save_dict: cell %d holds %d" % [i, c])
+			return null
+		board.stones[i] = c
+	var next := int(data.get("next_color", BLACK))
+	if next != BLACK and next != WHITE:
+		push_error("GoBoardState.from_save_dict: nobody plays colour %d" % next)
+		return null
+	board.next_color = next
+	board.phase = StringName(str(data.get("phase", "playing")))
+	board.consecutive_passes = int(data.get("consecutive_passes", 0))
+	board.ko_x = int(data.get("ko_x", -1))
+	board.ko_y = int(data.get("ko_y", -1))
+	board.end_reason = str(data.get("end_reason", ""))
+	board.move_list = []
+	var raw_moves: Variant = data.get("move_list", [])
+	if typeof(raw_moves) != TYPE_ARRAY:
+		push_error("GoBoardState.from_save_dict: move_list is not an array")
+		return null
+	for raw_move: Variant in raw_moves as Array:
+		if typeof(raw_move) != TYPE_DICTIONARY:
+			push_error("GoBoardState.from_save_dict: a move is not an object")
+			return null
+		var m: Dictionary = raw_move
+		board.move_list.append(
+			{
+				"color": int(m.get("color", BLACK)),
+				"vertex": str(m.get("vertex", "pass")),
+				"x": int(m.get("x", -1)),
+				"y": int(m.get("y", -1)),
+			}
+		)
+	return board

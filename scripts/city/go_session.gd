@@ -41,13 +41,58 @@ func begin_match(
 	p_white_human: bool,
 	p_white_rank: String
 ) -> bool:
+	var fresh := GoBoardState.new()
+	fresh.setup(n)
+	return _open(fresh, p_black_human, p_black_rank, p_white_human, p_white_rank)
+
+
+## Pick a saved game back up (see `to_save_dict`). False when the row is not a board this
+## build can play, in which case the caller should offer a fresh match instead.
+func resume_match(data: Dictionary) -> bool:
+	var raw: Variant = data.get("board", null)
+	if typeof(raw) != TYPE_DICTIONARY:
+		push_error("GoSession.resume_match: the saved match carries no board")
+		return false
+	var restored := GoBoardState.from_save_dict(raw as Dictionary)
+	if restored == null:
+		return false
+	if restored.phase != &"playing":
+		push_error(
+			"GoSession.resume_match: that match already ended (%s)" % restored.end_reason
+		)
+		return false
+	var claimed := int(data.get("board_n", restored.size))
+	if claimed != restored.size:
+		push_error(
+			"GoSession.resume_match: the row claims %d but the board is %d wide"
+			% [claimed, restored.size]
+		)
+		return false
+	return _open(
+		restored,
+		bool(data.get("black_human", true)),
+		str(data.get("black_rank", "5k")),
+		bool(data.get("white_human", false)),
+		str(data.get("white_rank", "5k"))
+	)
+
+
+## Adopt `p_board` as the live game and warm a net if either side needs one. A fresh match
+## and a resumed one differ only in which board walks in: the engine is replayed from
+## `move_list` either way, so an empty board is just the short case of the same path.
+func _open(
+	p_board: GoBoardState,
+	p_black_human: bool,
+	p_black_rank: String,
+	p_white_human: bool,
+	p_white_rank: String
+) -> bool:
 	black_human = p_black_human
 	white_human = p_white_human
 	black_rank = GoEnginePoolScript.normalize_rank(p_black_rank)
 	white_rank = GoEnginePoolScript.normalize_rank(p_white_rank)
-	_board_n = n
-	board = GoBoardState.new()
-	board.setup(n)
+	_board_n = p_board.size
+	board = p_board
 	_owned_engine = false
 	_engine_ready = false
 	_active_rank = ""
@@ -85,6 +130,25 @@ func end_session(reason: String = "leave") -> void:
 	## "restart" is an internal handoff; emitting would flip the arena UI mid-start.
 	if reason != "restart":
 		session_ended.emit(reason)
+
+
+## The match as a `WorldGames` row, or {} when there is nothing to come back to. Only a game
+## still being played qualifies: a scored board belongs to the end panel, and resuming into
+## one would put the player in front of a result they already dismissed.
+##
+## Safe to take while the AI is thinking. The board holds completed moves only, so the worst
+## a save mid-search loses is the move being searched — `kick_ai_if_needed` asks again.
+func to_save_dict() -> Dictionary:
+	if board == null or board.phase != &"playing":
+		return {}
+	return {
+		"board_n": _board_n,
+		"black_human": black_human,
+		"white_human": white_human,
+		"black_rank": black_rank,
+		"white_rank": white_rank,
+		"board": board.to_save_dict(),
+	}
 
 
 func needs_engine() -> bool:

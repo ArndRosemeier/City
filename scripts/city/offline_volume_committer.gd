@@ -21,6 +21,12 @@ static func release_commit(coord: Vector2i) -> void:
 		_commit_lock_coord = Vector2i(9999, 9999)
 
 
+## Drop whatever district holds the lock. Unload used to kill a stamp mid-await and leave
+## this stuck forever — the next boot's spawn then waited on a lock nobody would release.
+static func force_release() -> void:
+	_commit_lock_coord = Vector2i(9999, 9999)
+
+
 static func sorted_block_keys(blocks: Dictionary) -> Array[Vector3i]:
 	## Legacy Y-major order (kept for tests / callers that don't pass a focus).
 	var keys: Array[Vector3i] = []

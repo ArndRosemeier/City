@@ -647,7 +647,10 @@ func adjust_character_scale(direction: float) -> void:
 	set_character_scale(character_scale * factor, false)
 
 
-func set_character_scale(value: float, silent: bool = false) -> void:
+## `force` skips the grow-into-geometry rollback. Save restore needs that: the saved size is
+## the truth, and the footing search already chose a column — refusing the scale would load
+## a stranger in the right place.
+func set_character_scale(value: float, silent: bool = false, force: bool = false) -> void:
 	var next := clampf(value, scale_min, scale_max)
 	if _voxel_motion != null and _voxel_motion.has_method("set_max_step_height"):
 		## Step height stays absolute meters (curbs), not scaled with character size.
@@ -664,7 +667,7 @@ func set_character_scale(value: float, silent: bool = false) -> void:
 		_feet_aligned = false
 		_body_base_y = 0.0
 	## Growing into walls/ceilings — roll back that step.
-	if next > prev and not _can_stand_at(global_position):
+	if not force and next > prev and not _can_stand_at(global_position):
 		character_scale = prev
 		_apply_proportions()
 		global_position = pos_before
@@ -4173,6 +4176,17 @@ func _melee_origin(is_punch: bool) -> Vector3:
 	if foot.is_finite():
 		return foot
 	return global_position + Vector3(0.0, 0.22 * character_scale, 0.0)
+
+
+## World point of the player's hand — where effects that come "from the player" start,
+## such as the Go table's move arrow. Chest height when the body is a proxy capsule.
+func hand_world_pos() -> Vector3:
+	var hand := _bone_world_pos(
+		[&"RightHand", &"LeftHand", &"hand_r", &"hand_l", &"RightLowerArm", &"lowerarm_r"]
+	)
+	if hand.is_finite():
+		return hand
+	return global_position + Vector3(0.0, 1.22 * character_scale, 0.0)
 
 
 func _bone_world_pos(names: Array) -> Vector3:

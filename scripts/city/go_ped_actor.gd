@@ -14,6 +14,17 @@ const FALLBACK_FEMALE: Array[String] = [
 	"res://assets/humans/female_base.glb",
 ]
 
+## Quaternius rigs, then the glTF exporter variants, then the arm as a last resort.
+const HAND_BONES: Array[StringName] = [
+	&"RightHand",
+	&"hand_r",
+	&"hand.R",
+	&"RightLowerArm",
+	&"lowerarm_r",
+	&"LeftHand",
+	&"hand_l",
+]
+
 signal seat_reached()
 
 enum Phase { IDLE, WALK, SEATED, THINK }
@@ -42,6 +53,18 @@ func begin_as_invite(spawn_pos: Vector3, p_tier: StringName, face_yaw: float = 0
 
 func walk_to_seat(seat: Vector3, face_yaw: float) -> bool:
 	return walk_path([seat], face_yaw)
+
+
+## Drop straight into the seat, already facing the table. Resuming a saved match: the
+## opponent walked over during the session that saved it, and watching them arrive again
+## every time the district streams in would replay an entrance that already happened.
+func seat_immediately(seat: Vector3, face_yaw: float) -> void:
+	if _walk_tween != null and is_instance_valid(_walk_tween):
+		_walk_tween.kill()
+		_walk_tween = null
+	_face_yaw = face_yaw
+	global_position = seat
+	_arrive_at_seat()
 
 
 ## Walk a polyline in XZ (around obstacles), then face `face_yaw` at the seat.
@@ -83,6 +106,29 @@ func walk_path(waypoints: Array[Vector3], face_yaw: float) -> bool:
 		return false
 	_walk_tween.tween_callback(_arrive_at_seat)
 	return true
+
+
+## World point of the hand that reaches out to the board — where move VFX start. The
+## proxy capsule has no skeleton, so fall back to a point in front of the chest.
+func hand_world_pos() -> Vector3:
+	var skel: Skeleton3D = _find_skeleton(_body) if _body != null else null
+	if skel != null:
+		skel.force_update_all_bone_transforms()
+		for bone_name in HAND_BONES:
+			var idx := skel.find_bone(String(bone_name))
+			if idx >= 0:
+				return skel.to_global(skel.get_bone_global_pose(idx).origin)
+	return global_position + global_transform.basis * Vector3(0.0, 1.05, -0.35)
+
+
+func _find_skeleton(root: Node) -> Skeleton3D:
+	if root is Skeleton3D:
+		return root as Skeleton3D
+	for child in root.get_children():
+		var found := _find_skeleton(child)
+		if found != null:
+			return found
+	return null
 
 
 func set_thinking(on: bool) -> void:

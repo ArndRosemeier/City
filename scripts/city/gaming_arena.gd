@@ -11,6 +11,7 @@ const GoBoardStateScript := preload("res://scripts/city/go_board_state.gd")
 const GoRankScript := preload("res://scripts/city/go_rank.gd")
 const GoEnginePoolScript := preload("res://scripts/city/go_engine_pool.gd")
 const GoEndPanelScript := preload("res://scripts/city/go_end_panel.gd")
+const GoMoveArrowScript := preload("res://scripts/city/go_move_arrow.gd")
 
 var layout: GamingLayout = null
 var origin_vox: Vector3i = Vector3i.ZERO
@@ -25,6 +26,7 @@ var _main_table: GoTableUi3D = null
 var _settings: Node = null
 var _giant: GoGiantBoard = null
 var _end_panel: GoEndPanel = null
+var _move_arrow: GoMoveArrow = null
 var _black_ped: GoPedActor = null
 var _white_ped: GoPedActor = null
 var _match_active: bool = false
@@ -43,9 +45,12 @@ func setup(
 	_dseed = p_dseed
 	live_brush = p_live_brush
 	_spawn_main_views()
+	_resume_saved_match()
 
 
 func _exit_tree() -> void:
+	## The row outlives the arena on purpose: streaming the district out must not forfeit a
+	## game. Only finishing one clears it.
 	_teardown_session("unload")
 	GoEnginePoolScript.shutdown()
 
@@ -73,6 +78,11 @@ func _spawn_main_views() -> void:
 	)
 	_main_table.set_input_enabled(false)
 	_main_table.vertex_chosen.connect(_on_player_vertex)
+
+	_move_arrow = GoMoveArrowScript.new() as GoMoveArrow
+	_move_arrow.name = "GoMoveArrow"
+	add_child(_move_arrow)
+	_main_table.move_herald = _herald_move
 
 	_settings = GoSettingsUi3DScript.new()
 	_settings.name = "GoSettings"
@@ -155,12 +165,9 @@ func _on_start_match(
 	if _giant != null:
 		_giant.set_board_size(board_n, _main_board)
 	_bind_main_board()
-	_main_session.ai_thinking.connect(_on_ai_thinking)
-	_main_session.session_ended.connect(_on_session_ended)
-	_main_session.match_over.connect(_on_match_over)
-	_main_session.eval_updated.connect(_on_eval_updated)
-	_main_session.eval_cleared.connect(_on_eval_cleared)
+	_connect_session()
 	_refresh_board_input()
+	_sync_games_save()
 	print(
 		"GamingArena: start %dx%d black=%s white=%s"
 		% [
@@ -175,6 +182,14 @@ func _on_start_match(
 		return
 	## Uses session flags (no-ops when a human is to move).
 	_main_session.kick_ai_if_needed()
+
+
+func _connect_session() -> void:
+	_main_session.ai_thinking.connect(_on_ai_thinking)
+	_main_session.session_ended.connect(_on_session_ended)
+	_main_session.match_over.connect(_on_match_over)
+	_main_session.eval_updated.connect(_on_eval_updated)
+	_main_session.eval_cleared.connect(_on_eval_cleared)
 
 
 func _seat_ai_peds(
@@ -208,6 +223,23 @@ func _seat_ai_peds(
 		)
 	while arrived < expected and is_inside_tree():
 		await get_tree().process_frame
+
+
+## Opponents for a resumed match are already at the table: the walk-in belongs to the
+## session that started the game, not to every district stream-in afterwards.
+func _seat_ai_peds_immediately() -> void:
+	_clear_ai_peds()
+	if _main_session == null:
+		return
+	var table := _slot_surface_world(0.5)
+	if not _main_session.black_human:
+		var seat_b := _world_from_local_m(layout.black_stand_local)
+		_black_ped = _spawn_ai_ped(&"black", _main_session.black_rank, seat_b)
+		_black_ped.seat_immediately(seat_b, _yaw_toward(seat_b, table))
+	if not _main_session.white_human:
+		var seat_w := _world_from_local_m(layout.white_stand_local)
+		_white_ped = _spawn_ai_ped(&"white", _main_session.white_rank, seat_w)
+		_white_ped.seat_immediately(seat_w, _yaw_toward(seat_w, table))
 
 
 func _spawn_ai_ped(color_name: StringName, rank: String, at: Vector3) -> GoPedActor:
@@ -271,6 +303,13 @@ func _teardown_session(reason: String) -> void:
 
 
 func _unbind_board_views() -> void:
+	if _move_arrow != null:
+		_move_arrow.cancel()
+	if _main_board != null:
+		if _main_board.moved.is_connected(_on_board_moved):
+			_main_board.moved.disconnect(_on_board_moved)
+		if _main_board.passed.is_connected(_on_board_passed):
+			_main_board.passed.disconnect(_on_board_passed)
 	if _main_table != null:
 		if _main_table.board != null:
 			var tb: GoBoardState = _main_table.board
@@ -298,6 +337,11 @@ func _bind_main_board() -> void:
 		_giant.board = _main_board
 		_giant._connect_board_signals()
 		_giant._clear_all()
+	if _main_board != null:
+		if not _main_board.moved.is_connected(_on_board_moved):
+			_main_board.moved.connect(_on_board_moved)
+		if not _main_board.passed.is_connected(_on_board_passed):
+			_main_board.passed.connect(_on_board_passed)
 
 
 func _on_player_vertex(vertex: String) -> void:
@@ -363,6 +407,10 @@ func _on_session_ended(_reason: String) -> void:
 func _on_match_over(result: GoMatchResult) -> void:
 	_match_active = false
 	_on_eval_cleared()
+	## Finishing is the one thing that retires the save row. Walking away does not.
+	var games := _world_games()
+	if games != null:
+		games.clear_go()
 	if _main_table != null:
 		_main_table.set_input_enabled(false)
 	if _settings != null:
@@ -373,6 +421,133 @@ func _on_match_over(result: GoMatchResult) -> void:
 		_end_panel.show_result(result)
 	else:
 		_end_match_ui()
+
+
+# ---------------------------------------------------------------------------
+# Save
+# ---------------------------------------------------------------------------
+
+## The run's match registry, which lives on CityRoot. Null in the test fixtures that stage
+## an arena on its own — those play the game without a save behind it.
+func _world_games() -> WorldGames:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var city := tree.get_first_node_in_group(&"city_root") as CityRoot
+	if city == null:
+		return null
+	return city.world_games()
+
+
+## Copy the live board into the registry. Runs on every move, because the autosave fires on
+## a timer and must never catch the table between a stone and the record of it.
+func _sync_games_save() -> void:
+	var games := _world_games()
+	if games == null:
+		return
+	var row := {} if _main_session == null else _main_session.to_save_dict()
+	if row.is_empty():
+		games.clear_go()
+		return
+	games.set_go(row)
+
+
+## Sit back down at the game the save was holding, instead of opening the setup panel. The
+## arena is rebuilt whenever the district streams in, so this is also what carries a match
+## across walking out of the plaza and back.
+func _resume_saved_match() -> void:
+	var games := _world_games()
+	if games == null or not games.has_go():
+		return
+	var row := games.go_snapshot()
+	var board_n := int(row.get("board_n", 0))
+	if board_n != 9 and board_n != 19:
+		push_error("GamingArena: the saved match is %d wide, which no table here is" % board_n)
+		games.clear_go()
+		return
+	var session := GoSessionScript.new() as GoSession
+	session.name = "MainGoSession"
+	add_child(session)
+	if not session.resume_match(row):
+		session.queue_free()
+		games.clear_go()
+		return
+
+	_match_active = true
+	layout.board_n = board_n
+	_hide_end_panel()
+	_main_session = session
+	_main_board = session.board
+	if _settings != null:
+		_settings.set("board_n", board_n)
+		_settings.set("black_human", session.black_human)
+		_settings.set("white_human", session.white_human)
+		_settings.set("black_rank", session.black_rank)
+		_settings.set("white_rank", session.white_rank)
+		_settings.call("show_match")
+	if _giant != null:
+		_giant.set_board_size(board_n, _main_board)
+	_bind_main_board()
+	if _giant != null:
+		## Binding only clears the field — the saved stones have to be painted back on.
+		_giant.paint_snapshot(_main_board)
+	_connect_session()
+	_refresh_board_input()
+	_seat_ai_peds_immediately()
+	print(
+		"GamingArena: resumed %dx%d after %d moves, %s to play"
+		% [
+			board_n,
+			board_n,
+			_main_board.move_list.size(),
+			"black" if _main_board.next_color == GoBoardState.BLACK else "white",
+		]
+	)
+	_main_session.kick_ai_if_needed()
+
+
+func _on_board_moved(_color: int, _vertex: String, _loc: Vector2i) -> void:
+	_sync_games_save()
+
+
+func _on_board_passed(_color: int) -> void:
+	_sync_games_save()
+
+
+## Throws a dart of light from the mover's hand at the crossing and reports how long the
+## table should hold the stone back, so the stone lands under the strike.
+func _herald_move(color: int, world_target: Vector3) -> float:
+	if _move_arrow == null:
+		return 0.0
+	var hand := _hand_world_for(color)
+	## No hand in the world (an off-screen player, a ped still walking over) — no throw.
+	if not hand.is_finite():
+		return 0.0
+	return _move_arrow.fly(hand, world_target, color == GoBoardState.BLACK)
+
+
+func _hand_world_for(color: int) -> Vector3:
+	if _main_session == null:
+		return Vector3.INF
+	if _main_session.color_is_human(color):
+		return _player_hand_world()
+	var ped := _black_ped if color == GoBoardState.BLACK else _white_ped
+	if ped == null or not is_instance_valid(ped):
+		return Vector3.INF
+	return ped.hand_world_pos()
+
+
+func _player_hand_world() -> Vector3:
+	var tree := get_tree()
+	if tree == null:
+		return Vector3.INF
+	var city := tree.get_first_node_in_group(&"city_root") as CityRoot
+	if city == null:
+		return Vector3.INF
+	var walker := city.player_walker()
+	if walker == null:
+		return Vector3.INF
+	return walker.hand_world_pos()
 
 
 func _on_eval_updated(snapshot: GoEvalSnapshot) -> void:

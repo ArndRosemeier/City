@@ -40,6 +40,9 @@ func _ready() -> void:
 
 	var city := CityRoot.new()
 	city.city_seed = WORLD_SEED
+	## Score and gem budgets are Adventure-only. Sandbox unlocks everything and never
+	## depletes a district ledger, so the ledger round-trip below would always fail there.
+	city.get_loadout().reset_adventure()
 	add_child(city)
 	var walker := await _await_boot(city)
 	if walker == null:
@@ -47,7 +50,13 @@ func _ready() -> void:
 		return
 
 	var saved_pos := walker.global_position
-	walker.set_character_scale(SAVED_SCALE, true)
+	## Force: the spawn column can still be settling its collisions, and a grow that rolls
+	## back would save 1.0 and make the restore look like it forgot the size.
+	walker.set_character_scale(SAVED_SCALE, true, true)
+	if not is_equal_approx(walker.get_character_scale(), SAVED_SCALE):
+		_fail("FAIL could not set character scale to %.2f before saving" % SAVED_SCALE)
+		_finish()
+		return
 	var inv := city.get_inventory()
 	inv.clear()
 	if inv.add(InventoryCatalog.ID_TOPAZ, GEM_COUNT) != 0:

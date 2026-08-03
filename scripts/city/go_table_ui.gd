@@ -19,11 +19,22 @@ const EVAL_LABEL_MIN_SHARE := 0.2
 const EVAL_MAX_LABELS := 3
 const EVAL_TEX_PX := 96
 
+## Stone centres float just off the surface so they never z-fight with the painted grid.
+const STONE_Z := -0.03
+
 static var _disc_tex: ImageTexture = null
 static var _ring_tex: ImageTexture = null
 
 var board: GoBoardState = null
 var input_enabled: bool = true
+## Optional announcement played before a stone appears, so something can fly in ahead of
+## it: `func(color: int, world_target: Vector3) -> float`, returning the seconds to wait.
+## The board state is already updated — only this view holds back.
+var move_herald: Callable = Callable()
+## Stones waiting out a herald. A capture that arrives meanwhile must not repaint early.
+var _pending_paints: int = 0
+## Bumped whenever the board is swapped, so heralds still in flight drop their paint.
+var _paint_epoch: int = 0
 var _stone_root: Node3D = null
 var _eval_root: Node3D = null
 var _eval: GoEvalSnapshot = null
@@ -57,6 +68,7 @@ func setup_board(p_board: GoBoardState, origin: Vector3, face_yaw: float, panel_
 	_eval_root.name = "EvalMarkers"
 	add_child(_eval_root)
 	_eval = null
+	_reset_pending_paints()
 	if board != null:
 		if not board.moved.is_connected(_on_moved):
 			board.moved.connect(_on_moved)
@@ -84,6 +96,7 @@ func apply_board(p_board: GoBoardState) -> void:
 			board.reset.disconnect(_rebuild_stones)
 	board = p_board
 	_board_n = board.size if board != null else _board_n
+	_reset_pending_paints()
 	clear_eval()
 	_paint_grid()
 	if board != null:
@@ -148,9 +161,34 @@ func _on_surface(uv: Vector2, _local: Vector3, _world: Vector3) -> void:
 	vertex_chosen.emit(GoBoardState.format_vertex(x, y, _board_n))
 
 
-func _on_moved(_color: int, _vertex: String, _loc: Vector2i) -> void:
+func _on_moved(color: int, _vertex: String, loc: Vector2i) -> void:
+	if move_herald.is_valid() and loc.x >= 0:
+		var wait := float(move_herald.call(color, crossing_world(loc.x, loc.y)))
+		if wait > 0.0:
+			_paint_after(wait)
+			return
+	_land_stone()
+
+
+func _paint_after(seconds: float) -> void:
+	var epoch := _paint_epoch
+	_pending_paints += 1
+	await get_tree().create_timer(seconds).timeout
+	## A restart or a 9↔19 switch during the flight already repainted from scratch.
+	if epoch != _paint_epoch:
+		return
+	_pending_paints -= 1
+	_land_stone()
+
+
+func _land_stone() -> void:
 	_rebuild_stones()
 	_play_stone_bling()
+
+
+func _reset_pending_paints() -> void:
+	_paint_epoch += 1
+	_pending_paints = 0
 
 
 func _play_stone_bling() -> void:
@@ -166,6 +204,10 @@ func _play_stone_bling() -> void:
 
 
 func _on_captured(_color: int, _locs: Array) -> void:
+	## A capture always trails the move that caused it — let that move's paint show both,
+	## or the board would lose stones before the stone that took them turns up.
+	if _pending_paints > 0:
+		return
 	_rebuild_stones()
 
 
@@ -191,7 +233,7 @@ func _rebuild_stones() -> void:
 			var mat := StandardMaterial3D.new()
 			mat.albedo_color = Color(0.08, 0.08, 0.09) if c == GoBoardState.BLACK else Color(0.92, 0.92, 0.9)
 			mesh.material_override = mat
-			mesh.position = Vector3(at.x, at.y, -0.03)
+			mesh.position = Vector3(at.x, at.y, STONE_Z)
 			_stone_root.add_child(mesh)
 
 
@@ -200,6 +242,12 @@ func _cell_m() -> float:
 	var span := size_m.x * (1.0 - 2.0 * MARGIN_FRAC)
 	var last := float(maxi(_board_n - 1, 1))
 	return span / last
+
+
+## World point where a stone on this crossing sits — what off-board effects aim at.
+func crossing_world(x: int, y: int) -> Vector3:
+	var at := _crossing_local(x, y)
+	return to_global(Vector3(at.x, at.y, STONE_Z))
 
 
 ## Panel-local XY of a board crossing (same axes the click mapping uses).

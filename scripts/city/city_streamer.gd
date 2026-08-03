@@ -6,6 +6,7 @@ class_name CityStreamer
 extends Node
 
 const DistrictInstanceScript := preload("res://scripts/city/district_instance.gd")
+const OfflineVolumeCommitterScript := preload("res://scripts/city/offline_volume_committer.gd")
 
 signal spawn_district_ready(instance: DistrictInstance)
 signal status_message(text: String)
@@ -543,3 +544,5 @@ func clear_all() -> void:
 	_active_jobs.clear()
 	_booted = false
 	_has_priority = false
+	## Belt and braces: a stamp killed mid-await must not leave the next boot locked out.
+	OfflineVolumeCommitterScript.force_release()

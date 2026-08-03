@@ -20,9 +20,11 @@ extends Node
 const GameSaveScript := preload("res://scripts/city/game_save.gd")
 const CityWalkerScript := preload("res://scripts/city/city_walker.gd")
 const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
+const WorldGamesScript := preload("res://scripts/city/world_games.gd")
 
 const SCRATCH_DIR := "user://test_saves"
 const SLOT_NAME := "round_trip"
+const GAMES_SLOT := "unfinished_match"
 const WORLD_SEED := 4242
 const VOX := 0.5
 ## Body height the footing search must clear, in voxels — the same 1.7 m capsule CityRoot passes.
@@ -51,6 +53,7 @@ func _ready() -> void:
 	_check_names()
 	_check_footing()
 	await _check_round_trip()
+	await _check_games_section()
 	_check_slots_are_separate()
 	_check_old_format_is_retired()
 	_wipe_scratch()
@@ -251,6 +254,76 @@ func _make_walker(node_name: String) -> CityWalker:
 		walker.queue_free()
 		return null
 	return walker
+
+
+# ---------------------------------------------------------------------------
+# Games
+# ---------------------------------------------------------------------------
+
+## A half-played Go game is hours the seed cannot regenerate, so it travels in the file the
+## way the inventory does. Checked at the save layer only: that the row goes out whole and
+## comes back into a registry that never saw the original.
+func _check_games_section() -> void:
+	var walker := await _make_walker("Games")
+	if walker == null:
+		return
+	walker.global_position = BURIED_POS
+	var inventory := PlayerInventoryScript.new() as PlayerInventory
+	var board := GoBoardState.new()
+	board.setup(9)
+	for vertex: String in ["D4", "F6", "E5"]:
+		if not board.try_play(board.next_color, vertex):
+			_fail("FAIL the mock match would not play %s" % vertex)
+	var games := WorldGamesScript.new() as WorldGames
+	games.set_go({
+		"board_n": 9,
+		"black_human": true,
+		"white_human": false,
+		"black_rank": "5k",
+		"white_rank": "3k",
+		"board": board.to_save_dict(),
+	})
+
+	var data := GameSaveScript.capture(
+		WORLD_SEED, walker, inventory, "Match", null, 0, null, games
+	)
+	if data.is_empty():
+		_fail("FAIL capture produced nothing with a match in progress")
+		walker.queue_free()
+		return
+	if not GameSaveScript.write_named(GAMES_SLOT, data):
+		_fail("FAIL could not write the save holding the match")
+	var read := GameSaveScript.read_named(GAMES_SLOT)
+	if read.is_empty():
+		_fail("FAIL the save holding the match read back empty")
+		walker.queue_free()
+		return
+
+	var restored := WorldGamesScript.new() as WorldGames
+	GameSaveScript.apply_games(restored, read)
+	if not restored.has_go():
+		_fail("FAIL the match did not survive the file")
+	else:
+		var back := GoBoardState.from_save_dict(restored.go_snapshot().get("board", {}))
+		if back == null:
+			_fail("FAIL the restored row does not hold a readable board")
+		elif Array(back.stones) != Array(board.stones):
+			_fail("FAIL the restored board is a different position")
+		elif back.next_color != board.next_color:
+			_fail("FAIL the restored board hands the move to the wrong colour")
+		elif back.move_list.size() != board.move_list.size():
+			_fail("FAIL the move list is gone, so KataGo cannot be replayed into the game")
+
+	## A run with nothing going still writes the section, empty. A missing one would have
+	## `apply_games` shouting on every load of a save from a player who never sat down.
+	var idle := GameSaveScript.capture(WORLD_SEED, walker, inventory, "Idle")
+	var idle_games: Variant = idle.get("games", null)
+	if typeof(idle_games) != TYPE_DICTIONARY:
+		_fail("FAIL a save with no match going has no games section at all")
+	elif not (idle_games as Dictionary).is_empty():
+		_fail("FAIL a save with no match going carries one anyway: %s" % str(idle_games))
+	walker.queue_free()
+	print("OK an unfinished match survives capture, the file and apply_games")
 
 
 # ---------------------------------------------------------------------------

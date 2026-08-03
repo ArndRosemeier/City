@@ -54,6 +54,7 @@ const GameSaveScript := preload("res://scripts/city/game_save.gd")
 const GameMenuPanelScript := preload("res://scripts/city/game_menu_panel.gd")
 const CheatPanelScript := preload("res://scripts/city/cheat_panel.gd")
 const DistrictEconomyScript := preload("res://scripts/city/district_economy.gd")
+const WorldGamesScript := preload("res://scripts/city/world_games.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -150,6 +151,9 @@ var _player_score: int = 0
 ## Per-district gem budgets + explored flags. The only thing the save knows about the world.
 var _economy: DistrictEconomy = DistrictEconomyScript.new() as DistrictEconomy
 var _economy_accum: float = 0.0
+## Matches the run has going — a Go board in the Gaming plaza today. Outlives the district
+## that hosts them, so streaming the plaza out does not forfeit the game.
+var _games: WorldGames = WorldGamesScript.new() as WorldGames
 ## Collected gems and crafted items (25 stackable slots).
 var _inventory: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
 var _inventory_panel: PlayerInventoryPanel
@@ -521,6 +525,14 @@ func is_modal_open() -> bool:
 ## firing into the city behind the open picker.
 func is_splash_open() -> bool:
 	return _loading_splash != null and bool(_loading_splash.call("owns_screen"))
+
+
+## The character the human is driving. Districts reach for it through the `city_root`
+## group when an effect has to start at or aim for the player.
+func player_walker() -> CityWalker:
+	if _walker == null or not is_instance_valid(_walker):
+		return null
+	return _walker
 
 
 func _is_character_editor_open() -> bool:
@@ -1578,6 +1590,12 @@ func _ensure_infection_director() -> void:
 
 func get_economy() -> DistrictEconomy:
 	return _economy
+
+
+## Where a district's game tables park an unfinished match. The Gaming arena reaches for
+## this through the `city_root` group whenever it is rebuilt.
+func world_games() -> WorldGames:
+	return _games
 
 
 func get_player_score() -> int:
@@ -3106,9 +3124,11 @@ func _regenerate() -> void:
 		_undead = null
 	_player_score = 0
 	_inventory.clear()
-	## Every district row belongs to the world being torn down. A load refills both from the save
-	## once the new walker is standing (`_restore_pending_character`).
+	## Every district row and every open match belongs to the world being torn down. A load
+	## refills them from the save once the new walker is standing
+	## (`_restore_pending_character`).
 	_economy.clear()
+	_games.clear()
 	_gem_pickup_accum = 0.0
 	_economy_accum = 0.0
 	_radar_cooldown_left = 0.0
@@ -3519,6 +3539,8 @@ func _restore_pending_character() -> void:
 	GameSaveScript.apply_inventory(_inventory, _pending_restore)
 	GameSaveScript.apply_districts(_economy, _pending_restore)
 	GameSaveScript.apply_loadout(_loadout, _pending_restore)
+	## Only the paperwork: the Gaming arena sets the board back up when the plaza streams in.
+	GameSaveScript.apply_games(_games, _pending_restore)
 	_player_score = GameSaveScript.saved_score(_pending_restore)
 	if not _loadout.scores():
 		_player_score = 0
@@ -3566,7 +3588,7 @@ func write_quicksave(label: String = "Autosave") -> bool:
 	if not can_save_game():
 		return false
 	var data := GameSaveScript.capture(
-		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout
+		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout, _games
 	)
 	if data.is_empty():
 		return false
@@ -3581,7 +3603,7 @@ func write_named_save(raw_name: String) -> bool:
 		return false
 	var label := raw_name.strip_edges()
 	var data := GameSaveScript.capture(
-		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout
+		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout, _games
 	)
 	if data.is_empty():
 		return false
@@ -3633,6 +3655,7 @@ func start_new_game(mode: String = PlayerLoadout.MODE_SANDBOX) -> void:
 	_player_score = 0
 	_inventory.clear()
 	_economy.clear()
+	_games.clear()
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	city_seed = maxi(rng.randi() & 0x7fffffff, 1)
