@@ -10,8 +10,10 @@ var origin_vox: Vector3i = Vector3i.ZERO
 var giant_origin_local: Vector3i = Vector3i.ZERO
 var cell_vox: int = 4
 var voxel_size: float = 0.5
-var black_mat: int = VoxelMaterial.GRAVE_STONE
-var white_mat: int = VoxelMaterial.GRAVE_MARBLE
+## Slate black against chalk white. The graveyard pair (GRAVE_STONE / GRAVE_MARBLE) both
+## sit mid-grey and washed out against the light board field.
+var black_mat: int = VoxelMaterial.ASPHALT
+var white_mat: int = VoxelMaterial.PLASTER
 var _hand: Node3D = null
 var _animating: bool = false
 var _queue: Array[Dictionary] = []
@@ -44,17 +46,39 @@ func setup(
 			board.reset.connect(_clear_all)
 
 
+## Base voxel radius of a giant stone: leaves one voxel of board between neighbours.
+func stone_radius() -> int:
+	return maxi(cell_vox / 2 - 1, 1)
+
+
 func world_pos_for(x: int, y: int) -> Vector3:
-	## Stone sits in the centre of an empty field (half-cell inset).
-	var half := cell_vox / 2
-	var wx := origin_vox.x + giant_origin_local.x + x * cell_vox + half
-	var wz := origin_vox.z + giant_origin_local.z + y * cell_vox + half
-	var wy := origin_vox.y + giant_origin_local.y
+	## Stone sits on a grid crossing (line intersection), not in a cell centre.
+	var wx := origin_vox.x + giant_origin_local.x + x * cell_vox
+	var wz := origin_vox.z + giant_origin_local.z + y * cell_vox
+	## Board surface is giant_origin.y; stones stack on the two layers above it.
+	var wy := origin_vox.y + giant_origin_local.y + 3
 	return Vector3(
 		(float(wx) + 0.5) * voxel_size,
-		float(wy + 1) * voxel_size,
+		float(wy) * voxel_size,
 		(float(wz) + 0.5) * voxel_size
 	)
+
+
+## Write every stone of `board` at once, skipping the hand animation. Used when a board
+## has to appear already played (district reload, look inspection).
+func paint_snapshot(snapshot: GoBoardState) -> void:
+	if snapshot == null:
+		push_error("GoGiantBoard.paint_snapshot: null board")
+		return
+	for y in range(snapshot.size):
+		for x in range(snapshot.size):
+			var c := snapshot.at(x, y)
+			var mat := VoxelMaterial.AIR
+			if c == GoBoardState.BLACK:
+				mat = black_mat
+			elif c == GoBoardState.WHITE:
+				mat = white_mat
+			_set_stone_vox(x, y, mat)
 
 
 func _on_moved(color: int, _vertex: String, loc: Vector2i) -> void:
@@ -119,15 +143,26 @@ func _set_stone_vox(x: int, y: int, mat: int) -> void:
 	var brush: CityBrush = live_brush.call() as CityBrush
 	if brush == null:
 		return
-	var half_cell := cell_vox / 2
-	var wx := origin_vox.x + giant_origin_local.x + x * cell_vox + half_cell
-	var wz := origin_vox.z + giant_origin_local.z + y * cell_vox + half_cell
-	var wy := origin_vox.y + giant_origin_local.y
-	## Short disc centred in the field; keep clear of grid lines.
-	var half := maxi(cell_vox / 4, 1)
+	var wx := origin_vox.x + giant_origin_local.x + x * cell_vox
+	var wz := origin_vox.z + giant_origin_local.z + y * cell_vox
+	## Wide corner-cut base under a smaller cap: a domed lens, never a cube. Both layers
+	## sit above the painted grid, so a capture can never hole the board itself.
+	var base_y := origin_vox.y + giant_origin_local.y + 1
+	var r := stone_radius()
+	_stone_layer(brush, wx, wz, base_y, r, mat)
+	_stone_layer(brush, wx, wz, base_y + 1, maxi(r - 1, 1), mat)
+
+
+## One octagonal slice of a giant stone: a square with its four corners knocked off.
+func _stone_layer(brush: CityBrush, wx: int, wz: int, y: int, half: int, mat: int) -> void:
 	brush.fill_box(
-		Vector3i(wx - half, wy, wz - half),
-		Vector3i(wx + half + 1, wy + 2, wz + half + 1),
+		Vector3i(wx - half, y, wz - half),
+		Vector3i(wx + half + 1, y + 1, wz + half + 1),
 		mat
 	)
+	if half < 2:
+		return
+	for dz: int in [-half, half]:
+		for dx: int in [-half, half]:
+			brush.set_vox(Vector3i(wx + dx, y, wz + dz), VoxelMaterial.AIR)
 

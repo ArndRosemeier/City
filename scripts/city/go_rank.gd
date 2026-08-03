@@ -52,3 +52,13 @@ static func preset_rank(tier: StringName) -> String:
 
 static func label(rank: String) -> String:
 	return rank.strip_edges().to_lower()
+
+
+## Outfit band for an AI ped from its Human-SL rank.
+static func outfit_tier_for_rank(rank: String) -> StringName:
+	var i := index_of(rank)
+	if i <= 9:
+		return &"novice" ## 20k..11k
+	if i <= 19:
+		return &"club" ## 10k..1k
+	return &"dan"

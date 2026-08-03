@@ -1,8 +1,9 @@
-## Runtime Gaming district: main Go table + giant board + invite peds + side ambient.
+## Runtime Gaming district: one Go table (board + settings) + giant board sync.
 class_name GamingArena
 extends Node3D
 
 const GoTableUi3DScript := preload("res://scripts/city/go_table_ui.gd")
+const GoSettingsUi3DScript := preload("res://scripts/city/go_settings_ui.gd")
 const GoGiantBoardScript := preload("res://scripts/city/go_giant_board.gd")
 const GoSessionScript := preload("res://scripts/city/go_session.gd")
 const GoPedActorScript := preload("res://scripts/city/go_ped_actor.gd")
@@ -18,10 +19,12 @@ var _dseed: int = 0
 var _main_board: GoBoardState = null
 var _main_session: GoSession = null
 var _main_table: GoTableUi3D = null
+## Typed as Node — GoSettingsUi3D class_name may load after this file alphabetically.
+var _settings: Node = null
 var _giant: GoGiantBoard = null
-var _opponent: GoPedActor = null
-var _invite_peds: Dictionary = {}
-var _side_sessions: Array[GoSession] = []
+var _black_ped: GoPedActor = null
+var _white_ped: GoPedActor = null
+var _match_active: bool = false
 
 
 func setup(
@@ -37,50 +40,46 @@ func setup(
 	_dseed = p_dseed
 	live_brush = p_live_brush
 	_spawn_main_views()
-	_spawn_invites()
-	_spawn_sides()
 
 
 func _exit_tree() -> void:
 	if _main_session != null:
 		_main_session.end_session("unload")
 		_main_session = null
-	for s in _side_sessions:
-		if s != null:
-			s.end_session("unload")
-	_side_sessions.clear()
 
 
 func interact_at_world(_pos: Vector3) -> bool:
-	## Used when a child StaticBody forwards via meta; prefer invite_tier meta on collider chain.
 	return false
 
 
-func invite_tier(tier: StringName) -> bool:
-	## Ped presets snap the rank stepper, then start.
-	if _main_table != null:
-		_main_table.set_selected_rank(GoRankScript.preset_rank(tier))
-	_start_match_with_tier(tier)
-	return true
+func giant_board() -> GoGiantBoard:
+	return _giant
 
 
 func _spawn_main_views() -> void:
 	_main_board = GoBoardStateScript.new() as GoBoardState
 	_main_board.setup(layout.board_n)
 
+	## Lay-flat panels only use yaw for in-plane spin: this is the one that puts the
+	## text upright for someone standing at the south seat.
+	var yaw := layout.main_table_yaw
 	_main_table = GoTableUi3DScript.new() as GoTableUi3D
 	_main_table.name = "MainGoTable"
 	add_child(_main_table)
-	var yaw := layout.main_table_yaw + PI
-	## Above the timber slab (not at the voxel floor — that buried the board under the top).
 	_main_table.setup_board(
-		_main_board, _table_surface_world(layout.main_table_origin), yaw, 2.6
+		_main_board, _slot_surface_world(GamingComposer.BOARD_X_FRAC), yaw, 3.0
 	)
 	_main_table.set_input_enabled(false)
 	_main_table.vertex_chosen.connect(_on_player_vertex)
-	_main_table.pass_pressed.connect(_on_player_pass)
-	_main_table.resign_pressed.connect(_on_player_resign)
-	_main_table.invite_pressed.connect(_on_invite)
+
+	_settings = GoSettingsUi3DScript.new()
+	_settings.name = "GoSettings"
+	add_child(_settings)
+	_settings.call("setup", _slot_surface_world(GamingComposer.SETTINGS_X_FRAC), yaw, 1.9)
+	_settings.call("show_setup")
+	_settings.connect("start_pressed", _on_start_match)
+	_settings.connect("pass_pressed", _on_player_pass)
+	_settings.connect("resign_pressed", _on_player_resign)
 
 	_giant = GoGiantBoardScript.new() as GoGiantBoard
 	_giant.name = "GiantGoBoard"
@@ -95,123 +94,102 @@ func _spawn_main_views() -> void:
 	)
 
 
-func _spawn_invites() -> void:
-	for stand in layout.invite_stands:
-		var tier := StringName(str(stand.get("tier", "novice")))
-		var local: Vector3 = stand.get("local", Vector3.ZERO)
-		var ped: GoPedActor = GoPedActorScript.new() as GoPedActor
-		ped.name = "Invite_%s" % String(tier)
-		add_child(ped)
-		ped.begin_as_invite(_world_from_local_m(local), tier, float(stand.get("yaw", 0.0)))
-		_invite_peds[tier] = ped
-
-		var body := StaticBody3D.new()
-		body.name = "InviteHit"
-		body.collision_layer = 1
-		body.add_to_group("world_interact")
-		body.set_meta("go_invite_tier", String(tier))
-		var shape := CollisionShape3D.new()
-		var capsule := CapsuleShape3D.new()
-		capsule.radius = 0.5
-		capsule.height = 1.85
-		shape.shape = capsule
-		shape.position.y = 0.95
-		body.add_child(shape)
-		ped.add_child(body)
-		## CityWalker calls interact_at_world on the collider node or parents — attach script method via bind.
-		body.set_script(load("res://scripts/city/go_invite_hit.gd"))
-
-
-func _spawn_sides() -> void:
-	var i := 0
-	for side in layout.side_tables:
-		var session: GoSession = GoSessionScript.new() as GoSession
-		session.name = "SideGoSession_%d" % i
-		add_child(session)
-		var tier: StringName = &"novice" if i == 0 else &"club"
-		session.begin(GoSession.Mode.PED_VS_PED, tier, layout.board_n)
-		_side_sessions.append(session)
-
-		var table: GoTableUi3D = GoTableUi3DScript.new() as GoTableUi3D
-		table.name = "SideGoTable_%d" % i
-		add_child(table)
-		var origin: Vector3i = side["origin"]
-		table.setup_board(
-			session.board,
-			_table_surface_world(origin),
-			float(side.get("yaw", 0.0)) + PI,
-			1.8
-		)
-		table.set_input_enabled(false)
-
-		var ped_a: GoPedActor = GoPedActorScript.new() as GoPedActor
-		ped_a.name = "SidePedA_%d" % i
-		add_child(ped_a)
-		ped_a.begin_as_invite(_world_from_local_m(side["ped_a"]), tier, float(side.get("yaw", 0.0)))
-		var ped_b: GoPedActor = GoPedActorScript.new() as GoPedActor
-		ped_b.name = "SidePedB_%d" % i
-		add_child(ped_b)
-		ped_b.begin_as_invite(_world_from_local_m(side["ped_b"]), tier, float(side.get("yaw", 0.0)) + PI)
-		session.ai_thinking.connect(
-			func(on: bool) -> void:
-				if session.board != null and session.board.next_color == GoBoardState.BLACK:
-					ped_a.set_thinking(on)
-				else:
-					ped_b.set_thinking(on)
-		)
-		i += 1
-
-
-func _on_invite(tier: StringName) -> void:
-	_start_match_with_tier(tier)
-
-
-func _start_match_with_tier(tier: StringName) -> void:
-	if layout == null:
+func _on_start_match(
+	black_human: bool, black_rank: String, white_human: bool, white_rank: String
+) -> void:
+	if layout == null or _match_active:
 		return
+	_match_active = true
+	if _settings != null:
+		_settings.call("show_match")
+
 	if _main_session != null:
-		_main_session.end_session("reinvite")
+		_main_session.end_session("restart")
 		_main_session.queue_free()
 		_main_session = null
-
-	## Rank comes from the table stepper (invite buttons/peds snap presets first).
-	var rank := (
-		_main_table.selected_rank if _main_table != null else GoRankScript.preset_rank(tier)
-	)
+	_clear_ai_peds()
 
 	_main_session = GoSessionScript.new() as GoSession
 	_main_session.name = "MainGoSession"
 	add_child(_main_session)
-	_main_session.begin(GoSession.Mode.PLAYER_VS_PED, tier, layout.board_n, rank)
+	## Seat AI peds before kicking the opening move.
+	await _seat_ai_peds(black_human, black_rank, white_human, white_rank)
+	if not is_inside_tree():
+		return
+
+	_main_session.begin_match(
+		layout.board_n, black_human, black_rank, white_human, white_rank
+	)
 	_main_board = _main_session.board
 	_bind_main_board()
-	_main_table.set_input_enabled(true)
 	_main_session.ai_thinking.connect(_on_ai_thinking)
+	_main_session.session_ended.connect(_on_session_ended)
+	_main_session.match_over.connect(_on_match_over)
+	_refresh_board_input()
+	print(
+		"GamingArena: start black=%s white=%s"
+		% [
+			"human" if black_human else ("AI " + black_rank),
+			"human" if white_human else ("AI " + white_rank),
+		]
+	)
 
-	var ped: GoPedActor = _invite_peds.get(tier) as GoPedActor
-	if ped != null:
-		_opponent = ped
-		var seat := _world_from_local_m(layout.main_ped_stand_local)
-		var table := _table_surface_world(layout.main_table_origin)
-		## Face the board (look toward table centre), not the arrival travel heading.
-		var face := _yaw_toward(seat, table)
-		ped.walk_path(_opponent_walk_waypoints(seat, table), face)
-	print("GamingArena: invited %s at Human-SL rank %s" % [String(tier), _main_session.rank_label()])
+
+func _seat_ai_peds(
+	black_human: bool, black_rank: String, white_human: bool, white_rank: String
+) -> void:
+	var wait := _world_from_local_m(layout.ai_wait_local)
+	var table := _slot_surface_world(0.5)
+	var pending: Array[GoPedActor] = []
+	if not black_human:
+		_black_ped = _spawn_ai_ped(&"black", black_rank, wait)
+		var seat_b := _world_from_local_m(layout.black_stand_local)
+		if _black_ped.walk_path(
+			_walk_waypoints(wait, seat_b, table), _yaw_toward(seat_b, table)
+		):
+			pending.append(_black_ped)
+	if not white_human:
+		## Stagger second ped slightly so they don't occupy the same wait point.
+		var wait_w := wait + Vector3(0.0, 0.0, 1.4)
+		_white_ped = _spawn_ai_ped(&"white", white_rank, wait_w)
+		var seat_w := _world_from_local_m(layout.white_stand_local)
+		if _white_ped.walk_path(
+			_walk_waypoints(wait_w, seat_w, table), _yaw_toward(seat_w, table)
+		):
+			pending.append(_white_ped)
+	for ped in pending:
+		await ped.seat_reached
 
 
-## Route around the table pad (west flank) so the ped does not walk through the board.
-func _opponent_walk_waypoints(seat: Vector3, table: Vector3) -> Array[Vector3]:
+func _spawn_ai_ped(color_name: StringName, rank: String, at: Vector3) -> GoPedActor:
+	var tier: StringName = GoRankScript.outfit_tier_for_rank(rank)
+	var ped: GoPedActor = GoPedActorScript.new() as GoPedActor
+	ped.name = "AiPed_%s" % String(color_name)
+	add_child(ped)
+	ped.begin_as_invite(at, tier, layout.main_table_yaw)
+	return ped
+
+
+func _clear_ai_peds() -> void:
+	if _black_ped != null and is_instance_valid(_black_ped):
+		_black_ped.queue_free()
+	if _white_ped != null and is_instance_valid(_white_ped):
+		_white_ped.queue_free()
+	_black_ped = null
+	_white_ped = null
+
+
+func _walk_waypoints(from: Vector3, seat: Vector3, table: Vector3) -> Array[Vector3]:
 	var half_w := float(GamingComposer.TABLE_W) * voxel_size * 0.5
-	var west_x := table.x - half_w - 2.8
-	var south_z := table.z - 2.0
-	if _opponent != null:
-		south_z = minf(_opponent.global_position.z, table.z - 2.0)
-	var path: Array[Vector3] = [
-		Vector3(west_x, seat.y, south_z),
-		Vector3(west_x, seat.y, seat.z),
+	## Flank around the nearer table edge.
+	var east_x := table.x + half_w + 2.2
+	var west_x := table.x - half_w - 2.2
+	var flank_x := east_x if from.x >= table.x else west_x
+	return [
+		Vector3(flank_x, seat.y, from.z),
+		Vector3(flank_x, seat.y, seat.z),
 		seat,
 	]
-	return path
 
 
 func _yaw_toward(from: Vector3, to: Vector3) -> float:
@@ -219,7 +197,6 @@ func _yaw_toward(from: Vector3, to: Vector3) -> float:
 	look.y = 0.0
 	if look.length_squared() < 0.0001:
 		return layout.main_table_yaw if layout != null else 0.0
-	## Match GoPedActor / Quaternius forward (−Z).
 	return atan2(-look.x, -look.z)
 
 
@@ -241,39 +218,76 @@ func _bind_main_board() -> void:
 func _on_player_vertex(vertex: String) -> void:
 	if _main_session != null:
 		_main_session.try_player_vertex(vertex)
+		_refresh_board_input()
 
 
 func _on_player_pass() -> void:
 	if _main_session != null:
 		_main_session.try_player_pass()
+		_refresh_board_input()
 
 
 func _on_player_resign() -> void:
 	if _main_session != null:
 		_main_session.try_player_resign()
+		_refresh_board_input()
 
 
 func _on_ai_thinking(on: bool) -> void:
-	if _opponent != null:
-		_opponent.set_thinking(on)
-	if _main_table != null and _main_session != null:
-		_main_table.set_input_enabled(not on and _main_session.player_to_move())
+	if _main_session == null:
+		return
+	var color := _main_session.board.next_color if _main_session.board != null else GoBoardState.BLACK
+	## While thinking, next_color is the AI about to move; after the move it flips.
+	## Prefer the ped of the colour that just started thinking — use busy side:
+	if on:
+		if not _main_session.color_is_human(color):
+			_set_ped_thinking(color, true)
+	else:
+		if _black_ped != null:
+			_black_ped.set_thinking(false)
+		if _white_ped != null:
+			_white_ped.set_thinking(false)
+	_refresh_board_input()
 
 
-func _world_from_local_vox(local: Vector3i) -> Vector3:
-	return Vector3(
-		(float(origin_vox.x + local.x) + 0.5) * voxel_size,
-		float(origin_vox.y + local.y) * voxel_size,
-		(float(origin_vox.z + local.z) + 0.5) * voxel_size
-	)
+func _set_ped_thinking(color: int, on: bool) -> void:
+	var ped := _black_ped if color == GoBoardState.BLACK else _white_ped
+	if ped != null:
+		ped.set_thinking(on)
 
 
-## World point on the top face of the platform timber cap.
-func _table_surface_world(table_origin: Vector3i) -> Vector3:
-	## Composer platform: timber at Y = ground_y+TABLE_H (table_origin.y is ground_y).
-	var top_vox_y: int = table_origin.y + GamingComposer.TABLE_H
-	var cx: int = table_origin.x + GamingComposer.TABLE_W / 2
-	var cz: int = table_origin.z + GamingComposer.TABLE_D / 2
+func _refresh_board_input() -> void:
+	if _main_session == null:
+		return
+	var human_turn := _main_session.player_to_move()
+	if _main_table != null:
+		_main_table.set_input_enabled(human_turn)
+	if _settings != null:
+		_settings.call("set_match_actions_enabled", human_turn)
+
+
+func _on_session_ended(_reason: String) -> void:
+	_end_match_ui()
+
+
+func _on_match_over(_reason: String) -> void:
+	_end_match_ui()
+
+
+func _end_match_ui() -> void:
+	_match_active = false
+	if _settings != null:
+		_settings.call("show_setup")
+	if _main_table != null:
+		_main_table.set_input_enabled(false)
+
+
+## World point on the table timber at a fractional X along the table width.
+func _slot_surface_world(x_frac: float) -> Vector3:
+	var top_vox_y: int = layout.main_table_origin.y + GamingComposer.TABLE_H
+	var ox := layout.main_table_origin
+	var cx: int = ox.x + int(round(float(GamingComposer.TABLE_W) * x_frac))
+	var cz: int = ox.z + GamingComposer.TABLE_D / 2
 	return Vector3(
 		(float(origin_vox.x + cx) + 0.5) * voxel_size,
 		float(origin_vox.y + top_vox_y + 1) * voxel_size + 0.04,

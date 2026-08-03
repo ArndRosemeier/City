@@ -1,4 +1,4 @@
-## Builds a Gaming-theme plaza: meadow, giant Go pad, main table, side tables.
+## Builds a Gaming-theme plaza: meadow, giant Go pad, one wide main table.
 class_name GamingComposer
 extends RefCounted
 
@@ -12,13 +12,26 @@ var voxel_size: float = 0.5
 var layout: GamingLayout = null
 
 const BOARD_N := 19
-const GIANT_CELL := 4
-const PAD_MARGIN := 6
-const TABLE_W := 14
+## 3 m between crossings: wide enough for a rounded 5-voxel stone with a gap, and it
+## makes the 1-voxel grid line a sixth of a cell instead of a quarter (which read as a
+## white lattice rather than a board).
+const GIANT_CELL := 6
+## Light field carried past the outer lines, then the dark rim around it.
+const BOARD_EDGE := 4
+const BOARD_RIM := 2
+const PAD_MARGIN := 8
+## Light kaya-style playing surface; lines and rim are the dark timber.
+const BOARD_FIELD_MAT := VoxelMaterial.GRAVEL
+const BOARD_LINE_MAT := VoxelMaterial.TIMBER
+## Wide enough for board Ui3D + settings panel side by side, and no wider — a bigger
+## slab just reads as an empty timber field around two small panels.
+const TABLE_W := 18
 const TABLE_D := 10
 ## Low raised pad (no legs) — height in voxels above the meadow surface layer.
 const TABLE_H := 2
-const SIDE_BOARD_CELL := 2
+## Board sits on the west half; settings on the east (fractions of table width).
+const BOARD_X_FRAC := 0.33
+const SETTINGS_X_FRAC := 0.76
 
 
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -30,8 +43,6 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_paint_meadow(min_v, max_v)
 	_build_giant_pad()
 	_build_main_table()
-	for side in layout.side_tables:
-		_build_side_table(side)
 	print("GamingComposer: %s" % layout.describe())
 
 
@@ -64,17 +75,18 @@ func _plan(min_v: Vector3i, max_v: Vector3i) -> GamingLayout:
 	var z1 := la.end.y * cell_size
 	var cx := (x0 + x1) / 2
 	var cz := (z0 + z1) / 2
-	var span := BOARD_N * GIANT_CELL
-	var pad_side := span + PAD_MARGIN * 2
+	var span := (BOARD_N - 1) * GIANT_CELL
+	var pad_side := span + (BOARD_EDGE + BOARD_RIM + PAD_MARGIN) * 2 + 1
 	var ly := GamingLayout.new()
 	ly.board_n = BOARD_N
 	ly.giant_cell_vox = GIANT_CELL
 	ly.pad_min = Vector3i(cx - pad_side / 2, ground_y, cz - pad_side / 2)
 	ly.pad_max = Vector3i(ly.pad_min.x + pad_side, ground_y + 1, ly.pad_min.z + pad_side)
+	var inset := PAD_MARGIN + BOARD_RIM + BOARD_EDGE
 	ly.giant_origin = Vector3i(
-		ly.pad_min.x + PAD_MARGIN,
+		ly.pad_min.x + inset,
 		ground_y + 1,
-		ly.pad_min.z + PAD_MARGIN
+		ly.pad_min.z + inset
 	)
 	## Main table south of the pad, facing north toward the giant board.
 	var table_z := ly.pad_min.z - 18
@@ -82,27 +94,23 @@ func _plan(min_v: Vector3i, max_v: Vector3i) -> GamingLayout:
 	ly.main_table_origin = Vector3i(table_x, ground_y, table_z)
 	ly.main_table_yaw = 0.0
 	var vs := voxel_size
-	ly.main_player_stand_local = Vector3(
-		(float(table_x) + float(TABLE_W) * 0.5) * vs,
+	var mid_x := (float(table_x) + float(TABLE_W) * 0.5) * vs
+	ly.black_stand_local = Vector3(
+		mid_x,
 		float(ground_y + 1) * vs,
-		(float(table_z) - 2.0) * vs
+		(float(table_z) - 2.5) * vs
 	)
-	ly.main_ped_stand_local = Vector3(
-		(float(table_x) + float(TABLE_W) * 0.5) * vs,
+	ly.white_stand_local = Vector3(
+		mid_x,
 		float(ground_y + 1) * vs,
-		(float(table_z) + float(TABLE_D) + 2.0) * vs
+		(float(table_z) + float(TABLE_D) + 2.5) * vs
 	)
-	## Side tables east and west of the pad.
-	ly.side_tables = [
-		_side_spec(ly.pad_max.x + 10, cz - 8, -PI * 0.5, vs),
-		_side_spec(ly.pad_min.x - 10 - TABLE_W, cz - 8, PI * 0.5, vs),
-	]
-	## Invite stands further south, facing the main table.
-	ly.invite_stands = [
-		{"tier": "novice", "local": Vector3((float(cx) - 8.0) * vs, float(ground_y + 1) * vs, (float(table_z) - 14.0) * vs), "yaw": 0.0},
-		{"tier": "club", "local": Vector3(float(cx) * vs, float(ground_y + 1) * vs, (float(table_z) - 14.0) * vs), "yaw": 0.0},
-		{"tier": "dan", "local": Vector3((float(cx) + 8.0) * vs, float(ground_y + 1) * vs, (float(table_z) - 14.0) * vs), "yaw": 0.0},
-	]
+	## Waiting bench east of the table.
+	ly.ai_wait_local = Vector3(
+		(float(table_x) + float(TABLE_W) + 4.0) * vs,
+		float(ground_y + 1) * vs,
+		(float(table_z) + float(TABLE_D) * 0.5) * vs
+	)
 	ly.spawn_local = Vector3(
 		float(cx) * vs,
 		float(ground_y + 1) * vs + 0.85,
@@ -110,16 +118,6 @@ func _plan(min_v: Vector3i, max_v: Vector3i) -> GamingLayout:
 	)
 	ly.spawn_yaw = 0.0
 	return ly
-
-
-func _side_spec(ox: int, oz: int, yaw: float, vs: float) -> Dictionary:
-	return {
-		"origin": Vector3i(ox, ground_y, oz),
-		"yaw": yaw,
-		"ped_a": Vector3((float(ox) + 2.0) * vs, float(ground_y + 1) * vs, (float(oz) - 2.0) * vs),
-		"ped_b": Vector3((float(ox) + float(TABLE_W) - 2.0) * vs, float(ground_y + 1) * vs, (float(oz) + float(TABLE_D) + 2.0) * vs),
-		"cell_vox": SIDE_BOARD_CELL,
-	}
 
 
 func _paint_meadow(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -133,63 +131,55 @@ func _paint_meadow(min_v: Vector3i, max_v: Vector3i) -> void:
 func _build_giant_pad() -> void:
 	var p0 := layout.pad_min
 	var p1 := layout.pad_max
-	brush.fill_box(p0, Vector3i(p1.x, ground_y + 1, p1.z), VoxelMaterial.TILES)
-	## Timber playing surface one voxel up.
+	## Plain stone apron — the walkable frame the board is read against.
+	brush.fill_box(p0, Vector3i(p1.x, ground_y + 1, p1.z), VoxelMaterial.STONE)
 	var go := layout.giant_origin
 	var cell := layout.giant_cell_vox
 	var span := layout.giant_span_vox()
+	var board_y := ground_y + 1
+	## Dark rim, then the light field inside it — both a single flush layer, so the
+	## board is a slab you look at, not a lattice you walk through.
+	var rim := BOARD_EDGE + BOARD_RIM
 	brush.fill_box(
-		Vector3i(go.x - 1, ground_y + 1, go.z - 1),
-		Vector3i(go.x + span + 2, ground_y + 2, go.z + span + 2),
-		VoxelMaterial.TIMBER
+		Vector3i(go.x - rim, board_y, go.z - rim),
+		Vector3i(go.x + span + rim + 1, board_y + 1, go.z + span + rim + 1),
+		BOARD_LINE_MAT
 	)
-	## Grid lines between n×n empty fields (n+1 lines).
-	for i in range(BOARD_N + 1):
+	brush.fill_box(
+		Vector3i(go.x - BOARD_EDGE, board_y, go.z - BOARD_EDGE),
+		Vector3i(go.x + span + BOARD_EDGE + 1, board_y + 1, go.z + span + BOARD_EDGE + 1),
+		BOARD_FIELD_MAT
+	)
+	## n lines meet at n×n crossings — stones sit on those intersections.
+	for i in range(BOARD_N):
 		var lx := go.x + i * cell
 		var lz := go.z + i * cell
 		brush.fill_box(
-			Vector3i(lx, ground_y + 1, go.z),
-			Vector3i(lx + 1, ground_y + 2, go.z + span + 1),
-			VoxelMaterial.GRAVEL
+			Vector3i(lx, board_y, go.z),
+			Vector3i(lx + 1, board_y + 1, go.z + span + 1),
+			BOARD_LINE_MAT
 		)
 		brush.fill_box(
-			Vector3i(go.x, ground_y + 1, lz),
-			Vector3i(go.x + span + 1, ground_y + 2, lz + 1),
-			VoxelMaterial.GRAVEL
+			Vector3i(go.x, board_y, lz),
+			Vector3i(go.x + span + 1, board_y + 1, lz + 1),
+			BOARD_LINE_MAT
 		)
-	## Hoshi dots at field centres (4-4 style indices for 19).
 	var hoshi: PackedInt32Array = PackedInt32Array([3, 9, 15])
-	var half := cell / 2
 	for hi in range(hoshi.size()):
 		var hz: int = hoshi[hi]
 		for hj in range(hoshi.size()):
 			var hx: int = hoshi[hj]
-			var sx: int = go.x + hx * cell + half
-			var sz: int = go.z + hz * cell + half
-			brush.set_vox(Vector3i(sx, ground_y + 1, sz), VoxelMaterial.STONE)
+			## Star point: a round dot on the crossing, same ink as the lines.
+			brush.fill_disk(
+				go.x + hx * cell, go.z + hz * cell, board_y, 1, BOARD_LINE_MAT
+			)
 
 
 func _build_main_table() -> void:
 	_build_table_block(layout.main_table_origin)
 
 
-func _build_side_table(side: Dictionary) -> void:
-	var origin: Vector3i = side["origin"]
-	_build_table_block(origin)
-	## Compact timber board on the table top.
-	var cell: int = int(side.get("cell_vox", SIDE_BOARD_CELL))
-	var span := BOARD_N * cell
-	var bx := origin.x + (TABLE_W - span) / 2
-	var bz := origin.z + (TABLE_D - span) / 2
-	brush.fill_box(
-		Vector3i(bx, ground_y + TABLE_H, bz),
-		Vector3i(bx + span + 1, ground_y + TABLE_H + 1, bz + span + 1),
-		VoxelMaterial.TIMBER
-	)
-
-
 func _build_table_block(origin: Vector3i) -> void:
-	## Solid low platform (no legs) — stone bulk + timber cap.
 	var y0 := ground_y + 1
 	var y_top := y0 + TABLE_H
 	if TABLE_H > 1:

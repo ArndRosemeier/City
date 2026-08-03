@@ -14,6 +14,8 @@ const FALLBACK_FEMALE: Array[String] = [
 	"res://assets/humans/female_base.glb",
 ]
 
+signal seat_reached()
+
 enum Phase { IDLE, WALK, SEATED, THINK }
 
 var tier: StringName = &"novice"
@@ -38,12 +40,13 @@ func begin_as_invite(spawn_pos: Vector3, p_tier: StringName, face_yaw: float = 0
 		QuaterniusLocomotion.play_idle(_anim)
 
 
-func walk_to_seat(seat: Vector3, face_yaw: float) -> void:
-	walk_path([seat], face_yaw)
+func walk_to_seat(seat: Vector3, face_yaw: float) -> bool:
+	return walk_path([seat], face_yaw)
 
 
 ## Walk a polyline in XZ (around obstacles), then face `face_yaw` at the seat.
-func walk_path(waypoints: Array[Vector3], face_yaw: float) -> void:
+## Returns true when a walk tween is running (await `seat_reached`); false if already seated.
+func walk_path(waypoints: Array[Vector3], face_yaw: float) -> bool:
 	_face_yaw = face_yaw
 	_phase = Phase.WALK
 	if _walk_tween != null and is_instance_valid(_walk_tween):
@@ -51,13 +54,14 @@ func walk_path(waypoints: Array[Vector3], face_yaw: float) -> void:
 		_walk_tween = null
 	if waypoints.is_empty():
 		_arrive_at_seat()
-		return
+		return false
 	if _anim != null:
 		QuaterniusLocomotion.play_walk(_anim, WALK_SPEED)
 	_walk_tween = create_tween()
 	_walk_tween.set_trans(Tween.TRANS_LINEAR)
 	var y := global_position.y
 	var from := global_position
+	var segments := 0
 	for wp in waypoints:
 		var dest := Vector3(wp.x, y, wp.z)
 		var dist := Vector2(dest.x - from.x, dest.z - from.z).length()
@@ -71,7 +75,14 @@ func walk_path(waypoints: Array[Vector3], face_yaw: float) -> void:
 		_walk_tween.tween_callback(func() -> void: rotation.y = yaw)
 		_walk_tween.tween_property(self, "global_position", dest, dur)
 		from = dest
+		segments += 1
+	if segments == 0:
+		_walk_tween.kill()
+		_walk_tween = null
+		_arrive_at_seat()
+		return false
 	_walk_tween.tween_callback(_arrive_at_seat)
+	return true
 
 
 func set_thinking(on: bool) -> void:
@@ -95,6 +106,7 @@ func _arrive_at_seat() -> void:
 		_body.rotation.y = PI
 	if _anim != null:
 		QuaterniusLocomotion.play_idle_talking(_anim)
+	seat_reached.emit()
 
 
 func _spawn_visual() -> void:

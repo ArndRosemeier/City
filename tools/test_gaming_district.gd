@@ -86,16 +86,16 @@ func _ready() -> void:
 		_fail("FAIL board_n %d" % layout.board_n)
 		_quit()
 		return
-	if layout.side_tables.size() < 1:
-		_fail("FAIL expected side tables")
+	if layout.main_table_origin == Vector3i.ZERO and layout.pad_min == Vector3i.ZERO:
+		_fail("FAIL empty main table / pad")
 		_quit()
 		return
-	if layout.invite_stands.size() != 3:
-		_fail("FAIL expected 3 invite stands, got %d" % layout.invite_stands.size())
-		_quit()
-		return
-	if layout.giant_span_vox() != 19 * layout.giant_cell_vox:
+	if layout.giant_span_vox() != (19 - 1) * layout.giant_cell_vox:
 		_fail("FAIL giant span mismatch")
+		_quit()
+		return
+	if GamingComposer.TABLE_W < 16:
+		_fail("FAIL table too narrow for board+settings (%d)" % GamingComposer.TABLE_W)
 		_quit()
 		return
 
