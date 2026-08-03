@@ -80,6 +80,7 @@ func _plan(min_v: Vector3i, max_v: Vector3i) -> GamingLayout:
 	var ly := GamingLayout.new()
 	ly.board_n = BOARD_N
 	ly.giant_cell_vox = GIANT_CELL
+	ly.field_span_vox = span
 	ly.pad_min = Vector3i(cx - pad_side / 2, ground_y, cz - pad_side / 2)
 	ly.pad_max = Vector3i(ly.pad_min.x + pad_side, ground_y + 1, ly.pad_min.z + pad_side)
 	var inset := PAD_MARGIN + BOARD_RIM + BOARD_EDGE
@@ -164,7 +165,7 @@ func _build_giant_pad() -> void:
 			Vector3i(go.x + span + 1, board_y + 1, lz + 1),
 			BOARD_LINE_MAT
 		)
-	var hoshi: PackedInt32Array = PackedInt32Array([3, 9, 15])
+	var hoshi := hoshi_points(BOARD_N)
 	for hi in range(hoshi.size()):
 		var hz: int = hoshi[hi]
 		for hj in range(hoshi.size()):
@@ -173,6 +174,17 @@ func _build_giant_pad() -> void:
 			brush.fill_disk(
 				go.x + hx * cell, go.z + hz * cell, board_y, 1, BOARD_LINE_MAT
 			)
+
+
+## Star-point indices for a board of size `n` (GTP coordinates from the SW corner).
+static func hoshi_points(n: int) -> PackedInt32Array:
+	if n >= 19:
+		return PackedInt32Array([3, 9, 15])
+	if n >= 13:
+		return PackedInt32Array([3, 6, 9])
+	if n >= 9:
+		return PackedInt32Array([2, 4, 6])
+	return PackedInt32Array()
 
 
 func _build_main_table() -> void:

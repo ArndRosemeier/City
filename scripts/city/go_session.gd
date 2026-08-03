@@ -4,10 +4,18 @@ extends Node
 
 const GoEnginePoolScript := preload("res://scripts/city/go_engine_pool.gd")
 const GoRankScript := preload("res://scripts/city/go_rank.gd")
+const GoMatchResultScript := preload("res://scripts/city/go_match_result.gd")
+const GoEvalSnapshotScript := preload("res://scripts/city/go_eval_snapshot.gd")
 
 signal ai_thinking(on: bool)
 signal session_ended(reason: String)
-signal match_over(reason: String)
+signal match_over(result: GoMatchResult)
+## Root stats from the AI move that just landed. Free — the search already had them.
+signal eval_updated(snapshot: GoEvalSnapshot)
+## The shown numbers no longer describe the position (human moved, match ended, restart).
+signal eval_cleared()
+
+const KOMI := 7.5
 
 var board: GoBoardState = null
 var black_human: bool = true
@@ -17,7 +25,13 @@ var white_rank: String = "5k"
 var _eng: Object = null
 var _busy: bool = false
 var _owned_engine: bool = false
+var _engine_ready: bool = false
 var _active_rank: String = ""
+var _board_n: int = 19
+## Bumped on end_session so in-flight warmup / genmove coroutines bail out.
+var _epoch: int = 0
+## False once we learn the loaded GDExtension predates genmove_eval.
+var _engine_has_eval: bool = true
 
 
 func begin_match(
@@ -31,35 +45,46 @@ func begin_match(
 	white_human = p_white_human
 	black_rank = GoEnginePoolScript.normalize_rank(p_black_rank)
 	white_rank = GoEnginePoolScript.normalize_rank(p_white_rank)
+	_board_n = n
 	board = GoBoardState.new()
 	board.setup(n)
 	_owned_engine = false
+	_engine_ready = false
 	_active_rank = ""
-	if needs_engine():
-		var start_rank := black_rank if not black_human else white_rank
-		_eng = GoEnginePoolScript.acquire(start_rank)
-		if _eng == null:
-			push_warning("GoSession: no KataGo — AI sides will use random legal moves")
-		else:
-			_owned_engine = true
-			_active_rank = start_rank
-			_eng.call("set_boardsize", n)
-			_eng.call("clear_board")
+	_eng = null
 	_busy = false
+	_epoch += 1
+	_engine_has_eval = true
 	set_process(false)
-	## If Black is AI, kick the opening move after one frame.
-	if not black_human and board.phase == &"playing":
-		call_deferred("_kick_ai_if_needed")
+	eval_cleared.emit()
+	if needs_engine():
+		_owned_engine = true
+		## Warm the net in the background — human Black can play immediately.
+		_warmup_engine(_epoch)
 	return true
+
+
+## Call after seating (or immediately) when an AI side is to move.
+func kick_ai_if_needed() -> void:
+	_kick_ai_if_needed()
 
 
 func end_session(reason: String = "leave") -> void:
 	set_process(false)
+	_epoch += 1
+	_busy = false
 	if _owned_engine:
 		GoEnginePoolScript.release()
 		_owned_engine = false
+		## Destroy the net only when the district leaves — restart reuses it warm.
+		if reason == "unload":
+			GoEnginePoolScript.shutdown()
 	_eng = null
-	session_ended.emit(reason)
+	_engine_ready = false
+	eval_cleared.emit()
+	## "restart" is an internal handoff; emitting would flip the arena UI mid-start.
+	if reason != "restart":
+		session_ended.emit(reason)
 
 
 func needs_engine() -> bool:
@@ -90,11 +115,13 @@ func try_player_vertex(vertex: String) -> bool:
 	var color := board.next_color
 	if not board.try_play(color, vertex):
 		return false
+	## The shown numbers described the position before this stone.
+	eval_cleared.emit()
 	_sync_engine_play(color, vertex)
 	if board.phase == &"playing":
 		_kick_ai_if_needed()
 	else:
-		match_over.emit(String(board.phase))
+		match_over.emit(_build_result())
 	return true
 
 
@@ -104,6 +131,71 @@ func try_player_pass() -> bool:
 
 func try_player_resign() -> bool:
 	return try_player_vertex("resign")
+
+
+func is_ai_only() -> bool:
+	return not black_human and not white_human
+
+
+## Abort an in-progress match (AI-vs-AI STOP). Cancels in-flight genmove.
+func stop_match() -> bool:
+	if board == null or board.phase != &"playing":
+		return false
+	_epoch += 1
+	_busy = false
+	ai_thinking.emit(false)
+	if not board.stop_play():
+		return false
+	eval_cleared.emit()
+	match_over.emit(_build_result())
+	return true
+
+
+func _warmup_engine(epoch: int) -> void:
+	var start_rank := black_rank if not black_human else white_rank
+	var eng: Object = await GoEnginePoolScript.acquire_async(self, start_rank)
+	if epoch != _epoch or not _owned_engine or not is_inside_tree():
+		## acquire_async already took a pool ref — drop it if this session abandoned the wait.
+		if eng != null and (epoch != _epoch or not _owned_engine):
+			GoEnginePoolScript.release()
+		return
+	if eng == null:
+		push_warning("GoSession: no KataGo — AI sides will use random legal moves")
+		_owned_engine = false
+		_eng = null
+		_engine_ready = false
+		return
+	_eng = eng
+	_active_rank = start_rank
+	_prime_engine_board()
+	if epoch != _epoch:
+		return
+	_engine_ready = true
+	## A human stone may have landed during prime; rebuild once more so GTP matches.
+	_prime_engine_board()
+	## AI-vs-AI: don't wait for seating — open as soon as the net is ready.
+	if not color_is_human(board.next_color):
+		_kick_ai_if_needed()
+
+
+func _prime_engine_board() -> void:
+	if _eng == null or not is_instance_valid(_eng) or not bool(_eng.call("is_loaded")):
+		return
+	_eng.call("set_boardsize", _board_n)
+	_eng.call("clear_board")
+	if not _active_rank.is_empty():
+		_eng.call("set_rank", _active_rank)
+	if board == null:
+		return
+	## Replay any stones the human (or prior AI) already played during warmup.
+	for m in board.move_list:
+		var vertex := str(m.get("vertex", ""))
+		var v := vertex.strip_edges().to_lower()
+		if v.is_empty() or v == "resign":
+			continue
+		var color := int(m.get("color", GoBoardState.BLACK))
+		var color_s := "b" if color == GoBoardState.BLACK else "w"
+		_eng.call("play", color_s, "pass" if v == "pass" else vertex)
 
 
 func _kick_ai_if_needed() -> void:
@@ -119,9 +211,21 @@ func _request_ai_move() -> void:
 		return
 	if color_is_human(board.next_color):
 		return
+	var epoch := _epoch
 	_busy = true
 	ai_thinking.emit(true)
 	await get_tree().process_frame
+	if epoch != _epoch:
+		return
+	## Human may already have moved; wait for the net before falling back to random.
+	if _owned_engine and not _engine_ready:
+		while _owned_engine and not _engine_ready and is_inside_tree() and epoch == _epoch:
+			await get_tree().process_frame
+	if epoch != _epoch or board == null or board.phase != &"playing" or not is_inside_tree():
+		if epoch == _epoch:
+			_busy = false
+			ai_thinking.emit(false)
+		return
 	var color := board.next_color
 	var color_s := "b" if color == GoBoardState.BLACK else "w"
 	var rank := color_rank(color)
@@ -130,28 +234,53 @@ func _request_ai_move() -> void:
 		_eng != null and is_instance_valid(_eng) and bool(_eng.call("is_loaded"))
 	)
 	var vertex := ""
+	var eval_json := ""
 	if used_engine:
-		vertex = await _genmove_off_main(color_s)
+		var moved: Dictionary = await _genmove_off_main(color_s)
+		vertex = str(moved.get("vertex", ""))
+		eval_json = str(moved.get("eval_json", ""))
 	else:
 		vertex = _random_legal(color)
+	if epoch != _epoch:
+		return
 	if vertex.is_empty():
 		vertex = "pass"
 	if used_engine:
 		_apply_engine_move_to_state(color, vertex)
 	else:
 		board.try_play(color, vertex)
-	ai_thinking.emit(false)
+	## Clear busy before the signal so listeners' player_to_move() sees a free board.
 	_busy = false
+	ai_thinking.emit(false)
+	_emit_eval(eval_json, color, vertex)
 	if board == null:
 		return
 	if board.phase != &"playing":
-		match_over.emit(String(board.phase))
+		match_over.emit(_build_result())
 		return
 	if not color_is_human(board.next_color):
 		## AI vs AI: brief beat so the giant hand / stones can settle.
 		await get_tree().create_timer(0.35).timeout
-		if is_inside_tree() and board != null and board.phase == &"playing":
+		if epoch == _epoch and is_inside_tree() and board != null and board.phase == &"playing":
 			_kick_ai_if_needed()
+
+
+func _emit_eval(eval_json: String, color: int, vertex: String) -> void:
+	if eval_json.is_empty():
+		return
+	var snap: GoEvalSnapshot = GoEvalSnapshotScript.from_engine_json(
+		eval_json, color, vertex, _board_n
+	)
+	if snap == null:
+		return
+	eval_updated.emit(snap)
+
+
+func _build_result() -> GoMatchResult:
+	var reason := board.end_reason if board != null else "two_passes"
+	if reason.is_empty():
+		reason = "two_passes"
+	return GoMatchResultScript.from_board(board, reason, KOMI)
 
 
 func _ensure_rank(rank: String) -> void:
@@ -163,17 +292,33 @@ func _ensure_rank(rank: String) -> void:
 	_active_rank = rank
 
 
-func _genmove_off_main(color_s: String) -> String:
+## Returns {"vertex": String, "eval_json": String}. "eval_json" is empty when the loaded
+## GDExtension has no genmove_eval, or when the search reported nothing usable.
+func _genmove_off_main(color_s: String) -> Dictionary:
 	var eng := _eng
+	var with_eval := _engine_has_eval and eng.has_method("genmove_eval")
+	if _engine_has_eval and not with_eval:
+		_engine_has_eval = false
+		push_warning(
+			"GoSession: NativeKataGo has no genmove_eval — rebuild via "
+			+ "tools/build_city_katago.ps1 to see live winrate / score lead"
+		)
 	var mutex := Mutex.new()
-	var state := {"done": false, "vertex": ""}
+	var state := {"done": false, "vertex": "", "eval_json": ""}
 	var task_id := WorkerThreadPool.add_task(
 		func() -> void:
 			var v := ""
+			var json := ""
 			if eng != null and is_instance_valid(eng) and bool(eng.call("is_loaded")):
-				v = str(eng.call("genmove", color_s))
+				if with_eval:
+					var reply: Dictionary = eng.call("genmove_eval", color_s)
+					v = str(reply.get("vertex", ""))
+					json = str(reply.get("eval_json", ""))
+				else:
+					v = str(eng.call("genmove", color_s))
 			mutex.lock()
 			state["vertex"] = v
+			state["eval_json"] = json
 			state["done"] = true
 			mutex.unlock()
 	)
@@ -185,13 +330,13 @@ func _genmove_off_main(color_s: String) -> String:
 			break
 		if not is_inside_tree():
 			WorkerThreadPool.wait_for_task_completion(task_id)
-			return "pass"
+			return {"vertex": "pass", "eval_json": ""}
 		await get_tree().process_frame
 	WorkerThreadPool.wait_for_task_completion(task_id)
 	mutex.lock()
-	var vertex: String = str(state["vertex"])
+	var out := {"vertex": str(state["vertex"]), "eval_json": str(state["eval_json"])}
 	mutex.unlock()
-	return vertex
+	return out
 
 
 func _apply_engine_move_to_state(color: int, vertex: String) -> void:
@@ -210,6 +355,8 @@ func _apply_engine_move_to_state(color: int, vertex: String) -> void:
 
 
 func _sync_engine_play(color: int, vertex: String) -> void:
+	if not _engine_ready:
+		return
 	if _eng == null or not is_instance_valid(_eng) or not bool(_eng.call("is_loaded")):
 		return
 	var color_s := "b" if color == GoBoardState.BLACK else "w"

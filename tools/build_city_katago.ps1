@@ -3,7 +3,7 @@
 #   addons/city_katago/bin/city_katago_native.dll  (C++ Eigen embed)
 #   addons/city_katago/bin/city_katago.dll         (Rust Godot binding)
 #
-# Requires: VS 2022 C++, CMake (VS-bundled ok), Rust stable, fetched deps:
+# Requires: VS C++ workload (2022 or newer), CMake (VS-bundled ok), Rust stable, fetched deps:
 #   native/third_party/KataGo (tag v1.16.5)
 #   native/katago_deps/eigen + zlib
 #   tools/katago/*.bin.gz model for smoke (via ensure_katago.ps1)
@@ -12,10 +12,15 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $vsPath = $null
+$vsVersion = $null
 if (Test-Path $vswhere) {
   $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-  if (-not $vsPath) {
+  if ($vsPath) {
+    $vsVersion = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+  }
+  else {
     $vsPath = & $vswhere -latest -products * -property installationPath
+    $vsVersion = & $vswhere -latest -products * -property installationVersion
   }
 }
 $vcvars = $null
@@ -43,6 +48,20 @@ if (-not $cmake) {
   exit 1
 }
 
+# The generator must match the installed VS, or MSBuild rejects the platform toolset.
+# Whatever `cmake --help` lists for that major version is the one that works here.
+$vsMajor = 0
+if ($vsVersion) { $vsMajor = [int]($vsVersion -split "\.")[0] }
+$generator = @(& $cmake --help) |
+  ForEach-Object { if ($_ -match "^\*?\s*(Visual Studio $vsMajor \d{4})\s") { $Matches[1] } } |
+  Select-Object -First 1
+if (-not $generator) {
+  Write-Host "No CMake generator for Visual Studio $vsMajor (installed: $vsVersion)."
+  Write-Host "Update CMake, or build with a VS whose generator '$cmake --help' lists."
+  exit 1
+}
+Write-Host "Using generator: $generator (VS $vsVersion)"
+
 $env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
   throw "cargo not found. Install Rust from https://rustup.rs/"
@@ -53,6 +72,16 @@ $buildDir = Join-Path $embed "build"
 $crate = Join-Path $root "native\city_katago"
 $outDir = Join-Path $root "addons\city_katago\bin"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+# A cache from another generator cannot be reconfigured — start clean instead of failing.
+$cache = Join-Path $buildDir "CMakeCache.txt"
+if (Test-Path $cache) {
+  $hit = @(Select-String -Path $cache -Pattern "^CMAKE_GENERATOR:INTERNAL=(.*)$") | Select-Object -First 1
+  $cached = if ($hit) { $hit.Matches[0].Groups[1].Value } else { "" }
+  if ($cached -ne $generator) {
+    Write-Host "Generator changed ('$cached' -> '$generator'); wiping $buildDir"
+    Remove-Item -Recurse -Force $buildDir
+  }
+}
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
 $bat = Join-Path $env:TEMP "city_katago_build.bat"
@@ -63,7 +92,7 @@ call "$vcvars" >nul
 if errorlevel 1 exit /b 1
 
 echo === Configure city_katago_embed ===
-"$cmake" -S "$embed" -B "$buildDir" -G "Visual Studio 17 2022" -A x64
+"$cmake" -S "$embed" -B "$buildDir" -G "$generator" -A x64
 if errorlevel 1 exit /b 1
 
 echo === Build city_katago_native (RelWithDebInfo) ===

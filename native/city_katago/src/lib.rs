@@ -35,6 +35,14 @@ mod ffi {
             out_vertex: *mut c_char,
             out_len: i32,
         ) -> i32;
+        pub fn katago_genmove_eval(
+            h: *mut KatagoHandle,
+            color: *const c_char,
+            out_vertex: *mut c_char,
+            out_vertex_len: i32,
+            out_eval_json: *mut c_char,
+            out_eval_json_len: i32,
+        ) -> i32;
         pub fn katago_last_error(h: *const KatagoHandle) -> *const c_char;
         pub fn katago_version() -> *const c_char;
     }
@@ -199,6 +207,43 @@ impl NativeKataGo {
             panic!("NativeKataGo.genmove failed: {}", last_error(self.handle));
         }
         c_str_to_gstring(out.as_ptr() as *const c_char)
+    }
+
+    /// Generate and play a move, also returning the root statistics that same search
+    /// already produced. Keys: "vertex" (GTP vertex or "pass") and "eval_json"
+    /// (JSON object, "{}" when the search reported nothing usable).
+    #[func]
+    fn genmove_eval(&mut self, color: GString) -> VarDictionary {
+        self.require_handle();
+        let c = CString::new(color.to_string()).expect("color NUL");
+        let mut out = vec![0 as c_char; 32];
+        let mut json = vec![0 as c_char; 4096];
+        let rc = unsafe {
+            ffi::katago_genmove_eval(
+                self.handle,
+                c.as_ptr(),
+                out.as_mut_ptr(),
+                out.len() as i32,
+                json.as_mut_ptr(),
+                json.len() as i32,
+            )
+        };
+        if rc != 0 {
+            panic!(
+                "NativeKataGo.genmove_eval failed: {}",
+                last_error(self.handle)
+            );
+        }
+        let mut dict = VarDictionary::new();
+        dict.set(
+            "vertex",
+            &c_str_to_gstring(out.as_ptr() as *const c_char),
+        );
+        dict.set(
+            "eval_json",
+            &c_str_to_gstring(json.as_ptr() as *const c_char),
+        );
+        dict
     }
 }
 

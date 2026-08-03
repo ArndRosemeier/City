@@ -144,7 +144,8 @@ Eccentri City - Windows portable
 
 1. Unzip / open this folder.
 2. Double-click EccentriCity.bat
-3. First launch may download Godot 4.6 + Voxel Tools (~80 MB) and import assets.
+3. First launch may download Godot 4.6 + Voxel Tools (~80 MB), the KataGo
+   Human-SL net for Go (~95 MB), and import assets.
 
 Keep addons\city_voxel\bin\city_voxel.dll — required, not downloaded.
 "@
@@ -287,7 +288,7 @@ function Publish-Release([string]$zipPath, [string]$tag) {
 
 1. Download **EccentriCityPortable-windows.zip** and unzip it.
 2. Double-click **EccentriCity.bat**.
-3. First launch downloads Godot 4.6 + Voxel Tools (~80 MB) and imports assets (a few minutes). Later launches work offline.
+3. First launch downloads Godot 4.6 + Voxel Tools (~80 MB), the KataGo Human-SL net for Go (~95 MB), and imports assets (a few minutes). Later launches work offline.
 
 Optional: run **install_city.bat** for shortcuts under ``%LOCALAPPDATA%\Programs\EccentriCity``.
 

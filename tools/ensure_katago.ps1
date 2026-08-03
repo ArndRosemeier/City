@@ -1,11 +1,14 @@
 # Download KataGo Windows engines + a dan-capable network into tools/katago/.
 #
 #   powershell -File tools\ensure_katago.ps1
+#   powershell -File tools\ensure_katago.ps1 -HumanOnly
 #
 # Binaries and nets are gitignored. Phase-1 smoke uses the Eigen build (no OpenCL
 # autotune); OpenCL is fetched for the later GPU path.
+# -HumanOnly: only the Human-SL net (Gaming / GoEnginePool). Used by EccentriCity.bat.
 param(
-	[string]$Root = ""
+	[string]$Root = "",
+	[switch]$HumanOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +52,16 @@ function Get-File([string]$Url, [string]$Dest) {
 	Write-Host ("  -> {0} ({1:N1} MB)" -f (Split-Path -Leaf $Dest), ((Get-Item $Dest).Length / 1MB))
 }
 
+$humanPath = Join-Path $OutDir $HumanNetworkName
+Get-File $HumanNetworkUrl $humanPath
+
+if ($HumanOnly) {
+	Write-Host ""
+	Write-Host "KataGo Human-SL ready under $OutDir"
+	Write-Host "  human:   $humanPath"
+	return
+}
+
 foreach ($eng in $engines) {
 	$zipPath = Join-Path $OutDir $eng.Zip
 	Get-File "$Base/$($eng.Zip)" $zipPath
@@ -81,8 +94,6 @@ foreach ($legacy in @("katago_eigen.exe", "katago_opencl.exe")) {
 
 $netPath = Join-Path $OutDir $NetworkName
 Get-File $NetworkUrl $netPath
-$humanPath = Join-Path $OutDir $HumanNetworkName
-Get-File $HumanNetworkUrl $humanPath
 
 ## Upstream default_gtp.cfg has every required key; smoke overrides visits on the CLI.
 $cfgSrc = Join-Path $OutDir "eigen\default_gtp.cfg"

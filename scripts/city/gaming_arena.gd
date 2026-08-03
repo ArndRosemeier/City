@@ -9,6 +9,8 @@ const GoSessionScript := preload("res://scripts/city/go_session.gd")
 const GoPedActorScript := preload("res://scripts/city/go_ped_actor.gd")
 const GoBoardStateScript := preload("res://scripts/city/go_board_state.gd")
 const GoRankScript := preload("res://scripts/city/go_rank.gd")
+const GoEnginePoolScript := preload("res://scripts/city/go_engine_pool.gd")
+const GoEndPanelScript := preload("res://scripts/city/go_end_panel.gd")
 
 var layout: GamingLayout = null
 var origin_vox: Vector3i = Vector3i.ZERO
@@ -22,6 +24,7 @@ var _main_table: GoTableUi3D = null
 ## Typed as Node — GoSettingsUi3D class_name may load after this file alphabetically.
 var _settings: Node = null
 var _giant: GoGiantBoard = null
+var _end_panel: GoEndPanel = null
 var _black_ped: GoPedActor = null
 var _white_ped: GoPedActor = null
 var _match_active: bool = false
@@ -43,9 +46,8 @@ func setup(
 
 
 func _exit_tree() -> void:
-	if _main_session != null:
-		_main_session.end_session("unload")
-		_main_session = null
+	_teardown_session("unload")
+	GoEnginePoolScript.shutdown()
 
 
 func interact_at_world(_pos: Vector3) -> bool:
@@ -76,8 +78,10 @@ func _spawn_main_views() -> void:
 	_settings.name = "GoSettings"
 	add_child(_settings)
 	_settings.call("setup", _slot_surface_world(GamingComposer.SETTINGS_X_FRAC), yaw, 1.9)
+	_settings.set("board_n", layout.board_n)
 	_settings.call("show_setup")
 	_settings.connect("start_pressed", _on_start_match)
+	_settings.connect("board_size_changed", _on_board_size_changed)
 	_settings.connect("pass_pressed", _on_player_pass)
 	_settings.connect("resign_pressed", _on_player_resign)
 
@@ -90,49 +94,87 @@ func _spawn_main_views() -> void:
 		origin_vox,
 		layout.giant_origin,
 		layout.giant_cell_vox,
-		voxel_size
+		voxel_size,
+		layout.giant_span_vox()
 	)
+
+	_end_panel = GoEndPanelScript.new() as GoEndPanel
+	_end_panel.name = "GoEndPanel"
+	add_child(_end_panel)
+	_end_panel.setup(_end_panel_world(), layout.main_table_yaw)
+	_end_panel.dismissed.connect(_on_end_panel_dismissed)
+
+
+func _on_board_size_changed(board_n: int) -> void:
+	if layout == null or _match_active:
+		return
+	if board_n != 9 and board_n != 19:
+		push_error("GamingArena: unsupported board_n %d" % board_n)
+		return
+	layout.board_n = board_n
+	## Preview board only — no session yet. Both views retile immediately.
+	_main_board = GoBoardStateScript.new() as GoBoardState
+	_main_board.setup(board_n)
+	if _main_table != null:
+		_main_table.apply_board(_main_board)
+		_main_table.set_input_enabled(false)
+	if _giant != null:
+		_giant.set_board_size(board_n, _main_board)
 
 
 func _on_start_match(
-	black_human: bool, black_rank: String, white_human: bool, white_rank: String
+	black_human: bool,
+	black_rank: String,
+	white_human: bool,
+	white_rank: String,
+	board_n: int
 ) -> void:
 	if layout == null or _match_active:
 		return
+	if board_n != 9 and board_n != 19:
+		push_error("GamingArena: unsupported board_n %d" % board_n)
+		return
+	layout.board_n = board_n
 	_match_active = true
+	_hide_end_panel()
 	if _settings != null:
 		_settings.call("show_match")
 
-	if _main_session != null:
-		_main_session.end_session("restart")
-		_main_session.queue_free()
-		_main_session = null
+	_teardown_session("restart")
 	_clear_ai_peds()
 
 	_main_session = GoSessionScript.new() as GoSession
 	_main_session.name = "MainGoSession"
 	add_child(_main_session)
-	## Seat AI peds before kicking the opening move.
-	await _seat_ai_peds(black_human, black_rank, white_human, white_rank)
-	if not is_inside_tree():
-		return
-
+	## Board + input first; KataGo warms on a worker (or reuses a warm net). Human
+	## Black can play while the opponent walks over.
 	_main_session.begin_match(
-		layout.board_n, black_human, black_rank, white_human, white_rank
+		board_n, black_human, black_rank, white_human, white_rank
 	)
 	_main_board = _main_session.board
+	if _giant != null:
+		_giant.set_board_size(board_n, _main_board)
 	_bind_main_board()
 	_main_session.ai_thinking.connect(_on_ai_thinking)
 	_main_session.session_ended.connect(_on_session_ended)
 	_main_session.match_over.connect(_on_match_over)
+	_main_session.eval_updated.connect(_on_eval_updated)
+	_main_session.eval_cleared.connect(_on_eval_cleared)
 	_refresh_board_input()
 	print(
-		"GamingArena: start black=%s white=%s"
+		"GamingArena: start %dx%d black=%s white=%s"
 		% [
+			board_n,
+			board_n,
 			"human" if black_human else ("AI " + black_rank),
 			"human" if white_human else ("AI " + white_rank),
 		]
 	)
+	await _seat_ai_peds(black_human, black_rank, white_human, white_rank)
+	if not is_inside_tree() or _main_session == null:
+		return
+	## Uses session flags (no-ops when a human is to move).
+	_main_session.kick_ai_if_needed()
 
 
 func _seat_ai_peds(
@@ -140,25 +182,32 @@ func _seat_ai_peds(
 ) -> void:
 	var wait := _world_from_local_m(layout.ai_wait_local)
 	var table := _slot_surface_world(0.5)
-	var pending: Array[GoPedActor] = []
+	## Count arrivals — never `await` each ped's signal in series. The second ped can
+	## finish while we're still waiting on the first, and that emit is lost forever.
+	var expected := 0
+	var arrived := 0
+	var on_arrive := func() -> void:
+		arrived += 1
 	if not black_human:
 		_black_ped = _spawn_ai_ped(&"black", black_rank, wait)
 		var seat_b := _world_from_local_m(layout.black_stand_local)
-		if _black_ped.walk_path(
+		expected += 1
+		_black_ped.seat_reached.connect(on_arrive, CONNECT_ONE_SHOT)
+		_black_ped.walk_path(
 			_walk_waypoints(wait, seat_b, table), _yaw_toward(seat_b, table)
-		):
-			pending.append(_black_ped)
+		)
 	if not white_human:
 		## Stagger second ped slightly so they don't occupy the same wait point.
 		var wait_w := wait + Vector3(0.0, 0.0, 1.4)
 		_white_ped = _spawn_ai_ped(&"white", white_rank, wait_w)
 		var seat_w := _world_from_local_m(layout.white_stand_local)
-		if _white_ped.walk_path(
+		expected += 1
+		_white_ped.seat_reached.connect(on_arrive, CONNECT_ONE_SHOT)
+		_white_ped.walk_path(
 			_walk_waypoints(wait_w, seat_w, table), _yaw_toward(seat_w, table)
-		):
-			pending.append(_white_ped)
-	for ped in pending:
-		await ped.seat_reached
+		)
+	while arrived < expected and is_inside_tree():
+		await get_tree().process_frame
 
 
 func _spawn_ai_ped(color_name: StringName, rank: String, at: Vector3) -> GoPedActor:
@@ -200,19 +249,55 @@ func _yaw_toward(from: Vector3, to: Vector3) -> float:
 	return atan2(-look.x, -look.z)
 
 
+func _teardown_session(reason: String) -> void:
+	_unbind_board_views()
+	if _main_session == null:
+		_main_board = null
+		return
+	if _main_session.ai_thinking.is_connected(_on_ai_thinking):
+		_main_session.ai_thinking.disconnect(_on_ai_thinking)
+	if _main_session.session_ended.is_connected(_on_session_ended):
+		_main_session.session_ended.disconnect(_on_session_ended)
+	if _main_session.match_over.is_connected(_on_match_over):
+		_main_session.match_over.disconnect(_on_match_over)
+	if _main_session.eval_updated.is_connected(_on_eval_updated):
+		_main_session.eval_updated.disconnect(_on_eval_updated)
+	if _main_session.eval_cleared.is_connected(_on_eval_cleared):
+		_main_session.eval_cleared.disconnect(_on_eval_cleared)
+	_main_session.end_session(reason)
+	_main_session.queue_free()
+	_main_session = null
+	_main_board = null
+
+
+func _unbind_board_views() -> void:
+	if _main_table != null:
+		if _main_table.board != null:
+			var tb: GoBoardState = _main_table.board
+			if tb.moved.is_connected(_main_table._on_moved):
+				tb.moved.disconnect(_main_table._on_moved)
+			if tb.captured.is_connected(_main_table._on_captured):
+				tb.captured.disconnect(_main_table._on_captured)
+			if tb.reset.is_connected(_main_table._rebuild_stones):
+				tb.reset.disconnect(_main_table._rebuild_stones)
+		_main_table.board = null
+		_main_table._rebuild_stones()
+	if _giant != null:
+		_giant._disconnect_board_signals()
+		_giant.cancel_animations()
+		_giant.board = null
+		_giant._clear_all()
+
+
 func _bind_main_board() -> void:
-	_main_table.board = _main_board
-	if not _main_board.moved.is_connected(_main_table._on_moved):
-		_main_board.moved.connect(_main_table._on_moved)
-		_main_board.captured.connect(_main_table._on_captured)
-		_main_board.reset.connect(_main_table._rebuild_stones)
-	_main_table._rebuild_stones()
-	_giant.board = _main_board
-	if not _main_board.moved.is_connected(_giant._on_moved):
-		_main_board.moved.connect(_giant._on_moved)
-		_main_board.captured.connect(_giant._on_captured)
-		_main_board.reset.connect(_giant._clear_all)
-	_giant._clear_all()
+	## Grid geometry is applied via set_board_size / apply_board; this only wires signals.
+	_unbind_board_views()
+	if _main_table != null:
+		_main_table.apply_board(_main_board)
+	if _giant != null:
+		_giant.board = _main_board
+		_giant._connect_board_signals()
+		_giant._clear_all()
 
 
 func _on_player_vertex(vertex: String) -> void:
@@ -228,9 +313,13 @@ func _on_player_pass() -> void:
 
 
 func _on_player_resign() -> void:
-	if _main_session != null:
+	if _main_session == null:
+		return
+	if _main_session.is_ai_only():
+		_main_session.stop_match()
+	else:
 		_main_session.try_player_resign()
-		_refresh_board_input()
+	_refresh_board_input()
 
 
 func _on_ai_thinking(on: bool) -> void:
@@ -267,20 +356,69 @@ func _refresh_board_input() -> void:
 
 
 func _on_session_ended(_reason: String) -> void:
+	_hide_end_panel()
 	_end_match_ui()
 
 
-func _on_match_over(_reason: String) -> void:
+func _on_match_over(result: GoMatchResult) -> void:
+	_match_active = false
+	_on_eval_cleared()
+	if _main_table != null:
+		_main_table.set_input_enabled(false)
+	if _settings != null:
+		_settings.call("set_match_actions_enabled", false)
+	if _end_panel != null:
+		_end_panel.global_position = _end_panel_world()
+		_end_panel.rotation.y = layout.main_table_yaw
+		_end_panel.show_result(result)
+	else:
+		_end_match_ui()
+
+
+func _on_eval_updated(snapshot: GoEvalSnapshot) -> void:
+	if _settings != null:
+		_settings.call("set_eval", snapshot)
+	if _main_table != null:
+		_main_table.set_eval(snapshot)
+
+
+func _on_eval_cleared() -> void:
+	if _settings != null:
+		_settings.call("clear_eval")
+	if _main_table != null:
+		_main_table.clear_eval()
+
+
+func _on_end_panel_dismissed() -> void:
 	_end_match_ui()
+
+
+func _hide_end_panel() -> void:
+	if _end_panel != null:
+		_end_panel.hide_panel()
 
 
 func _end_match_ui() -> void:
 	_match_active = false
+	_hide_end_panel()
 	if _settings != null:
 		_settings.call("show_setup")
 	if _main_table != null:
 		_main_table.set_input_enabled(false)
 
+
+## Billboard centre: south of the giant board, facing the table / spawn.
+func _end_panel_world() -> Vector3:
+	var span := layout.giant_span_vox()
+	var mid_x_vox := float(origin_vox.x + layout.giant_origin.x) + float(span) * 0.5
+	## A few metres in front of the south edge of the grid.
+	var front_z_vox := float(origin_vox.z + layout.giant_origin.z) - 8.0 / voxel_size
+	var pad_y_m := float(origin_vox.y + layout.giant_origin.y) * voxel_size
+	return Vector3(
+		mid_x_vox * voxel_size,
+		pad_y_m + GoEndPanel.PANEL_H_M * 0.5,
+		front_z_vox * voxel_size
+	)
 
 ## World point on the table timber at a fractional X along the table width.
 func _slot_surface_world(x_frac: float) -> Vector3:

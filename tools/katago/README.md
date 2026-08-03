@@ -4,10 +4,14 @@
 
 ```text
 powershell -File tools\ensure_katago.ps1
+powershell -File tools\ensure_katago.ps1 -HumanOnly
 ```
 
-Downloads Eigen + OpenCL Windows engines, the strong self-play net, and the
+Full fetch: Eigen + OpenCL Windows engines, the strong self-play net, and the
 **Human-SL** net (`b18c384nbt-humanv0.bin.gz`) into this folder (gitignored).
+
+`-HumanOnly` fetches just the Human-SL net (~95 MB). `EccentriCity.bat` runs that
+on first launch when the file is missing.
 
 ## Strength = Human-SL rank (20k–9d)
 

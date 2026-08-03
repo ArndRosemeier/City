@@ -90,8 +90,20 @@ func _ready() -> void:
 		_fail("FAIL empty main table / pad")
 		_quit()
 		return
+	if layout.field_span_vox != (19 - 1) * layout.giant_cell_vox:
+		_fail("FAIL field_span_vox %d" % layout.field_span_vox)
+		_quit()
+		return
 	if layout.giant_span_vox() != (19 - 1) * layout.giant_cell_vox:
 		_fail("FAIL giant span mismatch")
+		_quit()
+		return
+	if layout.cell_vox_for(9) < layout.giant_cell_vox:
+		_fail("FAIL 9x9 cell should be >= bake cell")
+		_quit()
+		return
+	if GamingComposer.hoshi_points(9) != PackedInt32Array([2, 4, 6]):
+		_fail("FAIL 9x9 hoshi")
 		_quit()
 		return
 	if GamingComposer.TABLE_W < 16:
@@ -104,6 +116,10 @@ func _ready() -> void:
 	board.setup(19)
 	assert(board.try_play(GoBoardState.BLACK, "D4"))
 	assert(board.try_play(GoBoardState.WHITE, "Q16"))
+	var board9 := GoBoardState.new()
+	board9.setup(9)
+	assert(board9.try_play(GoBoardState.BLACK, "E5"))
+	assert(board9.try_play(GoBoardState.WHITE, "C3"))
 
 	if _failed:
 		_quit()

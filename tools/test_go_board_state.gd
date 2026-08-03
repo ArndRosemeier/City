@@ -24,5 +24,10 @@ func _ready() -> void:
 	assert(v == "A1", "format A1 got %s" % v)
 	var loc: Vector2i = GoBoardState.parse_vertex("C3", 19)
 	assert(loc == Vector2i(2, 2), "parse C3")
+	## Empty 9×9: White wins on komi alone.
+	b.setup(9)
+	var sc: Dictionary = b.score_tromp_taylor(7.5)
+	assert(is_equal_approx(float(sc["black"]), 0.0), "empty black")
+	assert(is_equal_approx(float(sc["white"]), 7.5), "empty white komi")
 	print("RESULT: OK")
 	get_tree().quit(0)

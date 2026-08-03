@@ -46,6 +46,26 @@ KATAGO_API int katago_play(KatagoHandle* h, const char* color, const char* verte
  */
 KATAGO_API int katago_genmove(KatagoHandle* h, const char* color, char* out_vertex, int out_len);
 
+/**
+ * Same as katago_genmove, plus the root statistics the very same search already produced
+ * (no second search, no ownership aggregation). Writes a JSON object into out_eval_json:
+ *
+ *   {"winrate_black":0.5432,"lead_black":-2.30,"visits":40,
+ *    "candidates":[{"vertex":"D4","visits":18,"winrate_black":0.55,
+ *                   "lead_black":1.20,"order":0}, ...]}
+ *
+ * All winrates and leads are normalized to Black's perspective. "{}" means the search
+ * reported nothing usable. Returns 0 on success.
+ */
+KATAGO_API int katago_genmove_eval(
+  KatagoHandle* h,
+  const char* color,
+  char* out_vertex,
+  int out_vertex_len,
+  char* out_eval_json,
+  int out_eval_json_len
+);
+
 KATAGO_API const char* katago_last_error(const KatagoHandle* h);
 KATAGO_API const char* katago_version(void);
 

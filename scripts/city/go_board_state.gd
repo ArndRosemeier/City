@@ -22,6 +22,8 @@ var consecutive_passes: int = 0
 ## Simple ko: forbidden re-capture location for one ply (Vector2i or null via INF).
 var ko_x: int = -1
 var ko_y: int = -1
+## Set when phase becomes scoring: "resign_b", "resign_w", "two_passes", or "stopped".
+var end_reason: String = ""
 
 
 func setup(n: int = 19) -> void:
@@ -39,6 +41,7 @@ func setup(n: int = 19) -> void:
 	consecutive_passes = 0
 	ko_x = -1
 	ko_y = -1
+	end_reason = ""
 	reset.emit()
 
 
@@ -95,12 +98,23 @@ func try_play(color: int, vertex: String) -> bool:
 		return true
 	if v == "resign":
 		phase = &"scoring"
-		game_over.emit("resign_%s" % ("b" if color == BLACK else "w"))
+		end_reason = "resign_%s" % ("b" if color == BLACK else "w")
+		game_over.emit(end_reason)
 		return true
 	var loc := parse_vertex(vertex, size)
 	if loc.x == -999:
 		return false
 	return try_play_xy(color, loc.x, loc.y)
+
+
+## Spectator abort (AI-vs-AI STOP). Scores whatever is on the board.
+func stop_play() -> bool:
+	if phase != &"playing":
+		return false
+	phase = &"scoring"
+	end_reason = "stopped"
+	game_over.emit(end_reason)
+	return true
 
 
 func is_legal_xy(color: int, x: int, y: int) -> bool:
@@ -171,7 +185,59 @@ func _apply_pass(color: int) -> void:
 	passed.emit(color)
 	if consecutive_passes >= 2:
 		phase = &"scoring"
-		game_over.emit("two_passes")
+		end_reason = "two_passes"
+		game_over.emit(end_reason)
+
+
+## Tromp-Taylor area score. Empty regions bordered by only one colour count for that
+## colour; stones count; dame (touched by both) count for neither. White gets `komi`.
+func score_tromp_taylor(komi: float = 7.5) -> Dictionary:
+	var owner := PackedInt32Array()
+	owner.resize(size * size)
+	owner.fill(-1)
+	var seen: Dictionary = {}
+	for y in range(size):
+		for x in range(size):
+			var c := at(x, y)
+			if c != EMPTY:
+				owner[y * size + x] = c
+				continue
+			var key := Vector2i(x, y)
+			if seen.has(key):
+				continue
+			var region: Array[Vector2i] = []
+			var borders: Dictionary = {}
+			var stack: Array[Vector2i] = [key]
+			seen[key] = true
+			while not stack.is_empty():
+				var p: Vector2i = stack.pop_back()
+				region.append(p)
+				for d in _neighbors(p.x, p.y):
+					var nc := at(d.x, d.y)
+					if nc == EMPTY:
+						if not seen.has(d):
+							seen[d] = true
+							stack.append(d)
+					else:
+						borders[nc] = true
+			var sole := EMPTY
+			if borders.size() == 1:
+				var bkeys: Array = borders.keys()
+				sole = int(bkeys[0])
+			for p2 in region:
+				owner[p2.y * size + p2.x] = sole
+	var black_pts := 0
+	var white_pts := 0
+	for i in range(owner.size()):
+		if owner[i] == BLACK:
+			black_pts += 1
+		elif owner[i] == WHITE:
+			white_pts += 1
+	return {
+		"black": float(black_pts),
+		"white": float(white_pts) + komi,
+		"komi": komi,
+	}
 
 
 func _neighbors(x: int, y: int) -> Array[Vector2i]:

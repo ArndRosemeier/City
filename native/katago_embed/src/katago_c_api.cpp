@@ -11,20 +11,31 @@
 #include "neuralnet/nneval.h"
 #include "neuralnet/sgfmetadata.h"
 #include "program/setup.h"
+#include "search/analysisdata.h"
 #include "search/asyncbot.h"
+#include "search/reportedsearchvalues.h"
 #include "search/searchparams.h"
 #include "search/timecontrols.h"
 
+#include <cmath>
 #include <cstring>
 #include <exception>
+#include <iomanip>
+#include <locale>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 using namespace std;
 
 namespace {
 
-constexpr const char* kVersion = "city_katago_embed/0.2 (KataGo Eigen Human-SL)";
+constexpr const char* kVersion = "city_katago_embed/0.3 (KataGo Eigen Human-SL)";
+
+// Candidate moves reported alongside a generated move. Enough for a board overlay,
+// small enough that the JSON can never approach the caller's buffer.
+constexpr int kMaxCandidates = 6;
 
 bool is_valid_rank_token(const string& rank) {
   static const char* kRanks[] = {
@@ -58,6 +69,19 @@ Player parse_color(const char* color) {
   if(pla != P_BLACK && pla != P_WHITE)
     throw StringError(string("invalid color: ") + color);
   return pla;
+}
+
+// Classic locale so the decimal point is always '.' regardless of the host process.
+string json_number(double v, int decimals) {
+  ostringstream o;
+  o.imbue(std::locale::classic());
+  o << std::fixed << std::setprecision(decimals) << v;
+  return o.str();
+}
+
+// KataGo reports search values from White's perspective; the game speaks Black.
+double black_winrate_of(double win_loss_value) {
+  return 1.0 - 0.5 * (1.0 + win_loss_value);
 }
 
 } // namespace
@@ -103,6 +127,57 @@ struct KatagoHandle {
     bot->setPosition(pla, board, hist);
   }
 };
+
+namespace {
+
+// Read what the finished search already computed. Must run before makeMove reroots
+// the tree. Returns "{}" when the search has nothing usable (e.g. zero visits).
+string collect_root_eval_json(const KatagoHandle* h) {
+  const Search* search = h->bot->getSearch();
+  if(search == nullptr)
+    return "{}";
+
+  ReportedSearchValues values;
+  if(!search->getRootValues(values))
+    return "{}";
+  if(!std::isfinite(values.winLossValue) || !std::isfinite(values.lead))
+    return "{}";
+
+  const Board& board = h->bot->getRootBoard();
+  ostringstream out;
+  out.imbue(std::locale::classic());
+  out << "{\"winrate_black\":" << json_number(black_winrate_of(values.winLossValue), 4);
+  out << ",\"lead_black\":" << json_number(-values.lead, 2);
+  out << ",\"visits\":" << values.visits;
+  out << ",\"candidates\":[";
+
+  // PV depth 1: we want the move and its stats, not a whole variation.
+  vector<AnalysisData> buf;
+  search->getAnalysisData(buf, kMaxCandidates, false, 1, false);
+  int written = 0;
+  for(size_t i = 0; i < buf.size() && written < kMaxCandidates; i++) {
+    const AnalysisData& d = buf[i];
+    if(d.move == Board::NULL_LOC)
+      continue;
+    if(!std::isfinite(d.winLossValue) || !std::isfinite(d.lead))
+      continue;
+    const string vertex =
+      (d.move == Board::PASS_LOC) ? string("pass") : Location::toString(d.move, board);
+    if(written > 0)
+      out << ",";
+    out << "{\"vertex\":\"" << vertex << "\"";
+    out << ",\"visits\":" << d.numVisits;
+    out << ",\"winrate_black\":" << json_number(black_winrate_of(d.winLossValue), 4);
+    out << ",\"lead_black\":" << json_number(-d.lead, 2);
+    out << ",\"order\":" << d.order;
+    out << "}";
+    written++;
+  }
+  out << "]}";
+  return out.str();
+}
+
+} // namespace
 
 extern "C" {
 
@@ -356,6 +431,60 @@ int katago_genmove(KatagoHandle* h, const char* color, char* out_vertex, int out
       s = Location::toString(loc, h->bot->getRootBoard());
 
     write_err(out_vertex, out_len, s);
+    h->last_error.clear();
+    return 0;
+  }
+  catch(const StringError& e) {
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const exception& e) {
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const string& e) {
+    h->set_error(e);
+    return 1;
+  }
+}
+
+int katago_genmove_eval(
+  KatagoHandle* h,
+  const char* color,
+  char* out_vertex,
+  int out_vertex_len,
+  char* out_eval_json,
+  int out_eval_json_len
+) {
+  if(h == nullptr || h->bot == nullptr)
+    return 1;
+  if(out_vertex == nullptr || out_vertex_len < 8)
+    return 1;
+  if(out_eval_json == nullptr || out_eval_json_len < 3)
+    return 1;
+  try {
+    const Player pla = parse_color(color);
+    TimeControls tc;
+    Loc loc = h->bot->genMoveSynchronous(pla, tc);
+    if(loc == Board::NULL_LOC)
+      throw StringError("genmove returned null location");
+
+    // Harvest first: makeMove reroots the tree and drops the root stats.
+    string eval_json = collect_root_eval_json(h);
+    if(static_cast<int>(eval_json.size()) + 1 > out_eval_json_len)
+      eval_json = "{}";
+
+    if(!h->bot->makeMove(loc, pla))
+      throw StringError("genmove chose illegal move");
+
+    string s;
+    if(loc == Board::PASS_LOC)
+      s = "pass";
+    else
+      s = Location::toString(loc, h->bot->getRootBoard());
+
+    write_err(out_vertex, out_vertex_len, s);
+    write_err(out_eval_json, out_eval_json_len, eval_json);
     h->last_error.clear();
     return 0;
   }

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/shot_go_eval_near_play.gd" id="1_shot_go_eval_near_play"]
+
+[node name="ShotGoEvalNearPlay" type="Node"]
+script = ExtResource("1_shot_go_eval_near_play")

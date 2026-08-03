@@ -1,6 +1,7 @@
 @echo off
 REM Eccentri City - canonical player / developer launcher.
-REM Ensures Godot 4.6 + Voxel Tools, requires city_voxel.dll, imports on first run.
+REM Ensures Godot 4.6 + Voxel Tools, KataGo Human-SL net, requires city_voxel.dll,
+REM imports on first run.
 
 setlocal EnableExtensions
 set "ROOT=%~dp0"
@@ -78,6 +79,28 @@ pause >nul
 echo.
 
 :after_sac_check
+
+REM Gaming / Go uses the Human-SL net (gitignored; ~95 MB first download).
+if exist "%ROOT%\tools\katago\b18c384nbt-humanv0.bin.gz" goto after_katago
+if not exist "%ROOT%\tools\ensure_katago.ps1" (
+    echo WARNING: tools\ensure_katago.ps1 missing - Go AI will not work until the Human-SL net is present.
+    goto after_katago
+)
+echo.
+echo Downloading KataGo Human-SL model for Go (~95 MB)...
+echo Internet required for this first-time step. Later launches skip this.
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\ensure_katago.ps1" -Root "%ROOT%" -HumanOnly
+if errorlevel 1 (
+    echo WARNING: Could not download the KataGo Human-SL model.
+    echo Go AI will fail until you run: powershell -File tools\ensure_katago.ps1 -HumanOnly
+    echo.
+) else if not exist "%ROOT%\tools\katago\b18c384nbt-humanv0.bin.gz" (
+    echo WARNING: KataGo ensure finished but tools\katago\b18c384nbt-humanv0.bin.gz is still missing.
+    echo.
+)
+
+:after_katago
 
 REM Do not use cmd if-exist/dir on paths containing a .godot segment.
 if not exist "%ROOT%\tools\check_godot_import_artifacts.ps1" goto do_import
