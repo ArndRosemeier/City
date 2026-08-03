@@ -2,7 +2,7 @@
 class_name GoGiantBoard
 extends Node3D
 
-const GoGiantHandScript := preload("res://scripts/city/go_giant_hand.gd")
+const GoGiantBeamScript := preload("res://scripts/city/go_giant_beam.gd")
 
 const BOARD_EDGE := 4
 const BOARD_FIELD_MAT := VoxelMaterial.GRAVEL
@@ -23,7 +23,7 @@ var voxel_size: float = 0.5
 ## sit mid-grey and washed out against the light board field.
 var black_mat: int = VoxelMaterial.ASPHALT
 var white_mat: int = VoxelMaterial.PLASTER
-var _hand: Node3D = null
+var _beam: GoGiantBeam = null
 var _animating: bool = false
 var _queue: Array[Dictionary] = []
 ## Bumped by cancel_animations so in-flight place/capture awaits discard their writes.
@@ -48,11 +48,16 @@ func setup(
 	voxel_size = p_voxel_size
 	board_n = board.size if board != null else 19
 	field_span_vox = p_field_span_vox if p_field_span_vox > 0 else (board_n - 1) * cell_vox
-	_hand = GoGiantHandScript.new()
-	_hand.name = "GoGiantHand"
-	add_child(_hand)
-	_hand.call("configure", voxel_size)
+	_beam = GoGiantBeamScript.new() as GoGiantBeam
+	_beam.name = "GoGiantBeam"
+	add_child(_beam)
+	_beam.configure(cell_world_m())
 	_connect_board_signals()
+
+
+## Crossing-to-crossing spacing in metres — the scale everything animated works from.
+func cell_world_m() -> float:
+	return float(cell_vox) * voxel_size
 
 
 ## Switch 9↔19 (or any supported n): clear stones, retile the grid in the same pad.
@@ -73,6 +78,8 @@ func set_board_size(n: int, p_board: GoBoardState) -> void:
 		giant_origin_local.z + inset
 	)
 	_paint_grid()
+	if _beam != null:
+		_beam.configure(cell_world_m())
 	_connect_board_signals()
 	if board != null:
 		paint_snapshot(board)
@@ -127,8 +134,8 @@ func cancel_animations() -> void:
 	_anim_epoch += 1
 	_queue.clear()
 	_animating = false
-	if _hand != null and _hand.has_method("cancel"):
-		_hand.call("cancel")
+	if _beam != null:
+		_beam.cancel()
 
 
 func _clear_all() -> void:
@@ -236,8 +243,8 @@ func _drain() -> void:
 func _animate_place(color: int, x: int, y: int, epoch: int) -> void:
 	var target := world_pos_for(x, y)
 	var mat := black_mat if color == GoBoardState.BLACK else white_mat
-	if _hand != null and _hand.has_method("place_at"):
-		await _hand.call("place_at", target, color == GoBoardState.BLACK)
+	if _beam != null:
+		await _beam.place_at(target, color == GoBoardState.BLACK)
 	if epoch != _anim_epoch:
 		return
 	_set_stone_vox(x, y, mat)
