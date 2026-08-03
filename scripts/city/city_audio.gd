@@ -41,8 +41,11 @@ var _gem_pickup_stream: AudioStream
 ## Chest lid and the flourish for a whole haul. No pack has either mood, so both are synthesized.
 var _chest_open_stream: AudioStream
 var _bling_stream: AudioStream
+## Soft Go stone place — short glass-pebble bling (not a debris boom).
+var _go_stone_bling_stream: AudioStream
 ## Fractal panel lock-on — a short locking chirp when the postcard autozoom lands.
 var _lock_on_stream: AudioStream
+
 ## Monster / fist melee — no Kenney pack for this mood, so always procedural.
 var _melee_swing_streams: Array[AudioStream] = []
 var _melee_hit_streams: Array[AudioStream] = []
@@ -256,6 +259,20 @@ func play_treasure_bling() -> void:
 	_bling_player.pitch_scale = _rng.randf_range(0.99, 1.01)
 	_bling_player.volume_db = -4.5
 	_bling_player.play()
+
+
+## Go stone settle — bright short bling at the board, never a debris/explosion hit.
+func play_go_stone_bling(world_pos: Vector3) -> void:
+	if not enabled:
+		return
+	if _go_stone_bling_stream == null:
+		return
+	var p := _next_player()
+	p.stream = _go_stone_bling_stream
+	p.global_position = world_pos
+	p.pitch_scale = _rng.randf_range(0.96, 1.06)
+	p.volume_db = -6.0
+	p.play()
 
 
 ## Panel lock-on: a quick rising latch that says "this view is the one" without stealing the
@@ -725,6 +742,7 @@ func _load_banks() -> void:
 	_gem_pickup_stream = _build_gem_pickup()
 	_chest_open_stream = _build_chest_open()
 	_bling_stream = _build_treasure_bling()
+	_go_stone_bling_stream = _build_go_stone_bling()
 	_lock_on_stream = _build_lock_on()
 	## Melee / orb — same: no pack for the mood, so synthesize a few variants.
 	_melee_swing_streams = [_build_melee_swing(0), _build_melee_swing(1), _build_melee_swing(2)]
@@ -1000,6 +1018,17 @@ func _build_treasure_bling() -> AudioStreamWAV:
 		var shimmer_env := smoothstep(0.0, 0.05, t) * exp(-t * 4.0)
 		var shimmer := sin(TAU * 3140.0 * t + sin(TAU * 33.0 * t) * 1.4) * 0.13 * shimmer_env
 		return (sum + shimmer) * 0.6
+	)
+
+
+func _build_go_stone_bling() -> AudioStreamWAV:
+	## Single bright glass-pebble tick — no low boom, no rubble.
+	return _synthesize(0.18, func(t: float, _i: int) -> float:
+		var env := smoothstep(0.0, 0.004, t) * exp(-t * 22.0)
+		var tick := sin(TAU * 1880.0 * t) * 0.7 + sin(TAU * 2760.0 * t) * 0.35
+		var body := sin(TAU * 920.0 * t) * 0.22 * exp(-t * 14.0)
+		var air := (_rng.randf() * 2.0 - 1.0) * 0.08 * exp(-t * 40.0)
+		return (tick + body + air) * env * 0.75
 	)
 
 

@@ -23,6 +23,7 @@ const THEME_NAME_TO_ID: Dictionary = {
 	"fractal": 9,
 	"arena": 10,
 	"zoo": 11,
+	"gaming": 12,
 }
 
 static var _loaded: bool = false

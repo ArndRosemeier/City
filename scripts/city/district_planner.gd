@@ -32,6 +32,8 @@ var large_fractal: Rect2i = Rect2i()
 var large_arena: Rect2i = Rect2i()
 ## Bounding rect of LandUse.ZOO cells. Empty when unused.
 var large_zoo: Rect2i = Rect2i()
+## Bounding rect of LandUse.GAMING cells. Empty when unused.
+var large_gaming: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## Multi-cell CORE tower parcels (planner cells). `position` is the anchor corner;
 ## every cell in the rect stays `CORE_LOT`, but only the anchor paints a building.
@@ -75,6 +77,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	large_fractal = Rect2i()
 	large_arena = Rect2i()
 	large_zoo = Rect2i()
+	large_gaming = Rect2i()
 
 	if theme.id == DistrictTheme.HILL:
 		## Edge stubs only — a full arterial cross would slice the massif into wedges.
@@ -102,6 +105,9 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	elif theme.id == DistrictTheme.ZOO:
 		_stamp_hill_edge_connectors(district_coord)
 		_build_zoo_layout()
+	elif theme.id == DistrictTheme.GAMING:
+		_stamp_hill_edge_connectors(district_coord)
+		_build_gaming_layout()
 	else:
 		_stamp_world_arterials(district_coord)
 		_stamp_organic_interior_roads()
@@ -284,6 +290,13 @@ func _build_zoo_layout() -> void:
 	large_zoo = _fill_open_reserve(LandUse.ZOO)
 	if large_zoo.size.x <= 0:
 		push_error("DistrictPlanner._build_zoo_layout: no zoo cells after road stamp")
+
+
+## Gaming theme: non-road cells become the plaza reserve for GamingComposer.
+func _build_gaming_layout() -> void:
+	large_gaming = _fill_open_reserve(LandUse.GAMING)
+	if large_gaming.size.x <= 0:
+		push_error("DistrictPlanner._build_gaming_layout: no gaming cells after road stamp")
 
 
 func _fill_open_reserve(tag: int) -> Rect2i:

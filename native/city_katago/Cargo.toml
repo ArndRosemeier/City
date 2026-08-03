@@ -1,0 +1,15 @@
+[package]
+name = "city_katago"
+version = "0.1.0"
+edition = "2021"
+description = "In-process KataGo GDExtension for Eccentri City"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+godot = { version = "0.5.3", features = ["api-4-6", "experimental-threads"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

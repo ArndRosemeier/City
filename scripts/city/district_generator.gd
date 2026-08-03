@@ -13,6 +13,7 @@ const CastleComposerScript := preload("res://scripts/city/castle_composer.gd")
 const FractalComposerScript := preload("res://scripts/city/fractal_composer.gd")
 const ArenaComposerScript := preload("res://scripts/city/arena_composer.gd")
 const ZooComposerScript := preload("res://scripts/city/zoo_composer.gd")
+const GamingComposerScript := preload("res://scripts/city/gaming_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CastleDoorwayScript := preload("res://scripts/city/castle_doorway.gd")
@@ -82,6 +83,7 @@ var _castle: CastleComposer
 var _fractal: FractalComposer
 var _arena: ArenaComposer
 var _zoo: ZooComposer
+var _gaming: GamingComposer
 ## Survives end_generate so DistrictInstance can spawn MandelbrotArena.
 var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
@@ -120,6 +122,8 @@ var _castle_layout: CastleLayout = null
 var _arena_layout: ArenaLayout = null
 ## Zoo plan from the compose pass; outlives the composer for the forever-war controller.
 var _zoo_layout: ZooLayout = null
+## Gaming plaza plan from the compose pass; outlives the composer for runtime tables.
+var _gaming_layout: GamingLayout = null
 ## World voxel origin of this district tile (local paint stays 0..size).
 var origin_vox: Vector3i = Vector3i.ZERO
 var district_coord: Vector2i = Vector2i.ZERO
@@ -197,6 +201,11 @@ func get_arena_layout() -> ArenaLayout:
 ## The zoo plan in *district-local* voxel coords, or null outside Monster Zoo districts.
 func get_zoo_layout() -> ZooLayout:
 	return _zoo_layout
+
+
+## The gaming plaza plan in *district-local* voxel coords, or null outside Gaming districts.
+func get_gaming_layout() -> GamingLayout:
+	return _gaming_layout
 
 
 ## Daylight cave mouths (district-local XZ) from the hill compose pass.
@@ -353,6 +362,15 @@ func _setup_composers() -> void:
 	_zoo.cell_size = cell_size
 	_zoo_layout = null
 
+	_gaming = GamingComposerScript.new()
+	_gaming.brush = _brush
+	_gaming.rng = _rng
+	_gaming.ground_y = ground_thickness
+	_gaming.planner = _planner
+	_gaming.cell_size = cell_size
+	_gaming.voxel_size = voxel_size
+	_gaming_layout = null
+
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
 	_grammar.rng = _rng
@@ -462,11 +480,12 @@ func paint_cell_ground(cx: int, cz: int) -> void:
 			_paint_street_cell(smin, smax, cx, cz, false)
 		LandUse.PLAZA:
 			_brush.fill_box(smin, smax, theme.plaza_mat)
-		LandUse.PARK, LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA, LandUse.ZOO:
+		LandUse.PARK, LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA, LandUse.ZOO, LandUse.GAMING:
 			## Lake tiles start as meadow; LakeComposer carves the basin into it. Castle
 			## tiles keep the meadow as the open field the fortress stands in. Arena
 			## tiles keep meadow under the colosseum approach, and Zoo tiles keep it
 			## outside the fence — the battlefield inside is dirt the composer lays.
+			## Gaming tiles keep meadow under the plaza the composer stamps.
 			_brush.fill_box(smin, smax, VoxelMaterial.PARK)
 		LandUse.FRACTAL:
 			## Meadow verge; FractalComposer stamps the centered glowing square.
@@ -499,7 +518,7 @@ func paint_cell_structures(cx: int, cz: int) -> void:
 	match tag:
 		LandUse.AVENUE, LandUse.ROAD:
 			pass  ## Surface already complete.
-		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA, LandUse.ZOO:
+		LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA, LandUse.ZOO, LandUse.GAMING:
 			pass  ## Fancy open-space decorate runs after all cells.
 		_:
 			_paint_lot(smin, smax, cx, cz, tag, _grammar)
@@ -515,7 +534,7 @@ func paint_cell_impostor_only(cx: int, cz: int) -> void:
 		return
 	var tag := _planner.tag_at(cx, cz)
 	match tag:
-		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA, LandUse.ZOO:
+		LandUse.AVENUE, LandUse.ROAD, LandUse.PLAZA, LandUse.PARK, LandUse.HILL, LandUse.GRAVEYARD, LandUse.LAKE, LandUse.CASTLE, LandUse.FRACTAL, LandUse.ARENA, LandUse.ZOO, LandUse.GAMING:
 			return
 		_:
 			pass
@@ -606,8 +625,20 @@ func decorate_open_spaces() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
-		or _fractal == null or _arena == null or _zoo == null
+		or _fractal == null or _arena == null or _zoo == null or _gaming == null
 	):
+		return
+	var lgaming := _planner.large_gaming
+	if lgaming.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 10)
+		var gmin := Vector3i(
+			lgaming.position.x * cell_size, ground_thickness, lgaming.position.y * cell_size
+		)
+		var gmax := Vector3i(
+			lgaming.end.x * cell_size, ground_thickness + 1, lgaming.end.y * cell_size
+		)
+		_gaming.compose(gmin, gmax)
+		_gaming_layout = _gaming.layout
 		return
 	var lzoo := _planner.large_zoo
 	if lzoo.size.x > 0:
@@ -732,8 +763,20 @@ func decorate_open_spaces_far() -> void:
 	if (
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
-		or _fractal == null or _arena == null or _zoo == null
+		or _fractal == null or _arena == null or _zoo == null or _gaming == null
 	):
+		return
+	var lgaming := _planner.large_gaming
+	if lgaming.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 10)
+		var gmin := Vector3i(
+			lgaming.position.x * cell_size, ground_thickness, lgaming.position.y * cell_size
+		)
+		var gmax := Vector3i(
+			lgaming.end.x * cell_size, ground_thickness + 1, lgaming.end.y * cell_size
+		)
+		_gaming.compose_far_sparse(gmin, gmax)
+		_gaming_layout = _gaming.layout
 		return
 	var lzoo := _planner.large_zoo
 	if lzoo.size.x > 0:
@@ -859,6 +902,15 @@ func open_space_bounds() -> Array[AABB]:
 	var yh := 12.0
 	var ox := float(origin_vox.x)
 	var oz := float(origin_vox.z)
+	var lgaming := _planner.large_gaming
+	if lgaming.size.x > 0:
+		out.append(
+			AABB(
+				Vector3(ox + lgaming.position.x * cell_size, 0.0, oz + lgaming.position.y * cell_size),
+				Vector3(lgaming.size.x * cell_size, y0 + 24.0, lgaming.size.y * cell_size)
+			)
+		)
+		return out
 	var lzoo := _planner.large_zoo
 	if lzoo.size.x > 0:
 		## Craters cut below the deck and the containment ring rises 8 m over it.
@@ -1010,6 +1062,7 @@ func end_generate() -> void:
 	_fractal = null
 	_arena = null
 	_zoo = null
+	_gaming = null
 	_grammar = null
 
 
@@ -1026,7 +1079,7 @@ func _paint_cell(cx: int, cz: int) -> void:
 			_paint_plaza_cell(min_v, max_v, cx, cz, _plaza)
 		LandUse.PARK:
 			_paint_park_cell(min_v, max_v, cx, cz, _park)
-		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA, LandUse.ZOO:
+		LandUse.HILL, LandUse.LAKE, LandUse.CASTLE, LandUse.ARENA, LandUse.ZOO, LandUse.GAMING:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
 		LandUse.FRACTAL:
 			_brush.fill_box(min_v, max_v, VoxelMaterial.PARK)
@@ -1085,6 +1138,8 @@ func find_spawn_world(tool: VoxelTool) -> Vector3:
 		spawn = _find_arena_gate_spawn(spawn_y, HEADROOM_VOX)
 	elif theme != null and theme.id == DistrictTheme.ZOO:
 		spawn = _find_zoo_gate_spawn(spawn_y, HEADROOM_VOX)
+	elif theme != null and theme.id == DistrictTheme.GAMING:
+		spawn = _find_gaming_spawn(spawn_y)
 	elif theme != null and theme.id == DistrictTheme.CASTLE:
 		spawn = _find_castle_gate_spawn(HEADROOM_VOX)
 	if not is_finite(spawn.x):
@@ -1277,6 +1332,19 @@ func _find_zoo_gate_spawn(spawn_y: float, headroom_vox: int) -> Vector3:
 			(float(origin_vox.z + z) + 0.5) * vs
 		)
 	return Vector3(INF, INF, INF)
+
+
+## Stand south of the main Go table, facing the table and giant board beyond.
+func _find_gaming_spawn(spawn_y: float) -> Vector3:
+	if _gaming_layout == null:
+		return Vector3(INF, INF, INF)
+	var local := _gaming_layout.spawn_local
+	last_spawn_yaw = _gaming_layout.spawn_yaw
+	return Vector3(
+		float(origin_vox.x) * voxel_size + local.x,
+		spawn_y,
+		float(origin_vox.z) * voxel_size + local.z
+	)
 
 
 ## Stand at the foot of the approach stairs (causeway), facing up toward the gate.

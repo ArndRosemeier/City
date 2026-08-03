@@ -37572,7 +37572,8 @@
       "graveyard": 22,
       "fractal": 20,
       "arena": 15,
-      "zoo": 12
+      "zoo": 12,
+      "gaming": 14
     },
     "rarity_weights": {
       "gem_quartz": 48,

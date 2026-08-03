@@ -15,6 +15,7 @@ const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.g
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
 const ZooControllerScript := preload("res://scripts/city/zoo_controller.gd")
+const GamingArenaScript := preload("res://scripts/city/gaming_arena.gd")
 const CryptSpawnerScript := preload("res://scripts/city/crypt_spawner.gd")
 const FactionPadSpawnerScript := preload("res://scripts/city/faction_pad_spawner.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
@@ -52,6 +53,8 @@ var mandelbrot_arena: Node3D
 var arena_controller: ArenaController
 ## Forever-war spawners + turf hazards + cloak gate. Null outside Monster Zoo districts.
 var zoo_controller: ZooController
+## Go tables + giant board + invite peds. Null outside Gaming districts.
+var gaming_arena: GamingArena
 ## Undead station under the chapel crypt. Null outside Graveyard districts.
 var crypt_spawner: CryptSpawner
 ## Two opposing forever-war pads inside a Castle dungeon. Empty outside Castle districts.
@@ -135,6 +138,7 @@ func allows_auto_actors() -> bool:
 		tid != DistrictTheme.FRACTAL
 		and tid != DistrictTheme.ARENA
 		and tid != DistrictTheme.ZOO
+		and tid != DistrictTheme.GAMING
 	)
 
 
@@ -614,6 +618,11 @@ func _stamp_detail_async() -> void:
 	CityProfiler.end("stream_zoo_war")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_gaming")
+	_spawn_gaming_arena(generator)
+	CityProfiler.end("stream_gaming")
+	await get_tree().process_frame
+
 	CityProfiler.begin("stream_crypt_spawner")
 	_spawn_crypt_spawner(generator, origin_vox)
 	CityProfiler.end("stream_crypt_spawner")
@@ -873,6 +882,20 @@ func _spawn_arena_controller(gen: DistrictGenerator) -> void:
 
 ## Start this tile's forever war. Nothing here waits on the player: the stations begin
 ## delivering bodies as soon as the district is live, and stop when it streams out.
+func _spawn_gaming_arena(gen: DistrictGenerator) -> void:
+	if gen == null:
+		return
+	var layout: GamingLayout = gen.get_gaming_layout()
+	if layout == null:
+		return
+	if gaming_arena != null and is_instance_valid(gaming_arena):
+		gaming_arena.queue_free()
+	gaming_arena = GamingArenaScript.new() as GamingArena
+	gaming_arena.name = "GamingArena"
+	add_child(gaming_arena)
+	gaming_arena.setup(layout, origin_vox, _voxel_size, _dseed, Callable(self, "live_brush"))
+
+
 func _spawn_zoo_controller(gen: DistrictGenerator) -> void:
 	if gen == null:
 		return

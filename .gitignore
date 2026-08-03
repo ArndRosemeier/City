@@ -36,6 +36,21 @@ venv/
 # Large vendor downloads (Blender, MPFB zips, system assets)
 tools/vendor/
 
+# KataGo engines + neural nets (fetched by tools/ensure_katago.ps1)
+tools/katago/**/*.exe
+tools/katago/**/*.dll
+tools/katago/**/*.zip
+tools/katago/**/*.bin.gz
+tools/katago/**/*.gz
+tools/katago/**/*.pem
+tools/katago/**/*.cfg
+tools/katago/**/*.txt
+tools/katago/eigen/
+tools/katago/opencl/
+tools/katago/_peek_*/
+!tools/katago/.gitkeep
+!tools/katago/README.md
+
 # Local Godot voxel engine binary (downloaded by ensure_city_deps.ps1)
 tools/godot/
 
@@ -55,6 +70,9 @@ assets/humans/animations/mixamo/raw/*.gltf
 
 # Rust / GDExtension build artifacts (ship Windows DLL in-repo for installers)
 native/**/target/
+native/katago_embed/build/
+native/katago_deps/
+native/third_party/KataGo/
 addons/city_voxel/bin/*.so
 addons/city_voxel/bin/*.dylib
 addons/city_voxel/bin/*.pdb
@@ -62,6 +80,14 @@ addons/city_voxel/bin/*.pdb
 addons/city_voxel/bin/~*
 !addons/city_voxel/bin/city_voxel.dll
 !addons/city_voxel/bin/.gitkeep
+addons/city_katago/bin/*.so
+addons/city_katago/bin/*.dylib
+addons/city_katago/bin/*.pdb
+addons/city_katago/bin/~*
+# Ship both DLLs once the embed smoke is green (native + rust).
+!addons/city_katago/bin/city_katago.dll
+!addons/city_katago/bin/city_katago_native.dll
+!addons/city_katago/bin/.gitkeep
 
 # Tooling scratch / smoke logs
 tools/_*.txt
