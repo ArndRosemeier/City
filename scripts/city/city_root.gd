@@ -3148,11 +3148,14 @@ func _regenerate() -> void:
 		_undead = null
 	_player_score = 0
 	_inventory.clear()
-	## Every district row and every open match belongs to the world being torn down. A load
-	## refills them from the save once the new walker is standing
-	## (`_restore_pending_character`).
+	## Every district row and every open match belongs to the world being torn down. District
+	## rows refill once the walker stands (`_restore_pending_character`). Match paperwork is
+	## poured back immediately below when a load is pending, so a Gaming plaza that streams
+	## during spawn can already resume Go / chess instead of standing up empty.
 	_economy.clear()
 	_games.clear()
+	if not _pending_restore.is_empty():
+		GameSaveScript.apply_games(_games, _pending_restore)
 	_gem_pickup_accum = 0.0
 	_economy_accum = 0.0
 	_radar_cooldown_left = 0.0
@@ -3576,8 +3579,10 @@ func _restore_pending_character() -> void:
 	GameSaveScript.apply_inventory(_inventory, _pending_restore)
 	GameSaveScript.apply_districts(_economy, _pending_restore)
 	GameSaveScript.apply_loadout(_loadout, _pending_restore)
-	## Only the paperwork: the Gaming arena sets the board back up when the plaza streams in.
+	## Idempotent with the early fill in `_regenerate`: keeps the registry correct if nothing
+	## streamed yet, then asks any already-built tables to sit down at the saved matches.
 	GameSaveScript.apply_games(_games, _pending_restore)
+	_resume_loaded_game_tables()
 	_player_score = GameSaveScript.saved_score(_pending_restore)
 	if not _loadout.scores():
 		_player_score = 0
@@ -3590,6 +3595,26 @@ func _restore_pending_character() -> void:
 	)
 	_pending_restore = {}
 	_autosave_accum = 0.0
+
+
+## Spawn-tile Gaming plazas may have called setup while `_games` was still empty. After the
+## save paperwork is in, tell those arenas to resume (no-op when they already did, or when
+## no match is stored).
+func _resume_loaded_game_tables() -> void:
+	if _streamer == null or not is_instance_valid(_streamer):
+		return
+	if not _streamer.has_method("get_loaded_districts"):
+		return
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
+		if inst == null:
+			continue
+		if inst.gaming_arena != null and is_instance_valid(inst.gaming_arena):
+			if inst.gaming_arena.has_method("try_resume_from_world_games"):
+				inst.gaming_arena.call("try_resume_from_world_games")
+		if inst.chess_arena != null and is_instance_valid(inst.chess_arena):
+			if inst.chess_arena.has_method("try_resume_from_world_games"):
+				inst.chess_arena.call("try_resume_from_world_games")
 
 
 ## True while there is a live character worth writing to disk. A finished run is not one: a save

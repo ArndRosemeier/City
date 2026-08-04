@@ -21,6 +21,7 @@ const GameSaveScript := preload("res://scripts/city/game_save.gd")
 const CityWalkerScript := preload("res://scripts/city/city_walker.gd")
 const PlayerInventoryScript := preload("res://scripts/city/player_inventory.gd")
 const WorldGamesScript := preload("res://scripts/city/world_games.gd")
+const ChessBoardStateScript := preload("res://scripts/city/chess_board_state.gd")
 
 const SCRATCH_DIR := "user://test_saves"
 const SLOT_NAME := "round_trip"
@@ -283,6 +284,19 @@ func _check_games_section() -> void:
 		"white_rank": "3k",
 		"board": board.to_save_dict(),
 	})
+	var chess_board: ChessBoardState = ChessBoardStateScript.new() as ChessBoardState
+	chess_board.setup()
+	if not chess_board.try_move(Vector2i(4, 1), Vector2i(4, 3)):
+		_fail("FAIL the mock chess match would not play e2-e4")
+	elif not chess_board.try_move(Vector2i(4, 6), Vector2i(4, 4)):
+		_fail("FAIL the mock chess match would not play e7-e5")
+	games.set_chess({
+		"white_human": true,
+		"black_human": false,
+		"white_level": "club",
+		"black_level": "club",
+		"board": chess_board.to_save_dict(),
+	})
 
 	var data := GameSaveScript.capture(
 		WORLD_SEED, walker, inventory, "Match", null, 0, null, games
@@ -302,17 +316,29 @@ func _check_games_section() -> void:
 	var restored := WorldGamesScript.new() as WorldGames
 	GameSaveScript.apply_games(restored, read)
 	if not restored.has_go():
-		_fail("FAIL the match did not survive the file")
+		_fail("FAIL the Go match did not survive the file")
 	else:
 		var back := GoBoardState.from_save_dict(restored.go_snapshot().get("board", {}))
 		if back == null:
-			_fail("FAIL the restored row does not hold a readable board")
+			_fail("FAIL the restored Go row does not hold a readable board")
 		elif Array(back.stones) != Array(board.stones):
-			_fail("FAIL the restored board is a different position")
+			_fail("FAIL the restored Go board is a different position")
 		elif back.next_color != board.next_color:
-			_fail("FAIL the restored board hands the move to the wrong colour")
+			_fail("FAIL the restored Go board hands the move to the wrong colour")
 		elif back.move_list.size() != board.move_list.size():
-			_fail("FAIL the move list is gone, so KataGo cannot be replayed into the game")
+			_fail("FAIL the Go move list is gone, so KataGo cannot be replayed into the game")
+	if not restored.has_chess():
+		_fail("FAIL the chess match did not survive the file")
+	else:
+		var chess_back := ChessBoardState.from_save_dict(
+			restored.chess_snapshot().get("board", {})
+		)
+		if chess_back == null:
+			_fail("FAIL the restored chess row does not hold a readable board")
+		elif chess_back.move_list.size() != chess_board.move_list.size():
+			_fail("FAIL the chess move list did not survive the file")
+		elif chess_back.side_to_move != chess_board.side_to_move:
+			_fail("FAIL the restored chess board hands the move to the wrong side")
 
 	## A run with nothing going still writes the section, empty. A missing one would have
 	## `apply_games` shouting on every load of a save from a player who never sat down.
@@ -323,7 +349,7 @@ func _check_games_section() -> void:
 	elif not (idle_games as Dictionary).is_empty():
 		_fail("FAIL a save with no match going carries one anyway: %s" % str(idle_games))
 	walker.queue_free()
-	print("OK an unfinished match survives capture, the file and apply_games")
+	print("OK unfinished Go and chess matches survive capture, the file and apply_games")
 
 
 # ---------------------------------------------------------------------------

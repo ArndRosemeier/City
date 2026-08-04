@@ -45,6 +45,9 @@ var _bling_stream: AudioStream
 var _go_stone_bling_stream: AudioStream
 ## Fractal panel lock-on — a short locking chirp when the postcard autozoom lands.
 var _lock_on_stream: AudioStream
+## Monster chess: wooden board land + a heavier smack when a piece is taken.
+var _chess_move_streams: Array[AudioStream] = []
+var _chess_capture_streams: Array[AudioStream] = []
 
 ## Monster / fist melee — no Kenney pack for this mood, so always procedural.
 var _melee_swing_streams: Array[AudioStream] = []
@@ -273,6 +276,38 @@ func play_go_stone_bling(world_pos: Vector3) -> void:
 	## Tight pitch drift: each stone should still read as glass, not a random chime.
 	p.pitch_scale = _rng.randf_range(0.97, 1.04)
 	p.volume_db = -4.0
+	p.play()
+
+
+## Chess piece landing on a square — dry wood contact, not a combat thud.
+func play_chess_move(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_chess_move_streams)
+	if stream == null:
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.05 / sqrt(maxf(character_scale, 0.35)), 0.7, 1.35)
+	p.pitch_scale *= _rng.randf_range(0.96, 1.05)
+	p.volume_db = -3.5 + clampf((character_scale - 1.0) * 1.2, -2.0, 3.0)
+	p.play()
+
+
+## Capture smack — the attacker connects; heavier than a quiet land, still board-game.
+func play_chess_capture(world_pos: Vector3, character_scale: float = 1.0) -> void:
+	if not enabled:
+		return
+	var stream := _pick(_chess_capture_streams)
+	if stream == null:
+		return
+	var p := _next_player()
+	p.stream = stream
+	p.global_position = world_pos
+	p.pitch_scale = clampf(1.0 / sqrt(maxf(character_scale, 0.35)), 0.55, 1.3)
+	p.pitch_scale *= _rng.randf_range(0.92, 1.08)
+	p.volume_db = -0.5 + clampf((character_scale - 1.0) * 1.8, -1.5, 4.0)
 	p.play()
 
 
@@ -745,6 +780,10 @@ func _load_banks() -> void:
 	_bling_stream = _build_treasure_bling()
 	_go_stone_bling_stream = _build_go_stone_bling()
 	_lock_on_stream = _build_lock_on()
+	_chess_move_streams = [_build_chess_move(0), _build_chess_move(1), _build_chess_move(2)]
+	_chess_capture_streams = [
+		_build_chess_capture(0), _build_chess_capture(1), _build_chess_capture(2)
+	]
 	## Melee / orb — same: no pack for the mood, so synthesize a few variants.
 	_melee_swing_streams = [_build_melee_swing(0), _build_melee_swing(1), _build_melee_swing(2)]
 	_melee_hit_streams = [_build_melee_hit(0), _build_melee_hit(1), _build_melee_hit(2)]
@@ -1049,6 +1088,31 @@ func _build_go_stone_bling() -> AudioStreamWAV:
 		## Quiet board undertone — the goban answering, not a boom.
 		var wood := sin(TAU * 240.0 * t) * 0.12 * exp(-t * 30.0)
 		return (knock * 0.9 + tip * 0.45 + glass * 0.85 + wood) * 0.78
+	)
+
+
+func _build_chess_move(variant: int) -> AudioStreamWAV:
+	## Weighted chessman on a timber court: low wood knock, almost no ring.
+	var body := 180.0 + float(variant) * 22.0
+	return _synthesize(0.18, func(t: float, _i: int) -> float:
+		var env := smoothstep(0.0, 0.003, t) * exp(-t * 22.0)
+		var thud := sin(TAU * body * t) * 0.7 + sin(TAU * (body * 1.85) * t) * 0.35
+		var board := sin(TAU * 420.0 * t) * 0.22 * exp(-t * 35.0)
+		var grit := (_rng.randf() * 2.0 - 1.0) * 0.28 * exp(-t * 55.0)
+		return (thud + board + grit) * env * 0.9
+	)
+
+
+func _build_chess_capture(variant: int) -> AudioStreamWAV:
+	## Smack: the quiet land plus a hard slap and a short body thump — a piece getting taken.
+	var body := 95.0 + float(variant) * 16.0
+	return _synthesize(0.26, func(t: float, _i: int) -> float:
+		var env := smoothstep(0.0, 0.004, t) * exp(-t * 14.0)
+		var thud := sin(TAU * body * t) * 0.85 + sin(TAU * (body * 1.6) * t) * 0.4
+		var slap := (_rng.randf() * 2.0 - 1.0) * 0.7 * exp(-t * 32.0)
+		var crack := sin(TAU * 680.0 * t) * exp(-t * 40.0)
+		var wood := sin(TAU * 260.0 * t) * 0.25 * exp(-t * 20.0)
+		return (thud + slap * 0.85 + crack * 0.55 + wood) * env
 	)
 
 

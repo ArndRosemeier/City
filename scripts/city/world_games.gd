@@ -1,5 +1,5 @@
-## Matches the run has going, one row per title. Today that is the Go table in the Gaming
-## district; a second board game would take a second key beside it.
+## Matches the run has going, one row per title. Today that is the Go table and the
+## monster-chess court on the Gaming plaza.
 ##
 ## The rows are opaque here on purpose. This class owns *that* a game is in progress and
 ## survives a save, load or district hop — what a match consists of is the game's own

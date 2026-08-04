@@ -461,6 +461,7 @@ func _choreograph(
 	## occupied square — so it is the only piece that needs to be in the air.
 	var hop := mover.piece_type == ChessBoardStateScript.KNIGHT
 
+	var scale := _piece_audio_scale(mover)
 	if victim != null:
 		var walk_in: Array[Vector3] = [
 			_staging_point(mover.global_position, victim.global_position)
@@ -470,10 +471,12 @@ func _choreograph(
 		if epoch != _epoch or not is_inside_tree():
 			return
 		mover.face_towards(victim.global_position)
+		_play_chess_swing(mover.global_position, scale)
 		mover.play_melee()
 		await mover.struck
 		if epoch != _epoch or not is_inside_tree():
 			return
+		_play_chess_capture(victim.global_position, scale)
 		victim.play_death()
 		await victim.death_done
 		if epoch != _epoch or not is_inside_tree():
@@ -482,10 +485,12 @@ func _choreograph(
 		var step_on: Array[Vector3] = [target]
 		mover.walk_to(to_sq, step_on, home)
 		await mover.arrived
+		_play_chess_move(mover.global_position, scale)
 	else:
 		var straight: Array[Vector3] = [target]
 		mover.walk_to(to_sq, straight, home, hop)
 		await mover.arrived
+		_play_chess_move(mover.global_position, scale)
 	if epoch != _epoch or not is_inside_tree():
 		return
 
@@ -510,6 +515,7 @@ func _choreograph(
 			await rook.arrived
 			if epoch != _epoch or not is_inside_tree():
 				return
+			_play_chess_move(rook.global_position, _piece_audio_scale(rook))
 			_actors[rt] = rook
 
 	if promotion != 0:
@@ -605,6 +611,60 @@ func _resume_saved_game() -> bool:
 	)
 	_session.kick_ai_if_needed()
 	return true
+
+
+## Called after a load fills WorldGames when this court already stood up empty (spawn-tile race).
+## Drops the decorative opening position and sits down at the saved match.
+func try_resume_from_world_games() -> bool:
+	var games := _world_games()
+	if games == null or not games.has_chess():
+		return false
+	if (
+		_session != null
+		and is_instance_valid(_session)
+		and _board != null
+		and _board.phase == &"playing"
+		and not _session.to_save_dict().is_empty()
+	):
+		## Already the live match.
+		return true
+	if _session != null and is_instance_valid(_session):
+		_session.end_session("restart")
+		_session = null
+	_animating = false
+	_clear_selection()
+	return _resume_saved_game()
+
+
+func _piece_audio_scale(actor: ChessPieceActor) -> float:
+	if actor == null:
+		return 1.0
+	return ChessCastScript.height_for(actor.piece_type) / 2.0
+
+
+func _city_audio() -> CityAudio:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	return tree.get_first_node_in_group(&"city_audio") as CityAudio
+
+
+func _play_chess_move(world_pos: Vector3, character_scale: float) -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_chess_move"):
+		audio.call("play_chess_move", world_pos, character_scale)
+
+
+func _play_chess_capture(world_pos: Vector3, character_scale: float) -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_chess_capture"):
+		audio.call("play_chess_capture", world_pos, character_scale)
+
+
+func _play_chess_swing(world_pos: Vector3, character_scale: float) -> void:
+	var audio := _city_audio()
+	if audio != null and audio.has_method("play_melee_swing"):
+		audio.call("play_melee_swing", world_pos, character_scale)
 
 
 # ---------------------------------------------------------------------------

@@ -329,8 +329,9 @@ static func apply_districts(economy: DistrictEconomy, data: Dictionary) -> void:
 	economy.load_save_dict(raw as Dictionary)
 
 
-## Hand the saved matches back to the live registry. The games themselves are resumed later,
-## by whoever owns the table: this only restores the paperwork.
+## Hand the saved matches back to the live registry. Tables resume from this paperwork —
+## CityRoot fills it before Gaming plazas stream (and again after the walker stands, then
+## asks any already-built arenas to sit down).
 static func apply_games(games: WorldGames, data: Dictionary) -> void:
 	if games == null:
 		push_error("GameSave.apply_games: no games registry")

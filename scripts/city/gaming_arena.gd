@@ -506,6 +506,13 @@ func _resume_saved_match() -> void:
 	_main_session.kick_ai_if_needed()
 
 
+## Called after a load fills WorldGames when this arena already stood up empty (spawn-tile race).
+func try_resume_from_world_games() -> void:
+	if _match_active and _main_session != null and is_instance_valid(_main_session):
+		return
+	_resume_saved_match()
+
+
 func _on_board_moved(_color: int, _vertex: String, _loc: Vector2i) -> void:
 	_sync_games_save()
 
