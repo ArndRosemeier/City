@@ -200,35 +200,41 @@ func _apply_pass(color: int) -> void:
 
 ## Japanese territory score: empty points enclosed by one colour + prisoners taken.
 ## Stones on the board do not count. Dame (touched by both) count for neither.
-## Dead groups still sitting on the board are not removed — same simplification as
-## the Chinese path; players are expected to have captured them before the two passes.
-func score_japanese(komi: float = 6.5) -> Dictionary:
-	var territory := _territory_counts()
+## `dead_locs` must come from the engine (KataGo final_status_list) — this does not
+## invent life and death. Empty array = every stone still on the board is alive.
+func score_japanese(komi: float = 6.5, dead_locs: Array[Vector2i] = []) -> Dictionary:
+	var scored := _scoring_position(dead_locs)
+	var territory: Dictionary = scored["territory"]
+	var caps_b := int(scored["black_captures"])
+	var caps_w := int(scored["white_captures"])
 	return {
-		"black": float(int(territory["black"]) + black_captures),
-		"white": float(int(territory["white"]) + white_captures) + komi,
+		"black": float(int(territory["black"]) + caps_b),
+		"white": float(int(territory["white"]) + caps_w) + komi,
 		"komi": komi,
 		"territory_black": int(territory["black"]),
 		"territory_white": int(territory["white"]),
-		"captures_black": black_captures,
-		"captures_white": white_captures,
+		"captures_black": caps_b,
+		"captures_white": caps_w,
 	}
 
 
 ## Chinese / Tromp-Taylor area score. Empty regions bordered by only one colour count
 ## for that colour; stones count; dame count for neither. White gets `komi`.
-func score_tromp_taylor(komi: float = 7.5) -> Dictionary:
-	return score_chinese(komi)
+## Dead stones (from the engine) are cleared before counting.
+func score_tromp_taylor(komi: float = 7.5, dead_locs: Array[Vector2i] = []) -> Dictionary:
+	return score_chinese(komi, dead_locs)
 
 
-func score_chinese(komi: float = 7.5) -> Dictionary:
-	var territory := _territory_counts()
+func score_chinese(komi: float = 7.5, dead_locs: Array[Vector2i] = []) -> Dictionary:
+	var scored := _scoring_position(dead_locs)
+	var grid: PackedInt32Array = scored["stones"]
+	var territory: Dictionary = scored["territory"]
 	var black_stones := 0
 	var white_stones := 0
-	for i in range(stones.size()):
-		if stones[i] == BLACK:
+	for i in range(grid.size()):
+		if grid[i] == BLACK:
 			black_stones += 1
-		elif stones[i] == WHITE:
+		elif grid[i] == WHITE:
 			white_stones += 1
 	return {
 		"black": float(black_stones + int(territory["black"])),
@@ -241,15 +247,45 @@ func score_chinese(komi: float = 7.5) -> Dictionary:
 	}
 
 
+## Copy with engine-marked dead stones removed. Does not mutate the live board.
+func _scoring_position(dead_locs: Array[Vector2i]) -> Dictionary:
+	var grid := stones.duplicate()
+	var caps_b := black_captures
+	var caps_w := white_captures
+	for p in dead_locs:
+		if p.x < 0 or p.y < 0 or p.x >= size or p.y >= size:
+			push_error("GoBoardState: dead stone off the board at %s" % str(p))
+			assert(false, "GoBoardState dead off board")
+			continue
+		var color := grid[p.y * size + p.x]
+		if color == EMPTY:
+			push_error("GoBoardState: dead mark on empty point %s" % str(p))
+			assert(false, "GoBoardState dead on empty")
+			continue
+		grid[p.y * size + p.x] = EMPTY
+		if color == WHITE:
+			caps_b += 1
+		else:
+			caps_w += 1
+	return {
+		"stones": grid,
+		"black_captures": caps_b,
+		"white_captures": caps_w,
+		"territory": _territory_counts_on(grid),
+	}
+
+
 ## Empty-point ownership only. Each empty region bordered by exactly one colour is
 ## that colour's territory; everything else is dame.
-func _territory_counts() -> Dictionary:
+func _territory_counts_on(grid: PackedInt32Array) -> Dictionary:
 	var black_terr := 0
 	var white_terr := 0
 	var seen: Dictionary = {}
 	for y in range(size):
 		for x in range(size):
-			if at(x, y) != EMPTY:
+			if x < 0 or y < 0 or x >= size or y >= size:
+				continue
+			if grid[y * size + x] != EMPTY:
 				continue
 			var key := Vector2i(x, y)
 			if seen.has(key):
@@ -262,7 +298,7 @@ func _territory_counts() -> Dictionary:
 				var p: Vector2i = stack.pop_back()
 				region.append(p)
 				for d in _neighbors(p.x, p.y):
-					var nc := at(d.x, d.y)
+					var nc := grid[d.y * size + d.x]
 					if nc == EMPTY:
 						if not seen.has(d):
 							seen[d] = true
@@ -271,8 +307,7 @@ func _territory_counts() -> Dictionary:
 						borders[nc] = true
 			if borders.size() != 1:
 				continue
-			var bkeys: Array = borders.keys()
-			var sole := int(bkeys[0])
+			var sole := int(borders.keys()[0])
 			if sole == BLACK:
 				black_terr += region.size()
 			elif sole == WHITE:

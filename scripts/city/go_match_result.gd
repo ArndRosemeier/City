@@ -2,6 +2,7 @@
 ##
 ## Japanese is the match default: territory + prisoners. Chinese / Tromp-Taylor area
 ## (stones + territory) is kept beside it so the end panel can switch without replaying.
+## Dead stones must be supplied by the engine — this class does not invent life and death.
 class_name GoMatchResult
 extends RefCounted
 
@@ -23,19 +24,28 @@ var black_japanese: float = 0.0
 var white_japanese: float = 0.0
 var black_chinese: float = 0.0
 var white_chinese: float = 0.0
+## Engine-marked dead stones used for both tallies (board coords).
+var dead_locs: Array[Vector2i] = []
 
 
-static func from_board(board: GoBoardState, p_reason: String, p_komi: float = 6.5) -> GoMatchResult:
+## `dead_locs` from KataGo `final_status_list dead`. Pass [] only when every stone is alive.
+static func from_board(
+	board: GoBoardState,
+	p_reason: String,
+	p_komi: float,
+	p_dead_locs: Array[Vector2i]
+) -> GoMatchResult:
 	var r := GoMatchResult.new()
 	r.reason = p_reason
 	r.komi = p_komi
 	r.board_n = board.size if board != null else 19
 	r.rules = RULES_JAPANESE
+	r.dead_locs = p_dead_locs.duplicate()
 	if board != null:
-		var jp: Dictionary = board.score_japanese(p_komi)
+		var jp: Dictionary = board.score_japanese(p_komi, p_dead_locs)
 		r.black_japanese = float(jp.get("black", 0.0))
 		r.white_japanese = float(jp.get("white", 0.0))
-		var cn: Dictionary = board.score_chinese(p_komi)
+		var cn: Dictionary = board.score_chinese(p_komi, p_dead_locs)
 		r.black_chinese = float(cn.get("black", 0.0))
 		r.white_chinese = float(cn.get("white", 0.0))
 	r._apply_active_scores()

@@ -43,6 +43,14 @@ mod ffi {
             out_eval_json: *mut c_char,
             out_eval_json_len: i32,
         ) -> i32;
+        pub fn katago_set_komi(h: *mut KatagoHandle, komi: f32) -> i32;
+        pub fn katago_final_score(h: *mut KatagoHandle, out_score: *mut c_char, out_len: i32) -> i32;
+        pub fn katago_final_status_list(
+            h: *mut KatagoHandle,
+            which: *const c_char,
+            out_vertices: *mut c_char,
+            out_len: i32,
+        ) -> i32;
         pub fn katago_last_error(h: *const KatagoHandle) -> *const c_char;
         pub fn katago_version() -> *const c_char;
     }
@@ -244,6 +252,56 @@ impl NativeKataGo {
             &c_str_to_gstring(json.as_ptr() as *const c_char),
         );
         dict
+    }
+
+    #[func]
+    fn set_komi(&mut self, komi: f32) {
+        self.require_handle();
+        let rc = unsafe { ffi::katago_set_komi(self.handle, komi) };
+        if rc != 0 {
+            panic!("NativeKataGo.set_komi failed: {}", last_error(self.handle));
+        }
+    }
+
+    /// GTP `final_score`: "B+12.5", "W+3.5", or "0".
+    #[func]
+    fn final_score(&mut self) -> GString {
+        self.require_handle();
+        let mut out = vec![0 as c_char; 32];
+        let rc = unsafe {
+            ffi::katago_final_score(self.handle, out.as_mut_ptr(), out.len() as i32)
+        };
+        if rc != 0 {
+            panic!(
+                "NativeKataGo.final_score failed: {}",
+                last_error(self.handle)
+            );
+        }
+        c_str_to_gstring(out.as_ptr() as *const c_char)
+    }
+
+    /// GTP `final_status_list`: `which` is "alive", "seki", or "dead".
+    /// Returns a space-separated list of GTP vertices (may be empty).
+    #[func]
+    fn final_status_list(&mut self, which: GString) -> GString {
+        self.require_handle();
+        let w = CString::new(which.to_string()).expect("which NUL");
+        let mut out = vec![0 as c_char; 8192];
+        let rc = unsafe {
+            ffi::katago_final_status_list(
+                self.handle,
+                w.as_ptr(),
+                out.as_mut_ptr(),
+                out.len() as i32,
+            )
+        };
+        if rc != 0 {
+            panic!(
+                "NativeKataGo.final_status_list failed: {}",
+                last_error(self.handle)
+            );
+        }
+        c_str_to_gstring(out.as_ptr() as *const c_char)
     }
 }
 

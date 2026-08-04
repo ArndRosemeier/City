@@ -104,10 +104,9 @@ func _open(
 	_engine_has_eval = true
 	set_process(false)
 	eval_cleared.emit()
-	if needs_engine():
-		_owned_engine = true
-		## Warm the net in the background — human Black can play immediately.
-		_warmup_engine(_epoch)
+	## Every match needs KataGo: AI moves and endgame life/death. No local fallback.
+	_owned_engine = true
+	_warmup_engine(_epoch)
 	return true
 
 
@@ -187,7 +186,7 @@ func try_player_vertex(vertex: String) -> bool:
 	if board.phase == &"playing":
 		_kick_ai_if_needed()
 	else:
-		match_over.emit(_build_result())
+		_finish_match()
 	return true
 
 
@@ -213,7 +212,7 @@ func stop_match() -> bool:
 	if not board.stop_play():
 		return false
 	eval_cleared.emit()
-	match_over.emit(_build_result())
+	_finish_match()
 	return true
 
 
@@ -226,7 +225,10 @@ func _warmup_engine(epoch: int) -> void:
 			GoEnginePoolScript.release()
 		return
 	if eng == null:
-		push_warning("GoSession: no KataGo — AI sides will use random legal moves")
+		push_error(
+			"GoSession: KataGo required — build tools/build_city_katago.ps1 and run tools/ensure_katago.ps1"
+		)
+		assert(false, "GoSession: KataGo missing")
 		_owned_engine = false
 		_eng = null
 		_engine_ready = false
@@ -240,7 +242,7 @@ func _warmup_engine(epoch: int) -> void:
 	## A human stone may have landed during prime; rebuild once more so GTP matches.
 	_prime_engine_board()
 	## AI-vs-AI: don't wait for seating — open as soon as the net is ready.
-	if not color_is_human(board.next_color):
+	if board != null and not color_is_human(board.next_color):
 		_kick_ai_if_needed()
 
 
@@ -249,6 +251,7 @@ func _prime_engine_board() -> void:
 		return
 	_eng.call("set_boardsize", _board_n)
 	_eng.call("clear_board")
+	_eng.call("set_komi", KOMI)
 	if not _active_rank.is_empty():
 		_eng.call("set_rank", _active_rank)
 	if board == null:
@@ -283,7 +286,7 @@ func _request_ai_move() -> void:
 	await get_tree().process_frame
 	if epoch != _epoch:
 		return
-	## Human may already have moved; wait for the net before falling back to random.
+	## Human may already have moved; wait for the net — there is no random fallback.
 	if _owned_engine and not _engine_ready:
 		while _owned_engine and not _engine_ready and is_inside_tree() and epoch == _epoch:
 			await get_tree().process_frame
@@ -292,29 +295,24 @@ func _request_ai_move() -> void:
 			_busy = false
 			ai_thinking.emit(false)
 		return
+	if _eng == null or not is_instance_valid(_eng) or not bool(_eng.call("is_loaded")):
+		_busy = false
+		ai_thinking.emit(false)
+		push_error("GoSession: AI to move but KataGo is not loaded")
+		assert(false, "GoSession: KataGo required for AI move")
+		return
 	var color := board.next_color
 	var color_s := "b" if color == GoBoardState.BLACK else "w"
 	var rank := color_rank(color)
 	_ensure_rank(rank)
-	var used_engine := (
-		_eng != null and is_instance_valid(_eng) and bool(_eng.call("is_loaded"))
-	)
-	var vertex := ""
-	var eval_json := ""
-	if used_engine:
-		var moved: Dictionary = await _genmove_off_main(color_s)
-		vertex = str(moved.get("vertex", ""))
-		eval_json = str(moved.get("eval_json", ""))
-	else:
-		vertex = _random_legal(color)
+	var moved: Dictionary = await _genmove_off_main(color_s)
+	var vertex := str(moved.get("vertex", ""))
+	var eval_json := str(moved.get("eval_json", ""))
 	if epoch != _epoch:
 		return
 	if vertex.is_empty():
 		vertex = "pass"
-	if used_engine:
-		_apply_engine_move_to_state(color, vertex)
-	else:
-		board.try_play(color, vertex)
+	_apply_engine_move_to_state(color, vertex)
 	## Clear busy before the signal so listeners' player_to_move() sees a free board.
 	_busy = false
 	ai_thinking.emit(false)
@@ -322,7 +320,7 @@ func _request_ai_move() -> void:
 	if board == null:
 		return
 	if board.phase != &"playing":
-		match_over.emit(_build_result())
+		_finish_match()
 		return
 	if not color_is_human(board.next_color):
 		## AI vs AI: brief beat so the giant hand / stones can settle.
@@ -342,11 +340,92 @@ func _emit_eval(eval_json: String, color: int, vertex: String) -> void:
 	eval_updated.emit(snap)
 
 
-func _build_result() -> GoMatchResult:
+## Score on a worker thread (ownership search), then emit match_over.
+func _finish_match() -> void:
+	var epoch := _epoch
+	var result: GoMatchResult = await _build_result_async()
+	if epoch != _epoch or not is_inside_tree():
+		return
+	match_over.emit(result)
+
+
+func _build_result_async() -> GoMatchResult:
 	var reason := board.end_reason if board != null else "two_passes"
 	if reason.is_empty():
 		reason = "two_passes"
-	return GoMatchResultScript.from_board(board, reason, KOMI)
+	if _owned_engine and not _engine_ready:
+		while _owned_engine and not _engine_ready and is_inside_tree():
+			await get_tree().process_frame
+	if _eng == null or not is_instance_valid(_eng) or not bool(_eng.call("is_loaded")):
+		push_error("GoSession: cannot score without KataGo")
+		assert(false, "GoSession: KataGo required for scoring")
+		var none: Array[Vector2i] = []
+		return GoMatchResultScript.from_board(board, reason, KOMI, none)
+	if not _eng.has_method("final_status_list"):
+		push_error(
+			"GoSession: NativeKataGo.final_status_list missing — rebuild tools/build_city_katago.ps1"
+		)
+		assert(false, "GoSession: rebuild city_katago for scoring")
+		var none2: Array[Vector2i] = []
+		return GoMatchResultScript.from_board(board, reason, KOMI, none2)
+	## Resign never reached the engine; always re-prime so status matches GoBoardState.
+	_prime_engine_board()
+	var dead_raw := await _final_status_off_main("dead")
+	var dead := _parse_status_vertices(dead_raw)
+	return GoMatchResultScript.from_board(board, reason, KOMI, dead)
+
+
+func _parse_status_vertices(raw: String) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var s := raw.strip_edges()
+	if s.is_empty() or board == null:
+		return out
+	for part in s.split(" ", false):
+		var token := str(part).strip_edges()
+		if token.is_empty():
+			continue
+		var loc := GoBoardState.parse_vertex(token, board.size)
+		if loc.x < 0:
+			push_error("GoSession: bad final_status_list vertex '%s'" % token)
+			assert(false, "GoSession: bad status vertex")
+			continue
+		if board.at(loc.x, loc.y) == GoBoardState.EMPTY:
+			push_error("GoSession: final_status_list marked empty %s" % token)
+			assert(false, "GoSession: status on empty")
+			continue
+		out.append(loc)
+	return out
+
+
+func _final_status_off_main(which: String) -> String:
+	var eng := _eng
+	var mutex := Mutex.new()
+	var state := {"done": false, "text": ""}
+	var task_id := WorkerThreadPool.add_task(
+		func() -> void:
+			var text := ""
+			if eng != null and is_instance_valid(eng) and bool(eng.call("is_loaded")):
+				text = str(eng.call("final_status_list", which))
+			mutex.lock()
+			state["text"] = text
+			state["done"] = true
+			mutex.unlock()
+	)
+	while true:
+		mutex.lock()
+		var done: bool = bool(state["done"])
+		mutex.unlock()
+		if done:
+			break
+		if not is_inside_tree():
+			WorkerThreadPool.wait_for_task_completion(task_id)
+			return ""
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(task_id)
+	mutex.lock()
+	var out := str(state["text"])
+	mutex.unlock()
+	return out
 
 
 func _ensure_rank(rank: String) -> void:
@@ -430,18 +509,3 @@ func _sync_engine_play(color: int, vertex: String) -> void:
 	if v == "resign":
 		return
 	_eng.call("play", color_s, vertex if v != "pass" else "pass")
-
-
-func _random_legal(color: int) -> String:
-	if board == null:
-		return "pass"
-	var coords: Array[Vector2i] = []
-	for y in range(board.size):
-		for x in range(board.size):
-			if board.at(x, y) == GoBoardState.EMPTY:
-				coords.append(Vector2i(x, y))
-	coords.shuffle()
-	for loc in coords:
-		if board.is_legal_xy(color, loc.x, loc.y):
-			return GoBoardState.format_vertex(loc.x, loc.y, board.size)
-	return "pass"

@@ -40,6 +40,9 @@ KATAGO_API int katago_set_rank(KatagoHandle* h, const char* rank);
 /** color: "b"/"w"/"black"/"white". vertex: GTP coords or "pass". */
 KATAGO_API int katago_play(KatagoHandle* h, const char* color, const char* vertex);
 
+/** Set komi on the live history (does not clear the board). */
+KATAGO_API int katago_set_komi(KatagoHandle* h, float komi);
+
 /**
  * Generate and play a move for color. Writes GTP vertex (or "pass") into out_vertex.
  * Returns 0 on success.
@@ -64,6 +67,24 @@ KATAGO_API int katago_genmove_eval(
   int out_vertex_len,
   char* out_eval_json,
   int out_eval_json_len
+);
+
+/**
+ * GTP-compatible endgame score (mirrors KataGo `final_score`). Writes "B+12.5", "W+3.5",
+ * or "0" into out_score. Uses NN lead when the ruleset has not finished a strict score.
+ */
+KATAGO_API int katago_final_score(KatagoHandle* h, char* out_score, int out_len);
+
+/**
+ * GTP-compatible life/death list (mirrors KataGo `final_status_list`).
+ * `which` must be "alive", "seki", or "dead". Writes space-separated GTP vertices.
+ * Dead stones come from NN ownership when the game is not strictly finished.
+ */
+KATAGO_API int katago_final_status_list(
+  KatagoHandle* h,
+  const char* which,
+  char* out_vertices,
+  int out_len
 );
 
 KATAGO_API const char* katago_last_error(const KatagoHandle* h);

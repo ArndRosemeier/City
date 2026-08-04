@@ -58,7 +58,8 @@ func _fake_resign_result() -> GoMatchResult:
 	assert(board.try_play_xy(GoBoardState.WHITE, 6, 6))
 	assert(board.try_play_xy(GoBoardState.BLACK, 2, 3))
 	assert(board.try_play(GoBoardState.WHITE, "resign"))
-	return GoMatchResult.from_board(board, board.end_reason, 6.5)
+	var no_dead: Array[Vector2i] = []
+	return GoMatchResult.from_board(board, board.end_reason, 6.5, no_dead)
 
 
 func _fake_score_result() -> GoMatchResult:
@@ -73,7 +74,8 @@ func _fake_score_result() -> GoMatchResult:
 	assert(board.try_play_xy(GoBoardState.WHITE, 4, 3))
 	assert(board.try_play(GoBoardState.BLACK, "pass"))
 	assert(board.try_play(GoBoardState.WHITE, "pass"))
-	return GoMatchResult.from_board(board, board.end_reason, 6.5)
+	var no_dead: Array[Vector2i] = []
+	return GoMatchResult.from_board(board, board.end_reason, 6.5, no_dead)
 
 
 func _build_environment(root: Node3D) -> void:

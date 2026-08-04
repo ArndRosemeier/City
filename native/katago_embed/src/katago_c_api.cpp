@@ -10,6 +10,8 @@
 #include "neuralnet/nninputs.h"
 #include "neuralnet/nneval.h"
 #include "neuralnet/sgfmetadata.h"
+#include "program/play.h"
+#include "program/playutils.h"
 #include "program/setup.h"
 #include "search/analysisdata.h"
 #include "search/asyncbot.h"
@@ -31,7 +33,7 @@ using namespace std;
 
 namespace {
 
-constexpr const char* kVersion = "city_katago_embed/0.3 (KataGo Eigen Human-SL)";
+constexpr const char* kVersion = "city_katago_embed/0.4 (KataGo Eigen Human-SL)";
 
 // Candidate moves reported alongside a generated move. Enough for a board overlay,
 // small enough that the JSON can never approach the caller's buffer.
@@ -82,6 +84,30 @@ string json_number(double v, int decimals) {
 // KataGo reports search values from White's perspective; the game speaks Black.
 double black_winrate_of(double win_loss_value) {
   return 1.0 - 0.5 * (1.0 + win_loss_value);
+}
+
+// Mirror KataGo GTP: suppress Human-SL bias while estimating endgame ownership / lead.
+SearchParams scoring_search_params(const SearchParams& base) {
+  SearchParams tmp = base;
+  tmp.playoutDoublingAdvantage = 0.0;
+  tmp.conservativePass = true;
+  tmp.humanSLChosenMoveProp = 0.0;
+  tmp.humanSLRootExploreProbWeightful = 0.0;
+  tmp.humanSLRootExploreProbWeightless = 0.0;
+  tmp.humanSLPlaExploreProbWeightful = 0.0;
+  tmp.humanSLPlaExploreProbWeightless = 0.0;
+  tmp.humanSLOppExploreProbWeightful = 0.0;
+  tmp.humanSLOppExploreProbWeightless = 0.0;
+  tmp.antiMirror = false;
+  tmp.avoidRepeatedPatternUtility = 0;
+  return tmp;
+}
+
+bool hist_has_strict_finished_score(const BoardHistory& hist) {
+  return hist.isGameFinished && (
+    (hist.rules.scoringRule == Rules::SCORING_AREA && !hist.rules.friendlyPassOk) ||
+    (hist.rules.scoringRule == Rules::SCORING_TERRITORY)
+  );
 }
 
 } // namespace
@@ -410,6 +436,38 @@ int katago_play(KatagoHandle* h, const char* color, const char* vertex) {
   }
 }
 
+int katago_set_komi(KatagoHandle* h, float komi) {
+  if(h == nullptr || h->bot == nullptr)
+    return 1;
+  try {
+    if(!Rules::komiIsIntOrHalfInt(komi))
+      throw StringError("komi must be an integer or half-integer");
+    if(komi < Rules::MIN_USER_KOMI || komi > Rules::MAX_USER_KOMI)
+      throw StringError("komi out of range");
+    h->bot->stopAndWait();
+    const Player pla = h->bot->getRootPla();
+    const Board board = h->bot->getRootBoard();
+    BoardHistory hist = h->bot->getRootHist();
+    hist.setKomi(komi);
+    h->rules = hist.rules;
+    h->bot->setPosition(pla, board, hist);
+    h->last_error.clear();
+    return 0;
+  }
+  catch(const StringError& e) {
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const exception& e) {
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const string& e) {
+    h->set_error(e);
+    return 1;
+  }
+}
+
 int katago_genmove(KatagoHandle* h, const char* color, char* out_vertex, int out_len) {
   if(h == nullptr || h->bot == nullptr)
     return 1;
@@ -497,6 +555,207 @@ int katago_genmove_eval(
     return 1;
   }
   catch(const string& e) {
+    h->set_error(e);
+    return 1;
+  }
+}
+
+int katago_final_score(KatagoHandle* h, char* out_score, int out_len) {
+  if(h == nullptr || h->bot == nullptr)
+    return 1;
+  if(out_score == nullptr || out_len < 8)
+    return 1;
+  bool restored = true;
+  SearchParams saved_params;
+  Player old_pla = C_EMPTY;
+  Board old_board;
+  BoardHistory old_hist;
+  try {
+    h->bot->stopAndWait();
+    saved_params = h->bot->getParams();
+    old_pla = h->bot->getRootPla();
+    old_board = h->bot->getRootBoard();
+    old_hist = h->bot->getRootHist();
+    restored = false;
+    h->bot->setParams(scoring_search_params(saved_params));
+
+    Board board = old_board;
+    BoardHistory hist = old_hist;
+    Player pla = old_pla;
+
+    Player winner = C_EMPTY;
+    double final_white_minus_black = 0.0;
+    if(hist_has_strict_finished_score(hist)) {
+      winner = hist.winner;
+      final_white_minus_black = hist.finalWhiteMinusBlackScore;
+    }
+    else {
+      const int64_t num_visits = std::max<int64_t>(50, static_cast<int64_t>(saved_params.numThreads) * 10);
+      double lead = PlayUtils::computeLead(
+        h->bot->getSearchStopAndWait(),
+        nullptr,
+        board,
+        hist,
+        pla,
+        num_visits,
+        OtherGameProperties()
+      );
+      if(hist.rules.gameResultWillBeInteger())
+        lead = round(lead);
+      else
+        lead = round(lead + 0.5) - 0.5;
+      final_white_minus_black = lead;
+      winner = lead > 0 ? P_WHITE : (lead < 0 ? P_BLACK : C_EMPTY);
+    }
+
+    h->bot->setPosition(old_pla, old_board, old_hist);
+    h->bot->setParams(saved_params);
+    restored = true;
+
+    string response;
+    if(winner == C_EMPTY)
+      response = "0";
+    else {
+      ostringstream o;
+      o.imbue(std::locale::classic());
+      o << (winner == P_BLACK ? "B+" : "W+") << std::fixed << std::setprecision(1)
+        << std::fabs(final_white_minus_black);
+      response = o.str();
+    }
+    write_err(out_score, out_len, response);
+    h->last_error.clear();
+    return 0;
+  }
+  catch(const StringError& e) {
+    if(!restored) {
+      h->bot->setPosition(old_pla, old_board, old_hist);
+      h->bot->setParams(saved_params);
+    }
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const exception& e) {
+    if(!restored) {
+      h->bot->setPosition(old_pla, old_board, old_hist);
+      h->bot->setParams(saved_params);
+    }
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const string& e) {
+    if(!restored) {
+      h->bot->setPosition(old_pla, old_board, old_hist);
+      h->bot->setParams(saved_params);
+    }
+    h->set_error(e);
+    return 1;
+  }
+}
+
+int katago_final_status_list(
+  KatagoHandle* h,
+  const char* which,
+  char* out_vertices,
+  int out_len
+) {
+  if(h == nullptr || h->bot == nullptr)
+    return 1;
+  if(which == nullptr || out_vertices == nullptr || out_len < 2)
+    return 1;
+  bool restored = true;
+  SearchParams saved_params;
+  Player old_pla = C_EMPTY;
+  Board old_board;
+  BoardHistory old_hist;
+  try {
+    const string mode = Global::toLower(string(which));
+    int status_mode = -1;
+    if(mode == "alive")
+      status_mode = 0;
+    else if(mode == "seki")
+      status_mode = 1;
+    else if(mode == "dead")
+      status_mode = 2;
+    else
+      throw StringError("final_status_list which must be alive, seki, or dead");
+
+    h->bot->stopAndWait();
+    saved_params = h->bot->getParams();
+    old_pla = h->bot->getRootPla();
+    old_board = h->bot->getRootBoard();
+    old_hist = h->bot->getRootHist();
+    restored = false;
+    h->bot->setParams(scoring_search_params(saved_params));
+
+    Board board = old_board;
+    BoardHistory hist = old_hist;
+    Player pla = old_pla;
+
+    vector<bool> is_alive;
+    if(hist_has_strict_finished_score(hist))
+      is_alive = PlayUtils::computeAnticipatedStatusesSimple(board, hist);
+    else {
+      const int64_t num_visits = std::max<int64_t>(100, static_cast<int64_t>(saved_params.numThreads) * 20);
+      vector<double> ownerships_buf;
+      is_alive = PlayUtils::computeAnticipatedStatusesWithOwnership(
+        h->bot->getSearchStopAndWait(),
+        board,
+        hist,
+        pla,
+        num_visits,
+        ownerships_buf
+      );
+    }
+
+    h->bot->setPosition(old_pla, old_board, old_hist);
+    h->bot->setParams(saved_params);
+    restored = true;
+
+    // GTP: seki list is empty; alive/dead come from the ownership boolean map.
+    ostringstream out;
+    bool first = true;
+    for(int y = 0; y < board.y_size; y++) {
+      for(int x = 0; x < board.x_size; x++) {
+        const Loc loc = Location::getLoc(x, y, board.x_size);
+        if(board.colors[loc] == C_EMPTY)
+          continue;
+        const bool alive = is_alive[loc];
+        const bool want =
+          (status_mode == 0 && alive) ||
+          (status_mode == 2 && !alive);
+        if(status_mode == 1 || !want)
+          continue;
+        if(!first)
+          out << ' ';
+        first = false;
+        out << Location::toString(loc, board);
+      }
+    }
+    write_err(out_vertices, out_len, out.str());
+    h->last_error.clear();
+    return 0;
+  }
+  catch(const StringError& e) {
+    if(!restored) {
+      h->bot->setPosition(old_pla, old_board, old_hist);
+      h->bot->setParams(saved_params);
+    }
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const exception& e) {
+    if(!restored) {
+      h->bot->setPosition(old_pla, old_board, old_hist);
+      h->bot->setParams(saved_params);
+    }
+    h->set_error(string(e.what()));
+    return 1;
+  }
+  catch(const string& e) {
+    if(!restored) {
+      h->bot->setPosition(old_pla, old_board, old_hist);
+      h->bot->setParams(saved_params);
+    }
     h->set_error(e);
     return 1;
   }
