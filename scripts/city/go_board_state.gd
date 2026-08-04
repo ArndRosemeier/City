@@ -24,6 +24,9 @@ var ko_x: int = -1
 var ko_y: int = -1
 ## Set when phase becomes scoring: "resign_b", "resign_w", "two_passes", or "stopped".
 var end_reason: String = ""
+## Prisoners held: white stones taken by Black, black stones taken by White.
+var black_captures: int = 0
+var white_captures: int = 0
 
 
 func setup(n: int = 19) -> void:
@@ -42,6 +45,8 @@ func setup(n: int = 19) -> void:
 	ko_x = -1
 	ko_y = -1
 	end_reason = ""
+	black_captures = 0
+	white_captures = 0
 	reset.emit()
 
 
@@ -157,6 +162,10 @@ func try_play_xy(color: int, x: int, y: int) -> bool:
 	for k: Vector2i in uniq.keys():
 		captured_locs.append(k)
 		set_at(k.x, k.y, EMPTY)
+	if color == BLACK:
+		black_captures += captured_locs.size()
+	else:
+		white_captures += captured_locs.size()
 	if captured_locs.size() == 1 and _group_size(x, y) == 1:
 		ko_x = captured_locs[0].x
 		ko_y = captured_locs[0].y
@@ -189,18 +198,58 @@ func _apply_pass(color: int) -> void:
 		game_over.emit(end_reason)
 
 
-## Tromp-Taylor area score. Empty regions bordered by only one colour count for that
-## colour; stones count; dame (touched by both) count for neither. White gets `komi`.
+## Japanese territory score: empty points enclosed by one colour + prisoners taken.
+## Stones on the board do not count. Dame (touched by both) count for neither.
+## Dead groups still sitting on the board are not removed — same simplification as
+## the Chinese path; players are expected to have captured them before the two passes.
+func score_japanese(komi: float = 6.5) -> Dictionary:
+	var territory := _territory_counts()
+	return {
+		"black": float(int(territory["black"]) + black_captures),
+		"white": float(int(territory["white"]) + white_captures) + komi,
+		"komi": komi,
+		"territory_black": int(territory["black"]),
+		"territory_white": int(territory["white"]),
+		"captures_black": black_captures,
+		"captures_white": white_captures,
+	}
+
+
+## Chinese / Tromp-Taylor area score. Empty regions bordered by only one colour count
+## for that colour; stones count; dame count for neither. White gets `komi`.
 func score_tromp_taylor(komi: float = 7.5) -> Dictionary:
-	var owner := PackedInt32Array()
-	owner.resize(size * size)
-	owner.fill(-1)
+	return score_chinese(komi)
+
+
+func score_chinese(komi: float = 7.5) -> Dictionary:
+	var territory := _territory_counts()
+	var black_stones := 0
+	var white_stones := 0
+	for i in range(stones.size()):
+		if stones[i] == BLACK:
+			black_stones += 1
+		elif stones[i] == WHITE:
+			white_stones += 1
+	return {
+		"black": float(black_stones + int(territory["black"])),
+		"white": float(white_stones + int(territory["white"])) + komi,
+		"komi": komi,
+		"territory_black": int(territory["black"]),
+		"territory_white": int(territory["white"]),
+		"stones_black": black_stones,
+		"stones_white": white_stones,
+	}
+
+
+## Empty-point ownership only. Each empty region bordered by exactly one colour is
+## that colour's territory; everything else is dame.
+func _territory_counts() -> Dictionary:
+	var black_terr := 0
+	var white_terr := 0
 	var seen: Dictionary = {}
 	for y in range(size):
 		for x in range(size):
-			var c := at(x, y)
-			if c != EMPTY:
-				owner[y * size + x] = c
+			if at(x, y) != EMPTY:
 				continue
 			var key := Vector2i(x, y)
 			if seen.has(key):
@@ -220,24 +269,15 @@ func score_tromp_taylor(komi: float = 7.5) -> Dictionary:
 							stack.append(d)
 					else:
 						borders[nc] = true
-			var sole := EMPTY
-			if borders.size() == 1:
-				var bkeys: Array = borders.keys()
-				sole = int(bkeys[0])
-			for p2 in region:
-				owner[p2.y * size + p2.x] = sole
-	var black_pts := 0
-	var white_pts := 0
-	for i in range(owner.size()):
-		if owner[i] == BLACK:
-			black_pts += 1
-		elif owner[i] == WHITE:
-			white_pts += 1
-	return {
-		"black": float(black_pts),
-		"white": float(white_pts) + komi,
-		"komi": komi,
-	}
+			if borders.size() != 1:
+				continue
+			var bkeys: Array = borders.keys()
+			var sole := int(bkeys[0])
+			if sole == BLACK:
+				black_terr += region.size()
+			elif sole == WHITE:
+				white_terr += region.size()
+	return {"black": black_terr, "white": white_terr}
 
 
 func _neighbors(x: int, y: int) -> Array[Vector2i]:
@@ -321,6 +361,8 @@ func to_save_dict() -> Dictionary:
 		"ko_x": ko_x,
 		"ko_y": ko_y,
 		"end_reason": end_reason,
+		"black_captures": black_captures,
+		"white_captures": white_captures,
 		"move_list": moves,
 	}
 
@@ -365,6 +407,8 @@ static func from_save_dict(data: Dictionary) -> GoBoardState:
 	board.ko_x = int(data.get("ko_x", -1))
 	board.ko_y = int(data.get("ko_y", -1))
 	board.end_reason = str(data.get("end_reason", ""))
+	board.black_captures = maxi(int(data.get("black_captures", 0)), 0)
+	board.white_captures = maxi(int(data.get("white_captures", 0)), 0)
 	board.move_list = []
 	var raw_moves: Variant = data.get("move_list", [])
 	if typeof(raw_moves) != TYPE_ARRAY:

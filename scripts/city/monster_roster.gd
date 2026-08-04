@@ -21,14 +21,17 @@ var _next_id: int = 0
 
 func setup(city: CityRoot, terrain: VoxelTerrain = null, lod: NavLod = null) -> void:
 	_city = city
-	if terrain != null:
+	if terrain != null and is_instance_valid(terrain):
 		_terrain = terrain
-	else:
-		_terrain = city.get_node_or_null(TERRAIN_NODE_NAME) as VoxelTerrain
-	if _terrain == null:
+	elif city != null:
+		## Prefer the authoritative field. Child-name lookup is a fallback only — after a
+		## load/regenerate the replacement terrain may briefly not be named VoxelTerrain.
+		_terrain = city.voxel_terrain()
+		if _terrain == null or not is_instance_valid(_terrain):
+			_terrain = city.get_node_or_null(TERRAIN_NODE_NAME) as VoxelTerrain
+	if _terrain == null or not is_instance_valid(_terrain):
 		push_error(
-			"MonsterRoster: CityRoot has no %s child, monsters cannot collide with voxels"
-			% TERRAIN_NODE_NAME
+			"MonsterRoster: CityRoot has no live VoxelTerrain, monsters cannot collide with voxels"
 		)
 	_lod = (
 		lod

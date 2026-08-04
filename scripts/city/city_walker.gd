@@ -1269,6 +1269,9 @@ func set_controls(controls: PlayerControls) -> void:
 
 
 func bind_terrain(terrain: VoxelTerrain) -> void:
+	if terrain == null:
+		_voxel_motion.call("clear")
+		return
 	_voxel_motion.call("setup", terrain, max_step_height)
 
 

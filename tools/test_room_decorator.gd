@@ -20,6 +20,7 @@ func _initialize() -> void:
 	failed = _check_factories(failed)
 	failed = _check_purpose_names(failed)
 	failed = _check_arena_labyrinth(rng, failed)
+	failed = _check_arena_dense_maze(rng, failed)
 	failed = _check_bed_footprint(failed)
 
 	var purposes: Array[int] = [
@@ -226,6 +227,53 @@ func _check_arena_labyrinth(rng: RandomNumberGenerator, failed: bool) -> bool:
 	print(
 		"arena labyrinth: walls=%d coverage=%.0f%% keep_clear open"
 		% [walls, wall_frac * 100.0]
+	)
+	return failed
+
+
+## Dense maze (no chamber punches) keeps the corridor lattice — more wall than punched ~15%.
+func _check_arena_dense_maze(_rng: RandomNumberGenerator, failed: bool) -> bool:
+	## Same seed for both so the corridor lattice matches and only the punch pass differs.
+	var seed := 4242
+	var punched_rng := RandomNumberGenerator.new()
+	punched_rng.seed = seed
+	var punched: RoomDecorator = _make_decorator(punched_rng) as RoomDecorator
+	var vol_p: RoomVolume = RoomVolumeScript.make(Rect2i(2, 2, 40, 36), 0, 6)
+	_shell_room(punched.brush, vol_p)
+	var punched_walls := punched.decorate(vol_p, RoomDecoratorScript.Purpose.ARENA)
+
+	var dense_rng := RandomNumberGenerator.new()
+	dense_rng.seed = seed
+	var dec: RoomDecorator = _make_decorator(dense_rng) as RoomDecorator
+	dec.arena_punch_rooms = false
+	var volume: RoomVolume = RoomVolumeScript.make(Rect2i(2, 2, 40, 36), 0, 6)
+	_shell_room(dec.brush, volume)
+	var walls := dec.decorate(volume, RoomDecoratorScript.Purpose.ARENA)
+	if walls <= punched_walls:
+		push_error(
+			"FAIL dense ARENA walls=%d not above punched=%d" % [walls, punched_walls]
+		)
+		failed = true
+	var y := volume.prop_y()
+	var r := volume.rect
+	var fractal := 0
+	var usable := 0
+	for z in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			usable += 1
+			var id := dec.brush.get_vox(Vector3i(x, y, z))
+			if VoxelMaterial.is_fractal_band(id):
+				fractal += 1
+	var wall_frac := float(fractal) / float(maxi(usable, 1))
+	if wall_frac <= RoomDecoratorScript.ARENA_WALL_TARGET:
+		push_error(
+			"FAIL dense ARENA coverage %.2f (want above punched target %.2f)"
+			% [wall_frac, RoomDecoratorScript.ARENA_WALL_TARGET]
+		)
+		failed = true
+	print(
+		"arena dense maze: walls=%d (punched=%d) coverage=%.0f%%"
+		% [walls, punched_walls, wall_frac * 100.0]
 	)
 	return failed
 

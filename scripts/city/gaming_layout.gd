@@ -29,7 +29,7 @@ var spawn_yaw: float = 0.0
 ## exclusive). GamingGarden fills this in; other zones on the tile should stay out of it.
 var garden_min: Vector3i = Vector3i.ZERO
 var garden_max: Vector3i = Vector3i.ZERO
-## Tetris arcade precinct on the west lawn, district-local voxels (max exclusive).
+## Tetris arcade kerb box, district-local voxels (max exclusive). Sized to the pavilion.
 var arcade_min: Vector3i = Vector3i.ZERO
 var arcade_max: Vector3i = Vector3i.ZERO
 ## Ground anchors for the permanent Tetris cabinets: the base centre of each, in
@@ -40,7 +40,7 @@ var arcade_yaw: float = 0.0
 ## Mid-row fallback spawn for a cabinet ped, district-local voxels. Runtime prefers a stand
 ## in front of each ped's own bay; this stays for layout dumps and older callers.
 var arcade_ped_spawn: Vector3i = Vector3i.ZERO
-## Monster-chess precinct on the east lawn, district-local voxels (max exclusive).
+## Monster-chess precinct, district-local voxels (max exclusive).
 var chess_min: Vector3i = Vector3i.ZERO
 var chess_max: Vector3i = Vector3i.ZERO
 ## Board SW corner (a1) and square pitch, so the runtime arena needs no bake constants.
@@ -48,6 +48,19 @@ var chess_max: Vector3i = Vector3i.ZERO
 ## one course above it.
 var chess_origin: Vector3i = Vector3i.ZERO
 var chess_square_vox: int = 8
+## Festive outer district wall (reserve inset). Maze lives inside this ring.
+var wall_rect: Rect2i = Rect2i()
+## Four mid-edge openings through the outer wall (N/S/W/E).
+var wall_gate_rects: Array[Rect2i] = []
+## Zoo-style containment ring around the attractions (outer footprint, posts included).
+## Dense maze fills the band between `wall_rect` and this rect.
+var fence_rect: Rect2i = Rect2i()
+## Walkable court inside the attraction ring (fence minus thickness).
+var field_rect: Rect2i = Rect2i()
+## Top solid Y of the attraction-fence posts.
+var fence_top_y: int = 0
+## Four mid-edge openings through the attraction ring (N/S/W/E).
+var gate_rects: Array[Rect2i] = []
 
 
 ## Distance from first to last intersection of the baked field.
@@ -86,8 +99,12 @@ func chess_square_center(file: int, rank: int) -> Vector2:
 
 
 func describe() -> String:
-	return "GamingLayout giant %dx%d cell=%d span=%d pad=%s..%s table=%s arcade=%s..%s(%d cabs) chess=%s..%s board=%s/%d" % [
+	return (
+		"GamingLayout giant %dx%d cell=%d span=%d pad=%s..%s table=%s arcade=%s..%s(%d cabs) "
+		+ "chess=%s..%s board=%s/%d wall=%s/%d fence=%s/%d"
+	) % [
 		board_n, board_n, giant_cell_vox, giant_span_vox(), pad_min, pad_max, main_table_origin,
 		arcade_min, arcade_max, arcade_cabinets.size(), chess_min, chess_max,
-		chess_origin, chess_square_vox
+		chess_origin, chess_square_vox, wall_rect, wall_gate_rects.size(),
+		fence_rect, gate_rects.size()
 	]

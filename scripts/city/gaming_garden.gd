@@ -4,9 +4,10 @@
 ## board's apron corners, a raked gravel court with a rock group, a koi pond with an
 ## arched crossing, clipped shrubs and pines.
 ##
-## Deliberately bounded to a band around the board pad and the play table: the rest of
-## the Gaming tile stays open meadow so other zones can be built beside the garden. The
-## band is published as `GamingLayout.garden_min/garden_max` for exactly that reason.
+## Deliberately bounded to a band around the board pad and the play table. The composer
+## wraps Go + Tetris + chess in a zoo fence and maze-fills outside that ring; this band
+## is published as `GamingLayout.garden_min/garden_max` so satellites and the ring share
+## one footprint.
 class_name GamingGarden
 extends RefCounted
 
@@ -72,6 +73,29 @@ var _lanterns_built: int = 0
 var _plants: int = 0
 
 
+## Publish `garden_min` / `garden_max` from pad + table without dressing. GamingComposer
+## needs the band before the maze so it can cut the Go installment hole.
+func plan_band(layout: GamingLayout, min_v: Vector3i, max_v: Vector3i) -> bool:
+	if layout == null:
+		push_error("GamingGarden: no layout")
+		return false
+	if min_v.x >= max_v.x or min_v.z >= max_v.z:
+		push_error("GamingGarden: empty bounds %s..%s" % [min_v, max_v])
+		return false
+	_layout = layout
+	_bounds = Rect2i(min_v.x, min_v.z, max_v.x - min_v.x, max_v.z - min_v.z)
+	var pad := _pad_rect()
+	var table := _table_rect()
+	var core := pad.merge(table)
+	_band = core.grow(BAND).intersection(_bounds)
+	if _band.size.x <= 0 or _band.size.y <= 0:
+		push_error("GamingGarden: garden band falls outside the reserve")
+		return false
+	_layout.garden_min = Vector3i(_band.position.x, ground_y, _band.position.y)
+	_layout.garden_max = Vector3i(_band.end.x, ground_y + 1, _band.end.y)
+	return true
+
+
 ## Full dressing for a walk-up district.
 func decorate(layout: GamingLayout, min_v: Vector3i, max_v: Vector3i) -> void:
 	if not _begin(layout, min_v, max_v):
@@ -100,33 +124,16 @@ func _begin(layout: GamingLayout, min_v: Vector3i, max_v: Vector3i) -> bool:
 	if brush == null or rng == null:
 		push_error("GamingGarden: brush / rng not set")
 		return false
-	if layout == null:
-		push_error("GamingGarden: no layout")
+	if not plan_band(layout, min_v, max_v):
 		return false
-	if min_v.x >= max_v.x or min_v.z >= max_v.z:
-		push_error("GamingGarden: empty bounds %s..%s" % [min_v, max_v])
-		return false
-	_layout = layout
-	_bounds = Rect2i(min_v.x, min_v.z, max_v.x - min_v.x, max_v.z - min_v.z)
 	_claimed = []
 	_gates_built = 0
 	_lanterns_built = 0
 	_plants = 0
 
-	## Go furniture AABB: the board pad plus the table sitting south of it.
-	var pad := _pad_rect()
-	var table := _table_rect()
-	var core := pad.merge(table)
-	_band = core.grow(BAND).intersection(_bounds)
-	if _band.size.x <= 0 or _band.size.y <= 0:
-		push_error("GamingGarden: garden band falls outside the reserve")
-		return false
-	_layout.garden_min = Vector3i(_band.position.x, ground_y, _band.position.y)
-	_layout.garden_max = Vector3i(_band.end.x, ground_y + 1, _band.end.y)
-
 	## Nothing plants on the board pad, on the table, or in the walk between them.
-	_claimed.append(pad.grow(2))
-	_claimed.append(table.grow(3))
+	_claimed.append(_pad_rect().grow(2))
+	_claimed.append(_table_rect().grow(3))
 	_claimed.append(_corridor_rect())
 	return true
 

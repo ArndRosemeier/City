@@ -41,7 +41,7 @@ var _gem_pickup_stream: AudioStream
 ## Chest lid and the flourish for a whole haul. No pack has either mood, so both are synthesized.
 var _chest_open_stream: AudioStream
 var _bling_stream: AudioStream
-## Soft Go stone place — short glass-pebble bling (not a debris boom).
+## Yunzi-style glass stone on wood — sharp clack + short crystalline ring.
 var _go_stone_bling_stream: AudioStream
 ## Fractal panel lock-on — a short locking chirp when the postcard autozoom lands.
 var _lock_on_stream: AudioStream
@@ -261,7 +261,7 @@ func play_treasure_bling() -> void:
 	_bling_player.play()
 
 
-## Go stone settle — bright short bling at the board, never a debris/explosion hit.
+## Go stone settle — glass Yunzi clack on the goban, never a debris/explosion hit.
 func play_go_stone_bling(world_pos: Vector3) -> void:
 	if not enabled:
 		return
@@ -270,8 +270,9 @@ func play_go_stone_bling(world_pos: Vector3) -> void:
 	var p := _next_player()
 	p.stream = _go_stone_bling_stream
 	p.global_position = world_pos
-	p.pitch_scale = _rng.randf_range(0.96, 1.06)
-	p.volume_db = -6.0
+	## Tight pitch drift: each stone should still read as glass, not a random chime.
+	p.pitch_scale = _rng.randf_range(0.97, 1.04)
+	p.volume_db = -4.0
 	p.play()
 
 
@@ -1022,13 +1023,32 @@ func _build_treasure_bling() -> AudioStreamWAV:
 
 
 func _build_go_stone_bling() -> AudioStreamWAV:
-	## Single bright glass-pebble tick — no low boom, no rubble.
-	return _synthesize(0.18, func(t: float, _i: int) -> float:
-		var env := smoothstep(0.0, 0.004, t) * exp(-t * 22.0)
-		var tick := sin(TAU * 1880.0 * t) * 0.7 + sin(TAU * 2760.0 * t) * 0.35
-		var body := sin(TAU * 920.0 * t) * 0.22 * exp(-t * 14.0)
-		var air := (_rng.randf() * 2.0 - 1.0) * 0.08 * exp(-t * 40.0)
-		return (tick + body + air) * env * 0.75
+	## Glass Yunzi on kaya: a wooden contact clack, then inharmonic high rings that die fast.
+	## Real stones are bright and dry — not a musical chime and not a rubble tick.
+	## Partials sit off integer ratios so the ring reads as glass rather than a bell.
+	var rings := PackedFloat32Array([2480.0, 3170.0, 4020.0, 5310.0, 6840.0])
+	var ring_w := PackedFloat32Array([0.55, 0.42, 0.28, 0.18, 0.10])
+	var ring_d := PackedFloat32Array([18.0, 22.0, 28.0, 34.0, 42.0])
+	return _synthesize(0.28, func(t: float, _i: int) -> float:
+		## Contact: hard wood knock + a few milliseconds of grit for the tip strike.
+		var knock_env := smoothstep(0.0, 0.0015, t) * exp(-t * 55.0)
+		var knock := (
+			sin(TAU * 620.0 * t) * 0.55
+			+ sin(TAU * 980.0 * t) * 0.35
+			+ sin(TAU * 1480.0 * t) * 0.2
+		) * knock_env
+		var tip := (_rng.randf() * 2.0 - 1.0) * 0.55 * exp(-t * 140.0)
+
+		## Glass body: bright partials with a tiny FM shimmer so it sings, briefly.
+		var glass := 0.0
+		for n in range(rings.size()):
+			var env := smoothstep(0.0, 0.0025, t) * exp(-t * ring_d[n])
+			var fm := sin(TAU * 27.0 * t) * (0.4 + float(n) * 0.15)
+			glass += sin(TAU * rings[n] * t + fm) * env * ring_w[n]
+
+		## Quiet board undertone — the goban answering, not a boom.
+		var wood := sin(TAU * 240.0 * t) * 0.12 * exp(-t * 30.0)
+		return (knock * 0.9 + tip * 0.45 + glass * 0.85 + wood) * 0.78
 	)
 
 

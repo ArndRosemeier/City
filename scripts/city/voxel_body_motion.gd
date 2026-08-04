@@ -21,10 +21,21 @@ var _collide_with_water: bool = true
 
 func setup(terrain: VoxelTerrain, max_step_height_m: float = 0.55) -> void:
 	_terrain = terrain
+	if _terrain == null:
+		return
 	_mover.set_step_climbing_enabled(true)
 	_collide_with_water = true
 	_apply_collision_mask()
 	set_max_step_height(max_step_height_m)
+
+
+## Drop the terrain binding. Call before the world tears VoxelTerrain out of the tree —
+## `is_instance_valid` stays true across remove_child/queue_free until the frame ends.
+func clear() -> void:
+	_terrain = null
+	_on_floor = false
+	_stepped_up = false
+	_stepped_down = false
 
 
 func set_max_step_height(height_m: float) -> void:
@@ -51,7 +62,7 @@ func _apply_collision_mask() -> void:
 
 
 func _world_metres_to_terrain_local(height_m: float) -> float:
-	if _terrain == null or not is_instance_valid(_terrain):
+	if not has_terrain():
 		return height_m
 	var sy := absf(_terrain.global_transform.basis.y.length())
 	if sy < 0.0001:
@@ -73,7 +84,13 @@ func has_stepped_down() -> bool:
 
 
 func has_terrain() -> bool:
-	return _terrain != null and is_instance_valid(_terrain)
+	## Must be in the tree: to_local/global_transform error once terrain was remove_child'd
+	## during regenerate, even though the Object is still instance-valid that frame.
+	return (
+		_terrain != null
+		and is_instance_valid(_terrain)
+		and _terrain.is_inside_tree()
+	)
 
 
 ## Live VoxelTool for the bound terrain, or null when unbound.

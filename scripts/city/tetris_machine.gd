@@ -340,6 +340,11 @@ func cells_for_piece(piece_id: int, rot: int) -> Array[Vector2i]:
 	return _cells_for(piece_id, rot)
 
 
+## Local-space centre of a board cell — used by well-alignment tests.
+func cell_local_center(col: int, row: int) -> Vector3:
+	return _cell_world_local(float(col), float(row))
+
+
 func fits_at(piece_id: int, rot: int, ox: int, oy: int) -> bool:
 	return _fits(piece_id, rot, ox, oy)
 
@@ -459,8 +464,9 @@ func _stamp_voxel_shell() -> void:
 
 	var x0 := -well_w * 0.5
 	var y0 := ped_h
-	_pf_origin = Vector3(x0 + cs * 0.5, y0 + cs * 0.5, depth * 0.5)
 	_piece_z = depth * 0.5
+	## Provisional origin — replaced after stamp so MultiMesh cells track the floored rails.
+	_pf_origin = Vector3(x0 + cs * 0.5, y0 + cs * 0.5, _piece_z)
 
 	_owned_voxels.clear()
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
@@ -504,6 +510,7 @@ func _stamp_voxel_shell() -> void:
 	_stamp_box_m(Vector3(1.0, btn_y + 0.35, -0.05), Vector3(btn, btn, btn))
 	_stamp_box_m(Vector3(1.6, btn_y, -0.05), Vector3(btn, btn, btn))
 	_brush.end_edit()
+	_align_playfield_to_rails(x0, well_w, y0, cs)
 
 	_title = Label3D.new()
 	_title.name = "Title"
@@ -537,13 +544,7 @@ func _stamp_box_m(center_local: Vector3, size_m: Vector3) -> void:
 
 
 func _stamp_local_point(local_pos: Vector3) -> void:
-	var world := to_global(local_pos)
-	var local_t := _terrain.to_local(world)
-	var vox := Vector3i(
-		int(floor(local_t.x)),
-		int(floor(local_t.y)),
-		int(floor(local_t.z))
-	)
+	var vox := _local_to_vox(local_pos)
 	if vox.y < 1:
 		vox.y = 1
 	var existing := int(_tool.get_voxel(vox))
@@ -551,6 +552,55 @@ func _stamp_local_point(local_pos: Vector3) -> void:
 		return
 	_brush.set_vox(vox, VoxelMaterial.GAMEBOY)
 	_owned_voxels[vox] = true
+
+
+func _local_to_vox(local_pos: Vector3) -> Vector3i:
+	var world := to_global(local_pos)
+	var local_t := _terrain.to_local(world)
+	return Vector3i(
+		int(floor(local_t.x)),
+		int(floor(local_t.y)),
+		int(floor(local_t.z))
+	)
+
+
+func _vox_center_to_local(vox: Vector3i) -> Vector3:
+	var terrain_local := Vector3(
+		float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5
+	)
+	return to_local(_terrain.to_global(terrain_local))
+
+
+## Arcade cabinets stand on voxel centres; `floor` then parks the GAMEBOY side rails one
+## cell off the continuous well, so locked pieces look shifted inside the harness. Seat
+## `_pf_origin` on the lattice the rails actually occupied.
+func _align_playfield_to_rails(x0: float, well_w: float, y0: float, cs: float) -> void:
+	if _terrain == null:
+		return
+	var left_c := _vox_center_to_local(
+		_local_to_vox(Vector3(x0 - cs * 0.5, y0 + cs * 0.5, _piece_z))
+	)
+	var right_c := _vox_center_to_local(
+		_local_to_vox(Vector3(x0 + well_w + cs * 0.5, y0 + cs * 0.5, _piece_z))
+	)
+	var bottom_c := _vox_center_to_local(
+		_local_to_vox(Vector3(0.0, y0 - cs * 0.5, _piece_z))
+	)
+	var x_left := left_c.x
+	var x_right := right_c.x
+	if x_right < x_left:
+		var tmp := x_left
+		x_left = x_right
+		x_right = tmp
+	var expected := float(COLS - 1) * cs
+	var actual := x_right - x_left - 2.0 * cs
+	if absf(actual - expected) > cs * 0.51:
+		push_error(
+			"TetrisMachine: stamped well span %.3fm (want %.3fm) — leaving provisional origin"
+			% [actual, expected]
+		)
+		return
+	_pf_origin = Vector3(x_left + cs, bottom_c.y + cs, _piece_z)
 
 
 func clear_shell() -> void:

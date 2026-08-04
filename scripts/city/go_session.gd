@@ -15,7 +15,9 @@ signal eval_updated(snapshot: GoEvalSnapshot)
 ## The shown numbers no longer describe the position (human moved, match ended, restart).
 signal eval_cleared()
 
-const KOMI := 7.5
+## Japanese match default. End-panel Chinese recount uses the same komi so toggling
+## only changes territory-vs-area accounting, not the compensation White already played under.
+const KOMI := 6.5
 
 var board: GoBoardState = null
 var black_human: bool = true

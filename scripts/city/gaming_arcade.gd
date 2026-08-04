@@ -30,9 +30,11 @@ const DECK_FRONT := 12
 const DECK_BACK := 8
 ## Two courses, so stepping up onto the arcade is a deliberate half metre.
 const DECK_H := 2
-## Margin from the garden-side zone edge. Small — the arcade is meant to read as part of
-## the quarter rather than a distant satellite.
+## Margin from the garden-side lawn edge when placing the pavilion on a west lawn.
 const GARDEN_MARGIN := 2
+## Lip around the deck — `_build_deck` grows the kerb by this, and the published precinct
+## is that kerb box so the maze cut matches the built pavilion.
+const KERB_PAD := 2
 
 ## Wall thickness and how far it stands proud of the tallest cabinet.
 const WALL_T := 3
@@ -60,6 +62,42 @@ var _deck: Rect2i = Rect2i()
 var _anchor_x: int = 0
 
 
+## Deck size in voxels (XZ). Shared with GamingComposer so the maze precinct matches bake.
+static func deck_size() -> Vector2i:
+	var row_span := (CABINETS - 1) * BAY_PITCH + CAB_W_VOX
+	return Vector2i(
+		DECK_BACK + CAB_BACK_VOX + DECK_FRONT,
+		row_span + DECK_END_PAD * 2
+	)
+
+
+## Kerb / maze-precinct size around the deck.
+static func precinct_size() -> Vector2i:
+	return deck_size() + Vector2i(KERB_PAD * 2, KERB_PAD * 2)
+
+
+## Place the pavilion hard against the garden edge of a west lawn and publish the kerb
+## box as `arcade_min` / `arcade_max` (not the whole lawn).
+static func plan_precinct(
+	layout: GamingLayout, lawn: Rect2i, ground_y: int
+) -> bool:
+	if layout == null:
+		push_error("GamingArcade.plan_precinct: no layout")
+		return false
+	var deck := deck_size()
+	if lawn.size.x < deck.x + GARDEN_MARGIN or lawn.size.y < deck.y:
+		push_error(
+			"GamingArcade: lawn %s cannot hold a %s pavilion" % [lawn, deck]
+		)
+		return false
+	var deck_x0 := lawn.end.x - deck.x - GARDEN_MARGIN
+	var deck_z0 := lawn.position.y + (lawn.size.y - deck.y) / 2
+	var kerb := Rect2i(deck_x0, deck_z0, deck.x, deck.y).grow(KERB_PAD)
+	layout.arcade_min = Vector3i(kerb.position.x, ground_y, kerb.position.y)
+	layout.arcade_max = Vector3i(kerb.end.x, ground_y + 1, kerb.end.y)
+	return true
+
+
 func build(layout: GamingLayout) -> void:
 	if not _begin(layout):
 		return
@@ -85,25 +123,23 @@ func _begin(layout: GamingLayout) -> bool:
 	var a0 := layout.arcade_min
 	var a1 := layout.arcade_max
 	if a1.x <= a0.x or a1.z <= a0.z:
-		## No west lawn was published — GamingComposer already said why.
+		## No arcade precinct was published — GamingComposer already said why.
 		return false
+	## Composer publishes the kerb box; the deck sits inset by KERB_PAD.
 	_zone = Rect2i(a0.x, a0.z, a1.x - a0.x, a1.z - a0.z)
-
-	var row_span := (CABINETS - 1) * BAY_PITCH + CAB_W_VOX
-	var deck_d := row_span + DECK_END_PAD * 2
-	var deck_w := DECK_BACK + CAB_BACK_VOX + DECK_FRONT
-	if _zone.size.x < deck_w or _zone.size.y < deck_d:
+	var want := precinct_size()
+	if _zone.size.x != want.x or _zone.size.y != want.y:
 		push_error(
-			"GamingArcade: zone %s cannot hold a %dx%d pavilion" % [_zone, deck_w, deck_d]
+			"GamingArcade: precinct %s is not the kerb size %s" % [_zone.size, want]
 		)
 		return false
-	## Hard against the garden: the west lawn is wide, and a western-third placement left the
-	## arcade reading as a distant outbuilding. The row still faces east, so you meet the
-	## screens as you leave the Go band rather than after a meadow crossing.
-	var deck_x0 := _zone.end.x - deck_w - GARDEN_MARGIN
-	var deck_z0 := _zone.position.y + (_zone.size.y - deck_d) / 2
-	_deck = Rect2i(deck_x0, deck_z0, deck_w, deck_d)
-	_anchor_x = deck_x0 + DECK_BACK + CAB_BACK_VOX
+	_deck = Rect2i(
+		_zone.position.x + KERB_PAD,
+		_zone.position.y + KERB_PAD,
+		_zone.size.x - KERB_PAD * 2,
+		_zone.size.y - KERB_PAD * 2
+	)
+	_anchor_x = _deck.position.x + DECK_BACK + CAB_BACK_VOX
 	return true
 
 
@@ -114,7 +150,7 @@ func _deck_top() -> int:
 
 
 func _build_deck() -> void:
-	var kerb := _deck.grow(2)
+	var kerb := _deck.grow(KERB_PAD)
 	## Kerb first, then the deck over it, so the deck edge is a lip rather than a cliff.
 	brush.fill_box(
 		Vector3i(kerb.position.x, ground_y + 1, kerb.position.y),

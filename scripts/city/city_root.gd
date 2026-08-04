@@ -1478,6 +1478,10 @@ func _process(delta: float) -> void:
 
 func _create_terrain() -> void:
 	if _terrain != null and is_instance_valid(_terrain):
+		## Detach before queue_free so the name "VoxelTerrain" is free. Leaving the old
+		## node in the tree until end-of-frame makes Godot rename the replacement
+		## (VoxelTerrain2), and MonsterRoster's child lookup then finds nothing.
+		remove_child(_terrain)
 		_terrain.queue_free()
 		_terrain = null
 		_tool = null
@@ -2745,7 +2749,8 @@ func _ensure_monster_roster() -> void:
 		_monsters = MonsterRosterScript.new() as MonsterRoster
 		_monsters.name = "MonsterRoster"
 		add_child(_monsters)
-	_monsters.setup(self)
+	## Pass the live field — never rely on child-name lookup after a regenerate.
+	_monsters.setup(self, _terrain)
 
 
 func _ensure_undead_director() -> void:
@@ -3111,6 +3116,12 @@ func _regenerate() -> void:
 	await get_tree().process_frame
 
 	if _walker != null and is_instance_valid(_walker):
+		## Stop probes before terrain leaves the tree — queue_free is deferred, and
+		## `_process` would still call to_local on the detached VoxelTerrain.
+		_walker.set_process(false)
+		_walker.set_physics_process(false)
+		if _walker.has_method("bind_terrain"):
+			_walker.call("bind_terrain", null)
 		_walker.queue_free()
 		_walker = null
 	_clear_summoned_tetris()

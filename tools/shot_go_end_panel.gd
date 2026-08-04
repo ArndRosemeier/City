@@ -58,13 +58,13 @@ func _fake_resign_result() -> GoMatchResult:
 	assert(board.try_play_xy(GoBoardState.WHITE, 6, 6))
 	assert(board.try_play_xy(GoBoardState.BLACK, 2, 3))
 	assert(board.try_play(GoBoardState.WHITE, "resign"))
-	return GoMatchResult.from_board(board, board.end_reason, 7.5)
+	return GoMatchResult.from_board(board, board.end_reason, 6.5)
 
 
 func _fake_score_result() -> GoMatchResult:
 	var board := GoBoardState.new()
 	board.setup(5)
-	## Black surrounds the SW; White the NE — two_passes area score.
+	## Black surrounds the SW; White the NE — two_passes territory / area score.
 	assert(board.try_play_xy(GoBoardState.BLACK, 0, 0))
 	assert(board.try_play_xy(GoBoardState.WHITE, 4, 4))
 	assert(board.try_play_xy(GoBoardState.BLACK, 1, 0))
@@ -73,7 +73,7 @@ func _fake_score_result() -> GoMatchResult:
 	assert(board.try_play_xy(GoBoardState.WHITE, 4, 3))
 	assert(board.try_play(GoBoardState.BLACK, "pass"))
 	assert(board.try_play(GoBoardState.WHITE, "pass"))
-	return GoMatchResult.from_board(board, board.end_reason, 7.5)
+	return GoMatchResult.from_board(board, board.end_reason, 6.5)
 
 
 func _build_environment(root: Node3D) -> void:

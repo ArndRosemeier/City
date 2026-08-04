@@ -53,6 +53,7 @@ func _ready() -> void:
 	_check_keys_reach_the_board(machine, walker)
 	await _check_keys_stop_at_a_modal(machine, walker)
 	_check_power_and_new(machine)
+	_check_arcade_well_alignment(walker)
 	_finish()
 
 
@@ -282,6 +283,78 @@ func _check_controls_face_the_stand(machine: TetrisMachine) -> void:
 		)
 		return
 	print("OK controls face the stand (dot %.2f)" % align)
+
+
+## Arcade cabinets stand on voxel centres and face sideways — that used to floor() the
+## GAMEBOY rails one cell off the MultiMesh playfield (gap on one side, flush on the other).
+func _check_arcade_well_alignment(walker: CityWalker) -> void:
+	var brush: CityBrush = CityBrushScript.new(_tool) as CityBrush
+	var machine: TetrisMachine = TetrisMachineScript.new() as TetrisMachine
+	machine.name = "ArcadeAlignCabinet"
+	add_child(machine)
+	## Same footing DistrictInstance._stand_world uses, plus the arcade's east-facing yaw.
+	var ground := Vector3(
+		(float(ORIGIN.x) + 0.5) * VOXEL_SIZE,
+		float(ORIGIN.y) * VOXEL_SIZE,
+		(float(ORIGIN.z + 48) + 0.5) * VOXEL_SIZE
+	)
+	machine.begin(_terrain, _tool, brush, walker, ground, -PI * 0.5, VOXEL_SIZE)
+	if machine.is_broken() or not machine.is_playable():
+		_fail("FAIL arcade-align cabinet did not come up playable")
+		machine.queue_free()
+		return
+	var c0: Vector3 = machine.cell_local_center(0, 2)
+	var c9: Vector3 = machine.cell_local_center(9, 2)
+	var span := absf(c9.x - c0.x)
+	var want := float(TetrisMachine.COLS - 1) * VOXEL_SIZE
+	if absf(span - want) > 0.02:
+		_fail("FAIL playfield span %.3f (want %.3f)" % [span, want])
+		machine.queue_free()
+		return
+	## Side rails are one cell outside the first/last column centres.
+	var left_rail := _nearest_shell_local_x(machine, c0.x - VOXEL_SIZE, c0.y)
+	var right_rail := _nearest_shell_local_x(machine, c9.x + VOXEL_SIZE, c9.y)
+	if left_rail == INF or right_rail == INF:
+		_fail("FAIL could not find stamped side rails beside the playfield")
+		machine.queue_free()
+		return
+	var left_gap := absf(c0.x - left_rail) - VOXEL_SIZE
+	var right_gap := absf(right_rail - c9.x) - VOXEL_SIZE
+	if absf(left_gap) > 0.08 or absf(right_gap) > 0.08:
+		_fail(
+			"FAIL well misaligned with harness (left err %.3f, right err %.3f)"
+			% [left_gap, right_gap]
+		)
+		machine.queue_free()
+		return
+	if absf(left_gap - right_gap) > 0.08:
+		_fail(
+			"FAIL asymmetric well gaps left=%.3f right=%.3f"
+			% [left_gap, right_gap]
+		)
+		machine.queue_free()
+		return
+	print("OK arcade well centres sit one cell inside each stamped rail")
+	machine.queue_free()
+
+
+## Closest owned GAMEBOY voxel centre (machine-local X) near an expected rail column.
+func _nearest_shell_local_x(machine: TetrisMachine, expect_x: float, at_y: float) -> float:
+	var best := INF
+	var best_d := INF
+	for vox_v: Variant in machine._owned_voxels.keys():
+		var vox: Vector3i = vox_v as Vector3i
+		var terrain_local := Vector3(
+			float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5
+		)
+		var local: Vector3 = machine.to_local(_terrain.to_global(terrain_local))
+		if absf(local.y - at_y) > VOXEL_SIZE:
+			continue
+		var d := absf(local.x - expect_x)
+		if d < best_d:
+			best_d = d
+			best = local.x
+	return best
 
 
 func _make_machine(walker: CityWalker) -> TetrisMachine:

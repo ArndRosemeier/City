@@ -65,6 +65,9 @@ const ARENA_QUARTER_BANDS: Array[int] = [0, 4, 8, 12]
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
+## When true (arena default), random chambers punch the maze down to ~15% wall cover.
+## Gaming sets this false and clears its own installment rectangles afterward.
+var arena_punch_rooms: bool = true
 
 
 ## Stamp props for `purpose` into `volume`. Returns how many props were written.
@@ -201,9 +204,9 @@ static func purpose_from_name(name: String) -> Purpose:
 
 
 ## Fractal-material maze in the pit air band: fill walls (one hue per quarter), carve
-## passages, then punch overlapping rooms until wall coverage is ~15%. A plain maze is
-## already ~half open — that free space counts; rooms only need to clear the rest.
-## No outer wall ring — the pit shell already bounds the fight.
+## passages, optionally punch overlapping rooms until wall coverage is ~15%. A plain maze
+## is already ~half open — that free space counts; rooms only need to clear the rest.
+## No outer wall ring — the pit shell (or district edge) already bounds the field.
 func _decorate_arena_labyrinth(volume: RoomVolume) -> int:
 	var r := volume.rect
 	if r.size.x < 16 or r.size.y < 16 or volume.air_h < 2:
@@ -267,18 +270,20 @@ func _decorate_arena_labyrinth(volume: RoomVolume) -> int:
 	_arena_carve_box(r.position.x, mouth_z, mouth_d, mouth_w, y0, y1, r, reserved)
 	_arena_carve_box(r.end.x - mouth_d, mouth_z, mouth_d, mouth_w, y0, y1, r, reserved)
 
-	## 4) Punch rooms until wall coverage ≤ ~15% (overlap is fine).
+	## 4) Optional chamber punches — arena clears down to ~15%; gaming leaves the dense maze
+	## and cuts installment rectangles itself after decorate returns.
 	var usable := maxi(volume.area() - reserved.size(), 1)
-	var guard := 96
-	while guard > 0 and _arena_wall_ratio(r, reserved, y0) > ARENA_WALL_TARGET:
-		guard -= 1
-		var rw := rng.randi_range(ARENA_ROOM_MIN, ARENA_ROOM_MAX)
-		var rd := rng.randi_range(ARENA_ROOM_MIN, ARENA_ROOM_MAX)
-		var rx := rng.randi_range(r.position.x, maxi(r.position.x, r.end.x - rw))
-		var rz := rng.randi_range(r.position.y, maxi(r.position.y, r.end.y - rd))
-		_arena_carve_box(rx, rz, rw, rd, y0, y1, r, reserved)
+	if arena_punch_rooms:
+		var guard := 96
+		while guard > 0 and _arena_wall_ratio(r, reserved, y0) > ARENA_WALL_TARGET:
+			guard -= 1
+			var rw := rng.randi_range(ARENA_ROOM_MIN, ARENA_ROOM_MAX)
+			var rd := rng.randi_range(ARENA_ROOM_MIN, ARENA_ROOM_MAX)
+			var rx := rng.randi_range(r.position.x, maxi(r.position.x, r.end.x - rw))
+			var rz := rng.randi_range(r.position.y, maxi(r.position.y, r.end.y - rd))
+			_arena_carve_box(rx, rz, rw, rd, y0, y1, r, reserved)
 
-	## 5) Reserved columns always finish clear (lifts).
+	## 5) Reserved columns always finish clear (lifts / keep_clear).
 	for p: Vector2i in reserved.keys():
 		_arena_carve_column(p.x, p.y, y0, y1)
 
@@ -293,10 +298,16 @@ func _decorate_arena_labyrinth(volume: RoomVolume) -> int:
 	if walls <= 0:
 		push_error("RoomDecorator.ARENA: labyrinth left no wall columns")
 	var wall_frac := float(walls) / float(usable)
-	print(
-		"RoomDecorator.ARENA: walls=%d coverage=%.0f%% (target %.0f%%)"
-		% [walls, wall_frac * 100.0, ARENA_WALL_TARGET * 100.0]
-	)
+	if arena_punch_rooms:
+		print(
+			"RoomDecorator.ARENA: walls=%d coverage=%.0f%% (target %.0f%%)"
+			% [walls, wall_frac * 100.0, ARENA_WALL_TARGET * 100.0]
+		)
+	else:
+		print(
+			"RoomDecorator.ARENA: walls=%d coverage=%.0f%% (dense maze, no chamber punches)"
+			% [walls, wall_frac * 100.0]
+		)
 	return walls
 
 
