@@ -21,6 +21,11 @@ const MARKER_M := 0.2
 const MARKER_OFFSET_Z := -0.02
 const BUTTON_Z := -0.015
 const BUTTON_DEPTH := 0.03
+## Label3D glyph atlas size; `pixel_size` divides by it, so this is purely how many
+## texels a glyph gets. A button label is ~160 screen px when you lean into a panel, so
+## 256 is already 1.6x oversampled. 512 is not visibly sharper and its atlas pages (the
+## outline scales with it too) are big enough to exhaust the headless dummy renderer.
+const LABEL_FONT_PX := 256
 
 @export var size_m: Vector2 = Vector2(5.0, 5.0)
 @export var surface_color: Color = Color(0.22, 0.45, 0.72, 0.92)
@@ -397,17 +402,20 @@ func _add_button_label(parent: MeshInstance3D, label: String, base: Color) -> vo
 	var lbl := Label3D.new()
 	lbl.name = "Label"
 	lbl.text = label
-	lbl.font_size = 64
+	lbl.font_size = LABEL_FONT_PX
 	var btn_h: float = (parent.mesh as QuadMesh).size.y
-	lbl.pixel_size = (btn_h * 0.52) / 64.0
+	lbl.pixel_size = (btn_h * 0.52) / float(LABEL_FONT_PX)
 	lbl.modulate = Color(1.0, 1.0, 1.0, 1.0).lerp(base.lightened(0.65), 0.35)
-	lbl.outline_size = 16
+	lbl.outline_size = int(round(16.0 * float(LABEL_FONT_PX) / 64.0))
 	lbl.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	lbl.double_sided = true
 	lbl.no_depth_test = false
+	## Seated graze on lay-flat panels: anisotropic keeps glyph mips from turning to mush.
+	lbl.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	lbl.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
 	## QuadMesh faces −Z; Label3D faces +Z by default — flip to match the panel face.
 	lbl.position = Vector3(0.0, 0.0, -BUTTON_DEPTH)
 	lbl.rotation.y = PI

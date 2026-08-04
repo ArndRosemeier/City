@@ -17,10 +17,20 @@ const EVAL_LABEL_Z := -0.032
 ## Below this share of the busiest candidate a disc gets no caption — the board is small.
 const EVAL_LABEL_MIN_SHARE := 0.2
 const EVAL_MAX_LABELS := 3
-const EVAL_TEX_PX := 96
+const EVAL_TEX_PX := 256
+## Glyph atlas size for eval captions. Keep world size via matching pixel_size divisor.
+## Same trade as Ui3D.LABEL_FONT_PX: texels per glyph, not on-screen size. 256 covers a
+## seated close-up of a caption without the outsized atlas pages 512 allocates.
+const EVAL_LABEL_FONT_PX := 256
 
-## Stone centres float just off the surface so they never z-fight with the painted grid.
+## Stone centres float just off the surface so they never z-fight with the grid mesh.
 const STONE_Z := -0.03
+## Grid ink as real geometry (not a texture): mipmaps on a lay-flat table pick a muddy
+## LOD at seated graze, so a 2048² paint looked no sharper than 512². Quads stay crisp.
+const GRID_Z := -0.002
+const GRID_LINE_M := 0.013
+const HOSHI_R_M := 0.026
+const GRID_INK := Color(0.12, 0.1, 0.08, 1.0)
 
 static var _disc_tex: ImageTexture = null
 static var _ring_tex: ImageTexture = null
@@ -37,9 +47,8 @@ var _pending_paints: int = 0
 var _paint_epoch: int = 0
 var _stone_root: Node3D = null
 var _eval_root: Node3D = null
+var _grid_root: Node3D = null
 var _eval: GoEvalSnapshot = null
-var _grid_img: Image = null
-var _grid_tex: ImageTexture = null
 var _board_n: int = 19
 
 
@@ -110,40 +119,75 @@ func apply_board(p_board: GoBoardState) -> void:
 
 
 func _paint_grid() -> void:
-	var px := 512
-	_grid_img = Image.create(px, px, false, Image.FORMAT_RGBA8)
-	_grid_img.fill(Color(0.78, 0.6, 0.34, 1.0))
-	var margin := int(round(MARGIN_FRAC * float(px)))
-	var n := _board_n
-	var inner := float(px - 2 * margin)
-	var ink := Color(0.12, 0.1, 0.08)
-	## n lines, first and last on the border of the playfield: stones go on the n×n
-	## crossings between them, never inside a cell.
-	for i in range(n):
-		var c := margin + int(round(float(i) / float(n - 1) * inner))
-		c = clampi(c, margin, px - margin - 1)
-		for k in range(margin, px - margin):
-			_grid_img.set_pixel(c, k, ink)
-			_grid_img.set_pixel(k, c, ink)
-	var hoshi := GamingComposer.hoshi_points(n)
-	for hi in range(hoshi.size()):
-		var hz: int = hoshi[hi]
-		for hj in range(hoshi.size()):
-			var hx: int = hoshi[hj]
-			var tx := margin + int(round(float(hx) / float(n - 1) * inner))
-			var ty := margin + int(round(float(hz) / float(n - 1) * inner))
-			for dy in range(-2, 3):
-				for dx in range(-2, 3):
-					if dx * dx + dy * dy <= 4:
-						_grid_img.set_pixel(tx + dx, ty + dy, ink)
-	_grid_tex = ImageTexture.create_from_image(_grid_img)
+	## Wood stays a flat unshaded albedo — no baked grid texture to mip-blur.
 	if _surface != null:
 		var mat := _surface.material_override as StandardMaterial3D
 		if mat == null:
 			mat = StandardMaterial3D.new()
 			_surface.material_override = mat
-		mat.albedo_texture = _grid_tex
-		mat.albedo_color = Color.WHITE
+		mat.albedo_texture = null
+		mat.albedo_color = surface_color
+	if _grid_root != null and is_instance_valid(_grid_root):
+		_grid_root.queue_free()
+	_grid_root = Node3D.new()
+	_grid_root.name = "GridInk"
+	add_child(_grid_root)
+	var ink_mat := StandardMaterial3D.new()
+	ink_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ink_mat.albedo_color = GRID_INK
+	ink_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var half := size_m * 0.5
+	var play_bottom := -half.y + size_m.y * MARGIN_FRAC
+	var play_top := half.y - size_m.y * MARGIN_FRAC
+	var play_left := -half.x + size_m.x * MARGIN_FRAC
+	var play_right := half.x - size_m.x * MARGIN_FRAC
+	var span_x := play_right - play_left
+	var span_y := play_top - play_bottom
+	var n := _board_n
+	var last := float(maxi(n - 1, 1))
+	## n lines on the playfield border: stones sit on the n×n crossings.
+	for i in range(n):
+		var t := float(i) / last
+		var x := lerpf(play_left, play_right, t)
+		var y := lerpf(play_bottom, play_top, t)
+		_add_grid_quad(
+			ink_mat,
+			Vector3(x, 0.0, GRID_Z),
+			Vector2(GRID_LINE_M, span_y)
+		)
+		_add_grid_quad(
+			ink_mat,
+			Vector3(0.0, y, GRID_Z),
+			Vector2(span_x, GRID_LINE_M)
+		)
+	var hoshi_mat := StandardMaterial3D.new()
+	hoshi_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	hoshi_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	hoshi_mat.albedo_texture = _shared_disc_tex()
+	hoshi_mat.albedo_color = GRID_INK
+	hoshi_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	hoshi_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var hoshi := GamingComposer.hoshi_points(n)
+	for hi in range(hoshi.size()):
+		var hz: int = hoshi[hi]
+		for hj in range(hoshi.size()):
+			var hx: int = hoshi[hj]
+			var at := _crossing_local(hx, hz)
+			_add_grid_quad(
+				hoshi_mat,
+				Vector3(at.x, at.y, GRID_Z),
+				Vector2(HOSHI_R_M * 2.0, HOSHI_R_M * 2.0)
+			)
+
+
+func _add_grid_quad(mat: Material, pos: Vector3, quad_size: Vector2) -> void:
+	var mesh_inst := MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	quad.size = quad_size
+	mesh_inst.mesh = quad
+	mesh_inst.material_override = mat
+	mesh_inst.position = pos
+	_grid_root.add_child(mesh_inst)
 
 
 func _on_surface(uv: Vector2, _local: Vector3, _world: Vector3) -> void:
@@ -337,6 +381,7 @@ func _add_marker_quad(tex: Texture2D, tint: Color, loc: Vector2i, radius: float)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_texture = tex
 	mat.albedo_color = tint
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh_inst.material_override = mat
 	mesh_inst.position = Vector3(at.x, at.y, EVAL_DISC_Z)
@@ -372,6 +417,9 @@ static func _make_radial_tex(inner: float, outer: float) -> ImageTexture:
 				a = minf(a, smoothstep(inner, inner + feather, r))
 			if a > 0.0:
 				img.set_pixel(px, py, Color(1.0, 1.0, 1.0, a))
+	var mip_err := img.generate_mipmaps()
+	if mip_err != OK:
+		push_error("GoTableUi3D._make_radial_tex: generate_mipmaps failed (%s)" % error_string(mip_err))
 	return ImageTexture.create_from_image(img)
 
 
@@ -379,15 +427,17 @@ func _add_marker_label(text: String, loc: Vector2i, cell_m: float) -> void:
 	var at := _crossing_local(loc.x, loc.y)
 	var lbl := Label3D.new()
 	lbl.text = text
-	lbl.font_size = 64
-	lbl.pixel_size = (cell_m * 0.34) / 64.0
+	lbl.font_size = EVAL_LABEL_FONT_PX
+	lbl.pixel_size = (cell_m * 0.34) / float(EVAL_LABEL_FONT_PX)
 	lbl.modulate = Color(1.0, 1.0, 1.0)
-	lbl.outline_size = 18
+	lbl.outline_size = int(round(18.0 * float(EVAL_LABEL_FONT_PX) / 64.0))
 	lbl.outline_modulate = Color(0.0, 0.12, 0.07, 0.95)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	lbl.double_sided = true
+	lbl.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	lbl.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
 	## Sorted after its own disc. `no_depth_test` would instead hide the disc entirely,
 	## because Godot draws depth-test-disabled transparents ahead of the rest.
 	lbl.render_priority = 1

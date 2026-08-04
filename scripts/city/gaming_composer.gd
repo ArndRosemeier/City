@@ -1,6 +1,10 @@
-## Builds a Gaming-theme plaza: meadow, giant Go pad, one wide main table.
+## Builds a Gaming-theme plaza: meadow, giant Go pad, one wide main table, and a
+## Japanese garden banded around them (see GamingGarden — the rest of the tile stays
+## open meadow on purpose).
 class_name GamingComposer
 extends RefCounted
+
+const GamingGardenScript := preload("res://scripts/city/gaming_garden.gd")
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
@@ -10,6 +14,7 @@ var cell_size: int = 28
 var voxel_size: float = 0.5
 
 var layout: GamingLayout = null
+var _garden: GamingGarden = null
 
 const BOARD_N := 19
 ## 3 m between crossings: wide enough for a rounded 5-voxel stone with a gap, and it
@@ -41,6 +46,8 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	if layout == null:
 		return
 	_paint_meadow(min_v, max_v)
+	## Garden first: it repaints ground courses, and the pad / table must sit on top.
+	_garden_for().decorate(layout, min_v, max_v)
 	_build_giant_pad()
 	_build_main_table()
 	print("GamingComposer: %s" % layout.describe())
@@ -53,8 +60,20 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	if layout == null:
 		return
 	_paint_meadow(min_v, max_v)
+	_garden_for().decorate_far(layout, min_v, max_v)
 	_build_giant_pad()
 	_build_main_table()
+
+
+func _garden_for() -> GamingGarden:
+	if _garden == null:
+		_garden = GamingGardenScript.new() as GamingGarden
+		_garden.brush = brush
+		_garden.rng = rng
+		_garden.ground_y = ground_y
+		_garden.table_w = TABLE_W
+		_garden.table_d = TABLE_D
+	return _garden
 
 
 func _begin() -> bool:

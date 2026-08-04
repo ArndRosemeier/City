@@ -1315,7 +1315,7 @@ func _on_controls_changed(controls: PlayerControls) -> void:
 
 
 func _on_settings_applied(settings: Dictionary) -> void:
-	var scale := clampf(float(settings.get("render_scale", 0.75)), 0.45, 1.0)
+	var scale := clampf(float(settings.get("render_scale", 1.0)), 0.45, 1.0)
 	get_viewport().scaling_3d_scale = scale
 
 	if _world_env != null and _world_env.environment != null:

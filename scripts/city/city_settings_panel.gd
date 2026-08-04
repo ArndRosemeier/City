@@ -13,7 +13,7 @@ const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 
 const CONFIG_PATH := "user://city_graphics.cfg"
 ## Bump when graphics defaults change so old user configs pick up the new baseline.
-const CONFIG_VERSION := 2
+const CONFIG_VERSION := 3
 ## Bump when default combat binds change so saved layouts pick up the new mapping.
 const CONTROLS_VERSION := 5
 
@@ -96,9 +96,9 @@ func toggle_panel() -> void:
 
 
 static func default_settings() -> Dictionary:
-	## Default = Low: weak GPUs get playable FPS out of the box.
+	## Default = Low: cut voxel/crowd/light reach, not pixels — mesh distance dominates FPS.
 	return {
-		"render_scale": 0.55,
+		"render_scale": 1.0,
 		"ssao": false,
 		"glow": false,
 		"fog": true,
@@ -126,7 +126,7 @@ func apply_preset(name: String) -> void:
 			_settings = default_settings()
 		"medium":
 			_settings = {
-				"render_scale": 0.75,
+				"render_scale": 1.0,
 				"ssao": true,
 				"glow": true,
 				"fog": true,
@@ -141,7 +141,7 @@ func apply_preset(name: String) -> void:
 			}
 		"high":
 			_settings = {
-				"render_scale": 0.9,
+				"render_scale": 1.0,
 				"ssao": true,
 				"glow": true,
 				"fog": true,

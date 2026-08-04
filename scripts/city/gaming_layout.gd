@@ -25,6 +25,10 @@ var ai_wait_local: Vector3 = Vector3.ZERO
 ## District-local spawn suggestion (meters from tile origin on XZ, Y absolute later).
 var spawn_local: Vector3 = Vector3.ZERO
 var spawn_yaw: float = 0.0
+## Japanese-garden precinct around the Go furniture, in district-local voxels (max
+## exclusive). GamingGarden fills this in; other zones on the tile should stay out of it.
+var garden_min: Vector3i = Vector3i.ZERO
+var garden_max: Vector3i = Vector3i.ZERO
 
 
 ## Distance from first to last intersection of the baked field.
