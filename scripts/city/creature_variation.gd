@@ -198,7 +198,7 @@ func clip_for(action: CreatureClips.Action) -> String:
 ## collision numbers that have to agree with them.
 func apply(model: Node3D, entry: CreatureCatalog.Entry) -> void:
 	_apply_parts(model, entry)
-	_apply_palette(model)
+	_Self.paint(model, band, hue, saturation, value)
 
 
 func describe() -> String:
@@ -213,7 +213,16 @@ func describe() -> String:
 # Palette
 # ---------------------------------------------------------------------------
 
-func _apply_palette(node: Node) -> void:
+## Recolour every mesh under `node` into `band`, landing at an explicit point inside it.
+##
+## Static and band-first because not every caller wants a rolled monster. The chess set fields
+## two fixed armies and has no use for random limbs or random takes, so it needs the recolour
+## without `roll()` around it. The material cache is shared either way: a tinted chess board and
+## a street full of monsters wearing the same atlas still come to one ShaderMaterial between
+## them, because the colour rides on the MeshInstance3D rather than on the material.
+static func paint(
+	node: Node, band: Band, hue: float, sat_high: float, value_high: float
+) -> void:
 	var mesh_instance := node as MeshInstance3D
 	if mesh_instance != null and mesh_instance.mesh != null:
 		var mesh := mesh_instance.mesh
@@ -225,14 +234,33 @@ func _apply_palette(node: Node) -> void:
 		mesh_instance.set_instance_shader_parameter("band_hue", hue)
 		mesh_instance.set_instance_shader_parameter("band_hue_keep", band.hue_keep)
 		mesh_instance.set_instance_shader_parameter("band_sat_low", band.sat_low)
-		mesh_instance.set_instance_shader_parameter("band_sat_high", saturation)
+		mesh_instance.set_instance_shader_parameter("band_sat_high", sat_high)
 		mesh_instance.set_instance_shader_parameter("band_value_low", band.value_low)
-		mesh_instance.set_instance_shader_parameter("band_value_high", value)
+		mesh_instance.set_instance_shader_parameter("band_value_high", value_high)
 		mesh_instance.set_instance_shader_parameter(
 			"band_ember", Vector3(band.ember.r, band.ember.g, band.ember.b)
 		)
 	for child in node.get_children():
-		_apply_palette(child)
+		paint(child, band, hue, sat_high, value_high)
+
+
+## The band at its own nominal colour, with none of the per-unit jitter a roll adds.
+static func paint_flat(node: Node, band: Band) -> void:
+	paint(node, band, band.hue, band.sat_high, band.value_high)
+
+
+## A band built from scratch, for callers outside the enemy palette. Deliberately not appended
+## to `bands()`: that list is the range the roster is allowed, and `roll()` steps through it by
+## seed, so a sixth entry would recolour every monster in the city.
+static func make_band(
+	name: String,
+	hue: float,
+	hue_keep: float,
+	sat: Vector2,
+	value: Vector2,
+	ember: Color
+) -> Band:
+	return _band(name, hue, 0.0, hue_keep, sat, 0.0, value, 0.0, ember)
 
 
 static func _palette_material(source: Material, who: String) -> ShaderMaterial:

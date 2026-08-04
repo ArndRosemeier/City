@@ -157,10 +157,25 @@ func is_soft_dropping() -> bool:
 	return _soft_dropping
 
 
+## Idempotent on purpose: the proximity gate that picks which cabinet in a row hears keys
+## 1–4 calls this every frame, and clearing DAS on every one of those calls would kill
+## auto-repeat while a key is held.
 func set_input_enabled(enabled: bool) -> void:
+	if _input_enabled == enabled:
+		return
 	_input_enabled = enabled
 	_das_dir = 0
 	_das_repeating = false
+
+
+func is_input_enabled() -> bool:
+	return _input_enabled
+
+
+## True while an NPC or AI owns the board, in which case the player-proximity gate must
+## leave its input alone.
+func has_ai_controller() -> bool:
+	return _ai_controller != null and is_instance_valid(_ai_controller)
 
 
 func claim_ai_controller(controller: Node) -> bool:

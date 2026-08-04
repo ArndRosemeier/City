@@ -904,10 +904,13 @@ func open_space_bounds() -> Array[AABB]:
 	var oz := float(origin_vox.z)
 	var lgaming := _planner.large_gaming
 	if lgaming.size.x > 0:
+		## Torii and pines want ~12 m, but the arcade pavilion is the tall thing here: a
+		## 14 m Tetris cabinet with a back wall standing proud of it and a lit marquee over
+		## that, so the box has to reach ~18 m or the pavilion loses its skyline.
 		out.append(
 			AABB(
 				Vector3(ox + lgaming.position.x * cell_size, 0.0, oz + lgaming.position.y * cell_size),
-				Vector3(lgaming.size.x * cell_size, y0 + 24.0, lgaming.size.y * cell_size)
+				Vector3(lgaming.size.x * cell_size, y0 + 44.0, lgaming.size.y * cell_size)
 			)
 		)
 		return out

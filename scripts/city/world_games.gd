@@ -12,6 +12,8 @@ extends RefCounted
 
 ## Save key for the Go table. Other titles claim their own key at this level.
 const GO_KEY := "go"
+## Save key for the monster-chess court on the same tile's east lawn.
+const CHESS_KEY := "chess"
 
 ## title key → the game's own snapshot
 var _rows: Dictionary[String, Dictionary] = {}
@@ -31,6 +33,22 @@ func go_snapshot() -> Dictionary:
 
 func has_go() -> bool:
 	return _rows.has(GO_KEY)
+
+
+func set_chess(snapshot: Dictionary) -> void:
+	set_row(CHESS_KEY, snapshot)
+
+
+func clear_chess() -> void:
+	clear_row(CHESS_KEY)
+
+
+func chess_snapshot() -> Dictionary:
+	return row(CHESS_KEY)
+
+
+func has_chess() -> bool:
+	return _rows.has(CHESS_KEY)
 
 
 ## An empty snapshot is a caller that meant `clear_row` and did not say so — a row that

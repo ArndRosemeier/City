@@ -16,6 +16,8 @@ const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
 const ZooControllerScript := preload("res://scripts/city/zoo_controller.gd")
 const GamingArenaScript := preload("res://scripts/city/gaming_arena.gd")
+const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
+const ChessArenaScript := preload("res://scripts/city/chess_arena.gd")
 const CryptSpawnerScript := preload("res://scripts/city/crypt_spawner.gd")
 const FactionPadSpawnerScript := preload("res://scripts/city/faction_pad_spawner.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
@@ -55,6 +57,14 @@ var arena_controller: ArenaController
 var zoo_controller: ZooController
 ## Go tables + giant board + invite peds. Null outside Gaming districts.
 var gaming_arena: GamingArena
+## Permanent Tetris cabinets in the Gaming quarter's arcade, plus the NPC that plays one.
+## They stamp their own voxel shells through the live brush, so they belong to the stream
+## rather than the bake, and they are freed with the tile. Empty outside Gaming districts.
+var gaming_cabinets: Array[Node3D] = []
+var gaming_cabinet_ped: Node3D
+## Monster chess on the same tile's east lawn: the puppets, the board collider and the
+## control plate. Typed as Node3D so this file parses before ChessArena is in the class cache.
+var chess_arena: Node3D
 ## Undead station under the chapel crypt. Null outside Graveyard districts.
 var crypt_spawner: CryptSpawner
 ## Two opposing forever-war pads inside a Castle dungeon. Empty outside Castle districts.
@@ -908,6 +918,82 @@ func _spawn_gaming_arena(gen: DistrictGenerator) -> void:
 	gaming_arena.name = "GamingArena"
 	add_child(gaming_arena)
 	gaming_arena.setup(layout, origin_vox, _voxel_size, _dseed, Callable(self, "live_brush"))
+	_spawn_chess_arena(layout)
+	## A cabinet needs the walker whose open panels gate its keys, and on the boot tile the
+	## detail stamp finishes *before* CityRoot builds that walker. CityRoot calls us back
+	## once the player exists; every tile streamed in later gets its row straight away.
+	var city := _find_city_root()
+	if city != null and city.has_player_walker():
+		stand_up_gaming_arcade()
+
+
+## Stand the chess armies up on the baked court. Unlike the arcade this needs nothing from
+## the live brush and nobody from CityRoot: the court is already in the voxels, the pieces are
+## puppets, and a saved game resumes off the world's match registry.
+func _spawn_chess_arena(layout: GamingLayout) -> void:
+	if chess_arena != null and is_instance_valid(chess_arena):
+		chess_arena.queue_free()
+	chess_arena = null
+	## No court was published — GamingComposer already said why on a tile too small for one.
+	if layout.chess_max.x <= layout.chess_min.x:
+		return
+	chess_arena = ChessArenaScript.new() as Node3D
+	chess_arena.name = "ChessArena"
+	add_child(chess_arena)
+	chess_arena.call("setup", layout, origin_vox, _voxel_size, _dseed)
+
+
+## Stand the arcade row up. The pavilion around it is baked (GamingArcade), but a cabinet
+## stamps its own GAMEBOY shell through the live brush, so it can only exist once the tile
+## is streamed in — which also means it re-stamps on every return to the district.
+func stand_up_gaming_arcade() -> void:
+	if generator == null:
+		return
+	var layout: GamingLayout = generator.get_gaming_layout()
+	if layout == null or layout.arcade_cabinets.is_empty():
+		return
+	_clear_gaming_arcade()
+	var city := _find_city_root()
+	if city == null:
+		push_error("DistrictInstance: the Tetris arcade needs CityRoot to stamp its cabinets")
+		return
+	for i in range(layout.arcade_cabinets.size()):
+		var anchor: Vector3i = layout.arcade_cabinets[i]
+		var machine := city.spawn_tetris_cabinet(
+			self, _stand_world(anchor), layout.arcade_yaw, "TetrisCabinet_%d" % i
+		)
+		if machine == null:
+			return
+		gaming_cabinets.append(machine)
+	## Gaming tiles run no crowds at all, so without this the arcade is a deserted row of
+	## screens. One player at the near cabinet is enough to make the quarter look inhabited.
+	gaming_cabinet_ped = TetrisPedNpcScript.new() as Node3D
+	gaming_cabinet_ped.name = "ArcadePed"
+	add_child(gaming_cabinet_ped)
+	gaming_cabinet_ped.call(
+		"begin", _stand_world(layout.arcade_ped_spawn), gaming_cabinets[0], 0
+	)
+
+
+func _clear_gaming_arcade() -> void:
+	for machine in gaming_cabinets:
+		if machine != null and is_instance_valid(machine):
+			machine.queue_free()
+	gaming_cabinets.clear()
+	if gaming_cabinet_ped != null and is_instance_valid(gaming_cabinet_ped):
+		gaming_cabinet_ped.queue_free()
+	gaming_cabinet_ped = null
+
+
+## World point on top of a district-local voxel cell, centred on its XZ footprint. This is
+## the convention GamingLayout's arcade anchors use: the cell you stand on, not the air
+## above it.
+func _stand_world(cell: Vector3i) -> Vector3:
+	return Vector3(
+		(float(origin_vox.x + cell.x) + 0.5) * _voxel_size,
+		float(origin_vox.y + cell.y + 1) * _voxel_size,
+		(float(origin_vox.z + cell.z) + 0.5) * _voxel_size
+	)
 
 
 func _spawn_zoo_controller(gen: DistrictGenerator) -> void:

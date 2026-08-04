@@ -125,7 +125,13 @@ var _undead_hud: UndeadInvasionHud
 var _minimap: CityMinimap
 ## Span field / portal / corridor / dynamic-block viewer, off until F8.
 var _nav_overlay: NavDebugOverlay
-var _tetris: Node3D
+## Every live Tetris cabinet: the T-key summon plus the permanent arcade row a Gaming
+## district streams in. Voxel damage is reported to all of them; keys 1–4 are global, so
+## only the nearest cabinet within reach listens (see _gate_tetris_input).
+var _tetris_machines: Array[Node3D] = []
+## The T-key machine — the one a re-summon replaces. District cabinets are permanent and
+## are owned by the district instance that spawned them.
+var _summoned_tetris: Node3D
 var _tetris_peds: Array[Node3D] = []
 var _aim_panel: Node3D
 var _game_over_layer: CanvasLayer
@@ -182,6 +188,12 @@ const RADAR_COOLDOWN_SEC := 30.0
 const RADAR_REVEAL_SEC := 12.0
 const GEM_PICKUP_INTERVAL_SEC := 0.12
 const GEM_PICKUP_REACH_M := 1.35
+## How far from a cabinet's stand keys 1–4 still reach it. Generous, because a T-key
+## machine is summoned at aim range and should be playable from where you summoned it —
+## the arcade row stays unambiguous because only the *nearest* cabinet ever listens.
+const TETRIS_REACH_M := 20.0
+## How far a dropped pedestrian will look for a cabinet to walk up to and play.
+const TETRIS_PED_REACH_M := 14.0
 ## Hill ore is painted as tiny 6-neighbour clumps; one strike / walk-up takes the whole clump.
 const GEM_CLUSTER_MAX := 24
 ## Seconds between district budget / explore sweeps. Only fires when a tile finishes baking or
@@ -533,6 +545,10 @@ func player_walker() -> CityWalker:
 	if _walker == null or not is_instance_valid(_walker):
 		return null
 	return _walker
+
+
+func has_player_walker() -> bool:
+	return _walker != null and is_instance_valid(_walker)
 
 
 func _is_character_editor_open() -> bool:
@@ -1402,6 +1418,7 @@ func _process(delta: float) -> void:
 		_refresh_elevator_panel()
 	elif _elevator_panel != null:
 		_elevator_panel.unbind()
+	_gate_tetris_input()
 	if _gem_pickup_accum >= GEM_PICKUP_INTERVAL_SEC:
 		_gem_pickup_accum = 0.0
 		CityProfiler.begin("gem_pickup")
@@ -3096,11 +3113,7 @@ func _regenerate() -> void:
 	if _walker != null and is_instance_valid(_walker):
 		_walker.queue_free()
 		_walker = null
-	if _tetris != null and is_instance_valid(_tetris):
-		if _tetris.has_method("clear_shell"):
-			_tetris.call("clear_shell")
-		_tetris.queue_free()
-		_tetris = null
+	_clear_summoned_tetris()
 	_clear_tetris_peds()
 	if _aim_panel != null and is_instance_valid(_aim_panel):
 		_aim_panel.queue_free()
@@ -3357,11 +3370,24 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 		_undead.call("set_enabled", true)
 		if _undead_hud != null and is_instance_valid(_undead_hud):
 			_undead_hud.call("bind_director", _undead)
+	## Tiles that came up during boot could not stand their Tetris cabinets up, because a
+	## cabinet is gated on the walker that only exists now.
+	_stand_up_district_arcades()
 	print(
 		"CityRoot: playable — endless stream active at y=%.2f (F1–F6 = build · M = meteor · T = tetris)"
 		% floor_y
 	)
 	_maybe_run_summon_probe()
+
+
+func _stand_up_district_arcades() -> void:
+	if _streamer == null or not is_instance_valid(_streamer):
+		return
+	var districts: Array = _streamer.call("get_loaded_districts") as Array
+	for entry: Variant in districts:
+		var di: DistrictInstance = entry
+		if di != null and is_instance_valid(di):
+			di.stand_up_gaming_arcade()
 
 
 ## `--summon-probe=big/BlueDemon` (optional `--summon-probe-quit`): summon once playable so
@@ -4448,18 +4474,11 @@ func _spawn_aim_panel_at(hit_point: Vector3) -> void:
 
 
 func _spawn_tetris_at(hit_point: Vector3) -> void:
-	if _tool == null or _terrain == null:
-		push_error("CityRoot: cannot spawn Tetris without VoxelTerrain tool")
-		return
 	if _walker == null or not is_instance_valid(_walker):
 		push_error("CityRoot: cannot spawn Tetris without the walker that gates its keys")
 		return
 	var walker := _walker as CityWalker
-	if _tetris != null and is_instance_valid(_tetris):
-		if _tetris.has_method("clear_shell"):
-			_tetris.call("clear_shell")
-		_tetris.queue_free()
-		_tetris = null
+	_clear_summoned_tetris()
 	## Old cabinet players lose their machine.
 	_clear_tetris_peds()
 	var face_yaw := 0.0
@@ -4471,15 +4490,83 @@ func _spawn_tetris_at(hit_point: Vector3) -> void:
 		face_yaw = walker.rotation.y + PI
 	## Cardinal facing only — voxel shell must stay axis-aligned (no diagonal cabinets).
 	face_yaw = roundf(face_yaw / (PI * 0.5)) * (PI * 0.5)
-	_tetris = TetrisMachineScript.new() as Node3D
-	_tetris.name = "TetrisMachine"
-	var spawned: Node3D = _tetris
-	add_child(_tetris)
-	spawned.tree_exited.connect(func() -> void:
-		if _tetris == spawned:
-			_tetris = null
+	_summoned_tetris = spawn_tetris_cabinet(self, hit_point, face_yaw, "TetrisMachine")
+
+
+## Stand a cabinet up under `parent` and register it. Districts call this for their arcade
+## row and keep ownership, so the cabinets die with the tile that streamed them in.
+func spawn_tetris_cabinet(
+	parent: Node, ground_hit: Vector3, face_yaw: float, node_name: String
+) -> Node3D:
+	if parent == null or not parent.is_inside_tree():
+		push_error("CityRoot.spawn_tetris_cabinet: parent must already be in the tree")
+		return null
+	if _tool == null or _terrain == null or _brush == null:
+		push_error("CityRoot.spawn_tetris_cabinet: no VoxelTerrain tool to stamp the shell")
+		return null
+	if _walker == null or not is_instance_valid(_walker):
+		push_error("CityRoot.spawn_tetris_cabinet: no walker to gate the cabinet keys")
+		return null
+	var machine: Node3D = TetrisMachineScript.new() as Node3D
+	machine.name = node_name
+	parent.add_child(machine)
+	_tetris_machines.append(machine)
+	machine.tree_exited.connect(func() -> void:
+		_tetris_machines.erase(machine)
+		if _summoned_tetris == machine:
+			_summoned_tetris = null
 	)
-	_tetris.call("begin", _terrain, _tool, _brush, walker, hit_point, face_yaw, VOXEL_SIZE)
+	machine.call(
+		"begin", _terrain, _tool, _brush, _walker as CityWalker, ground_hit, face_yaw, VOXEL_SIZE
+	)
+	return machine
+
+
+func _clear_summoned_tetris() -> void:
+	if _summoned_tetris == null or not is_instance_valid(_summoned_tetris):
+		_summoned_tetris = null
+		return
+	if _summoned_tetris.has_method("clear_shell"):
+		_summoned_tetris.call("clear_shell")
+	_summoned_tetris.queue_free()
+	_tetris_machines.erase(_summoned_tetris)
+	_summoned_tetris = null
+
+
+## Closest cabinet to `at` whose stand is within `max_m`, or null. Distance is measured to
+## the stand rather than the cabinet centre, because that is where a player or NPC has to
+## be for the screen to be readable.
+func nearest_tetris_machine(at: Vector3, max_m: float) -> Node3D:
+	var best: Node3D = null
+	var best_d := max_m * max_m
+	for machine in _tetris_machines:
+		if machine == null or not is_instance_valid(machine):
+			continue
+		var stand: Vector3 = machine.call("get_stand_world_position")
+		var d := at.distance_squared_to(stand)
+		if d < best_d:
+			best_d = d
+			best = machine
+	return best
+
+
+## Keys 1–4 are one global set, so exactly one cabinet may be listening. The nearest one in
+## reach wins; every other board goes deaf, and AI-owned boards are left alone because
+## their controller already holds their input.
+func _gate_tetris_input() -> void:
+	if _tetris_machines.is_empty():
+		return
+	var listener: Node3D = null
+	if _walker != null and is_instance_valid(_walker) and not _game_over:
+		listener = nearest_tetris_machine(_walker.global_position, TETRIS_REACH_M)
+		if listener != null and bool(listener.call("has_ai_controller")):
+			listener = null
+	for machine in _tetris_machines:
+		if machine == null or not is_instance_valid(machine):
+			continue
+		if bool(machine.call("has_ai_controller")):
+			continue
+		machine.call("set_input_enabled", machine == listener)
 
 
 func _spawn_tetris_ped_at(hit_point: Vector3) -> void:
@@ -4491,8 +4578,9 @@ func _spawn_tetris_ped_at(hit_point: Vector3) -> void:
 	ped.tree_exited.connect(func() -> void:
 		_tetris_peds.erase(ped)
 	)
-	var machine: Node3D = _tetris if _tetris != null and is_instance_valid(_tetris) else null
-	ped.call("begin", hit_point, machine, slot)
+	## A ped walks to whichever cabinet it was dropped beside; the ped itself re-checks the
+	## distance and just stands around if there is nothing playable nearby.
+	ped.call("begin", hit_point, nearest_tetris_machine(hit_point, TETRIS_PED_REACH_M), slot)
 
 
 func _clear_tetris_peds() -> void:
@@ -4503,13 +4591,14 @@ func _clear_tetris_peds() -> void:
 
 
 func _notify_tetris_damage(detached: Array = []) -> void:
-	if _tetris == null or not is_instance_valid(_tetris):
-		return
-	if detached.is_empty():
-		if _tetris.has_method("check_integrity"):
-			_tetris.call("check_integrity")
-	elif _tetris.has_method("notify_voxels_carved"):
-		_tetris.call("notify_voxels_carved", detached)
+	for machine in _tetris_machines:
+		if machine == null or not is_instance_valid(machine):
+			continue
+		if detached.is_empty():
+			if machine.has_method("check_integrity"):
+				machine.call("check_integrity")
+		elif machine.has_method("notify_voxels_carved"):
+			machine.call("notify_voxels_carved", detached)
 
 
 func _try_auto_spawn_meteor() -> void:
