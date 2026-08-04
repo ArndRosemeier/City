@@ -1,0 +1,59 @@
+---
+description: PowerShell-safe git commit/push — never use bash heredocs on this machine
+alwaysApply: true
+---
+
+# Git commits on Windows (PowerShell)
+
+The agent shell here is **PowerShell**, not bash. Bash heredocs fail with:
+
+```text
+Missing file specification after redirection operator.
+```
+
+**Do not** use this (from the generic commit user-rule examples):
+
+```bash
+git commit -m "$(cat <<'EOF'
+Message here.
+
+EOF
+)"
+```
+
+There is nothing to “install” to make that work inside PowerShell. Use one of the forms below instead.
+
+## Preferred: two `-m` flags (subject + body)
+
+```powershell
+git commit -m "Subject line in imperative mood." -m "Optional second paragraph with more context. Why, not what."
+```
+
+Git joins multiple `-m` arguments with a blank line — that is the usual subject/body split.
+
+## Multi-line body via a PowerShell here-string
+
+Only when the body needs real newlines inside one paragraph block:
+
+```powershell
+$msg = @'
+Subject line in imperative mood.
+
+Body with real newlines if needed.
+Second body line.
+'@
+git commit -m $msg
+```
+
+Use single-quoted `@'...'@` so `$` and `` ` `` in the message are not expanded.
+
+## Push
+
+After a successful commit, when the user asked to push:
+
+```powershell
+git push -u origin HEAD
+git status
+```
+
+Still follow `commit-everything.mdc` (stage the full related working tree) and the usual git safety rules (no force-push to main, no amend unless allowed, no secrets).
