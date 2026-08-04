@@ -57,11 +57,11 @@ var arena_controller: ArenaController
 var zoo_controller: ZooController
 ## Go tables + giant board + invite peds. Null outside Gaming districts.
 var gaming_arena: GamingArena
-## Permanent Tetris cabinets in the Gaming quarter's arcade, plus the NPC that plays one.
-## They stamp their own voxel shells through the live brush, so they belong to the stream
-## rather than the bake, and they are freed with the tile. Empty outside Gaming districts.
+## Permanent Tetris cabinets in the Gaming quarter's arcade, plus the NPCs that play two of
+## them. They stamp their own voxel shells through the live brush, so they belong to the
+## stream rather than the bake, and they are freed with the tile. Empty outside Gaming.
 var gaming_cabinets: Array[Node3D] = []
-var gaming_cabinet_ped: Node3D
+var gaming_cabinet_peds: Array[Node3D] = []
 ## Monster chess on the same tile's east lawn: the puppets, the board collider and the
 ## control plate. Typed as Node3D so this file parses before ChessArena is in the class cache.
 var chess_arena: Node3D
@@ -946,6 +946,9 @@ func _spawn_chess_arena(layout: GamingLayout) -> void:
 ## Stand the arcade row up. The pavilion around it is baked (GamingArcade), but a cabinet
 ## stamps its own GAMEBOY shell through the live brush, so it can only exist once the tile
 ## is streamed in — which also means it re-stamps on every return to the district.
+##
+## Two random bays get an NPC and stay powered; the leftover bay starts OFF with ON/NEW so
+## the player has a free machine that is not already claimed.
 func stand_up_gaming_arcade() -> void:
 	if generator == null:
 		return
@@ -965,14 +968,37 @@ func stand_up_gaming_arcade() -> void:
 		if machine == null:
 			return
 		gaming_cabinets.append(machine)
-	## Gaming tiles run no crowds at all, so without this the arcade is a deserted row of
-	## screens. One player at the near cabinet is enough to make the quarter look inhabited.
-	gaming_cabinet_ped = TetrisPedNpcScript.new() as Node3D
-	gaming_cabinet_ped.name = "ArcadePed"
-	add_child(gaming_cabinet_ped)
-	gaming_cabinet_ped.call(
-		"begin", _stand_world(layout.arcade_ped_spawn), gaming_cabinets[0], 0
-	)
+	var order: Array[int] = []
+	for i in range(gaming_cabinets.size()):
+		order.append(i)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _dseed ^ 0x7E7715
+	for i in range(order.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp := order[i]
+		order[i] = order[j]
+		order[j] = tmp
+	## Prefer two ped bays whenever the row is that long; a short row still leaves one free.
+	var ped_count := mini(2, maxi(gaming_cabinets.size() - 1, 0))
+	var ped_idxs: Array[int] = []
+	for i in range(ped_count):
+		ped_idxs.append(order[i])
+	var free_idx := order[ped_count] if ped_count < order.size() else -1
+	for i in range(gaming_cabinets.size()):
+		var player_bay := i == free_idx
+		gaming_cabinets[i].call("configure_arcade", player_bay)
+	for ped_i in ped_idxs:
+		var machine: Node3D = gaming_cabinets[ped_i]
+		var ped: Node3D = TetrisPedNpcScript.new() as Node3D
+		ped.name = "ArcadePed_%d" % ped_i
+		add_child(ped)
+		gaming_cabinet_peds.append(ped)
+		## Stand a couple of metres in front of the bay so the ped walks to it, not from the
+		## shared mid-row spawn that used to dump everyone on cabinet 0.
+		var spawn: Vector3 = machine.call("get_stand_world_position")
+		spawn += machine.global_transform.basis.z * -1.2
+		spawn.y = machine.global_position.y
+		ped.call("begin", spawn, machine, 0)
 
 
 func _clear_gaming_arcade() -> void:
@@ -980,9 +1006,10 @@ func _clear_gaming_arcade() -> void:
 		if machine != null and is_instance_valid(machine):
 			machine.queue_free()
 	gaming_cabinets.clear()
-	if gaming_cabinet_ped != null and is_instance_valid(gaming_cabinet_ped):
-		gaming_cabinet_ped.queue_free()
-	gaming_cabinet_ped = null
+	for ped in gaming_cabinet_peds:
+		if ped != null and is_instance_valid(ped):
+			ped.queue_free()
+	gaming_cabinet_peds.clear()
 
 
 ## World point on top of a district-local voxel cell, centred on its XZ footprint. This is

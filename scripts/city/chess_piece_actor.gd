@@ -19,6 +19,7 @@
 class_name ChessPieceActor
 extends Node3D
 
+const ChessBoardStateScript := preload("res://scripts/city/chess_board_state.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const CreatureClipsScript := preload("res://scripts/city/creature_clips.gd")
 const CreatureVariationScript := preload("res://scripts/city/creature_variation.gd")
@@ -35,6 +36,16 @@ const TURN_TIME := 0.22
 const STRIKE_AT := 0.45
 ## A knight hops rather than walking round the corner, and this is the apex of that hop.
 const HOP_HEIGHT := 1.6
+
+## Gold crown worn only by kings — the cue that survives the army tint and a midgame scramble
+## when home-square memory no longer tells queen from king. Sibling of the model so the body's
+## scale does not squash the spikes.
+const CROWN_BAND_R := 0.30
+const CROWN_BAND_H := 0.16
+const CROWN_SPIKE_H := 0.38
+const CROWN_SPIKES := 5
+const CROWN_COLOUR := Color(0.95, 0.78, 0.22)
+const CROWN_LIFT := 0.12
 
 ## The move animation is finished and the piece stands on `square`.
 signal arrived()
@@ -95,6 +106,8 @@ func begin(
 		return false
 	if not _load_model(target_height, band):
 		return false
+	if piece_type == ChessBoardStateScript.KING:
+		_attach_crown()
 	global_position = world_pos
 	rotation.y = yaw
 	play_idle()
@@ -303,6 +316,59 @@ func _load_model(target_height: float, band: CreatureVariation.Band) -> bool:
 	_set_loop(_clip_death, Animation.LOOP_NONE)
 	_anim.animation_finished.connect(_on_clip_finished)
 	return true
+
+
+## A short gold circlet with five spikes, parked just above the normalised crown of the head.
+## Shared matte gold on both armies — against ivory and slate it is the one colour that is not
+## already spent on "which side", so it can mean "this is the king" and nothing else.
+func _attach_crown() -> void:
+	if has_node("Crown"):
+		return
+	var crown := Node3D.new()
+	crown.name = "Crown"
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.albedo_color = CROWN_COLOUR
+	mat.metallic = 0.85
+	mat.roughness = 0.35
+	mat.emission_enabled = true
+	mat.emission = CROWN_COLOUR
+	mat.emission_energy_multiplier = 0.35
+
+	var band := MeshInstance3D.new()
+	band.name = "Band"
+	var band_mesh := CylinderMesh.new()
+	band_mesh.top_radius = CROWN_BAND_R * 0.92
+	band_mesh.bottom_radius = CROWN_BAND_R
+	band_mesh.height = CROWN_BAND_H
+	band_mesh.radial_segments = 16
+	band.mesh = band_mesh
+	band.material_override = mat
+	band.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	crown.add_child(band)
+
+	for i in CROWN_SPIKES:
+		var spike := MeshInstance3D.new()
+		spike.name = "Spike_%d" % i
+		var spike_mesh := CylinderMesh.new()
+		spike_mesh.top_radius = 0.015
+		spike_mesh.bottom_radius = 0.09
+		spike_mesh.height = CROWN_SPIKE_H
+		spike_mesh.radial_segments = 8
+		spike.mesh = spike_mesh
+		spike.material_override = mat
+		spike.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var ang := TAU * float(i) / float(CROWN_SPIKES)
+		var ring_r := CROWN_BAND_R * 0.72
+		spike.position = Vector3(
+			cos(ang) * ring_r,
+			CROWN_BAND_H * 0.5 + CROWN_SPIKE_H * 0.45,
+			sin(ang) * ring_r
+		)
+		crown.add_child(spike)
+
+	crown.position = Vector3(0.0, stand_height() + CROWN_LIFT, 0.0)
+	add_child(crown)
 
 
 func _set_loop(clip: String, mode: Animation.LoopMode) -> void:

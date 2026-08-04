@@ -125,17 +125,26 @@ func _check_bodies_load() -> void:
 			if absf(got_h - want_h) > 0.01:
 				_fail("FAIL %s normalised to %.2f m, wanted %.2f m" % [body, got_h, want_h])
 			_check_painted(actor, body, ChessCastScript.band_for(colour))
+			var crowned := actor.get_node_or_null("Crown") != null
+			if t == ChessBoardStateScript.KING and not crowned:
+				_fail("FAIL king %s has no crown" % body)
+			elif t != ChessBoardStateScript.KING and crowned:
+				_fail("FAIL non-king %s is wearing a crown" % body)
 			print("OK %s stands %.2f m as type %d" % [body, got_h, t])
 			actor.queue_free()
 			await get_tree().process_frame
 
 
-## Every mesh on the piece has to be wearing the palette shader carrying its own army's numbers.
-## A body that keeps its authored material is the failure that would go unreported: the board
-## still sets up, one piece is simply the wrong colour.
+## Every mesh on the body has to be wearing the palette shader carrying its own army's numbers.
+## The gold crown is a separate prop on kings and is deliberately not painted — only walk
+## `CreatureModel`, or a king fails this check for wearing jewellery.
 func _check_painted(actor: Node3D, body: String, band: CreatureVariation.Band) -> void:
+	var model := actor.get_node_or_null("CreatureModel")
+	if model == null:
+		_fail("FAIL %s has no CreatureModel to paint" % body)
+		return
 	var meshes: Array[MeshInstance3D] = []
-	_collect_meshes(actor, meshes)
+	_collect_meshes(model, meshes)
 	if meshes.is_empty():
 		_fail("FAIL %s has no mesh to paint" % body)
 		return

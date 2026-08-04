@@ -1,8 +1,11 @@
 ## Tall open-frame Tetris: GAMEBOY voxel shell + MultiMesh pieces. Summon with T.
 ## Controls: 1 left · 2 rotate · 3 right · 4 fast drop (tap once per piece).
+## Arcade cabinets also expose a small ON/OFF + NEW plate the player can click.
 ## Any destroyed shell voxel breaks the machine.
 class_name TetrisMachine
 extends Node3D
+
+const Ui3DScript := preload("res://scripts/city/ui_3d.gd")
 
 const COLS := 10
 const ROWS := 20
@@ -23,6 +26,28 @@ const SOFT_DROP_SEC := 0.07
 const INTEGRITY_CHECK_SEC := 0.2
 ## Cube edge as a fraction of the cell — gap keeps neighbour faces from touching.
 const BLOCK_FILL := 0.9
+
+const BTN_POWER := &"power"
+const BTN_NEW := &"new"
+## Pedestal face layout (free bay). SCORE / LINES stay exactly where ped cabinets put them;
+## hints take the free line above SCORE; NEW/ON sit on the LINES row, left of the well.
+const HUD_Y_M := 1.05
+const HUD_Z_M := -0.55
+## Label3D default pixel_size is 0.01, so font_size 72 is ~0.72 m per line — the same
+## figure the centred SCORE\nLINES block uses to straddle HUD_Y_M.
+const HUD_LINE_M := 0.72
+const HINTS_Y_M := HUD_Y_M + HUD_LINE_M + 0.12
+const CONTROLS_W_M := 1.45
+const CONTROLS_H_M := 0.42
+const CONTROLS_Y_M := HUD_Y_M - HUD_LINE_M * 0.5
+const CONTROLS_X_M := -(FRAME_W * 0.5 - CONTROLS_W_M * 0.5 - 0.2)
+const CONTROLS_Z_M := -0.7
+## Pedestal key cheat-sheet for the free arcade bay. Same Label3D face as the score, own
+## colour so it reads as help rather than status. Hidden on ped-owned cabinets.
+## Keep to ←→↓ plus a word for rotate: fancy loop arrows are often missing from the
+## default Label3D font and show up as the wrong glyph.
+const HINTS_TEXT := "1←   2 TURN   3→   4↓"
+const HINTS_COLOUR := Color(0.95, 0.82, 0.28)
 
 const PIECE_I := 1
 const PIECE_J := 2
@@ -70,6 +95,7 @@ var _board_mms: Array[MultiMeshInstance3D] = []
 var _active_blocks: Array[MeshInstance3D] = []
 var _ghost_blocks: Array[MeshInstance3D] = []
 var _hud: Label3D
+var _hints: Label3D
 var _title: Label3D
 var _game_over_label: Label3D
 
@@ -89,11 +115,16 @@ var _owned_voxels: Dictionary = {}  # Vector3i → true
 var _pf_origin: Vector3 = Vector3.ZERO
 ## Center Z of pieces inside the well.
 var _piece_z: float = 0.0
-## When false, keys 1–4 are ignored (NPC / AI owns the cabinet).
+## When false, keys 1–4 are ignored (NPC / AI owns the cabinet, or the cabinet is off).
 var _input_enabled: bool = true
 var _ai_controller: Node = null
 ## Owner of the canonical "some panel owns the screen" test.
 var _walker: CityWalker
+## Powered cabinets fall and take keys; an off cabinet freezes in place until toggled on.
+var _powered: bool = true
+## The arcade's free cabinet shows ON/NEW; ped-owned bays and the T-key summon hide them.
+var _show_controls: bool = false
+var _controls: Ui3D = null
 
 
 func begin(
@@ -121,16 +152,93 @@ func begin(
 	_stamp_voxel_shell()
 	_build_piece_visuals()
 	_build_labels()
+	_build_controls()
 	_board.resize(COLS * ROWS)
 	_board.fill(0)
 	_reset_bag()
+	_powered = true
 	_spawn_piece()
 	_refresh_board_visual()
 	_refresh_active_visual()
 	_refresh_hud()
+	_refresh_controls()
 	set_process_unhandled_input(true)
 	set_process(true)
 	set_physics_process(true)
+
+
+## Arcade policy for one bay. Ped bays stay on with no plate; the free bay starts off and
+## shows ON / NEW so a player can claim it without keys fighting an NPC.
+func configure_arcade(player_operable: bool) -> void:
+	_show_controls = player_operable
+	if player_operable:
+		set_powered(false)
+	else:
+		set_powered(true)
+	_refresh_controls()
+
+
+func is_powered() -> bool:
+	return _powered
+
+
+func set_powered(on: bool) -> void:
+	if _broken:
+		return
+	if _powered == on:
+		_refresh_controls()
+		return
+	_powered = on
+	if not on:
+		## Freeze mid-game rather than wiping it: a toggle is a power switch, not NEW.
+		set_input_enabled(false)
+		_soft_dropping = false
+		_das_dir = 0
+		_das_repeating = false
+		_locking = false
+		_lock_accum = 0.0
+	elif _active_id == 0 and not _game_over and not _clearing:
+		_spawn_piece()
+	_refresh_active_visual()
+	_refresh_hud()
+	_refresh_controls()
+
+
+## Wipe score and board and, if the cabinet is on, drop a fresh piece. Broken shells stay
+## broken — NEW is not a repair kit.
+func new_game() -> void:
+	if _broken:
+		push_error("TetrisMachine.new_game: cabinet is destroyed")
+		return
+	if has_ai_controller():
+		push_error("TetrisMachine.new_game: an NPC owns this board")
+		return
+	_score = 0
+	_lines = 0
+	_level = 1
+	_game_over = false
+	_clearing = false
+	_clear_timer = 0.0
+	_clear_rows.clear()
+	_active_id = 0
+	_soft_dropping = false
+	_locking = false
+	_lock_accum = 0.0
+	_lock_resets = 0
+	_fall_t = 0.0
+	_das_dir = 0
+	_das_repeating = false
+	_board.fill(0)
+	_reset_bag()
+	if _game_over_label != null:
+		_game_over_label.visible = false
+	_refresh_board_visual()
+	if _powered:
+		_spawn_piece()
+	else:
+		_refresh_active_visual()
+	_refresh_hud()
+	_refresh_controls()
 
 
 func _ready() -> void:
@@ -142,7 +250,13 @@ func _ready() -> void:
 
 
 func is_playable() -> bool:
-	return not _broken and not _game_over and not _clearing and _active_id > 0
+	return (
+		_powered
+		and not _broken
+		and not _game_over
+		and not _clearing
+		and _active_id > 0
+	)
 
 
 func is_broken() -> bool:
@@ -159,8 +273,11 @@ func is_soft_dropping() -> bool:
 
 ## Idempotent on purpose: the proximity gate that picks which cabinet in a row hears keys
 ## 1–4 calls this every frame, and clearing DAS on every one of those calls would kill
-## auto-repeat while a key is held.
+## auto-repeat while a key is held. An off cabinet stays deaf even when the gate asks
+## otherwise — power is the stronger rule.
 func set_input_enabled(enabled: bool) -> void:
+	if enabled and (not _powered or _broken):
+		enabled = false
 	if _input_enabled == enabled:
 		return
 	_input_enabled = enabled
@@ -179,7 +296,7 @@ func has_ai_controller() -> bool:
 
 
 func claim_ai_controller(controller: Node) -> bool:
-	if _broken:
+	if _broken or not _powered:
 		return false
 	if _ai_controller != null and is_instance_valid(_ai_controller) and _ai_controller != controller:
 		return false
@@ -191,7 +308,7 @@ func claim_ai_controller(controller: Node) -> bool:
 func release_ai_controller(controller: Node) -> void:
 	if _ai_controller == controller:
 		_ai_controller = null
-		if not _broken and not _game_over:
+		if not _broken and not _game_over and _powered:
 			set_input_enabled(true)
 
 
@@ -480,6 +597,7 @@ func _break_machine() -> void:
 	if _broken:
 		return
 	_broken = true
+	_powered = false
 	_game_over = true
 	_active_id = 0
 	_soft_dropping = false
@@ -489,6 +607,7 @@ func _break_machine() -> void:
 	_refresh_active_visual()
 	## Labels / HUD are Node3D props — hide them so they don't float after the shell is gone.
 	_hide_overlay_labels()
+	_refresh_controls()
 	for mmi in _board_mms:
 		if mmi != null:
 			mmi.visible = false
@@ -499,6 +618,8 @@ func _hide_overlay_labels() -> void:
 		_title.visible = false
 	if _hud != null:
 		_hud.visible = false
+	if _hints != null:
+		_hints.visible = false
 	if _game_over_label != null:
 		_game_over_label.visible = false
 
@@ -566,8 +687,8 @@ func _build_labels() -> void:
 	_hud.name = "ScoreHud"
 	_hud.font_size = 72
 	_hud.modulate = Color(0.2, 0.95, 0.35)
-	## Front of pedestal, clear of voxel volume so score stays readable.
-	_hud.position = Vector3(0.0, 1.15, -0.55)
+	## Front of pedestal — identical anchor on free and ped cabinets so SCORE/LINES line up.
+	_hud.position = Vector3(0.0, HUD_Y_M, HUD_Z_M)
 	_hud.rotation.y = PI
 	_hud.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hud.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -575,6 +696,22 @@ func _build_labels() -> void:
 	_hud.outline_modulate = Color(0.02, 0.06, 0.02, 0.95)
 	_configure_cabinet_label(_hud, 10)
 	add_child(_hud)
+
+	_hints = Label3D.new()
+	_hints.name = "ControlHints"
+	_hints.text = HINTS_TEXT
+	_hints.font_size = 72
+	_hints.modulate = HINTS_COLOUR
+	## Free line above SCORE (not on top of it — the centred two-line HUD already owns that).
+	_hints.position = Vector3(0.0, HINTS_Y_M, HUD_Z_M)
+	_hints.rotation.y = PI
+	_hints.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hints.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hints.outline_size = 18
+	_hints.outline_modulate = Color(0.08, 0.05, 0.01, 0.95)
+	_configure_cabinet_label(_hints, 10)
+	_hints.visible = false
+	add_child(_hints)
 
 	_game_over_label = Label3D.new()
 	_game_over_label.name = "GameOver"
@@ -592,6 +729,69 @@ func _build_labels() -> void:
 	_configure_cabinet_label(_game_over_label, 11)
 	_game_over_label.visible = false
 	add_child(_game_over_label)
+
+
+## Pedestal plate facing the stand. Built once; `configure_arcade` decides whether it is live.
+func _build_controls() -> void:
+	if _controls != null:
+		return
+	var panel: Ui3D = Ui3DScript.new() as Ui3D
+	panel.name = "ArcadeControls"
+	panel.size_m = Vector2(CONTROLS_W_M, CONTROLS_H_M)
+	panel.surface_color = Color(0.10, 0.11, 0.13, 0.94)
+	panel.show_debug_marker = false
+	add_child(panel)
+	## Child of the cabinet: `begin` writes local yaw, and the parent already carries
+	## `face_yaw`. Passing that again stacked a second turn and stood the plate edge-on.
+	## Local 0 keeps Ui3D's −Z on the cabinet's −Z (the stand). Do *not* copy the score
+	## label's π flip — Label3D faces +Z, Ui3D faces −Z, so the same flip would point the
+	## plate into the shell. Same row as LINES, left of the well.
+	var at := to_global(Vector3(CONTROLS_X_M, CONTROLS_Y_M, CONTROLS_Z_M))
+	panel.begin(at, 0.0)
+	if not panel.button_pressed.is_connected(_on_controls_button):
+		panel.button_pressed.connect(_on_controls_button)
+	_controls = panel
+	_refresh_controls()
+
+
+func _refresh_controls() -> void:
+	var live := _show_controls and not _broken
+	if _hints != null:
+		_hints.visible = live
+	if _controls == null:
+		return
+	_controls.set_hit_enabled(live)
+	if not live:
+		_controls.clear_buttons()
+		return
+	_controls.clear_buttons()
+	## Label is the action, not the state: an off cabinet offers ON, an on one offers OFF.
+	var power_label := "OFF" if _powered else "ON"
+	var power_col := (
+		Color(0.45, 0.22, 0.18) if _powered else Color(0.18, 0.42, 0.24)
+	)
+	_controls.add_button(
+		BTN_POWER, Rect2(0.04, 0.12, 0.44, 0.76), power_label, power_col, true
+	)
+	var new_col := Color(0.22, 0.28, 0.42) if _powered else Color(0.16, 0.18, 0.22)
+	_controls.add_button(BTN_NEW, Rect2(0.52, 0.12, 0.44, 0.76), "NEW", new_col, true)
+	_controls.rebuild_buttons()
+
+
+func _on_controls_button(button_id: StringName, _uv: Vector2) -> void:
+	if _broken or not _show_controls:
+		return
+	if has_ai_controller():
+		return
+	if UiInputGate.gameplay_blocked(_walker):
+		return
+	match button_id:
+		BTN_POWER:
+			set_powered(not _powered)
+		BTN_NEW:
+			new_game()
+		_:
+			push_error("TetrisMachine: unknown control '%s'" % String(button_id))
 
 
 ## Depth-tested labels: no_depth_test made score/title paint over the player whenever
@@ -825,6 +1025,10 @@ func _display_y() -> float:
 
 
 func _physics_process(delta: float) -> void:
+	if not _powered:
+		_das_dir = 0
+		_das_repeating = false
+		return
 	if UiInputGate.gameplay_blocked(_walker):
 		## A panel that opens mid-hold swallows the key release below it, so the latched
 		## repeat has to be dropped here or the piece keeps sliding behind the modal.
@@ -843,6 +1047,9 @@ func _process(delta: float) -> void:
 		check_integrity()
 		if _broken:
 			return
+	## Off means frozen: the well keeps whatever was on it, but nothing falls.
+	if not _powered:
+		return
 	if _game_over:
 		return
 	if _clearing:
@@ -911,7 +1118,7 @@ func _tetris_key_id(ek: InputEventKey) -> int:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _broken or _game_over or not _input_enabled:
+	if _broken or not _powered or _game_over or not _input_enabled:
 		return
 	## A modal owns the screen while it is up, so a cabinet key must not reach the board behind
 	## it. Same gate the walker and the build bar put on their own hotkeys.
@@ -1014,7 +1221,9 @@ func _refresh_board_visual_hiding_rows(hide: Array[int]) -> void:
 func _refresh_active_visual() -> void:
 	if _active_blocks.is_empty():
 		return
-	if _active_id <= 0:
+	## An off cabinet hides the falling piece so the well reads as dormant rather than paused
+	## mid-drop. Locked blocks stay — they are the machine's last game, not its current one.
+	if not _powered or _active_id <= 0:
 		for b in _active_blocks:
 			b.visible = false
 		for g in _ghost_blocks:
@@ -1066,8 +1275,12 @@ func _refresh_active_visual() -> void:
 func _refresh_hud() -> void:
 	if _hud == null:
 		return
+	## Two lines on every live cabinet. Free-bay ON/NEW buttons carry power/restart state, so
+	## do not append a third status line there — that is what shoved SCORE up into the hints.
 	_hud.text = "SCORE %d\nLINES %d  LV %d" % [_score, _lines, _level]
 	if _broken:
 		_hud.text += "\nCABINET DESTROYED"
-	elif _game_over:
-		_hud.text += "\nT TO RESTART"
+	elif not _show_controls and not _powered:
+		_hud.text += "\nOFF"
+	elif not _show_controls and _game_over:
+		_hud.text += "\nNEW TO RESTART"

@@ -61,6 +61,9 @@ func _start_behavior(spawn_pos: Vector3) -> void:
 	if bool(_machine.call("is_broken")):
 		_set_phase_idle()
 		return
+	if _machine.has_method("is_powered") and not bool(_machine.call("is_powered")):
+		_set_phase_idle()
+		return
 	var dist := global_position.distance_to(_machine.global_position)
 	if dist > NEAR_TETRIS_M:
 		_set_phase_idle()

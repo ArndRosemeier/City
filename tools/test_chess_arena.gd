@@ -30,6 +30,7 @@ func _ready() -> void:
 	var arena: ChessArena = _stage_court()
 	_check_square_mapping(arena)
 	_check_armies_stand(arena)
+	_check_edge_labels(arena)
 	await _check_hotseat_move(arena)
 	await _check_capture_choreography(arena)
 	await _check_ai_answers(arena)
@@ -76,6 +77,46 @@ func _check_square_mapping(arena: ChessArena) -> void:
 		_fail("FAIL a point west of the board reported a square")
 	if arena.square_at_world(sw + Vector3(0.0, 0.0, span * 2.0)) != -1:
 		_fail("FAIL a point north of the board reported a square")
+
+
+## Each rim plate has court + outside glyphs, both upright, facing opposite ways.
+func _check_edge_labels(arena: ChessArena) -> void:
+	var root := arena.get_node_or_null("EdgeLabels")
+	if root == null or root.get_child_count() != 32:
+		_fail(
+			"FAIL edge labels are %s, expected 32"
+			% ("missing" if root == null else str(root.get_child_count()))
+		)
+		return
+	var board_mid := arena.square_world(3, 3).lerp(arena.square_world(4, 4), 0.5)
+	for child in root.get_children():
+		var holder := child as Node3D
+		var court := holder.get_node_or_null("GlyphCourt") as Label3D
+		var outside := holder.get_node_or_null("GlyphOutside") as Label3D
+		if court == null or outside == null:
+			_fail("FAIL %s needs GlyphCourt and GlyphOutside" % holder.name)
+			return
+		var glyphs: Array[Label3D] = [court, outside]
+		for glyph in glyphs:
+			if glyph.global_transform.basis.y.dot(Vector3.UP) < 0.95:
+				_fail("FAIL '%s'/%s is not upright" % [glyph.text, glyph.name])
+				return
+		var toward_board := (board_mid - holder.global_position)
+		toward_board.y = 0.0
+		toward_board = toward_board.normalized()
+		var court_face := court.global_transform.basis.z
+		court_face.y = 0.0
+		court_face = court_face.normalized()
+		var outside_face := outside.global_transform.basis.z
+		outside_face.y = 0.0
+		outside_face = outside_face.normalized()
+		if court_face.dot(toward_board) < 0.5:
+			_fail("FAIL '%s' court face misses the board" % court.text)
+			return
+		if outside_face.dot(-toward_board) < 0.5:
+			_fail("FAIL '%s' outside face misses the approach" % outside.text)
+			return
+	print("OK 32 rim plates read upright from court and outside")
 
 
 func _check_armies_stand(arena: ChessArena) -> void:

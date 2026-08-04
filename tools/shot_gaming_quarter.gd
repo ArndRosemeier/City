@@ -61,15 +61,16 @@ func _ready() -> void:
 		]
 	)
 
-	## Whole row head on, from where you walk in off the meadow.
+	## Whole row head on, from the garden-side apron — the pavilion sits against the Go band
+	## now, so a deep meadow pull-back would shoot through the trees.
 	var mid_cab: Vector3i = layout.arcade_cabinets[1]
-	var row_eye := _world(origin, mid_cab + Vector3i(56, 18, 0))
+	var row_eye := _world(origin, mid_cab + Vector3i(28, 16, 0))
 	walker.global_position = row_eye + Vector3(0.0, 1.0, 0.0)
 	await _settle(14.0)
-	await _shoot(row_eye, _world(origin, mid_cab + Vector3i(0, 16, 0)), ARCADE_PNG)
+	await _shoot(row_eye, _world(origin, mid_cab + Vector3i(0, 14, 0)), ARCADE_PNG)
 
-	## One bay close up and off-axis: pilasters, marquee, and the NPC at the controls.
-	var bay_eye := _world(origin, mid_cab + Vector3i(20, 8, -18))
+	## One bay close up and off-axis: pilasters, marquee, and a ped at the controls.
+	var bay_eye := _world(origin, mid_cab + Vector3i(14, 8, -14))
 	walker.global_position = bay_eye + Vector3(0.0, 1.0, 0.0)
 	await _settle(8.0)
 	await _shoot(bay_eye, _world(origin, mid_cab + Vector3i(0, 12, 0)), ARCADE_BAY_PNG)
@@ -112,12 +113,27 @@ func _check_zones(layout: GamingLayout, inst: DistrictInstance) -> bool:
 			% [inst.gaming_cabinets.size(), GamingArcade.CABINETS]
 		)
 		return false
+	var ped_bays := 0
+	var free_bays := 0
 	for machine in inst.gaming_cabinets:
 		if bool(machine.call("is_broken")):
 			push_error("FAIL cabinet %s stamped itself broken" % machine.name)
 			return false
-	if inst.gaming_cabinet_ped == null:
-		push_error("FAIL no arcade ped — the quarter streams in deserted")
+		if bool(machine.call("is_powered")):
+			ped_bays += 1
+		else:
+			free_bays += 1
+	if ped_bays != 2 or free_bays != 1:
+		push_error(
+			"FAIL arcade power split is %d on / %d off, expected 2 on / 1 off"
+			% [ped_bays, free_bays]
+		)
+		return false
+	if inst.gaming_cabinet_peds.size() != 2:
+		push_error(
+			"FAIL %d arcade peds, expected 2 — the free bay should be the player's"
+			% inst.gaming_cabinet_peds.size()
+		)
 		return false
 	if layout.chess_origin == Vector3i.ZERO or layout.chess_max == layout.chess_min:
 		push_error("FAIL layout carries no chess court")
@@ -127,11 +143,26 @@ func _check_zones(layout: GamingLayout, inst: DistrictInstance) -> bool:
 		return false
 	var arena: ChessArena = inst.chess_arena as ChessArena
 	var standing := 0
+	var kings_crowned := 0
 	for sq in range(64):
-		if arena.actor_at(sq) != null:
-			standing += 1
+		var actor := arena.actor_at(sq)
+		if actor == null:
+			continue
+		standing += 1
+		if actor.get_node_or_null("Crown") != null:
+			kings_crowned += 1
 	if standing != 32:
 		push_error("FAIL %d monsters on the chess court, expected 32" % standing)
+		return false
+	if kings_crowned != 2:
+		push_error("FAIL %d crowned kings on the court, expected 2" % kings_crowned)
+		return false
+	var edges := arena.get_node_or_null("EdgeLabels")
+	if edges == null or edges.get_child_count() != 32:
+		push_error(
+			"FAIL edge labels are %s, expected 32 A–H/1–8 plates"
+			% ("missing" if edges == null else str(edges.get_child_count()))
+		)
 		return false
 	return true
 

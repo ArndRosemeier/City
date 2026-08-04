@@ -41,6 +41,17 @@ const MARKER_FRAC := 0.82
 const PANEL_WEST_VOX := 10
 const PANEL_EYE_M := 1.9
 
+## Rank/file overlays on the rim — Ui3D-shaped plates with no collider. Two Label3Ds per
+## plate (court face + outside face), same trick as Signpost, so neither approach reads a
+## mirrored caption.
+const EDGE_OUTSET_FRAC := 0.62
+const EDGE_LIFT_M := 0.55
+const EDGE_PLATE_FRAC := 0.48
+const EDGE_FONT_PX := 140
+const EDGE_PLATE_COLOUR := Color(0.07, 0.08, 0.10, 0.88)
+const EDGE_GLYPH_COLOUR := Color(0.94, 0.90, 0.72)
+const EDGE_GLYPH_LIFT := 0.02
+
 var layout: GamingLayout = null
 var origin_vox: Vector3i = Vector3i.ZERO
 var voxel_size: float = 0.5
@@ -79,6 +90,7 @@ func setup(
 	add_to_group("world_interact")
 	_build_click_slab()
 	_build_marker_pool()
+	_build_edge_labels()
 	_build_panel()
 	if not _resume_saved_game():
 		## No saved game: stand the armies up anyway. An empty court would read as scenery
@@ -676,7 +688,105 @@ func _place_marker(slot: int, sq: int, tint: Color) -> void:
 	mi.visible = true
 
 
-## The control plate, west of the board and facing the way a player arrives from the garden.
+## A–H on the north and south rims, 1–8 on the east and west. Each plate carries two glyphs
+## (inward + outward) so the caption is upright from the court and from the garden approach.
+func _build_edge_labels() -> void:
+	var root := Node3D.new()
+	root.name = "EdgeLabels"
+	add_child(root)
+	var half := square_m() * 0.5
+	var outset := square_m() * EDGE_OUTSET_FRAC
+	var y := surface_y() + EDGE_LIFT_M
+	for file in range(8):
+		var letter := char(65 + file)  # A..H
+		var mid := square_world(file, 0)
+		## South rim: plate −Z faces the court (+Z world).
+		_add_edge_glyph(
+			root, letter,
+			Vector3(mid.x, y, mid.z - half - outset),
+			PI
+		)
+		mid = square_world(file, 7)
+		## North rim: plate −Z faces the court (−Z world).
+		_add_edge_glyph(
+			root, letter,
+			Vector3(mid.x, y, mid.z + half + outset),
+			0.0
+		)
+	for rank in range(8):
+		var digit := str(rank + 1)
+		var mid := square_world(0, rank)
+		## West rim: plate −Z faces the court (+X world).
+		_add_edge_glyph(
+			root, digit,
+			Vector3(mid.x - half - outset, y, mid.z),
+			-PI * 0.5
+		)
+		mid = square_world(7, rank)
+		## East rim: plate −Z faces the court (−X world).
+		_add_edge_glyph(
+			root, digit,
+			Vector3(mid.x + half + outset, y, mid.z),
+			PI * 0.5
+		)
+
+
+## `face_yaw` aims the plate's −Z at the court. Court glyph gets the π flip; outside glyph
+## keeps Label3D's native +Z so it reads from the apron beyond the rim.
+func _add_edge_glyph(parent: Node3D, text: String, world_pos: Vector3, face_yaw: float) -> void:
+	var holder := Node3D.new()
+	holder.name = "Edge_%s" % text
+	parent.add_child(holder)
+	holder.global_position = world_pos
+	holder.rotation.y = face_yaw
+
+	var side := square_m() * EDGE_PLATE_FRAC
+	var plate := MeshInstance3D.new()
+	plate.name = "Plate"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(side, side)
+	plate.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = EDGE_PLATE_COLOUR
+	## Opaque on purpose: a translucent plate lets the far glyph show through mirrored.
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	plate.material_override = mat
+	plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	holder.add_child(plate)
+
+	var court := _make_edge_glyph_label(text, side)
+	court.name = "GlyphCourt"
+	court.position = Vector3(0.0, 0.0, -EDGE_GLYPH_LIFT)
+	court.rotation.y = PI
+	holder.add_child(court)
+
+	var outside := _make_edge_glyph_label(text, side)
+	outside.name = "GlyphOutside"
+	outside.position = Vector3(0.0, 0.0, EDGE_GLYPH_LIFT)
+	holder.add_child(outside)
+
+
+func _make_edge_glyph_label(text: String, side: float) -> Label3D:
+	var lbl := Label3D.new()
+	lbl.text = text
+	lbl.font_size = EDGE_FONT_PX
+	lbl.pixel_size = (side * 0.72) / float(EDGE_FONT_PX)
+	lbl.modulate = EDGE_GLYPH_COLOUR
+	lbl.outline_size = 20
+	lbl.outline_modulate = Color(0.02, 0.02, 0.03, 0.95)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	lbl.double_sided = false
+	lbl.no_depth_test = false
+	lbl.alpha_cut = Label3D.ALPHA_CUT_OPAQUE_PREPASS
+	lbl.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	lbl.render_priority = 1
+	return lbl
+
+
 func _build_panel() -> void:
 	var panel: Node = ChessSettingsUiScript.new()
 	panel.name = "ChessSettings"

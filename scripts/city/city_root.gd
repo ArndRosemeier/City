@@ -4551,16 +4551,20 @@ func nearest_tetris_machine(at: Vector3, max_m: float) -> Node3D:
 
 
 ## Keys 1–4 are one global set, so exactly one cabinet may be listening. The nearest one in
-## reach wins; every other board goes deaf, and AI-owned boards are left alone because
-## their controller already holds their input.
+## reach wins; every other board goes deaf. AI-owned boards are left alone because their
+## controller already holds their input, and off boards are never listeners — power is the
+## stronger rule than proximity.
 func _gate_tetris_input() -> void:
 	if _tetris_machines.is_empty():
 		return
 	var listener: Node3D = null
 	if _walker != null and is_instance_valid(_walker) and not _game_over:
 		listener = nearest_tetris_machine(_walker.global_position, TETRIS_REACH_M)
-		if listener != null and bool(listener.call("has_ai_controller")):
-			listener = null
+		if listener != null:
+			if bool(listener.call("has_ai_controller")):
+				listener = null
+			elif listener.has_method("is_powered") and not bool(listener.call("is_powered")):
+				listener = null
 	for machine in _tetris_machines:
 		if machine == null or not is_instance_valid(machine):
 			continue

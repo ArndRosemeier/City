@@ -24,10 +24,15 @@ const BAY_PITCH := 20
 ## Deck reaches this far past the outermost bay, so the row stands in a court.
 const DECK_END_PAD := 14
 ## Standing room east of the cabinet fronts, and the sliver of deck behind the wall.
-const DECK_FRONT := 22
+## Front is kept short on purpose: the pavilion sits against the garden edge, and a deep
+## apron would push the screens back into the west lawn again.
+const DECK_FRONT := 12
 const DECK_BACK := 8
 ## Two courses, so stepping up onto the arcade is a deliberate half metre.
 const DECK_H := 2
+## Margin from the garden-side zone edge. Small — the arcade is meant to read as part of
+## the quarter rather than a distant satellite.
+const GARDEN_MARGIN := 2
 
 ## Wall thickness and how far it stands proud of the tallest cabinet.
 const WALL_T := 3
@@ -92,9 +97,10 @@ func _begin(layout: GamingLayout) -> bool:
 			"GamingArcade: zone %s cannot hold a %dx%d pavilion" % [_zone, deck_w, deck_d]
 		)
 		return false
-	## Pushed to the western third of the lawn: the deck faces east across open grass, so
-	## the row is visible on the walk over instead of being read edge-on.
-	var deck_x0 := _zone.position.x + (_zone.size.x - deck_w) / 4
+	## Hard against the garden: the west lawn is wide, and a western-third placement left the
+	## arcade reading as a distant outbuilding. The row still faces east, so you meet the
+	## screens as you leave the Go band rather than after a meadow crossing.
+	var deck_x0 := _zone.end.x - deck_w - GARDEN_MARGIN
 	var deck_z0 := _zone.position.y + (_zone.size.y - deck_d) / 2
 	_deck = Rect2i(deck_x0, deck_z0, deck_w, deck_d)
 	_anchor_x = deck_x0 + DECK_BACK + CAB_BACK_VOX

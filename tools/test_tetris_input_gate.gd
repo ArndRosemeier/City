@@ -52,6 +52,7 @@ func _ready() -> void:
 
 	_check_keys_reach_the_board(machine, walker)
 	await _check_keys_stop_at_a_modal(machine, walker)
+	_check_power_and_new(machine)
 	_finish()
 
 
@@ -185,6 +186,102 @@ func _press(code: Key, pressed: bool) -> void:
 	ev.physical_keycode = code
 	ev.pressed = pressed
 	get_viewport().push_input(ev)
+
+
+## Arcade free bay: starts off, refuses keys, toggles back on, and NEW wipes a finished board.
+func _check_power_and_new(machine: TetrisMachine) -> void:
+	machine.configure_arcade(true)
+	if machine.is_powered():
+		_fail("FAIL configure_arcade(true) left the cabinet powered")
+		return
+	if machine.is_playable():
+		_fail("FAIL an off cabinet still reports playable")
+		return
+	var hints := machine.get_node_or_null("ControlHints") as Label3D
+	if hints == null or not hints.visible:
+		_fail("FAIL free bay has no visible key hints above the score")
+		return
+	if not str(hints.text).contains("1") or not str(hints.text).contains("4"):
+		_fail("FAIL key hints do not list keys 1–4: %s" % hints.text)
+		return
+	var hud := machine.get_node_or_null("ScoreHud") as Label3D
+	if hud == null:
+		_fail("FAIL free bay has no ScoreHud")
+		return
+	if hints.position.y <= hud.position.y + 0.5:
+		_fail(
+			"FAIL hints at y=%.2f sit on the score at y=%.2f"
+			% [hints.position.y, hud.position.y]
+		)
+		return
+	if str(hud.text).contains("\nOFF") or str(hud.text).contains("\nNEW"):
+		_fail("FAIL free-bay HUD still carries a third status line: %s" % hud.text)
+		return
+	var panel := machine.get_node_or_null("ArcadeControls") as Node3D
+	if panel == null:
+		_fail("FAIL free bay has no ArcadeControls plate")
+		return
+	if panel.position.x >= -0.5:
+		_fail("FAIL controls are not left-aligned (local x=%.2f)" % panel.position.x)
+		return
+	if absf(panel.position.y - (hud.position.y - 0.36)) > 0.2:
+		_fail(
+			"FAIL controls y=%.2f are not on the LINES row under score y=%.2f"
+			% [panel.position.y, hud.position.y]
+		)
+		return
+	_check_controls_face_the_stand(machine)
+	var col_before := _column(machine)
+	_tap(KEY_1)
+	if _column(machine) != col_before:
+		_fail("FAIL key 1 moved a piece on an off cabinet")
+		return
+	if machine.claim_ai_controller(self):
+		_fail("FAIL an off cabinet accepted an AI claim")
+		machine.release_ai_controller(self)
+		return
+	machine.set_powered(true)
+	if not machine.is_powered() or not machine.is_playable():
+		_fail("FAIL turning the cabinet on did not restore play")
+		return
+	machine.new_game()
+	if machine.get_active_piece().is_empty():
+		_fail("FAIL NEW on a powered cabinet left no active piece")
+		return
+	machine.set_powered(false)
+	machine.new_game()
+	if machine.is_powered():
+		_fail("FAIL NEW powered the cabinet on by itself")
+		return
+	if not machine.get_active_piece().is_empty():
+		_fail("FAIL NEW on an off cabinet left a falling piece for the rules")
+		return
+	print("OK power toggle and NEW keep an off cabinet quiet and a restart clean")
+
+
+## The plate is a child of the cabinet. A world yaw passed into `Ui3D.begin` stacks on the
+## parent's face and stands the buttons edge-on to the player — assert the face points at
+## the stand, which is the only orientation a player at the controls can read.
+func _check_controls_face_the_stand(machine: TetrisMachine) -> void:
+	var panel := machine.get_node_or_null("ArcadeControls") as Node3D
+	if panel == null:
+		_fail("FAIL free bay has no ArcadeControls plate")
+		return
+	var face := -panel.global_transform.basis.z
+	var stand := machine.get_stand_world_position() - machine.global_position
+	stand.y = 0.0
+	if stand.length_squared() < 0.01:
+		_fail("FAIL stand is on top of the cabinet origin")
+		return
+	stand = stand.normalized()
+	var align := face.dot(stand)
+	if align < 0.9:
+		_fail(
+			"FAIL controls face %s but the stand is %s (dot %.2f) — plate is sideways"
+			% [face, stand, align]
+		)
+		return
+	print("OK controls face the stand (dot %.2f)" % align)
 
 
 func _make_machine(walker: CityWalker) -> TetrisMachine:

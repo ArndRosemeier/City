@@ -37,7 +37,8 @@ var arcade_max: Vector3i = Vector3i.ZERO
 ## `arcade_yaw`. Baked by GamingArcade so the runtime needs no bake constants.
 var arcade_cabinets: Array[Vector3i] = []
 var arcade_yaw: float = 0.0
-## Where a cabinet-playing NPC spawns from, district-local voxels.
+## Mid-row fallback spawn for a cabinet ped, district-local voxels. Runtime prefers a stand
+## in front of each ped's own bay; this stays for layout dumps and older callers.
 var arcade_ped_spawn: Vector3i = Vector3i.ZERO
 ## Monster-chess precinct on the east lawn, district-local voxels (max exclusive).
 var chess_min: Vector3i = Vector3i.ZERO
