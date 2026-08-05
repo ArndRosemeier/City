@@ -55,6 +55,7 @@ const GameMenuPanelScript := preload("res://scripts/city/game_menu_panel.gd")
 const CheatPanelScript := preload("res://scripts/city/cheat_panel.gd")
 const DistrictEconomyScript := preload("res://scripts/city/district_economy.gd")
 const WorldGamesScript := preload("res://scripts/city/world_games.gd")
+const FractalCascadeScript := preload("res://scripts/city/fractal_cascade.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -259,6 +260,10 @@ const _DISSOLVE_NEIGHBOURS: Array[Vector3i] = [
 	Vector3i(0, 1, 0), Vector3i(0, -1, 0),
 	Vector3i(0, 0, 1), Vector3i(0, 0, -1),
 ]
+## Fractal display cascades: only a player shot may start one; never spawned by another cascade.
+## Cap concurrent chains from separate shots (glow / bands / interior).
+const FRACTAL_CASCADE_MAX := 5
+var _fractal_cascades: Array = []  # FractalCascade RefCounted instances
 
 ## Visual mesh radius (~90 m at default). Collisions use a shorter viewer below.
 var _voxel_view_vox: int = 100
@@ -1395,6 +1400,10 @@ func _process(delta: float) -> void:
 		CityProfiler.begin("voxel_dissolve")
 		_tick_dissolve()
 		CityProfiler.end("voxel_dissolve")
+	if not _fractal_cascades.is_empty():
+		CityProfiler.begin("voxel_fractal_cascade")
+		_tick_fractal_cascades()
+		CityProfiler.end("voxel_fractal_cascade")
 	CityProfiler.begin("underground")
 	_sync_underground_lighting()
 	CityProfiler.end("underground")
@@ -3956,25 +3965,115 @@ func _spawn_neighborhood_aabb(spawn_world: Vector3, radius_vox: float = 48.0) ->
 
 
 func _on_blast(hit_position: Vector3, _collider: Object, radius_m: float) -> void:
-	if _tool == null or _terrain == null:
+	## Legacy dig signal — same per-cell player destroy as charged blast (no VFX flash).
+	if _tool == null or _terrain == null or _brush == null:
 		return
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var local := _terrain.to_local(hit_position)
 	var hit_vox := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
 	var hit_mat := int(_tool.get_voxel(hit_vox))
-	if _try_start_dissolve(hit_position, hit_mat):
+	## Dissolve under the impact stays exclusive (cage / boss).
+	if VoxelMaterial.is_dissolve(hit_mat):
+		_try_start_dissolve(hit_position, hit_mat)
 		return
-	if _try_detonate_explosive(hit_position, hit_mat):
+	if VoxelMaterial.is_explosive(hit_mat):
+		_try_detonate_explosive(hit_position, hit_mat)
 		return
 	var radius_vox := maxf(radius_m, 0.25) / VOXEL_SIZE
-	## Revert any tip in the blast first; restored fabric then takes the carve normally.
 	_tip_kill_leads_in_sphere(local, radius_vox)
-	_brush.begin_edit()
-	_carve_destructible_sphere(local, radius_vox)
+	var r_i := int(ceil(radius_vox)) + 1
+	var r2 := radius_vox * radius_vox
+	var cx := hit_vox.x
+	var cy := hit_vox.y
+	var cz := hit_vox.z
+	var allow_chip := _roll_carve_chip()
+	var ctx := _make_player_carve_ctx(allow_chip, 900)
+	_player_note_cell(hit_vox, ctx)
+	for z in range(cz - r_i, cz + r_i + 1):
+		for y in range(cy - r_i, cy + r_i + 1):
+			for x in range(cx - r_i, cx + r_i + 1):
+				var center := Vector3(float(x) + 0.5, float(y) + 0.5, float(z) + 0.5)
+				if center.distance_squared_to(local) > r2 + 0.0001:
+					continue
+				var vox := Vector3i(x, y, z)
+				if vox == hit_vox:
+					continue
+				_player_note_cell(vox, ctx)
+	_player_commit_carve(ctx, hit_position)
 	_restore_bedrock_floor(local, radius_vox)
-	_brush.end_edit()
-	_notify_tetris_damage()
 	_notify_destruction(hit_position, maxf(radius_m * 4.0, 28.0))
+
+
+## Start one column-hop cascade at an exact seed voxel. Only shots call this.
+## Up to FRACTAL_CASCADE_MAX concurrent from separate shots; at the cap the hit is absorbed.
+func _try_start_fractal_cascade_at(seed_vox: Vector3i) -> bool:
+	if _tool == null or _terrain == null or _brush == null:
+		return false
+	var mat_id := _brush.get_vox(seed_vox)
+	if not VoxelMaterial.is_fractal_display(mat_id):
+		return false
+	_prune_fractal_cascades()
+	if _fractal_cascades.size() >= FRACTAL_CASCADE_MAX:
+		return true
+	var cascade: RefCounted = FractalCascadeScript.new()
+	var detached: Array = cascade.call("start", _brush, seed_vox) as Array
+	var hit_world := _terrain.to_global(
+		Vector3(float(seed_vox.x) + 0.5, float(seed_vox.y) + 0.5, float(seed_vox.z) + 0.5)
+	)
+	_emit_fractal_cascade_debris(detached, hit_world)
+	if bool(cascade.call("is_active")):
+		_fractal_cascades.append(cascade)
+	return true
+
+
+func _prune_fractal_cascades() -> void:
+	var i := 0
+	while i < _fractal_cascades.size():
+		var cascade: RefCounted = _fractal_cascades[i] as RefCounted
+		if cascade == null or not bool(cascade.call("is_active")):
+			_fractal_cascades.remove_at(i)
+			continue
+		i += 1
+
+
+func _tick_fractal_cascades() -> void:
+	var i := 0
+	while i < _fractal_cascades.size():
+		var cascade: RefCounted = _fractal_cascades[i] as RefCounted
+		if cascade == null:
+			_fractal_cascades.remove_at(i)
+			continue
+		var detached: Array = cascade.call("tick") as Array
+		if not detached.is_empty():
+			_emit_fractal_cascade_debris(detached, _hit_world_from_detached(detached))
+		if not bool(cascade.call("is_active")):
+			_fractal_cascades.remove_at(i)
+			continue
+		i += 1
+
+
+## World-space centre of the first detached entry — debris blast origin for one column peel.
+func _hit_world_from_detached(detached: Array) -> Vector3:
+	if _terrain == null or detached.is_empty():
+		return Vector3.ZERO
+	var entry: Variant = detached[0]
+	if typeof(entry) != TYPE_DICTIONARY:
+		return Vector3.ZERO
+	var vox: Vector3i = (entry as Dictionary).get("vox", Vector3i.ZERO) as Vector3i
+	return _terrain.to_global(
+		Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+	)
+
+
+func _emit_fractal_cascade_debris(detached: Array, hit_world: Vector3) -> void:
+	if detached.is_empty():
+		return
+	if _cascade != null and _cascade.has_method("detach_blast_voxels"):
+		CityProfiler.begin("cascade_detach")
+		_cascade.call("detach_blast_voxels", detached, hit_world)
+		CityProfiler.end("cascade_detach")
+	_notify_tetris_damage(detached)
+	_notify_destruction(hit_world, 28.0)
 
 
 ## Player damage touched dissolve fabric — start (or extend) a neighbour-infection cascade.
@@ -4093,9 +4192,9 @@ func _try_detonate_explosive(hit_world: Vector3, mat_id: int) -> bool:
 	return true
 
 
-## Charged LMB bomb (and stomp): carve + outward tumble debris, then cascade columns above.
+## Charged LMB bomb (and stomp): per-cell player destroy, then normal debris/column for NORMAL cells.
 func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
-	if _tool == null or _terrain == null:
+	if _tool == null or _terrain == null or _brush == null:
 		return
 	CityProfiler.begin("voxel_blast")
 	var radius := maxf(radius_m, 0.35)
@@ -4110,42 +4209,39 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	var cy := int(floor(local.y))
 	var cz := int(floor(local.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	## Dissolve fabric under the impact: cascade instead of a crater (no boss-killing blast).
-	if _brush != null:
-		var probe_mat := _brush.get_vox(Vector3i(cx, cy, cz))
-		if VoxelMaterial.is_dissolve(probe_mat):
-			CityProfiler.end("voxel_blast")
-			_try_start_dissolve(hit_world, probe_mat)
-			return
+	var center_vox := Vector3i(cx, cy, cz)
+	var probe_mat := _brush.get_vox(center_vox)
+	## Dissolve under the impact: exclusive cascade (no cratering the boss / cage floor).
+	if VoxelMaterial.is_dissolve(probe_mat):
+		CityProfiler.end("voxel_blast")
+		_try_start_dissolve(hit_world, probe_mat)
+		return
 	## Explosive fabric under the impact: enlarge to material radius + acoustic boom.
 	## Area damage is the caller's job (walker / stomp / `_try_detonate_explosive`).
-	if not _explosive_detonating and _brush != null:
-		var probe := _brush.get_vox(Vector3i(cx, cy, cz))
-		if VoxelMaterial.is_explosive(probe):
-			var er := VoxelMaterial.explosive_radius_m(probe)
-			if er > radius:
-				radius = er
-				radius_vox = minf(radius / VOXEL_SIZE, 14.0)
-				r_i = int(ceil(radius_vox)) + 1
-				r2 = radius_vox * radius_vox
-			if _audio != null:
-				if _audio.has_method("play_explosive_boom"):
-					_audio.call("play_explosive_boom", hit_world)
-				if _audio.has_method("play_charged_blast_impact"):
-					_audio.call("play_charged_blast_impact", hit_world, 2.8)
-	var detached: Array = []
-	var column_max_y: Dictionary = {}  # Vector2i → int
+	if not _explosive_detonating and VoxelMaterial.is_explosive(probe_mat):
+		var er := VoxelMaterial.explosive_radius_m(probe_mat)
+		if er > radius:
+			radius = er
+			radius_vox = minf(radius / VOXEL_SIZE, 14.0)
+			r_i = int(ceil(radius_vox)) + 1
+			r2 = radius_vox * radius_vox
+		if _audio != null:
+			if _audio.has_method("play_explosive_boom"):
+				_audio.call("play_explosive_boom", hit_world)
+			if _audio.has_method("play_charged_blast_impact"):
+				_audio.call("play_charged_blast_impact", hit_world, 2.8)
 	const MAX_DEBRIS := 900
 	## One chip roll for the whole blast — same gate as blaster / laser / melee.
 	var allow_chip := _roll_carve_chip()
-	var center_mat := _brush.get_vox(Vector3i(cx, cy, cz)) if _brush != null else VoxelMaterial.AIR
-	var center_verdict := _carve_verdict(center_mat)
+	var center_verdict := _carve_verdict(probe_mat)
 	if (
 		center_verdict == CarveVerdict.REFUSE
 		or (center_verdict == CarveVerdict.CHIP and not allow_chip)
 	):
-		_flash_hardness_refuse(center_mat)
-	_brush.begin_edit()
+		_flash_hardness_refuse(probe_mat)
+	var ctx := _make_player_carve_ctx(allow_chip, MAX_DEBRIS)
+	## Pass 1 — classify every cell. Centre is noted first so it wins the one fractal seed.
+	_player_note_cell(center_vox, ctx)
 	for z in range(cz - r_i, cz + r_i + 1):
 		for y in range(cy - r_i, cy + r_i + 1):
 			for x in range(cx - r_i, cx + r_i + 1):
@@ -4153,36 +4249,14 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 				if center.distance_squared_to(local) > r2 + 0.0001:
 					continue
 				var vox := Vector3i(x, y, z)
-				## Brush sees pending AIR from earlier furniture assembly clears.
-				var mat_id := _brush.get_vox(vox)
-				if not _carve_allowed(mat_id, allow_chip):
+				if vox == center_vox:
 					continue
-				var carved := _brush.destroy_vox(vox)
-				for entry in carved:
-					var ev: Vector3i = entry["vox"] as Vector3i
-					if detached.size() < MAX_DEBRIS:
-						detached.append(entry)
-					var col := Vector2i(ev.x, ev.z)
-					if column_max_y.has(col):
-						column_max_y[col] = maxi(int(column_max_y[col]), ev.y)
-					else:
-						column_max_y[col] = ev.y
+				_player_note_cell(vox, ctx)
+	## Pass 2 — one fractal cascade (if any) then normal carves. Seed runs outside the edit.
+	_player_commit_carve(ctx, hit_world)
 	_restore_bedrock_floor(local, radius_vox)
-	_brush.end_edit()
 	CityProfiler.end("voxel_blast")
-	if _cascade != null:
-		## Primary blast voxels fly outward from the impact.
-		if _cascade.has_method("detach_blast_voxels"):
-			CityProfiler.begin("cascade_detach")
-			_cascade.call("detach_blast_voxels", detached, hit_world)
-			CityProfiler.end("cascade_detach")
-		## Fabric still standing above the hole cascades like melee.
-		for col_key in column_max_y.keys():
-			var xz: Vector2i = col_key
-			var max_y: int = int(column_max_y[col_key])
-			_cascade_column_above(Vector3i(xz.x, max_y, xz.y))
 	BlastFlashVfxScript.spawn(self, hit_world, radius)
-	_notify_tetris_damage(detached)
 	_notify_destruction(hit_world, maxf(radius * 5.0, 32.0))
 
 
@@ -4258,8 +4332,134 @@ enum CarveVerdict {
 	IMMUNE,
 }
 
+## Per-cell fate for player weapons. All four tray weapons route sphere cells through
+## `_player_note_cell` + `_player_commit_carve` so fractal / dissolve never use the normal path.
+enum PlayerVoxelKind {
+	NONE,
+	GEM,
+	DISSOLVE,
+	FRACTAL,
+	EXPLOSIVE,
+	NORMAL,
+}
+
 ## Chance a CHIP-tier cell yields when the strike has already committed to chipping.
 const CARVE_CHIP_CHANCE := 0.28
+
+
+## Material policy for one player-destroyed cell (before hardness).
+func _player_voxel_kind(mat_id: int) -> PlayerVoxelKind:
+	if mat_id == VoxelMaterial.AIR or mat_id == VoxelMaterial.WATER:
+		return PlayerVoxelKind.NONE
+	if VoxelMaterial.is_gem(mat_id):
+		return PlayerVoxelKind.GEM
+	if VoxelMaterial.is_dissolve(mat_id):
+		return PlayerVoxelKind.DISSOLVE
+	if VoxelMaterial.is_fractal_display(mat_id):
+		return PlayerVoxelKind.FRACTAL
+	if VoxelMaterial.is_explosive(mat_id):
+		return PlayerVoxelKind.EXPLOSIVE
+	if VoxelMaterial.is_destructible(mat_id):
+		return PlayerVoxelKind.NORMAL
+	return PlayerVoxelKind.NONE
+
+
+## Sentinel: no fractal seed chosen yet for this hit.
+const _PLAYER_NO_SEED := Vector3i(2147483647, 2147483647, 2147483647)
+
+
+func _make_player_carve_ctx(allow_chip: bool, max_debris: int) -> Dictionary:
+	return {
+		"allow_chip": allow_chip,
+		"detached": [],
+		"column_max_y": {},  # Vector2i → int
+		"max_debris": max_debris,
+		"normal_cells": [],  # Array[Vector3i] — carved in commit
+		## One shot → one fractal seed (first noted cell; callers note the impact first).
+		"fractal_seed": _PLAYER_NO_SEED,
+		"handled": false,
+	}
+
+
+## Pass 1: classify one cell. Does not carve normals or start the fractal cascade yet.
+func _player_note_cell(vox: Vector3i, ctx: Dictionary) -> void:
+	if _brush == null or _terrain == null:
+		return
+	var mat_id := _brush.get_vox(vox)
+	var kind := _player_voxel_kind(mat_id)
+	if kind == PlayerVoxelKind.NONE:
+		return
+	var allow_chip: bool = bool(ctx["allow_chip"])
+	match kind:
+		PlayerVoxelKind.GEM:
+			try_collect_gem_at(vox)
+			ctx["handled"] = true
+		PlayerVoxelKind.DISSOLVE:
+			var hit_world := _terrain.to_global(
+				Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+			)
+			_try_start_dissolve(hit_world, mat_id)
+			ctx["handled"] = true
+		PlayerVoxelKind.FRACTAL:
+			if not _carve_allowed(mat_id, allow_chip):
+				return
+			var seed: Vector3i = ctx["fractal_seed"] as Vector3i
+			if seed == _PLAYER_NO_SEED:
+				ctx["fractal_seed"] = vox
+			ctx["handled"] = true
+		PlayerVoxelKind.EXPLOSIVE, PlayerVoxelKind.NORMAL:
+			if not _carve_allowed(mat_id, allow_chip):
+				return
+			(ctx["normal_cells"] as Array).append(vox)
+			ctx["handled"] = true
+
+
+## Pass 2: start at most one fractal cascade, then carve queued normal cells + debris.
+func _player_commit_carve(ctx: Dictionary, hit_world: Vector3) -> void:
+	var seed: Vector3i = ctx["fractal_seed"] as Vector3i
+	if seed != _PLAYER_NO_SEED:
+		_try_start_fractal_cascade_at(seed)
+	var normals: Array = ctx["normal_cells"] as Array
+	if not normals.is_empty() and _brush != null:
+		var detached: Array = ctx["detached"] as Array
+		var column_max_y: Dictionary = ctx["column_max_y"] as Dictionary
+		var max_debris: int = int(ctx["max_debris"])
+		_brush.begin_edit()
+		for item in normals:
+			var vox: Vector3i = item as Vector3i
+			var carved := _brush.destroy_vox(vox)
+			for entry in carved:
+				var ev: Vector3i = entry["vox"] as Vector3i
+				if detached.size() < max_debris:
+					detached.append(entry)
+				var col := Vector2i(ev.x, ev.z)
+				if column_max_y.has(col):
+					column_max_y[col] = maxi(int(column_max_y[col]), ev.y)
+				else:
+					column_max_y[col] = ev.y
+		_brush.end_edit()
+	_player_emit_normal_cascade(ctx, hit_world)
+
+
+## Spawn tumble debris + column collapse for cells that took the NORMAL path this hit.
+func _player_emit_normal_cascade(ctx: Dictionary, hit_world: Vector3) -> void:
+	var detached: Array = ctx["detached"] as Array
+	var column_max_y: Dictionary = ctx["column_max_y"] as Dictionary
+	if _cascade != null and is_instance_valid(_cascade):
+		if not detached.is_empty() and _cascade.has_method("detach_blast_voxels"):
+			CityProfiler.begin("cascade_detach")
+			_cascade.call("detach_blast_voxels", detached, hit_world)
+			CityProfiler.end("cascade_detach")
+		elif not detached.is_empty() and _cascade.has_method("detach_voxels"):
+			CityProfiler.begin("cascade_detach")
+			_cascade.detach_voxels(detached)
+			CityProfiler.end("cascade_detach")
+		for col_key in column_max_y.keys():
+			var xz: Vector2i = col_key
+			var max_y: int = int(column_max_y[col_key])
+			_cascade_column_above(Vector3i(xz.x, max_y, xz.y))
+	if not detached.is_empty():
+		_notify_tetris_damage(detached)
 
 
 ## Classify `mat_id` against the player's hardness tier. No RNG — callers roll chip once.
@@ -4378,25 +4578,24 @@ func apply_voxel_strike(
 	## Diameter = 1 voxel per human scale → radius = scale/2.
 	var radius_vox := scale * 0.5
 	var hit_center := Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
+	var hit_world := _terrain.to_global(hit_center)
+	var hit_mat := int(_tool.get_voxel(hit_vox))
 	## Punching a gem (or a gem in the fist sphere) collects it — gems never carve.
 	if hit_gem:
 		try_collect_gem_at(hit_vox)
-	elif VoxelMaterial.is_dissolve(int(_tool.get_voxel(hit_vox))):
-		var hit_world_dissolve := _terrain.to_global(hit_center)
-		return _try_start_dissolve(hit_world_dissolve, int(_tool.get_voxel(hit_vox)))
-	elif VoxelMaterial.is_explosive(int(_tool.get_voxel(hit_vox))):
-		var hit_world_boom := _terrain.to_global(hit_center)
-		return _try_detonate_explosive(hit_world_boom, int(_tool.get_voxel(hit_vox)))
-	## Revert tips in the punch sphere first; then the strike carves restored fabric as usual.
+	## Dissolve on the primary cell: exclusive (cage opens without a punch crater).
+	elif VoxelMaterial.is_dissolve(hit_mat):
+		return _try_start_dissolve(hit_world, hit_mat)
+	elif VoxelMaterial.is_explosive(hit_mat):
+		return _try_detonate_explosive(hit_world, hit_mat)
+	## Revert tips in the punch sphere first; then every cell uses the shared player carve path.
 	_tip_kill_leads_in_sphere(hit_center, radius_vox)
 	var r_i := int(ceil(radius_vox))
 	var r2 := radius_vox * radius_vox
-	## Collect destructibles in the punch sphere, then clear. Cascade must use the TOP of the
-	## hole — starting from the bottom found only AIR (sphere already wiped the column).
 	## Reuse the ray's chip roll — never roll again per neighbour.
-	var detached: Array = []
-	var column_max_y: Dictionary = {}  # Vector2i → int
-	_brush.begin_edit()
+	var ctx := _make_player_carve_ctx(allow_chip, 900)
+	## Pass 1 — hit cell first so it wins the one fractal seed when it is fractal.
+	_player_note_cell(hit_vox, ctx)
 	for z in range(hit_vox.z - r_i, hit_vox.z + r_i + 1):
 		for y in range(hit_vox.y - r_i, hit_vox.y + r_i + 1):
 			for x in range(hit_vox.x - r_i, hit_vox.x + r_i + 1):
@@ -4404,49 +4603,18 @@ func apply_voxel_strike(
 				if center.distance_squared_to(hit_center) > r2 + 0.0001:
 					continue
 				var vox := Vector3i(x, y, z)
-				var mat_id := _brush.get_vox(vox)
-				if VoxelMaterial.is_gem(mat_id):
-					try_collect_gem_at(vox)
+				if vox == hit_vox:
 					continue
-				if not _carve_allowed(mat_id, allow_chip):
-					continue
-				var carved := _brush.destroy_vox(vox)
-				for entry in carved:
-					var ev: Vector3i = entry["vox"] as Vector3i
-					detached.append(entry)
-					var col := Vector2i(ev.x, ev.z)
-					if column_max_y.has(col):
-						column_max_y[col] = maxi(int(column_max_y[col]), ev.y)
-					else:
-						column_max_y[col] = ev.y
-	_brush.end_edit()
+				_player_note_cell(vox, ctx)
+	_player_commit_carve(ctx, hit_world)
 
-	if hit_gem and detached.is_empty():
+	var detached: Array = ctx["detached"] as Array
+	if hit_gem and detached.is_empty() and not bool(ctx["handled"]):
 		return true
-
-	if _cascade == null:
-		return not detached.is_empty() or hit_gem
-	var hit_world := _terrain.to_global(
-		Vector3(float(hit_vox.x) + 0.5, float(hit_vox.y) + 0.5, float(hit_vox.z) + 0.5)
-	)
-	## Punch sphere is already AIR — spawn debris immediately (same as blast).
-	if _cascade.has_method("detach_blast_voxels"):
-		CityProfiler.begin("cascade_detach")
-		_cascade.call("detach_blast_voxels", detached, hit_world)
-		CityProfiler.end("cascade_detach")
-	elif _cascade.has_method("detach_voxels"):
-		CityProfiler.begin("cascade_detach")
-		_cascade.detach_voxels(detached)
-		CityProfiler.end("cascade_detach")
-	## Remaining destructibles above the hole tumble down per column.
-	for col_key in column_max_y.keys():
-		var xz: Vector2i = col_key
-		var max_y: int = int(column_max_y[col_key])
-		_cascade_column_above(Vector3i(xz.x, max_y, xz.y))
-
-	_notify_tetris_damage(detached)
-	_notify_destruction(hit_world, 30.0 + 8.0 * scale)
-	return true
+	if bool(ctx["handled"]) or not detached.is_empty() or hit_gem:
+		_notify_destruction(hit_world, 30.0 + 8.0 * scale)
+		return true
+	return false
 
 
 func _on_meteor_requested(hit_point: Vector3, _hit_normal: Vector3) -> void:

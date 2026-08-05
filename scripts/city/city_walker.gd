@@ -3675,6 +3675,9 @@ func _aim_ray_at_cursor(
 
 
 ## Fresh cursor target + hand muzzle for one blaster bolt (retargets every shot).
+## Aim is always the camera-ray hit under the mouse — never reprojected from the cast
+## hand. The Spell_Simple_Shoot pose swings the palm off the view ray; rebuilding
+## aim as `hand + cam_dir * dist` was dropping every follow-up bolt below the cursor.
 func _blaster_shot_endpoints() -> Dictionary:
 	var s := maxf(character_scale, 0.05)
 	var hand := _bone_world_pos(
@@ -3685,18 +3688,18 @@ func _blaster_shot_endpoints() -> Dictionary:
 	var aim := _aim_ray_at_cursor(true, hand)
 	var aim_point: Vector3 = aim["point"] as Vector3
 	var cam_dir: Vector3 = aim["cam_dir"] as Vector3
+	var cam_from: Vector3 = aim["cam_from"] as Vector3
 	var to_aim := aim_point - hand
 	var dir: Vector3
 	if to_aim.length_squared() < 0.0001:
 		dir = cam_dir
 	else:
 		dir = to_aim.normalized()
-		## Hand can sit past a close cursor hit — shoot along the camera ray instead.
+		## Hand swung past / beside the cursor hit during the cast anim — keep the
+		## mouse aim point and fire from a muzzle on the camera ray instead.
 		if dir.dot(cam_dir) < 0.2:
 			dir = cam_dir
-			var cam_from: Vector3 = aim["cam_from"] as Vector3
-			var along := maxf(cam_from.distance_to(aim_point), 1.25 * s)
-			aim_point = hand + dir * along
+			hand = cam_from + cam_dir * (0.35 * s)
 	var origin := hand + dir * (0.2 * s)
 	return {"origin": origin, "aim_point": aim_point}
 

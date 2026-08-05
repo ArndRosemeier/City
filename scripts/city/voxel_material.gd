@@ -372,6 +372,12 @@ static func is_fractal_band(id: int) -> bool:
 	return id >= FRACTAL_BAND_FIRST and id <= FRACTAL_BAND_LAST
 
 
+## Materials used to display fractals (plaza glow, Mandelbrot bands, set interior).
+## Hitting any of these starts the fractal column-hop cascade.
+static func is_fractal_display(id: int) -> bool:
+	return id == FRACTAL_GLOW or id == FRACTAL_INTERIOR or is_fractal_band(id)
+
+
 ## Containment ring voxels (posts, energy line, pane). None of them ever yield.
 static func is_zoo_fence(id: int) -> bool:
 	return id == ZOO_FENCE_FRAME or id == ZOO_FENCE_LINE or id == ZOO_FENCE_GLASS
