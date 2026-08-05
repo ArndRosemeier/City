@@ -8,6 +8,7 @@ const OfflineVolumeCommitterScript := preload("res://scripts/city/offline_volume
 const CrowdDirectorScript := preload("res://scripts/city/crowd_director.gd")
 const VehicleDirectorScript := preload("res://scripts/vehicles/vehicle_director.gd")
 const StreetPropPlacerScript := preload("res://scripts/city/street_prop_placer.gd")
+const BirdDirectorScript := preload("res://scripts/city/bird_director.gd")
 const SignpostPlacerScript := preload("res://scripts/city/signpost_placer.gd")
 const GemChestPlacerScript := preload("res://scripts/city/gem_chest_placer.gd")
 const RecipePickupPlacerScript := preload("res://scripts/city/recipe_pickup_placer.gd")
@@ -41,6 +42,9 @@ var generator: DistrictGenerator
 var crowd: CrowdDirector
 var vehicles: VehicleDirector
 var street_props: StreetPropPlacer
+## Ambient birds. Unlike the crowd these are on every tile, spectacle ones included — birds
+## fly over an arena as readily as over a park.
+var birds: BirdDirector
 ## Fingerposts naming the four neighbours. Empty of posts on special tiles.
 var signposts: SignpostPlacer
 ## Gem chests placed as this tile's rooms get furnished. Created on the first chest.
@@ -191,6 +195,8 @@ func bind_camera(camera: Camera3D) -> void:
 		building_lod._camera = camera
 	if street_props != null and is_instance_valid(street_props):
 		street_props._camera = camera
+	if birds != null and is_instance_valid(birds):
+		birds._camera = camera
 	if signposts != null and is_instance_valid(signposts):
 		signposts.set_camera(camera)
 	if castle_doors != null and is_instance_valid(castle_doors):
@@ -289,6 +295,10 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 		street_props.clear_props()
 		street_props.queue_free()
 	street_props = null
+	if birds != null and is_instance_valid(birds):
+		birds.clear_birds()
+		birds.queue_free()
+	birds = null
 	if signposts != null and is_instance_valid(signposts):
 		signposts.clear_posts()
 		signposts.queue_free()
@@ -350,6 +360,10 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 		street_props.clear_props()
 		street_props.queue_free()
 	street_props = null
+	if birds != null and is_instance_valid(birds):
+		birds.clear_birds()
+		birds.queue_free()
+	birds = null
 	if signposts != null and is_instance_valid(signposts):
 		signposts.clear_posts()
 		signposts.queue_free()
@@ -605,6 +619,27 @@ func _stamp_detail_async(epoch: int) -> void:
 		)
 		CityProfiler.end("stream_signposts")
 		await get_tree().process_frame
+
+	## Outside the auto-actor block on purpose: the arena, the zoo and the fractal plaza have
+	## no crowd and no traffic, but there is no district a bird would not fly over.
+	CityProfiler.begin("stream_birds")
+	birds = BirdDirectorScript.new()
+	birds.name = "Birds"
+	add_child(birds)
+	birds.bind_city(_find_city_root())
+	birds.setup(
+		live_brush(),
+		generator.get_planner(),
+		origin_vox,
+		Vector2i(generator.size_x, generator.size_z),
+		generator.ground_thickness,
+		generator.cell_size,
+		_voxel_size,
+		camera,
+		_dseed
+	)
+	CityProfiler.end("stream_birds")
+	await get_tree().process_frame
 
 	## City lot façade doors only. Castle keep/dungeon openings stay open AIR — hung leaves
 	## and DOOR barriers blocked dungeon forever-war circulation, so castle layouts are not hung.

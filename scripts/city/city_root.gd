@@ -70,6 +70,8 @@ const SPAWN_DISTRICT_RING := 3
 const CHEAT_RECIPE_STAND_OFF_M := 2.4
 ## Stand-off beside the hill cave boss cage after the cheat hop.
 const CHEAT_CAGE_STAND_OFF_M := 3.5
+## Birds never draw closer in than this, whatever the crowd slider says.
+const BIRD_RENDER_FLOOR_M := 90.0
 ## District layouts hang off this seed plus the district's grid coordinate. Left at
 ## SEED_RANDOM every launch builds a different world; set a concrete value (in the
 ## scene, from code, or with --city-seed=N) to replay one exactly.
@@ -1388,6 +1390,11 @@ func _apply_district_runtime_budgets(crowd_m: float, vehicle_m: float, omni: int
 		if inst.street_props != null and is_instance_valid(inst.street_props):
 			inst.street_props.max_omni_lights = omni
 			inst.street_props._refresh_lights(true)
+		if inst.birds != null and is_instance_valid(inst.birds):
+			## Birds ride the crowd slider — both are ambient actor draw distance — but a
+			## dozen palm-sized meshes cost a fraction of a skinned pedestrian, so they keep
+			## a floor rather than disappearing off the bottom of the quality presets.
+			inst.birds.render_distance = maxf(crowd_m, BIRD_RENDER_FLOOR_M)
 
 
 func _process(delta: float) -> void:
@@ -4965,6 +4972,43 @@ func collect_ped_positions(from: Vector3, max_dist: float) -> PackedVector3Array
 	return out
 
 
+## Every actor that is not a bird, within max_dist (XZ) of `from`: the player, pedestrians,
+## traffic and living monsters. Bird flocks ask this to decide when to take off, which is the
+## only thing in the world that cares about "an actor, any actor" rather than a specific kind.
+func collect_actor_positions(from: Vector3, max_dist: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var max_d2 := max_dist * max_dist
+	if is_player_alive():
+		out.append(_walker.global_position)
+	out.append_array(collect_ped_positions(from, max_dist))
+	if _monsters != null and is_instance_valid(_monsters):
+		for entry in _monsters.get_alive_units():
+			var unit := entry as UndeadUnit
+			if unit == null or not is_instance_valid(unit) or not unit.is_alive():
+				continue
+			if Vector2(
+				unit.global_position.x - from.x, unit.global_position.z - from.z
+			).length_squared() <= max_d2:
+				out.append(unit.global_position)
+	if _streamer == null:
+		return out
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
+		if inst == null or not is_instance_valid(inst) or inst.vehicles == null:
+			continue
+		if not is_instance_valid(inst.vehicles):
+			continue
+		for i in range(inst.vehicles.vehicle_live_count()):
+			var car := inst.vehicles.agent_at(i)
+			if car == null or not is_instance_valid(car):
+				continue
+			if Vector2(
+				car.global_position.x - from.x, car.global_position.z - from.z
+			).length_squared() <= max_d2:
+				out.append(car.global_position)
+	return out
+
+
 ## Living hostile monsters within max_dist (XZ) for `hunter`. Bodies rather than points,
 ## because a hunter commits to one target and has to recognise it again next tick.
 func collect_hostile_monsters(
@@ -5788,6 +5832,8 @@ func _notify_destruction(world_pos: Vector3, radius_m: float = 32.0) -> void:
 			inst.crowd.react_to_destruction(world_pos, radius_m)
 		if inst.vehicles != null and is_instance_valid(inst.vehicles):
 			inst.vehicles.react_to_destruction(world_pos, radius_m)
+		if inst.birds != null and is_instance_valid(inst.birds):
+			inst.birds.react_to_destruction(world_pos, radius_m)
 
 
 ## First destructible voxel along a world ray (includes walk-through park mats:

@@ -311,6 +311,51 @@ Checks: `tools/test_procedural_vehicle.gd` and `tools/test_vehicle_glass.gd` (ru
 `--script`). Looks: `tools/shot_car_showroom.tscn` for a lit pad lineup and per-profile
 close-ups, `tools/shot_city_traffic.tscn` for cars photographed in live traffic.
 
+## Birds
+
+Every tile carries a `BirdDirector` — a small flock that sits in the trees, crosses the tile
+between perches, and bursts off whatever it is sitting on when an actor walks up. Unlike the
+crowd and the traffic they are on **every** district, spectacle tiles included: there is no
+quarter a bird would not fly over.
+
+One model, `BirdActor`: a body, a head, a beak, a tail and two hinged wings, all primitives
+built in code. Birds differ only in scale (0.7–1.55) and in which of five coats they wear —
+sparrow, pigeon, crow, dove, finch — so a flock reads as mixed species without a second mesh
+anywhere. Materials are shared per species, not per bird.
+
+A bird in flight steers toward its target and then carries a **wobble laid over that path as a
+bounded offset in metres** — a lift pulse on each downstroke, a slower sideways weave, and a
+matching body roll. The offset is peeled back off before the next step, so it never enters
+`velocity`. Folding it into the velocity instead is the obvious shortcut and it is wrong: the
+steering lerp only bleeds off about a tenth of it per frame, so the push compounds into several
+m/s of extra travel and the wobble amplitude and the cruise speed stop being separate dials.
+`test_birds` guards this by checking that ground speed over a leg stays within a quarter of
+`cruise_speed`.
+
+Perches come from a voxel scan when the tile streams in rather than from the bake, so the
+flock finds trees on any tile whichever composer planted them. Columns are probed mostly
+inside the planner's open-nature cells, scanned downward through a 22-voxel band above the
+street deck, and the first solid voxel is the seat. **A column whose band starts solid is
+refused**: without that rule anything taller than the band — a landmark pine, a tower —
+reports the band ceiling as a "treetop" and birds end up buried inside the crown. Foliage
+tops are what the flock is for; a handful of ledge and pavement seats are kept as well, hard
+capped so trees stay the common case.
+
+Birds are outside the nav and crowd stacks entirely. They have no goals, no collision, no
+health, and nothing in the world reacts to them, so none of that machinery would earn its
+keep. The whole cost is the one perch scan plus a fixed handful of nodes that stop drawing
+past `render_distance` (the crowd slider, floored at 90 m — birds are far cheaper than
+skinned pedestrians). Scares come through one door, `flush_near`: the proximity pass runs it
+against `CityRoot.collect_actor_positions` (player, peds, traffic, monsters), and
+`_notify_destruction` runs it with the blast radius, which is the difference between someone
+walking up to one tree and the ground coming apart under all of them.
+
+Checks: `tools/test_birds.tscn` — perch scan against a stamped grove, the buried-seat rule,
+the model measuring bird-sized with its wings beating, close actors flushing the flock and
+distant ones not, startled birds settling again, the flock staying over its own tile, and
+draw-distance hysteresis. Looks: `tools/shot_birds.tscn` (run `-Rendered` with
+`--spawn-theme=garden`) for a perched close-up, the tree line and the flock on the wing.
+
 ## Voxel write funnel
 
 Every live voxel write goes through `CityBrush` (`scripts/city/city_brush.gd`). Nothing
