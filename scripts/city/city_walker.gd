@@ -229,6 +229,9 @@ var _pivot: Node3D
 var _capsule: CollisionShape3D
 var _captured: bool = false
 var _game_over_locked: bool = false
+## Set while a cutscene drives the body and camera (district hop). Blocks look and input the
+## same way the death lock does, so a stray mouse drag cannot fight the scripted pitch.
+var _cutscene_locked: bool = false
 var _body_root: Node3D
 var _skeleton: Skeleton3D
 var _mesh: MeshInstance3D
@@ -592,6 +595,8 @@ func is_character_editor_open() -> bool:
 
 func is_blocking_ui_open() -> bool:
 	if _game_over_locked:
+		return true
+	if _cutscene_locked:
 		return true
 	if is_character_editor_open():
 		return true
@@ -4335,6 +4340,38 @@ func set_yaw(yaw: float) -> void:
 	_yaw = yaw
 	rotation.y = yaw
 	_apply_camera_angles()
+
+
+func get_pitch() -> float:
+	return _pitch
+
+
+## Aim the camera arm up or down. Clamped to the same band the player can reach, so a cutscene
+## cannot leave the camera somewhere mouse look is unable to recover from.
+func set_pitch(pitch: float) -> void:
+	_pitch = clampf(pitch, pitch_min, pitch_max)
+	_apply_camera_angles()
+
+
+## Hand the body and camera to a cutscene. Releases look capture on the way in, so the mouse is
+## free while the scene plays, and leaves the camera wherever the scene put it on the way out.
+func set_cutscene_locked(on: bool) -> void:
+	if _cutscene_locked == on:
+		return
+	_cutscene_locked = on
+	if on:
+		_end_jump_rise()
+		_jumping = false
+		if _climb_mode != ClimbMode.NONE:
+			_end_climb(false)
+		_auto_run = false
+		_set_rmb_looking(false)
+		_set_capture(false)
+		velocity = Vector3.ZERO
+
+
+func is_cutscene_locked() -> bool:
+	return _cutscene_locked
 
 
 func get_camera() -> Camera3D:

@@ -70,11 +70,8 @@ var _rng := RandomNumberGenerator.new()
 var _accum: float = 0.0
 ## Set by the cull pass: false when the whole flock is out of draw range.
 var _any_drawn: bool = true
-## Species coats, three materials each (body, wings/tail, beak), shared by every bird
-## wearing them.
-var _coats: Array[StandardMaterial3D] = []
-var _accents: Array[StandardMaterial3D] = []
-var _beaks: Array[StandardMaterial3D] = []
+## Species this flock draws from, shared by every bird wearing one.
+var _coats: Array[BirdActor.Coat] = []
 
 
 func clear_birds() -> void:
@@ -260,42 +257,8 @@ func _seat_is_gone(seat: Vector3) -> bool:
 
 ## Five coats over the one model. Body, wings and beak per species.
 func _ensure_species() -> void:
-	if not _coats.is_empty():
-		return
-	var palette: Array[PackedColorArray] = [
-		## Sparrow
-		PackedColorArray([
-			Color(0.46, 0.33, 0.19), Color(0.34, 0.24, 0.14), Color(0.28, 0.24, 0.18)
-		]),
-		## Pigeon
-		PackedColorArray([
-			Color(0.55, 0.57, 0.62), Color(0.38, 0.41, 0.48), Color(0.72, 0.55, 0.42)
-		]),
-		## Crow
-		PackedColorArray([
-			Color(0.11, 0.11, 0.13), Color(0.07, 0.07, 0.09), Color(0.16, 0.16, 0.17)
-		]),
-		## Dove
-		PackedColorArray([
-			Color(0.86, 0.85, 0.81), Color(0.72, 0.71, 0.68), Color(0.62, 0.5, 0.38)
-		]),
-		## Finch
-		PackedColorArray([
-			Color(0.78, 0.62, 0.18), Color(0.5, 0.36, 0.12), Color(0.35, 0.3, 0.2)
-		]),
-	]
-	for entry: PackedColorArray in palette:
-		_coats.append(_matte(entry[0]))
-		_accents.append(_matte(entry[1]))
-		_beaks.append(_matte(entry[2]))
-
-
-func _matte(albedo: Color) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = albedo
-	mat.roughness = 0.85
-	mat.metallic = 0.0
-	return mat
+	if _coats.is_empty():
+		_coats = BirdActorScript.build_species_coats()
 
 
 func _spawn_flock() -> void:
@@ -303,10 +266,10 @@ func _spawn_flock() -> void:
 		var bird: BirdActor = BirdActorScript.new()
 		bird.name = "Bird_%d" % i
 		add_child(bird)
-		var species := _rng.randi_range(0, _coats.size() - 1)
+		var coat := _coats[_rng.randi_range(0, _coats.size() - 1)]
 		## Wrens to crows over the same mesh.
 		var size := _rng.randf_range(0.7, 1.55)
-		bird.build(_coats[species], _accents[species], _beaks[species], size)
+		bird.build(coat.body, coat.accent, coat.beak, size)
 		## Small birds beat faster and travel a little quicker than the heavy ones.
 		bird.cruise_speed = lerpf(13.0, 8.5, clampf((size - 0.7) / 0.85, 0.0, 1.0))
 		bird.flee_speed = bird.cruise_speed * 1.7

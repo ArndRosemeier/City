@@ -7,6 +7,7 @@ const AirGeneratorScript := preload("res://scripts/city/air_generator.gd")
 const VoxelBlockLibraryScript := preload("res://scripts/city/voxel_block_library.gd")
 const CityWalkerScript := preload("res://scripts/city/city_walker.gd")
 const DistrictInstanceScript := preload("res://scripts/city/district_instance.gd")
+const DistrictHopCutsceneScript := preload("res://scripts/city/district_hop_cutscene.gd")
 const CityStreamerScript := preload("res://scripts/city/city_streamer.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
@@ -245,6 +246,8 @@ var _player_viewer: VoxelViewer
 var _collision_viewer: VoxelViewer
 var _booting: bool = false
 var _district_hopping: bool = false
+## The launch animation, alive only while a hop is playing.
+var _hop_cutscene: DistrictHopCutscene = null
 var _fps_accum: float = 0.0
 var _infection_stream_accum: float = 0.0
 var _street_night_factor: float = 0.0
@@ -2993,16 +2996,27 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		% [here, dest, theme.display_name]
 	)
 	_set_hud_enabled(false)
-	if _loading_splash != null:
-		_loading_splash.call(
-			"show_splash",
-			"Hopping to %s %s…" % [theme.display_name, dest]
-		)
 	walker.set_physics_process(false)
 	walker.velocity = Vector3.ZERO
-	## Park above the destination centre so the bubble scores that tile first.
-	var hover := DistrictCoord.center_world(dest, VOXEL_SIZE) + Vector3(0.0, 40.0, 0.0)
-	walker.global_position = hover
+	## The title splash would hide the whole point of the hop. Drop to a status line over the
+	## live world so the launch, the sky and the landing are all on screen, and the bake still
+	## says how far along it is.
+	if _loading_splash != null:
+		_loading_splash.call(
+			"show_status_only",
+			"Hopping to %s %s…" % [theme.display_name, dest]
+		)
+	_begin_hop_cutscene(walker)
+	_hop_cutscene.start_rise()
+	await _hop_cutscene.await_phase()
+	## Park above the destination centre so the bubble scores that tile first. The camera is
+	## looking at sky for this, so crossing the map is never in frame. Held a touch above where
+	## the launch topped out, so the swap cannot read as a drop.
+	var hover := (
+		DistrictCoord.center_world(dest, VOXEL_SIZE)
+		+ Vector3(0.0, DistrictHopCutsceneScript.RISE_M + 5.0, 0.0)
+	)
+	_hop_cutscene.start_hold(hover)
 	var inst: DistrictInstance = _streamer.call("prioritize_district", dest) as DistrictInstance
 	if inst == null:
 		await _finish_district_hop_fail("missing district instance", origin_pos)
@@ -3049,9 +3063,13 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		while not _has_solid_ground_at(spawn) and Time.get_ticks_msec() < ground_deadline:
 			await get_tree().process_frame
 		spawn = inst.generator.find_spawn_world(_tool)
-	walker.global_position = spawn + Vector3(0.0, 6.0, 0.0)
-	walker.velocity = Vector3.ZERO
-	_apply_spawn_yaw(walker, inst.generator)
+	## Slide across to sit over the landing spot rather than the tile centre, so the blocks
+	## being probed for footing are the ones the bubble is keeping loaded — and so the descent
+	## comes straight down on the district instead of sliding across it. Still invisible: the
+	## camera is on the sky until the descent starts.
+	walker.global_position = Vector3(spawn.x, walker.global_position.y, spawn.z)
+	## Footing is resolved from up here, before the descent starts, so the ride down ends on
+	## the spot the player actually stands on rather than dropping and then snapping.
 	if _loading_splash != null:
 		_loading_splash.call("set_status", "Finding footing…")
 	var footing := await _resolve_playable_footing(spawn, inst.generator, "hop into %s" % dest)
@@ -3060,7 +3078,14 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		return
 	spawn = footing["spawn"] as Vector3
 	var floor_y := float(footing["floor_y"])
-	walker.global_position = Vector3(spawn.x, floor_y + 0.15, spawn.z)
+	var feet := Vector3(spawn.x, floor_y + 0.15, spawn.z)
+	_apply_spawn_yaw(walker, inst.generator)
+	if _loading_splash != null:
+		_loading_splash.call("hide_splash")
+	_hop_cutscene.start_descent(feet)
+	await _hop_cutscene.await_phase()
+	_end_hop_cutscene()
+	walker.global_position = feet
 	walker.velocity = Vector3.ZERO
 	_apply_spawn_yaw(walker, inst.generator)
 	walker.set_physics_process(true)
@@ -3068,24 +3093,45 @@ func _district_hop_to(dest: Vector2i, origin_pos: Vector3) -> void:
 		_streamer.call("clear_priority_district")
 	_district_hopping = false
 	_set_hud_enabled(true)
-	if _loading_splash != null:
-		_loading_splash.call("hide_splash")
 	print("CityRoot: district hop landed in %s at y=%.2f" % [dest, floor_y])
+
+
+## Stand up the launch animation. One node, alive only for the hop, so a failed hop cannot
+## leave birds or a hijacked camera behind.
+func _begin_hop_cutscene(walker: CityWalker) -> void:
+	_end_hop_cutscene()
+	_hop_cutscene = DistrictHopCutsceneScript.new()
+	_hop_cutscene.name = "DistrictHopCutscene"
+	add_child(_hop_cutscene)
+	_hop_cutscene.begin(walker)
+
+
+func _end_hop_cutscene() -> void:
+	if _hop_cutscene == null or not is_instance_valid(_hop_cutscene):
+		_hop_cutscene = null
+		return
+	_hop_cutscene.finish()
+	_hop_cutscene.queue_free()
+	_hop_cutscene = null
 
 
 func _finish_district_hop_fail(reason: String, restore_pos: Vector3) -> void:
 	push_error("CityRoot: district hop failed — %s" % reason)
+	_end_hop_cutscene()
 	if _streamer != null and _streamer.has_method("clear_priority_district"):
 		_streamer.call("clear_priority_district")
 	if _walker != null and is_instance_valid(_walker):
 		_walker.global_position = restore_pos
 		_walker.velocity = Vector3.ZERO
+		_walker.set_pitch(DistrictHopCutsceneScript.PITCH_LEVEL)
 		_walker.set_physics_process(true)
 	_district_hopping = false
 	if not _booting:
 		_set_hud_enabled(true)
 	if _loading_splash != null:
-		_loading_splash.call("set_status", "Hop failed — %s" % reason)
+		## A failed hop drops the player back where they were, so the message needs the full
+		## splash behind it — a status line over the world is too easy to miss.
+		_loading_splash.call("show_splash", "Hop failed — %s" % reason)
 		## Brief beat so the error is readable, then fade.
 		await get_tree().create_timer(1.2).timeout
 		if not _booting and _loading_splash != null:

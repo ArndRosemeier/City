@@ -20,6 +20,7 @@ const PICKER_WIDTH := 520.0
 const PICKER_MARGIN := 24
 
 var _root: Control
+var _bg: ColorRect
 var _status: Label
 var _title_art: TextureRect
 var _picker: Control
@@ -30,6 +31,8 @@ var _picker_list: VBoxContainer
 var _theme_buttons: Dictionary[int, Button] = {}
 var _fading: bool = false
 var _awaiting_choice: bool = false
+## True while only the bottom status line is up and the 3D world is showing through.
+var _status_only: bool = false
 
 
 func _ready() -> void:
@@ -42,12 +45,12 @@ func _ready() -> void:
 	_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_root)
 
-	var bg := ColorRect.new()
-	bg.name = "Bg"
-	bg.color = BG_COLOR
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(bg)
+	_bg = ColorRect.new()
+	_bg.name = "Bg"
+	_bg.color = BG_COLOR
+	_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(_bg)
 
 	_title_art = TextureRect.new()
 	_title_art.name = "TitleArt"
@@ -96,12 +99,35 @@ func set_status(text: String) -> void:
 
 func show_splash(status: String = "Loading EccentriCity…", art: Texture2D = null) -> void:
 	_fading = false
+	_set_status_only(false)
 	_set_art(art)
 	set_status(status)
 	visible = true
 	if _root != null:
 		_root.modulate = Color.WHITE
 		_root.mouse_filter = Control.MOUSE_FILTER_STOP
+
+
+## Progress text over a live world: no title art, no dim, no click blocking. The district hop
+## cutscene needs the sky and the ground it is falling toward to stay on screen while the
+## destination bakes, but the bake can run for minutes and still has to say what it is doing.
+func show_status_only(status: String) -> void:
+	_fading = false
+	_hide_picker()
+	_set_status_only(true)
+	set_status(status)
+	visible = true
+	if _root != null:
+		_root.modulate = Color.WHITE
+		_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+func _set_status_only(on: bool) -> void:
+	_status_only = on
+	if _bg != null:
+		_bg.visible = not on
+	if _title_art != null:
+		_title_art.visible = not on
 
 
 func hide_splash() -> void:
@@ -120,6 +146,7 @@ func hide_splash() -> void:
 	tw.tween_callback(func() -> void:
 		visible = false
 		_fading = false
+		_set_status_only(false)
 		_set_art(null)
 		if _root != null:
 			_root.modulate = Color.WHITE
@@ -136,7 +163,7 @@ func _set_art(art: Texture2D) -> void:
 ## handler has to stop at. A fade-out has already handed the world back, so the last half
 ## second of one must not keep the hotkeys switched off.
 func owns_screen() -> bool:
-	return visible and not _fading
+	return visible and not _fading and not _status_only
 
 
 ## Puts the armed picker on screen without waiting for the answer, for callers that drive the
@@ -150,6 +177,7 @@ func open_district_picker(
 		push_error("LoadingSplash.open_district_picker: picker missing")
 		return
 	_fading = false
+	_set_status_only(false)
 	visible = true
 	if _root != null:
 		_root.modulate = Color.WHITE

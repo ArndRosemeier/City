@@ -126,9 +126,34 @@ fully reproducible: the seed is printed at startup and `--city-seed=N` replays i
 means "pick a new one". The player boots into a random district tile within three
 tiles of the world origin (chosen from the same seed, so `--city-seed=N` also
 replays the spawn). Override with `--spawn-district=x,z` or `--spawn-theme=hill`
-(or `arena`, `castle`, …). In-game, **J** opens a district-type picker and teleports to the nearest
-matching tile. The tile at the world origin is still always the downtown core theme,
-even when you spawn elsewhere.
+(or `arena`, `castle`, …). In-game, **J** opens a district-type picker and flies you to the
+nearest matching tile (see [District hops](#district-hops)). The tile at the world origin is
+still always the downtown core theme, even when you spawn elsewhere.
+
+## District hops
+
+A hop (**J**) has to wait for the destination tile to bake, which can be a second or a few
+minutes. That wait used to be the title splash: the player stared at art. It is now played as
+an animation instead (`scripts/city/district_hop_cutscene.gd`). The body is thrown fifty metres
+up while the camera swings down to watch the district being left shrink away; the camera then
+turns to the sky and holds; when the tile reports ready it turns back down and rides the
+descent onto the new spawn. The splash drops to a bare status line over the live world so bake
+progress is still readable.
+
+The hold is the part that carries the wait, and it has no known length — it ends on
+`DistrictInstance.is_ready`, not on a clock. The player is not really climbing during it: they
+are parked over the destination so the streaming bubble bakes that tile, and the map is crossed
+while the camera is pointed at empty sky. Nothing up there has a fixed scale (the clouds are a
+shader on the sky dome and do not move relative to the viewer), so the only thing selling
+continued ascent is a small flock of birds falling past the camera, recycled through a box kept
+tight around the view. Phases are stepped by hand rather than by `Tween` precisely because the
+middle one cannot be given a duration.
+
+`tools/test_district_hop_cutscene.gd` pins the parts that would be a soft lock or a wrong
+landing: that the hold never ends on its own, that the birds keep being recycled however long
+it runs, that the camera looks down / up / down, that the descent finishes exactly on the
+footing the hop resolved, and that `finish` always hands the body and the input back.
+`tools/shot_hop.gd -Rendered` photographs all three phases through the player's own camera.
 
 ## District themes
 

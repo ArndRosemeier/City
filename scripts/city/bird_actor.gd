@@ -16,6 +16,22 @@ enum State {
 	FLEEING,
 }
 
+
+## One species' three materials, shared by every bird wearing it.
+class Coat extends RefCounted:
+	var body: StandardMaterial3D
+	var accent: StandardMaterial3D
+	var beak: StandardMaterial3D
+
+	func _init(
+		body_mat: StandardMaterial3D,
+		accent_mat: StandardMaterial3D,
+		beak_mat: StandardMaterial3D
+	) -> void:
+		body = body_mat
+		accent = accent_mat
+		beak = beak_mat
+
 ## Body length at scale 1.0, in metres. Scaled per bird by the director.
 const BODY_LEN_M := 0.34
 ## Wingbeats per second in level flight. Flee flight beats faster (see `tick`).
@@ -68,6 +84,46 @@ var _wobble: Vector3 = Vector3.ZERO
 var _yaw: float = 0.0
 var _pitch: float = 0.0
 var _roll: float = 0.0
+
+
+## The species a flock draws from. Every bird in the world wears one of these five, so the
+## district flocks and the district-hop cutscene mix the same sparrows, pigeons, crows, doves
+## and finches instead of each keeping a private palette.
+static func build_species_coats() -> Array[Coat]:
+	var palette: Array[PackedColorArray] = [
+		## Sparrow
+		PackedColorArray([
+			Color(0.46, 0.33, 0.19), Color(0.34, 0.24, 0.14), Color(0.28, 0.24, 0.18)
+		]),
+		## Pigeon
+		PackedColorArray([
+			Color(0.55, 0.57, 0.62), Color(0.38, 0.41, 0.48), Color(0.72, 0.55, 0.42)
+		]),
+		## Crow
+		PackedColorArray([
+			Color(0.11, 0.11, 0.13), Color(0.07, 0.07, 0.09), Color(0.16, 0.16, 0.17)
+		]),
+		## Dove
+		PackedColorArray([
+			Color(0.86, 0.85, 0.81), Color(0.72, 0.71, 0.68), Color(0.62, 0.5, 0.38)
+		]),
+		## Finch
+		PackedColorArray([
+			Color(0.78, 0.62, 0.18), Color(0.5, 0.36, 0.12), Color(0.35, 0.3, 0.2)
+		]),
+	]
+	var out: Array[Coat] = []
+	for entry: PackedColorArray in palette:
+		out.append(Coat.new(_matte(entry[0]), _matte(entry[1]), _matte(entry[2])))
+	return out
+
+
+static func _matte(albedo: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = albedo
+	mat.roughness = 0.85
+	mat.metallic = 0.0
+	return mat
 
 
 ## Assemble the shared shape. `coat` colours body and head, `accent` the wings and tail,
