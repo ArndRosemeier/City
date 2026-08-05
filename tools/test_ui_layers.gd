@@ -30,6 +30,17 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/loading_splash.gd", "layer": UiLayers.LOADING_SPLASH},
 ]
 
+## Top-centre strips and the panel each one anchors, checked against the compass band below.
+##
+## Layers are only half of "can the player see it": two surfaces on different layers still fight when
+## they claim the same pixels, and the loser here was the compass. The Siege strip opened at y=18 and
+## covered the rose while announcing which cardinal the next wave came from — the one readout that
+## makes "attack from the west" mean anything.
+const TOP_CENTRE: Array[Dictionary] = [
+	{"path": "res://scripts/city/siege_hud.gd", "panel": "Root/SiegeStrip"},
+	{"path": "res://scripts/city/zoo_cloak_hud.gd", "panel": "Root/CloakStrip"},
+]
+
 ## Autoload → the layer it must sit on. Both outrank every panel, so a hitch report or an error
 ## can never end up hidden behind one.
 const AUTOLOADS: Dictionary = {
@@ -87,6 +98,7 @@ func _ready() -> void:
 	_check_bands()
 	_check_unique()
 	_check_surfaces()
+	_check_compass_band()
 	_check_autoloads()
 	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
@@ -149,6 +161,40 @@ func _check_surfaces() -> void:
 			_fail("FAIL %s claimed layer %d, expected %d" % [path, got, want])
 			continue
 		print("OK %s on layer %d" % [path.get_file(), got])
+
+
+## Nothing top-centre may start inside the compass band. `PlayerCompassHud.BAND_BOTTOM` is the shared
+## edge, so a strip that goes back to its own literal offset fails here.
+func _check_compass_band() -> void:
+	for row in TOP_CENTRE:
+		var path := str(row["path"])
+		var script: GDScript = load(path) as GDScript
+		if script == null:
+			_fail("FAIL %s is not a GDScript" % path)
+			continue
+		var surface: CanvasLayer = script.new() as CanvasLayer
+		if surface == null:
+			_fail("FAIL %s does not extend CanvasLayer" % path)
+			continue
+		add_child(surface)
+		var want_path := str(row["panel"])
+		var panel := surface.get_node_or_null(NodePath(want_path)) as Control
+		## Read the geometry out before the free: a reference to a freed node reads as null, which
+		## turns "the strip moved" into "the strip is missing".
+		var found := panel != null
+		var top := 0.0 if panel == null else panel.offset_top
+		remove_child(surface)
+		surface.free()
+		if not found:
+			_fail("FAIL %s has no panel at %s" % [path, want_path])
+			continue
+		if top < PlayerCompassHud.BAND_BOTTOM:
+			_fail(
+				"FAIL %s opens at y=%.0f, inside the compass band (0..%.0f)"
+				% [path.get_file(), top, PlayerCompassHud.BAND_BOTTOM]
+			)
+			continue
+		print("OK %s opens at y=%.0f, clear of the compass" % [path.get_file(), top])
 
 
 func _check_autoloads() -> void:

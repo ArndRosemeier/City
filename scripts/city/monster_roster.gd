@@ -6,11 +6,15 @@ extends Node3D
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
 
-## Soft cap shared by every summon path (N-key, arena, invasion, siege, zoo).
-## Siege alone can hold `district_alive_cap` attackers plus a pad full of towers, so this has
-## to sit well above that district number — otherwise a live defence starves itself and the
-## ErrorOverlay floods with "alive cap reached" instead of waiting for a kill.
+## Soft cap on *walking* units, shared by every summon path (N-key, arena, invasion, siege, zoo).
+## A frame-rate safety net rather than a balance number: districts pace themselves with their own
+## alive targets, and this only exists so several of them at once cannot bury the frame. Siege
+## towers do not count against it — see `count_alive_walkers`.
 const MAX_ALIVE_UNITS := 80
+## Absolute ceiling including immobile bodies, which is what siege towers are gated on. A quarter
+## offers a couple of hundred build sites, so without this the pot is the only limit on how many
+## combat hosts a run can stand up.
+const MAX_ALIVE_TOTAL := 220
 ## CityRoot's terrain child — NavMotor near-tier needs the live VoxelTerrain node.
 const TERRAIN_NODE_NAME := "VoxelTerrain"
 ## Units stamped by UndeadInvasionDirector (waves / orb converts). Arena uses ArenaCombat.
@@ -71,6 +75,17 @@ func count_alive() -> int:
 	return n
 
 
+## Living units that actually walk. Siege towers are excluded: they are meshless, immobile and
+## nav-free, so they cost a fraction of a walker — and counting them against the walker ceiling
+## would let a well-funded defence starve the horde it was built to fight.
+func count_alive_walkers() -> int:
+	var n := 0
+	for u in _units:
+		if _unit_usable(u) and u.is_alive() and not u.is_siege_tower():
+			n += 1
+	return n
+
+
 func count_role(want_role: UndeadUnit.Role) -> int:
 	var n := 0
 	for u in _units:
@@ -90,6 +105,7 @@ func spawn_siege_tower(
 	combat_id: String,
 	world_pos: Vector3,
 	authored_hp: float,
+	muzzle_height_m: float,
 	body_seed: int = -1
 ) -> UndeadUnit:
 	if combat_id.is_empty():
@@ -101,8 +117,8 @@ func spawn_siege_tower(
 		assert(false, "MonsterRoster: unknown tower combat id")
 		return null
 	_prune_units()
-	if count_alive() >= MAX_ALIVE_UNITS:
-		## Soft cap: a short pot or a full horde is expected pressure, not a fault.
+	if count_alive() >= MAX_ALIVE_TOTAL:
+		## Soft cap: a pot big enough to plate the whole quarter is expected pressure, not a fault.
 		return null
 	var unit := UndeadUnit.new()
 	unit.name = "SiegeTower_%d" % _next_id
@@ -116,6 +132,7 @@ func spawn_siege_tower(
 		_lod,
 		combat_id,
 		authored_hp,
+		muzzle_height_m,
 		body_seed if body_seed >= 0 else randi()
 	)
 	unit.died.connect(_on_unit_died)
@@ -145,7 +162,7 @@ func spawn_by_id(
 		assert(false, "MonsterRoster: body not spawnable")
 		return null
 	_prune_units()
-	if count_alive() >= MAX_ALIVE_UNITS:
+	if count_alive_walkers() >= MAX_ALIVE_UNITS:
 		## Soft cap: callers that care (Zoo, Siege) hold and retry; N-key just fails quietly.
 		return null
 	return spawn_role(

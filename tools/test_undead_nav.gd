@@ -203,6 +203,10 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	await _test_siege_attacker_walks_to_a_beacon()
+	if _failed:
+		_quit()
+		return
 
 	print("RESULT: OK")
 	_quit()
@@ -690,6 +694,57 @@ func _test_giant_digs_out_through_the_brush() -> void:
 	_city.prey_at = Vector3.INF
 
 
+## A siege attacker walks to a stone under conditions where nothing else in the provider would give
+## it anywhere to go: no prey in the city, no line of sight to anything, and the observer parked far
+## enough away that navigation is running the body at its far tier — where every other walker gets a
+## wander instead of a goal. That combination is the entire point of a beacon, and the siege depends
+## on it: the outer stones are ~100 m from the quarter, so a horde that only advanced near the player
+## would leave three flanks untouched for the whole run.
+func _test_siege_attacker_walks_to_a_beacon() -> void:
+	var start := _w(Vector3i(30, 1, 60))
+	var stone := _w(Vector3i(130, 1, 60))
+	var unit := _spawn(UndeadUnit.Role.MINION, start)
+	if unit == null:
+		return
+	unit.set_faction(int(MonsterFaction.Id.SIEGE_ATTACKER))
+	## Blind and alone: only a beacon can produce a goal from here.
+	_city.los_ok = false
+	_city.prey_at = Vector3.INF
+	_city.prey_b = Vector3.INF
+	var registry := _city.beacon_registry()
+	var beacon := registry.register(stone, 5.0, int(MonsterFaction.Id.SIEGE_ATTACKER))
+	NavAgent.reset_events()
+
+	var frames := await _run_far(
+		unit, func() -> bool: return unit.global_position.distance_to(stone) <= 7.0
+	)
+	if unit.nav_tier() != NavLod.Tier.FAR:
+		_fail(
+			"FAIL the body ran at tier %s, so this never tested the far path"
+			% NavLod.tier_name(unit.nav_tier())
+		)
+		return
+	var reach := unit.global_position.distance_to(stone)
+	if reach > 7.0:
+		_fail(
+			"FAIL a siege attacker is %.1f m from its beacon after %d ticks (ladder %s)"
+			% [reach, frames, NavLadder.state_name(unit.nav_state())]
+		)
+		return
+	## Ambient wildlife must not see siege stones, or a Siege tile's stones would be chewed down by
+	## whatever wandered past before the player ever staked a run.
+	if registry.nearest_for(int(MonsterFaction.Id.UNDEAD), start) != null:
+		_fail("FAIL an ordinary undead was handed a siege beacon")
+		return
+	print(
+		"beacon: a blind siege attacker crossed %.1f m to a stone at far tier in %d ticks"
+		% [start.distance_to(stone), frames]
+	)
+	registry.unregister(beacon)
+	_city.los_ok = true
+	_despawn(unit)
+
+
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
@@ -732,6 +787,20 @@ func _run(unit: UndeadUnit, done: Callable) -> int:
 		await get_tree().process_frame
 		frames += 1
 		_city.player_at = unit.global_position + Vector3(0.0, 0.0, OBSERVER_OFFSET_M)
+		unit.tick(SIM_DT)
+		if bool(done.call()):
+			break
+	return frames
+
+
+## Like `_run`, but the observer stays parked well outside the mid band, so the body is navigated at
+## the far tier — one coarse corridor, interpolated motion — for the whole case.
+func _run_far(unit: UndeadUnit, done: Callable) -> int:
+	_city.player_at = unit.global_position + Vector3(0.0, 0.0, NavLod.MID_RADIUS_M * 3.0)
+	var frames := 0
+	while frames < MAX_FRAMES:
+		await get_tree().process_frame
+		frames += 1
 		unit.tick(SIM_DT)
 		if bool(done.call()):
 			break

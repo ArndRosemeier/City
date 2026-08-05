@@ -7,6 +7,14 @@ class_name PlayerCompassHud
 extends CanvasLayer
 
 const SIZE_PX := 72.0
+## The strip of screen top-centre belongs to: margin above the disc, and the heading line under it.
+## Published because anything else that wants top-centre has to start below `band_bottom()` —
+## the Siege strip used to open at y=18 and read "attack from the west" across the rose that was the
+## only thing on screen saying which way west is.
+const TOP_MARGIN := 10.0
+const HEADING_H := 18.0
+## Bottom edge of the compass in screen pixels. Other top-centre HUDs anchor under this.
+const BAND_BOTTOM := TOP_MARGIN + SIZE_PX + HEADING_H
 const RING_COLOR := Color(0.75, 0.88, 0.92, 0.9)
 const CARDINAL_COLOR := Color(0.95, 0.97, 1.0, 0.95)
 const NORTH_COLOR := Color(1.0, 0.45, 0.38, 0.98)
@@ -49,8 +57,8 @@ func _ready() -> void:
 	panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	panel.offset_left = -SIZE_PX * 0.5
 	panel.offset_right = SIZE_PX * 0.5
-	panel.offset_top = 10.0
-	panel.offset_bottom = 10.0 + SIZE_PX + 18.0
+	panel.offset_top = TOP_MARGIN
+	panel.offset_bottom = BAND_BOTTOM
 	_root.add_child(panel)
 
 	_rose = Control.new()

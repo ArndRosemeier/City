@@ -33,8 +33,10 @@ func _ready() -> void:
 	_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_panel.offset_left = -140.0
 	_panel.offset_right = 140.0
-	_panel.offset_top = 18.0
-	_panel.offset_bottom = 54.0
+	## Under the compass, which owns top-centre. Overlapping it hid the rose behind a cloak state
+	## the player can already see on their own body.
+	_panel.offset_top = PlayerCompassHud.BAND_BOTTOM + 10.0
+	_panel.offset_bottom = _panel.offset_top + 36.0
 	_style = StyleBoxFlat.new()
 	_style.bg_color = Color(0.03, 0.06, 0.09, 0.88)
 	_style.border_color = CLOAK_COLOR

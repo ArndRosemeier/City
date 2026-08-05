@@ -70,6 +70,12 @@ var _target_node: Node = null
 var _target_ped: Vector3 = Vector3.INF
 ## Set when the ladder gave up on a goal: look somewhere else before looking there again.
 var _wander_next: bool = false
+## Objective this body walks when nothing living is acquirable, resolved by `_refresh_objective`.
+## A registered beacon wins over the unit's own push aim.
+var _objective_aim: Vector3 = Vector3.INF
+var _objective_hold_m: float = 1.5
+## Beacon this body walked to last, for `BeaconRegistry.nearest_for` hysteresis. 0 means none.
+var _beacon_id: int = 0
 
 
 func setup(unit: UndeadUnit, city: CityRoot) -> void:
@@ -188,7 +194,9 @@ func goal_failed(_request: NavGoalRequest, goal: NavGoal, state: NavLadder.State
 	_clear_pursuit()
 	_unit.set_combat_prey(Vector3.INF)
 	_unit.on_goal_failed(goal, state)
-	_wander_next = goal.tag != TAG_WANDER
+	## "Look somewhere else first" is advice for something that can walk. An immobile body has
+	## nowhere else to look, and a wander it cannot serve would fail again next frame.
+	_wander_next = goal.tag != TAG_WANDER and not _is_immobile()
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +218,9 @@ func retarget(agent: NavAgent) -> void:
 		):
 			_retarget_engage_in_place(agent)
 		return
+	if goal.tag == TAG_PUSH:
+		_retarget_objective(agent)
+		return
 	if goal.tag != TAG_HUNT:
 		return
 	var prey := _nearest_living_prey()
@@ -227,12 +238,36 @@ func retarget(agent: NavAgent) -> void:
 	## No visible prey — pursue last known point before giving up.
 	var memory := _handle_lost_prey()
 	if memory == null:
-		agent.set_goal(_wander())
+		var idle := _idle_goal()
+		if idle == null:
+			agent.abandon_goal()
+			return
+		agent.set_goal(idle)
 		return
 	_unit.set_combat_prey(Vector3.INF)
 	if memory.point.distance_to(goal.point) <= RETARGET_SLACK_M:
 		return
 	agent.set_goal(memory)
+
+
+## A stone can fall while a body is still walking to it. The registry drops the entry, so the next
+## pick is whatever is still standing — but without re-issuing here the body would first walk all the
+## way to the crater it was already aimed at, which is up to half a minute of a wave doing nothing.
+func _retarget_objective(agent: NavAgent) -> void:
+	var was := _beacon_id
+	_refresh_objective()
+	if _objective_aim == Vector3.INF:
+		## The run ended, or whatever it was walking to is no longer anybody's objective.
+		agent.abandon_goal()
+		return
+	if _beacon_id == was:
+		return
+	var next := _push_goal()
+	if next == null:
+		## Already inside the new objective's radius: hold, and let the controller land contact.
+		agent.abandon_goal()
+		return
+	agent.set_goal(next)
 
 
 func _retarget_engage_in_place(agent: NavAgent) -> void:
@@ -280,9 +315,21 @@ func _handle_lost_prey() -> NavGoal:
 func _hunt_goal() -> NavGoal:
 	CityProfiler.begin("undead_hunt_pick")
 	var goal: NavGoal = null
-	if _unit.nav_tier() == NavLod.Tier.FAR:
+	_refresh_objective()
+	if _unit.nav_tier() == NavLod.Tier.FAR and not _is_immobile():
 		## Nobody is close enough to see this body fight; the crowd query is not worth it.
-		goal = _wander()
+		##
+		## Towers are the exception. The saving this buys is a corridor an immobile body was
+		## never going to walk, and a defence that stops shooting 80 m from the player is a
+		## defence that does not work: the player holds one side of a quarter while the horde
+		## eats the other. A tower's prey query is its whole cost, and it is the cheap half of
+		## a walker — no path, no motion, no separation.
+		##
+		## A beacon-bound body is the other exception, and it is cheaper still: it already knows
+		## where it is going, so it skips the crowd query outright. Wandering here is what would
+		## leave three siege flanks untouched all run — the horde grinding stones the player is
+		## nowhere near *is* the mode, and far bodies still walk their corridor (as a lerp).
+		goal = _push_goal() if _beacon_id != 0 else _wander()
 	else:
 		var prey := _nearest_living_prey()
 		if prey != Vector3.INF:
@@ -294,15 +341,15 @@ func _hunt_goal() -> NavGoal:
 			if memory != null:
 				goal = memory
 			else:
-				## Siege attackers (and anything else with a standing push) walk the objective
-				## before they shuffle. Without this the horde would never reach the Lodestone
-				## — defenders are unacquirable, so there is never a hunt target on the way in.
-				if _unit.push_aim() != Vector3.INF:
+				## Siege attackers (and anything else with a standing objective) walk it before
+				## they shuffle. Without this the horde would never reach a stone — defenders are
+				## unacquirable, so there is never a hunt target on the way in.
+				if _objective_aim != Vector3.INF:
 					## Null from `_push_goal` here means "inside the vulnerability radius, hold".
 					## Wandering on that null is what kept the horde circling the Lodestone.
 					goal = _push_goal()
 				else:
-					goal = _wander()
+					goal = _idle_goal()
 	CityProfiler.end("undead_hunt_pick")
 	return goal
 
@@ -315,11 +362,15 @@ func _hunt(prey: Vector3) -> NavGoal:
 	away.y = 0.0
 	var distance := away.length()
 	var engage := _hunt_engage_m()
-	if distance <= engage:
+	if distance <= engage or _is_immobile():
 		## Close enough to swing: hold and let MonsterCombat strike. A trivial go_to(self)
 		## goal completes every physics frame, re-acquires, and re-paths — that alone tanks FPS.
 		## Engage is the *strike* reach, not the stand-off the corridor aims at: a body that
 		## lands a touch short of stand-off must still fight, not open another approach.
+		##
+		## Immobile bodies hold at any distance. A tower handed a corridor it cannot walk ends in
+		## `goal_failed`, which drops the target it had just acquired — so prey between the
+		## stand-off and the aggro range would have it re-acquiring instead of shooting.
 		_unit.set_combat_prey(prey)
 		return null
 	var stand_off := minf(_hunt_stand_off_m(), engage)
@@ -354,7 +405,44 @@ func _wander() -> NavGoal:
 	return _tagged(NavGoal.wander(_unit.global_position, WANDER_RADIUS_M), TAG_WANDER)
 
 
-## Standing push (Lodestone). Null once the body is inside the objective's vulnerability
+## What a body does with nobody to fight. Immobile bodies get null, which NavAgent reads as
+## engage-in-place — the state whose `retarget` keeps re-asking who is in range. A wander goal
+## instead would fail (nothing can walk it), and a failed goal drops the target this body holds,
+## so a tower would spend a fight losing prey it had already found.
+func _idle_goal() -> NavGoal:
+	if _is_immobile():
+		return null
+	return _wander()
+
+
+## Pick the objective this body walks when it has nothing to hunt: the nearest beacon it is allowed
+## to perceive, or its own push aim when the registry has nothing for its faction.
+##
+## Beacons win because they are the live answer. A siege stone can die mid-approach, and a per-unit
+## aim stamped at spawn would send bodies to keep chewing a crater; the registry drops the entry
+## instead, and the next query hands them whatever is still standing.
+func _refresh_objective() -> void:
+	var beacon := _nearest_beacon()
+	if beacon != null:
+		_beacon_id = beacon.id
+		_objective_aim = beacon.pos
+		_objective_hold_m = beacon.hold_radius_m
+		return
+	_beacon_id = 0
+	_objective_aim = _unit.push_aim()
+	_objective_hold_m = _unit.push_hold_m()
+
+
+func _nearest_beacon() -> BeaconRegistry.Entry:
+	if _city == null or not is_instance_valid(_city):
+		return null
+	var registry := _city.beacon_registry()
+	if registry == null or registry.is_empty():
+		return null
+	return registry.nearest_for(_unit.faction(), _unit.global_position, _beacon_id)
+
+
+## Walk the standing objective (a siege stone). Null once the body is inside its vulnerability
 ## radius, meaning **hold here** — callers must not read that as "nothing to do" and wander
 ## off, because holding still is what lets the controller land contact damage.
 ##
@@ -362,10 +450,10 @@ func _wander() -> NavGoal:
 ## around the shell (melee "dance"). Walk to a standable ring instead, set a little inside the
 ## vulnerability radius so any re-path only ever moves the body further in.
 func _push_goal() -> NavGoal:
-	var aim := _unit.push_aim()
+	var aim := _objective_aim
 	if aim == Vector3.INF:
 		return null
-	var vuln_r := _unit.push_hold_m()
+	var vuln_r := _objective_hold_m
 	var from := _unit.global_position
 	var away := Vector2(from.x - aim.x, from.z - aim.z)
 	var dist := away.length()

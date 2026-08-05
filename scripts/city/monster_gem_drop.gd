@@ -70,10 +70,20 @@ static func pick_mat_for_value(value: int, rng: RandomNumberGenerator) -> int:
 	return int(mats[rng.randi_range(0, mats.size() - 1)])
 
 
-## Full haul as VoxelMaterial gem ids. Empty when score < 1.
-static func roll_mats(max_hp: float, rng: RandomNumberGenerator) -> Array[int]:
+## Full haul as VoxelMaterial gem ids. Empty when the effective score is under 1.
+##
+## `min_score` raises a floor under the HP-derived score. Siege uses 1: wave fodder is KayKit
+## (~34 HP), which scores zero under the global table, and an empty pot after the stake is spent
+## is a dead run. Outside a siege leave it at 0 so zoo / street kills keep the authored floor.
+static func roll_mats(
+	max_hp: float, rng: RandomNumberGenerator, min_score: int = 0
+) -> Array[int]:
 	var out: Array[int] = []
-	var score := score_for_max_hp(max_hp)
+	if min_score < 0:
+		push_error("MonsterGemDrop.roll_mats: negative min_score %d" % min_score)
+		assert(false, "MonsterGemDrop: bad min_score")
+		min_score = 0
+	var score := maxi(score_for_max_hp(max_hp), min_score)
 	if score < 1:
 		return out
 	var parts := partition_score(score, rng)

@@ -165,6 +165,10 @@ var _footstep_accum: float = 0.0
 var _siege_tower: bool = false
 ## Authored max HP for siege towers (CreatureHealth is meaningless for a building).
 var _authored_hp: float = 0.0
+## Muzzle height above this body's origin in metres, or a negative for "derive it from body span".
+## Siege towers must set it: they stand inside their own voxel stamp, and the muzzle is where every
+## line-of-sight probe starts. See `muzzle_world`.
+var _muzzle_height_m: float = -1.0
 
 
 ## `p_seed` decides which body out of the catalogue this unit wears and every procedural
@@ -220,6 +224,7 @@ func setup_siege_tower(
 	lod: NavLod,
 	combat_id: String,
 	authored_hp: float,
+	muzzle_height_m: float,
 	p_seed: int
 ) -> void:
 	if combat_id.is_empty():
@@ -230,9 +235,16 @@ func setup_siege_tower(
 		push_error("UndeadUnit.setup_siege_tower: non-positive hp %f" % authored_hp)
 		assert(false, "UndeadUnit: bad tower hp")
 		return
+	if muzzle_height_m <= 0.0:
+		push_error(
+			"UndeadUnit.setup_siege_tower: non-positive muzzle height %f" % muzzle_height_m
+		)
+		assert(false, "UndeadUnit: bad tower muzzle height")
+		return
 	role = Role.MINION
 	_siege_tower = true
 	_authored_hp = authored_hp
+	_muzzle_height_m = muzzle_height_m
 	_body_id = combat_id
 	_roster = roster
 	_invasion = null
@@ -365,8 +377,13 @@ func set_faction(id: int) -> void:
 	_faction = id
 
 
-## Standing push destination when nothing else is worth hunting (Siege Lodestone, …).
-## `Vector3.INF` clears it. The goal provider walks here before it wanders.
+## Per-body standing objective for when nothing living is worth hunting: the goal provider walks here
+## before it wanders. `Vector3.INF` clears it.
+##
+## The siege stones used to be stamped in here at spawn and are not any more — they are `BeaconRegistry`
+## entries, which the provider prefers, because a stone can die while a body is still walking to it
+## and an aim frozen at spawn would keep sending it to a crater. This stays as the per-body form of
+## the same idea for anything that wants one body to hold one spot.
 func set_push_aim(world: Vector3, hold_m: float = 1.5) -> void:
 	_push_aim = world
 	_push_hold_m = maxf(hold_m, 0.5)
@@ -435,7 +452,12 @@ func city() -> CityRoot:
 	return _city
 
 
+## Where this body looks and shoots from. Prey acquisition traces voxel LOS from here, so a muzzle
+## inside solid rock is a body that can never see anything — which is why buildings carry an
+## explicit height instead of one derived from a collider span they do not have.
 func muzzle_world() -> Vector3:
+	if _muzzle_height_m >= 0.0:
+		return global_position + Vector3(0.0, _muzzle_height_m, 0.0)
 	return global_position + Vector3(0.0, MUZZLE_BASE_M * _span_tall() * character_scale, 0.0)
 
 
@@ -1320,7 +1342,7 @@ func _fire_orb(toward: Vector3) -> void:
 	orb.name = "UndeadOrb"
 	var parent: Node = _roster if _roster != null else self
 	parent.add_child(orb)
-	var muzzle := global_position + Vector3(0.0, MUZZLE_BASE_M * _span_tall() * character_scale, 0.0)
+	var muzzle := muzzle_world()
 	## Prey aim point already includes chest height from LOS selection.
 	## Convert callback is invasion-only; arena mages still fire for player hit via city.
 	## Human-faction allies must not convert the player they fight beside.

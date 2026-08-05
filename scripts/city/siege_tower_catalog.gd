@@ -7,6 +7,12 @@ extends RefCounted
 
 const GameDataScript := preload("res://scripts/city/game_data.gd")
 
+## Cells between the pad surface point and the lowest stamp voxel — `stamp_at` leaves the pad
+## plate solid and builds on the air cell above it.
+const STAMP_BASE_CELLS := 1
+## Air left between the top of a tower's stamp and its muzzle.
+const MUZZLE_CLEARANCE_M := 0.35
+
 
 class Def:
 	extends RefCounted
@@ -20,6 +26,9 @@ class Def:
 	var cost: Dictionary = {}
 	## Packed as [ox, oy, oz, material_id] relative to the pad surface centre.
 	var voxels: PackedInt32Array = PackedInt32Array()
+	## Highest voxel offset in the stamp. The combat host needs this to put its muzzle above its
+	## own mass — see `muzzle_height_m`.
+	var stamp_top_oy: int = 0
 
 
 static var _by_id: Dictionary = {}
@@ -76,6 +85,7 @@ static func ensure_loaded() -> void:
 			push_error("SiegeTowerCatalog: '%s' stamp produced no voxels" % id)
 			assert(false, "SiegeTowerCatalog: empty stamp")
 			continue
+		d.stamp_top_oy = _stamp_top_oy(d.voxels)
 		_by_id[id] = d
 		_order.append(id)
 
@@ -102,6 +112,35 @@ static func ids() -> PackedStringArray:
 	for id in _order:
 		out.append(id)
 	return out
+
+
+## Height above the pad surface point (`pad_world`, as handed to `stamp_at`) at which a tower's
+## muzzle clears the mass it just painted, in metres.
+##
+## The muzzle is the eye: `UndeadGoalProvider` probes voxel line of sight from it to pick prey, and
+## a probe that starts inside solid rock reaches nothing. A tower's combat host stands *within* its
+## own stamp, so a muzzle derived from body span the way a creature's is would bury the eye and the
+## tower would never acquire, never fire, and never look broken in any log.
+static func muzzle_height_m(def: RefCounted, voxel_size: float) -> float:
+	if def == null:
+		push_error("SiegeTowerCatalog.muzzle_height_m: def required")
+		return 0.0
+	if voxel_size <= 0.0:
+		push_error("SiegeTowerCatalog.muzzle_height_m: bad voxel size %f" % voxel_size)
+		return 0.0
+	## `stamp_at` starts one cell above the pad surface, so the top face of the highest voxel is
+	## `STAMP_BASE_CELLS + top_oy + 1` cells up.
+	var cells := STAMP_BASE_CELLS + int(def.get("stamp_top_oy")) + 1
+	return float(cells) * voxel_size + MUZZLE_CLEARANCE_M
+
+
+## Tallest voxel offset in a packed stamp.
+static func _stamp_top_oy(voxels: PackedInt32Array) -> int:
+	var top := 0
+	var n := voxels.size() / 4
+	for i in range(n):
+		top = maxi(top, voxels[i * 4 + 1])
+	return top
 
 
 ## Write the tower's voxels onto live terrain at the pad surface centre (world metres).

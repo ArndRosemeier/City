@@ -12,6 +12,7 @@ const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 const MonsterRosterScript := preload("res://scripts/city/monster_roster.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const SiegeBuildPickerScript := preload("res://scripts/city/siege_build_picker.gd")
+const BeaconRegistryScript := preload("res://scripts/city/beacon_registry.gd")
 
 ## Nav scaffolding for the one test that spawns a real tower body.
 const VOXEL_SIZE := 0.5
@@ -103,9 +104,26 @@ func _check_afford_and_spend() -> void:
 	layout.lodestone_base_y = 6
 	layout.lodestone_radius_vox = 5
 	layout.lodestone_height_vox = 16
-	layout.add_gate(Vector3i(112, 6, 0), Vector2i(0, 1))
+	layout.add_breach(Vector3i(112, 6, 0), Vector2i(0, 1))
 	layout.add_pad(Vector3i(100, 6, 100), SiegeLayout.PadKind.STREET)
 	layout.add_pad(Vector3i(120, 6, 100), SiegeLayout.PadKind.STREET)
+	## A run needs its five stones and its mouths, even in a pad-only fixture: `start_run` builds a
+	## pool and a beacon per stone, and `is_valid` refuses a layout that has none.
+	for i in range(4):
+		var sx := 1 if (i % 2) == 0 else -1
+		var sz := 1 if i < 2 else -1
+		layout.add_outer_stone(Vector2i(112 + sx * 100, 112 + sz * 100), 6, 4, 12)
+	for g in range(8):
+		var bearing := TAU * float(g) / 8.0
+		layout.add_hell_gate(
+			Vector3i(
+				112 + int(round(cos(bearing) * 108.0)),
+				6,
+				112 + int(round(sin(bearing) * 108.0))
+			),
+			Vector2i(1, 0) if absf(cos(bearing)) >= absf(sin(bearing)) else Vector2i(0, 1),
+			bearing
+		)
 
 	var inv: PlayerInventory = PlayerInventoryScript.new() as PlayerInventory
 	inv.add("gem_quartz", 20)
@@ -181,6 +199,7 @@ func _check_pad_plates(ctrl: SiegeController, layout: SiegeLayout, city: _FakeCi
 		if plate.button_at_uv(Vector2(0.5, 0.5)) != &"plus":
 			_fail("FAIL pad plate %d has no + button in the middle of the face" % i)
 			return
+	_check_plate_lod(ctrl, layout)
 	var first := ctrl.get_node_or_null("SiegePadPanel_0") as Ui3D
 	first.button_pressed.emit(&"plus", Vector2.ZERO)
 	if not city.picker.is_open():
@@ -198,6 +217,41 @@ func _check_pad_plates(ctrl: SiegeController, layout: SiegeLayout, city: _FakeCi
 	if city.picker.is_open():
 		_fail("FAIL picker stayed open after close")
 	print("pads: %d plates live, picker lists only affordable recipes" % layout.pad_count())
+
+
+## A quarter carries hundreds of plates, which only works because each one draws at short range and
+## carries no collider until the player is on top of it. Both are easy to lose in a refactor and
+## neither shows up as a failure — the district just gets slow, and shots aimed low stop firing
+## because `CityWalker._try_world_interact` swallows them on the first invisible plate it rays.
+func _check_plate_lod(ctrl: SiegeController, layout: SiegeLayout) -> void:
+	for i in range(layout.pad_count()):
+		var plate := ctrl.get_node_or_null("SiegePadPanel_%d" % i) as Ui3D
+		if plate.is_collision_enabled():
+			_fail("FAIL pad plate %d was born with a live collider" % i)
+			return
+		if plate.view_distance_m <= 0.0:
+			_fail("FAIL pad plate %d draws at any range — the view cutoff is missing" % i)
+			return
+		if plate.surface_color.a < 0.999:
+			_fail("FAIL pad plate %d has a translucent face — hundreds of those is the slow path" % i)
+			return
+		var surface := plate.get_node_or_null("Surface") as GeometryInstance3D
+		if surface == null:
+			_fail("FAIL pad plate %d has no Surface mesh" % i)
+			return
+		if not is_equal_approx(surface.visibility_range_end, plate.view_distance_m):
+			_fail(
+				"FAIL pad plate %d culls at %.1f m but asked for %.1f"
+				% [i, surface.visibility_range_end, plate.view_distance_m]
+			)
+			return
+		if surface.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			_fail("FAIL pad plate %d casts shadows" % i)
+			return
+	print(
+		"plates: %.0f m view cutoff, shadowless, colliders handed out by proximity"
+		% (ctrl.get_node("SiegePadPanel_0") as Ui3D).view_distance_m
+	)
 
 
 ## Spawn a real tower body. A tower is a meshless `UndeadUnit` with no CreatureCatalog entry,
@@ -231,12 +285,18 @@ func _check_tower_body() -> void:
 	var at := Vector3(
 		float(ORIGIN.x + 8), float(ORIGIN.y + 1), float(ORIGIN.z + 8)
 	) * VOXEL_SIZE
-	var tower := roster.spawn_siege_tower(str(def.get("combat_id")), at, hp)
+	var muzzle_h := (
+		SiegeTowerCatalogScript.muzzle_height_m(def, VOXEL_SIZE)
+		- SiegeControllerScript.TOWER_HOST_LIFT_M
+	)
+	var tower := roster.spawn_siege_tower(str(def.get("combat_id")), at, hp, muzzle_h)
 	if tower == null:
 		_fail("FAIL roster refused to spawn a siege tower")
 		_teardown_tower_scaffold(roster, terrain, city)
 		return
 	tower.set_physics_process(false)
+	_check_tower_muzzle(tower, def, at)
+	_check_tower_hunts_at_far_tier(tower)
 	if not tower.is_siege_tower():
 		_fail("FAIL spawned body does not report as a siege tower")
 	if not tower.is_alive():
@@ -260,6 +320,45 @@ func _check_tower_body() -> void:
 	print("body: meshless tower spawns with authored hp and takes only mob damage")
 	roster.despawn_unit(tower)
 	_teardown_tower_scaffold(roster, terrain, city)
+
+
+## The muzzle is where prey acquisition starts its voxel LOS probe, and a tower stands inside the
+## mass it painted. A muzzle taken from body span — 1.35 m, what a creature with no catalogue entry
+## falls back to — sits in the middle of its own stone: the probe is blocked at the first step,
+## nothing is ever acquired, and a whole field of towers holds fire without one line in the log.
+func _check_tower_muzzle(tower: UndeadUnit, def: RefCounted, host_pos: Vector3) -> void:
+	var pad_y := host_pos.y - SiegeControllerScript.TOWER_HOST_LIFT_M
+	var cells := SiegeTowerCatalogScript.STAMP_BASE_CELLS + int(def.get("stamp_top_oy")) + 1
+	var mass_top := pad_y + float(cells) * VOXEL_SIZE
+	var muzzle := tower.muzzle_world()
+	if muzzle.y <= mass_top:
+		_fail(
+			"FAIL tower muzzle y %.2f sits in its own stamp (mass top %.2f)"
+			% [muzzle.y, mass_top]
+		)
+		return
+	print("muzzle: eye at %.2f m clears the stamp top at %.2f m" % [muzzle.y, mass_top])
+
+
+## A tower must keep looking for targets however far it is from the player. Walkers past the LOD
+## mid radius (80 m) skip the prey query and wander instead — nobody can see them fight. A tower
+## cannot wander, and a quarter is wider than 80 m: taking that shortcut meant the far half of the
+## defence stood idle while the horde ate it, which is exactly what the player saw. The tell is the
+## goal: the shortcut's only output is a wander, so anything else means the query ran.
+func _check_tower_hunts_at_far_tier(tower: UndeadUnit) -> void:
+	var agent: NavAgent = tower._nav_agent
+	if agent == null:
+		_fail("FAIL tower has no nav agent, so nothing refreshes its prey")
+		return
+	agent._update_tier(tower.global_position + Vector3(500.0, 0.0, 0.0))
+	if tower.nav_tier() != NavLod.Tier.FAR:
+		_fail("FAIL tower tier is %s, wanted FAR" % NavLod.tier_name(tower.nav_tier()))
+		return
+	var goal: NavGoal = tower.goal_provider().next_goal(null)
+	if goal == null:
+		print("far tier: tower holds and keeps querying prey instead of wandering")
+		return
+	_fail("FAIL a far tower was handed a %s goal it can never walk" % goal.tag)
 
 
 func _teardown_tower_scaffold(
@@ -306,6 +405,8 @@ class _FakeCity:
 	## presses rather than a stub that could drift from it.
 	var picker: SiegeBuildPicker = null
 	var _faction: int = int(MonsterFactionScript.Id.HUMAN)
+	## CityRoot owns this in the real game; a run registers a beacon per stone in it.
+	var beacons: BeaconRegistry = BeaconRegistryScript.new() as BeaconRegistry
 
 	func _ready() -> void:
 		picker = SiegeBuildPickerScript.new() as SiegeBuildPicker
@@ -314,6 +415,13 @@ class _FakeCity:
 
 	func get_inventory() -> PlayerInventory:
 		return inventory
+
+	func beacon_registry() -> BeaconRegistry:
+		return beacons
+
+	## Plate colliders follow the player, so the controller needs this every proximity tick.
+	func get_player_position() -> Vector3:
+		return Vector3.ZERO
 
 	func open_siege_build_picker(pad_index: int, controller: Node) -> void:
 		picker.open_for_pad(pad_index, controller, Vector2.ZERO)

@@ -37,12 +37,7 @@ func _ready() -> void:
 		return
 	print("baking Siege district at %s" % coord)
 
-	var dseed := DistrictCoord.district_seed(WORLD_SEED, coord)
-	var planner: DistrictPlanner = DistrictPlannerScript.new()
-	planner.theme = DistrictTheme.make(DistrictTheme.SIEGE)
-	planner.build(
-		DistrictCoord.SIZE_X_VOX, DistrictCoord.SIZE_Z_VOX, dseed, DistrictCoord.CELL_SIZE, coord
-	)
+	var planner := _plan_for(coord)
 	var quarter := planner.siege_quarter
 	if quarter.size.x <= 0 or quarter.size.y <= 0:
 		_fail("FAIL planner produced no siege_quarter")
@@ -127,40 +122,65 @@ func _ready() -> void:
 		_fail("FAIL siege layout is not runnable: %s" % layout.describe())
 		_quit()
 		return
-	if layout.gate_count() < SiegeComposer.GATE_MIN or layout.gate_count() > SiegeComposer.GATE_MAX:
+	if (
+		layout.breach_count() < SiegeComposer.BREACH_MIN
+		or layout.breach_count() > SiegeComposer.BREACH_MAX
+	):
 		_fail(
-			"FAIL expected %d..%d gates, got %d"
-			% [SiegeComposer.GATE_MIN, SiegeComposer.GATE_MAX, layout.gate_count()]
+			"FAIL expected %d..%d barricade breaches, got %d"
+			% [SiegeComposer.BREACH_MIN, SiegeComposer.BREACH_MAX, layout.breach_count()]
 		)
 		_quit()
 		return
-	if layout.gate_dirs.size() != layout.gate_count():
-		_fail("FAIL gate_dirs desynced from gates")
+	if layout.breach_dirs.size() != layout.breach_count():
+		_fail("FAIL breach_dirs desynced from breaches")
 		_quit()
 		return
-	if layout.pad_count() < 4:
-		_fail("FAIL only %d foundation pads — nowhere to mount a defence" % layout.pad_count())
+	## Five stones and eight mouths, or the run has no shield and no direction to come from.
+	if layout.outer_stone_count() != SiegeComposer.OUTER_STONE_COUNT:
+		_fail(
+			"FAIL expected %d outer stones, got %d"
+			% [SiegeComposer.OUTER_STONE_COUNT, layout.outer_stone_count()]
+		)
+		_quit()
+		return
+	if layout.hell_gate_count() != SiegeComposer.HELL_GATE_COUNT:
+		_fail(
+			"FAIL expected %d hell gates, got %d"
+			% [SiegeComposer.HELL_GATE_COUNT, layout.hell_gate_count()]
+		)
+		_quit()
+		return
+	## Build sites are permissive by design: every position with room for a tower that will not
+	## block a lane becomes one. A quarter this size yields a couple of hundred, so a handful means
+	## a throttle crept back into the sweep — caps and cell strides are what used to hold it to 18.
+	if layout.pad_count() < 120:
+		_fail(
+			"FAIL only %d build sites — the sweep is throttled, not permissive"
+			% layout.pad_count()
+		)
 		_quit()
 		return
 	if layout.pad_kinds.size() != layout.pad_count():
 		_fail("FAIL pad_kinds desynced from pads")
 		_quit()
 		return
-	if layout.count_of_kind(SiegeLayout.PadKind.STREET) < 4:
+	if layout.count_of_kind(SiegeLayout.PadKind.STREET) < 100:
 		_fail(
-			"FAIL only %d street pads — the defence has to be mountable from the ground"
+			"FAIL only %d street sites — the defence has to be mountable from the ground"
 			% layout.count_of_kind(SiegeLayout.PadKind.STREET)
 		)
 		_quit()
 		return
-	## The seed is fixed, so this tile is deterministic: losing the roof tier entirely means the
-	## roof probe broke, not that the city happened to come out flat.
+	## The seed is fixed, so this tile is deterministic: a thin roof tier means the roof probe
+	## broke, not that the city happened to come out flat. It has broken twice — once on the
+	## same-surface spacing rule, once on a voxel probe that assumed solid buildings.
 	var roof_pads := (
 		layout.count_of_kind(SiegeLayout.PadKind.ROOF_JUMP)
 		+ layout.count_of_kind(SiegeLayout.PadKind.ROOF_HIGH)
 	)
-	if roof_pads < 1:
-		_fail("FAIL no roof pads at all — the elevated tier went missing")
+	if roof_pads < 4:
+		_fail("FAIL only %d roof sites — the elevated tier went missing" % roof_pads)
 		_quit()
 		return
 
@@ -171,8 +191,13 @@ func _ready() -> void:
 		return
 	for i in range(layout.pad_count()):
 		var pad := layout.pads[i]
-		if not qv.has_point(Vector2i(pad.x, pad.z)):
-			_fail("FAIL pad %d at %s is outside the quarter %s" % [i, pad, qv])
+		## Sites live in the quarter or in a build ring around an outer stone. Anywhere else is a
+		## site the player has no reason to be at and no stone to defend from it.
+		if not qv.has_point(Vector2i(pad.x, pad.z)) and not _near_an_outer_stone(layout, pad):
+			_fail(
+				"FAIL pad %d at %s is neither in the quarter %s nor on an outer stone ring"
+				% [i, pad, qv]
+			)
 			_quit()
 			return
 		var kind := layout.pad_kind_at(i)
@@ -202,11 +227,19 @@ func _ready() -> void:
 			)
 			_quit()
 			return
+		## Spacing is a same-surface rule. A roof pad and the sidewalk pad under it are not two
+		## towers in one firing position, and enforcing the gap across levels would delete the
+		## roof edges — a sidewalk runs along every facade.
 		for j in range(i + 1, layout.pad_count()):
 			var other := layout.pads[j]
+			if absi(other.y - pad.y) > SiegeComposer.SAME_LEVEL_VOX:
+				continue
 			var d := Vector2(float(pad.x - other.x), float(pad.z - other.z)).length()
 			if d < float(SiegeComposer.PAD_SPACING):
-				_fail("FAIL pads %d and %d are only %.1f voxels apart" % [i, j, d])
+				_fail(
+					"FAIL pads %d and %d share a surface but are only %.1f voxels apart"
+					% [i, j, d]
+				)
 				_quit()
 				return
 
@@ -318,8 +351,351 @@ func _ready() -> void:
 		_quit()
 		return
 
+	if not _check_outer_stones(layout, blocks, deck, planner):
+		_quit()
+		return
+	if not _check_hell_gates(layout, blocks, deck, planner):
+		_quit()
+		return
+	if not _check_editable_bounds(gen, layout, deck):
+		_quit()
+		return
+	if not _check_offcentre_tile():
+		_quit()
+		return
+
 	print("RESULT: OK")
 	_quit()
+
+
+func _plan_for(coord: Vector2i) -> DistrictPlanner:
+	var planner: DistrictPlanner = DistrictPlannerScript.new()
+	planner.theme = DistrictTheme.make(DistrictTheme.SIEGE)
+	planner.build(
+		DistrictCoord.SIZE_X_VOX,
+		DistrictCoord.SIZE_Z_VOX,
+		DistrictCoord.district_seed(WORLD_SEED, coord),
+		DistrictCoord.CELL_SIZE,
+		coord
+	)
+	return planner
+
+
+## Everything above ran on whichever Siege tile the theme search returns first, and on this seed that
+## one's grand plaza sits 14 voxels from the middle of the tile — so it says nothing about a tile
+## where it does not.
+##
+## That gap shipped a bug: the stone ring and the gate ring were laid out around the *tile centre*
+## while the Lodestone stands in the plaza, so on an off-centre tile the geometry was lopsided around
+## the thing it is supposed to shield, and the mouths on the near side ended up beside the objective.
+## This phase bakes the worst-offset Siege tile the seed has and re-runs the outer checks on it.
+func _check_offcentre_tile() -> bool:
+	var tile_mid := Vector2i(
+		DistrictCoord.SIZE_X_VOX / 2, DistrictCoord.SIZE_Z_VOX / 2
+	)
+	var worst := Vector2i.ZERO
+	var worst_off := -1.0
+	var worst_planner: DistrictPlanner = null
+	for ring in range(MAX_RING + 1):
+		for cz in range(-ring, ring + 1):
+			for cx in range(-ring, ring + 1):
+				if maxi(absi(cx), absi(cz)) != ring:
+					continue
+				var c := Vector2i(cx, cz)
+				if DistrictTheme.for_district(WORLD_SEED, c).id != DistrictTheme.SIEGE:
+					continue
+				var p := _plan_for(c)
+				if p.siege_quarter.size.x <= 0 or p.grand_plaza.size.x <= 0:
+					continue
+				var plaza_mid := p.grand_plaza.position + p.grand_plaza.size / 2
+				var mid_vox := Vector2i(
+					plaza_mid.x * DistrictCoord.CELL_SIZE + DistrictCoord.CELL_SIZE / 2,
+					plaza_mid.y * DistrictCoord.CELL_SIZE + DistrictCoord.CELL_SIZE / 2
+				)
+				var off := Vector2(mid_vox - tile_mid).length()
+				if off > worst_off:
+					worst_off = off
+					worst = c
+					worst_planner = p
+	if worst_planner == null:
+		_fail("FAIL no Siege tile at all in ring 0..%d — the first phase should have caught that" % MAX_RING)
+		return false
+	print(
+		"most off-centre Siege tile is %s, plaza %.0f voxels (%.0f m) off the tile middle"
+		% [worst, worst_off, worst_off * 0.5]
+	)
+
+	var res: Dictionary = DistrictBakeJobScript.bake({
+		"coord": worst,
+		"world_seed": WORLD_SEED,
+	})
+	if not bool(res.get("ok", false)):
+		_fail("FAIL bake of %s: %s" % [worst, res.get("error", "?")])
+		return false
+	var gen: DistrictGenerator = res["generator"]
+	var layout: SiegeLayout = gen.get_siege_layout()
+	if layout == null or not layout.is_valid():
+		_fail("FAIL the off-centre tile %s produced no runnable siege layout" % worst)
+		return false
+	var blocks: Dictionary = res["blocks"]
+	var deck := int(res["ground_thickness"])
+	if not _check_outer_stones(layout, blocks, deck, worst_planner):
+		return false
+	if not _check_hell_gates(layout, blocks, deck, worst_planner):
+		return false
+	return _check_editable_bounds(gen, layout, deck)
+
+
+func _near_an_outer_stone(layout: SiegeLayout, pad: Vector3i) -> bool:
+	for stone: SiegeLayout.Stone in layout.outer_stones:
+		var d := Vector2(float(pad.x - stone.xz.x), float(pad.z - stone.xz.y)).length()
+		if d <= float(SiegeComposer.OUTER_PAD_RING + SiegeComposer.PAD_HALF):
+			return true
+	return false
+
+
+## The four stones that shield the centre. They stand in ordinary city well outside the barricade —
+## a stone inside the wall would shield nothing — and they are the same lit glass as the Lodestone so
+## they read as the same kind of thing, without being minable.
+func _check_outer_stones(
+	layout: SiegeLayout, blocks: Dictionary, deck: int, planner: DistrictPlanner
+) -> bool:
+	var qv := layout.quarter_vox
+	var tile := Rect2i(0, 0, planner.cells_x * DistrictCoord.CELL_SIZE, planner.cells_z * DistrictCoord.CELL_SIZE)
+	for i in range(layout.outer_stone_count()):
+		var stone := layout.outer_stone_at(i)
+		if qv.has_point(stone.xz):
+			_fail("FAIL outer stone %d at %s stands inside the quarter it shields" % [i, stone.xz])
+			return false
+		if not tile.has_point(stone.xz):
+			_fail("FAIL outer stone %d at %s is off the tile %s" % [i, stone.xz, tile])
+			return false
+		var gap := Vector2(
+			float(stone.xz.x - layout.lodestone_xz.x), float(stone.xz.y - layout.lodestone_xz.y)
+		).length()
+		if gap < float(SiegeComposer.OUTER_RING_Z - SiegeComposer.SITE_SEARCH_MAX):
+			_fail("FAIL outer stone %d is only %.0f voxels from the centre" % [i, gap])
+			return false
+		## Two stones on one flank is one flank with two crystals on it. Only reachable when the tile
+		## edge forced their ideal points together, which is exactly the case worth catching.
+		for j in range(i + 1, layout.outer_stone_count()):
+			var other := layout.outer_stone_at(j)
+			var apart := Vector2(
+				float(stone.xz.x - other.xz.x), float(stone.xz.y - other.xz.y)
+			).length()
+			if apart < float(SiegeComposer.OUTER_STONE_MIN_GAP):
+				_fail(
+					"FAIL outer stones %d and %d are only %.0f voxels apart" % [i, j, apart]
+				)
+				return false
+		var core := _probe(blocks, stone.xz.x, deck + 4, stone.xz.y)
+		if core != VoxelMaterial.GLASS_LIT:
+			_fail(
+				"FAIL outer stone %d core at (%d,%d,%d) is %d not GLASS_LIT"
+				% [i, stone.xz.x, deck + 4, stone.xz.y, core]
+			)
+			return false
+		if not _check_obelisk(i, stone, layout, blocks, deck):
+			return false
+		var r := stone.radius_vox + 1
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				for y in range(deck, deck + stone.height_vox + 3):
+					var m := _probe(blocks, stone.xz.x + dx, y, stone.xz.y + dz)
+					if m >= VoxelMaterial.GEM_QUARTZ and m <= VoxelMaterial.GEM_DIAMOND:
+						_fail(
+							"FAIL outer stone %d has collectible gem %d at (%d,%d,%d)"
+							% [i, m, stone.xz.x + dx, y, stone.xz.y + dz]
+						)
+						return false
+	print("outer stones: %d obelisks outside the wall" % layout.outer_stone_count())
+	return true
+
+
+## The shape rule, which is a usability rule rather than a cosmetic one: these have to be tellable
+## from the Lodestone at a glance. A player who cannot tell them apart walks to a stone, finds no
+## staking console, and has no way to start the mode at all — that is how this was reported.
+##
+## So: a slender needle, not a scaled-down copy of the crystal. The shaft is checked narrow at
+## mid-height where the Lodestone is at its widest, and taller than the Lodestone overall.
+func _check_obelisk(
+	i: int, stone: SiegeLayout.Stone, layout: SiegeLayout, blocks: Dictionary, deck: int
+) -> bool:
+	if stone.height_vox <= 0:
+		_fail("FAIL outer stone %d has no height" % i)
+		return false
+	var mid := deck + 2 + stone.height_vox / 2
+	var edge := SiegeComposer.OBELISK_SHAFT_HALF + 1
+	var beside := _probe(blocks, stone.xz.x + edge, mid, stone.xz.y)
+	if beside != VoxelMaterial.AIR:
+		_fail(
+			"FAIL outer stone %d is %d voxels wide at mid-height — that is a crystal, not an obelisk"
+			% [i, edge * 2 + 1]
+		)
+		return false
+	if _probe(blocks, stone.xz.x, mid, stone.xz.y) != VoxelMaterial.GLASS_LIT:
+		_fail("FAIL outer stone %d has no shaft at mid-height" % i)
+		return false
+	if stone.height_vox <= layout.lodestone_height_vox:
+		_fail(
+			"FAIL outer stone %d is %d voxels tall, no taller than the Lodestone's %d"
+			% [i, stone.height_vox, layout.lodestone_height_vox]
+		)
+		return false
+	## And the Lodestone must still be the broad one, or the two silhouettes have simply swapped.
+	var lode_flank := _probe(
+		blocks,
+		layout.lodestone_xz.x + SiegeComposer.OBELISK_SHAFT_HALF + 1,
+		deck + 4,
+		layout.lodestone_xz.y
+	)
+	if lode_flank != VoxelMaterial.GLASS_LIT:
+		_fail("FAIL the Lodestone is as narrow as an obelisk — the two read the same")
+		return false
+	return true
+
+
+## The mouths the horde comes out of. Two things have to hold or the portal is decoration: the frame
+## is containment-kit material (which is `Hardness.NEVER`, so it cannot be dismantled) and the mouth
+## is `LOS_VEIL` (walk-through, but opaque to shots — the anti-spawn-camp rule, mechanically).
+func _check_hell_gates(
+	layout: SiegeLayout, blocks: Dictionary, deck: int, planner: DistrictPlanner
+) -> bool:
+	var qv := layout.quarter_vox
+	var tile := Rect2i(0, 0, planner.cells_x * DistrictCoord.CELL_SIZE, planner.cells_z * DistrictCoord.CELL_SIZE)
+	var veiled := 0
+	for i in range(layout.hell_gate_count()):
+		var gate := layout.hell_gate_at(i)
+		var mouth := Vector2i(gate.mouth.x, gate.mouth.z)
+		if qv.has_point(mouth):
+			_fail("FAIL hell gate %d opens inside the barricaded quarter at %s" % [i, mouth])
+			return false
+		if not tile.has_point(mouth):
+			_fail("FAIL hell gate %d at %s is off the tile %s" % [i, mouth, tile])
+			return false
+		## Standoff from every stone. A mouth beside the thing it besieges means the wave is already
+		## on the objective when it appears, with no ground for the player to hold — which is how
+		## this shipped the first time, with one gate of each pair ~25 m from its own stone.
+		if not _check_gate_standoff(i, mouth, layout):
+			return false
+		var veil := _probe(blocks, gate.mouth.x, deck + 4, gate.mouth.z)
+		if veil != VoxelMaterial.LOS_VEIL:
+			_fail(
+				"FAIL hell gate %d mouth at (%d,%d,%d) is %d not LOS_VEIL — shootable spawn"
+				% [i, gate.mouth.x, deck + 4, gate.mouth.z, veil]
+			)
+			return false
+		veiled += 1
+		var along := Vector2i(-gate.outward.y, gate.outward.x)
+		var post := SiegeComposer.HELL_GATE_HALF_W + 1
+		var frame := _probe(
+			blocks,
+			gate.mouth.x + along.x * post,
+			deck + 4,
+			gate.mouth.z + along.y * post
+		)
+		if not VoxelMaterial.is_zoo_fence(frame):
+			_fail(
+				"FAIL hell gate %d pillar is %d, not containment-kit fence — a breakable portal"
+				% [i, frame]
+			)
+			return false
+		## The step the horde takes out of the mouth has to be standable, or bodies spawn in a wall.
+		var step := _probe(
+			blocks,
+			gate.mouth.x - gate.outward.x * 3,
+			deck + 1,
+			gate.mouth.z - gate.outward.y * 3
+		)
+		if step != VoxelMaterial.AIR:
+			_fail(
+				"FAIL hell gate %d has %d blocking the step out of its mouth" % [i, step]
+			)
+			return false
+	print("hell gates: %d veiled, unbreakable mouths outboard of the stones" % veiled)
+	return true
+
+
+func _check_gate_standoff(i: int, mouth: Vector2i, layout: SiegeLayout) -> bool:
+	var want := float(SiegeComposer.GATE_STONE_CLEAR)
+	var to_lode := Vector2(
+		float(mouth.x - layout.lodestone_xz.x), float(mouth.y - layout.lodestone_xz.y)
+	).length()
+	if to_lode < want:
+		_fail(
+			"FAIL hell gate %d is %.0f voxels from the Lodestone, inside the %.0f standoff"
+			% [i, to_lode, want]
+		)
+		return false
+	for s in range(layout.outer_stone_count()):
+		var stone := layout.outer_stone_at(s)
+		var d := Vector2(float(mouth.x - stone.xz.x), float(mouth.y - stone.xz.y)).length()
+		if d < want:
+			_fail(
+				"FAIL hell gate %d is %.0f voxels from outer stone %d, inside the %.0f standoff"
+				% [i, d, s, want]
+			)
+			return false
+	return true
+
+
+## The one check the bake path cannot fail but play can. A baked tile writes into a fresh block map
+## and takes everything; the *streamed* path routes decoration through `open_space_bounds` and
+## silently drops any write outside it. Siege is the only theme whose writes leave its reserve, so
+## every outer stone apex, every gate lintel and every pad on an outer ring has to be inside a
+## declared box — otherwise the stones exist in the layout, the controller registers beacons at them,
+## and the player sees nothing there.
+func _check_editable_bounds(gen: DistrictGenerator, layout: SiegeLayout, deck: int) -> bool:
+	var bounds := gen.open_space_bounds()
+	if bounds.is_empty():
+		_fail("FAIL a Siege tile declared no editable bounds — every outer write would be dropped")
+		return false
+	var origin := gen.origin_vox
+	for i in range(layout.outer_stone_count()):
+		var stone := layout.outer_stone_at(i)
+		var apex := Vector3i(stone.xz.x, stone.base_y + 2 + stone.height_vox, stone.xz.y)
+		if not _inside_any(bounds, apex + origin):
+			_fail("FAIL outer stone %d apex %s is outside every editable box" % [i, apex])
+			return false
+	for i in range(layout.hell_gate_count()):
+		var gate := layout.hell_gate_at(i)
+		var lintel := Vector3i(gate.mouth.x, deck + 2 + SiegeComposer.HELL_GATE_H, gate.mouth.z)
+		if not _inside_any(bounds, lintel + origin):
+			_fail("FAIL hell gate %d lintel %s is outside every editable box" % [i, lintel])
+			return false
+	var outer_pads := 0
+	for i in range(layout.pad_count()):
+		var pad := layout.pads[i]
+		if layout.quarter_vox.has_point(Vector2i(pad.x, pad.z)):
+			continue
+		outer_pads += 1
+		## Pads are plated at their own level and studded a little above it.
+		if not _inside_any(bounds, Vector3i(pad.x, pad.y + 2, pad.z) + origin):
+			_fail("FAIL outer-ring pad %d at %s is outside every editable box" % [i, pad])
+			return false
+	if outer_pads <= 0:
+		_fail("FAIL no build sites outside the quarter — the outer stones have no defence")
+		return false
+	print(
+		"editable bounds: %d boxes cover 4 stone apexes, 8 lintels and %d outer-ring pads"
+		% [bounds.size(), outer_pads]
+	)
+	return true
+
+
+## Inclusive on both faces, unlike `AABB.has_point`: these boxes are voxel extents, and a write at
+## the top course of a box is inside it.
+func _inside_any(bounds: Array[AABB], p: Vector3i) -> bool:
+	var v := Vector3(float(p.x), float(p.y), float(p.z))
+	for b: AABB in bounds:
+		var hi := b.position + b.size
+		if (
+			v.x >= b.position.x and v.x <= hi.x
+			and v.y >= b.position.y and v.y <= hi.y
+			and v.z >= b.position.z and v.z <= hi.z
+		):
+			return true
+	return false
 
 
 ## Everything a new theme has to be plumbed into before a tile of it can exist: the enum, the
@@ -372,13 +748,19 @@ func _probe(blocks: Dictionary, x: int, y: int, z: int) -> int:
 	var ly := y - bp.y * BLOCK
 	var lz := z - bp.z * BLOCK
 	if data.size() <= 2:
-		return int(data[0])
+		return _u16(data, 0)
 	## Column order is x-fastest within a z row; voxels are y-fastest inside a column.
 	var col := lx + lz * BLOCK
 	var idx := (col * BLOCK + ly) * 2
 	if idx < 0 or idx + 1 >= data.size():
 		return -1
-	return int(data[idx])
+	return _u16(data, idx)
+
+
+## The containment-kit materials the hell gates are built from live above 255, so the low byte alone
+## is a different material entirely — `ZOO_FENCE_FRAME` (257) reads back as `BEDROCK` (1).
+func _u16(data: PackedByteArray, byte_index: int) -> int:
+	return int(data[byte_index]) | (int(data[byte_index + 1]) << 8)
 
 
 func _count_at_y(blocks: Dictionary, y: int) -> Dictionary:
@@ -391,14 +773,14 @@ func _count_at_y(blocks: Dictionary, y: int) -> Dictionary:
 		var data: PackedByteArray = blocks[key]
 		var local_y := y - block_y0
 		if data.size() <= 2:
-			var uid := int(data[0])
+			var uid := _u16(data, 0)
 			if uid == VoxelMaterial.AIR:
 				continue
 			counts[uid] = int(counts.get(uid, 0)) + BLOCK * BLOCK
 			continue
 		var columns := (data.size() / 2) / BLOCK
 		for c in range(columns):
-			var vid := int(data[(c * BLOCK + local_y) * 2])
+			var vid := _u16(data, (c * BLOCK + local_y) * 2)
 			if vid == VoxelMaterial.AIR:
 				continue
 			counts[vid] = int(counts.get(vid, 0)) + 1
@@ -414,7 +796,7 @@ func _count_above_y(blocks: Dictionary, y: int) -> Dictionary:
 			continue
 		var data: PackedByteArray = blocks[key]
 		if data.size() <= 2:
-			var uid := int(data[0])
+			var uid := _u16(data, 0)
 			if uid == VoxelMaterial.AIR:
 				continue
 			var layers := mini(BLOCK, block_y0 + BLOCK - (y + 1))
@@ -424,7 +806,7 @@ func _count_above_y(blocks: Dictionary, y: int) -> Dictionary:
 		for i in range(voxels):
 			if block_y0 + (i % BLOCK) <= y:
 				continue
-			var vid := int(data[i * 2])
+			var vid := _u16(data, i * 2)
 			if vid == VoxelMaterial.AIR:
 				continue
 			counts[vid] = int(counts.get(vid, 0)) + 1

@@ -17,6 +17,7 @@ const PlayerBoostHudScript := preload("res://scripts/city/player_boost_hud.gd")
 const PlayerCompassHudScript := preload("res://scripts/city/player_compass_hud.gd")
 const ZooCloakHudScript := preload("res://scripts/city/zoo_cloak_hud.gd")
 const SiegeHudScript := preload("res://scripts/city/siege_hud.gd")
+const BeaconRegistryScript := preload("res://scripts/city/beacon_registry.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
@@ -119,6 +120,10 @@ var _player_minion: UndeadUnit = null
 var _player_minion_life_left: float = 0.0
 ## Active Siege Quarter run (pot + waves). Null outside a committed defence.
 var _siege_run: SiegeController = null
+## Objectives every monster of a given faction perceives at any range. Lives here rather than on
+## the siege controller because a beacon is a city-wide property of a target, and the goal provider
+## has to reach it from any body on the tile.
+var _beacons: BeaconRegistry = BeaconRegistryScript.new() as BeaconRegistry
 var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
 var _boost_hud: CanvasLayer
@@ -1275,14 +1280,14 @@ func capture_summon_aim() -> void:
 
 ## Meshless Siege Quarter tower at an explicit world point (pad centre).
 func spawn_siege_tower_at(
-	combat_id: String, world_pos: Vector3, authored_hp: float
+	combat_id: String, world_pos: Vector3, authored_hp: float, muzzle_height_m: float
 ) -> UndeadUnit:
 	_ensure_monster_roster()
 	if _monsters == null:
 		push_error("CityRoot.spawn_siege_tower_at: no MonsterRoster")
 		assert(false, "CityRoot: no MonsterRoster")
 		return null
-	return _monsters.spawn_siege_tower(combat_id, world_pos, authored_hp)
+	return _monsters.spawn_siege_tower(combat_id, world_pos, authored_hp, muzzle_height_m)
 
 
 ## Spawn a catalogue body at an explicit world point (Arena lifts, tests).
@@ -2441,16 +2446,27 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 func grant_monster_kill_haul(world_pos: Vector3, max_hp: float) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	var haul: Array[int] = MonsterGemDropScript.roll_mats(max_hp, rng)
+	var siege := active_siege_run()
+	## Siege waves are mostly KayKit fodder under the global score floor (floor(hp/40) = 0).
+	## Without a one-stone floor the pot never refills after the stake and the run starves.
+	var haul: Array[int] = MonsterGemDropScript.roll_mats(
+		max_hp, rng, 1 if siege != null else 0
+	)
 	if haul.is_empty():
 		return
-	var siege := active_siege_run()
 	if siege != null:
 		var pot_paid := siege.credit_kill_mats(haul)
-		if pot_paid > 0:
-			report_gem_haul(world_pos, pot_paid, haul[0])
-			if _loot_toast != null:
-				_loot_toast.set_headline("Siege pot")
+		if pot_paid <= 0:
+			return
+		## The pot is the inventory during a run — still put every stone on the loot card.
+		## `report_gem_haul` alone only sets a headline; without `add_gem` the card never
+		## becomes visible, so a kill looked like it paid nothing even when the pot moved.
+		if _loot_toast != null:
+			for gem in haul:
+				_loot_toast.add_gem(gem, 1)
+		report_gem_haul(world_pos, pot_paid, haul[0])
+		if _loot_toast != null:
+			_loot_toast.set_headline("Siege pot")
 		return
 	var vox := Vector3i.ZERO
 	if _terrain != null:
@@ -2612,6 +2628,12 @@ func set_player_combat_faction(id: int) -> void:
 	if _walker == null or not is_instance_valid(_walker):
 		return
 	_walker.set_combat_faction(id)
+
+
+## Objectives that bypass aggro range and line of sight. `UndeadGoalProvider` reads this when a
+## body has nothing living to hunt; the Siege Quarter's stones are the only registrars today.
+func beacon_registry() -> BeaconRegistry:
+	return _beacons
 
 
 ## Active Siege Quarter run, or null. Kill hauls and streaming pin consult this.

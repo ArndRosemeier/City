@@ -41,6 +41,9 @@ const LABEL_FONT_PX := 256
 @export var marker_color: Color = Color(1.0, 0.85, 0.15, 1.0)
 ## When true, non-button surface presses move a small square to the hit.
 @export var show_debug_marker: bool = false
+## Metres past which this panel's meshes stop drawing; 0 draws at any range. See
+## `set_view_distance_m` — it does **not** affect the collider.
+@export var view_distance_m: float = 0.0
 
 var _surface: MeshInstance3D = null
 var _body: StaticBody3D = null
@@ -137,9 +140,54 @@ func button_count() -> int:
 ## an invisible surface. Toggle both together.
 func set_hit_enabled(enabled: bool) -> void:
 	visible = enabled
+	set_collision_enabled(enabled)
+
+
+## Collider on/off *without* touching visibility, which `set_hit_enabled` deliberately couples.
+##
+## A field of hundreds of panels needs the two apart. `set_view_distance_m` culls meshes
+## engine-side but leaves every body live, and `CityWalker._try_world_interact` raycasts
+## `laser_range_m` — 100 m — swallowing the shot on any panel it hits *before* firing. Invisible
+## panels with live colliders would eat every shot aimed low.
+func set_collision_enabled(enabled: bool) -> void:
 	if _body == null or not is_instance_valid(_body):
 		return
 	_body.collision_layer = 1 if enabled else 0
+
+
+func is_collision_enabled() -> bool:
+	if _body == null or not is_instance_valid(_body):
+		return false
+	return _body.collision_layer != 0
+
+
+## Stop drawing the panel past `distance` metres (0 = always draw). Per-mesh engine culling, so
+## this costs nothing per frame and needs no proximity bookkeeping. Applies to meshes that exist
+## now and to any respawned later by a button rebuild.
+func set_view_distance_m(distance: float) -> void:
+	view_distance_m = maxf(distance, 0.0)
+	_apply_geometry_flags(_surface)
+	_apply_geometry_flags(_marker)
+	if _button_root == null or not is_instance_valid(_button_root):
+		return
+	for child in _button_root.get_children():
+		_apply_geometry_flags(child as GeometryInstance3D)
+		for sub in child.get_children():
+			_apply_geometry_flags(sub as GeometryInstance3D)
+
+
+## Panels are unshaded surfaces read head-on; a UI slab that casts a shadow onto the world is a
+## bug in every case, and at hundreds of panels the shadow atlas costs more than the drawing.
+func _apply_geometry_flags(gi: GeometryInstance3D) -> void:
+	if gi == null or not is_instance_valid(gi):
+		return
+	gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	gi.visibility_range_end = view_distance_m
+	## Hard cutoff, no fade. `VISIBILITY_RANGE_FADE_SELF` dissolves via material alpha, which
+	## would drag every culled panel back into the transparent pass — the exact cost the cutoff
+	## exists to avoid. A 1 m plate winking in at 30 m is a speck.
+	gi.visibility_range_end_margin = 0.0
+	gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 
 
 ## Live update of the face colour (e.g. Mandelbrot UI strip feedback).
@@ -298,6 +346,7 @@ func _build_surface() -> void:
 	)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_surface.material_override = mat
+	_apply_geometry_flags(_surface)
 	add_child(_surface)
 
 	_body = StaticBody3D.new()
@@ -346,6 +395,7 @@ func _rebuild_button_meshes() -> void:
 			bg_mat.albedo_color = bg
 			bg_mesh.material_override = bg_mat
 			bg_mesh.position = Vector3(local.x, local.y, BUTTON_Z + 0.004)
+			_apply_geometry_flags(bg_mesh)
 			_button_root.add_child(bg_mesh)
 		var mesh_inst := MeshInstance3D.new()
 		mesh_inst.name = "Btn_%s" % str(btn["id"])
@@ -367,6 +417,7 @@ func _rebuild_button_meshes() -> void:
 			mat.albedo_color = btn["color"] as Color
 		mesh_inst.material_override = mat
 		mesh_inst.position = Vector3(local.x, local.y, BUTTON_Z)
+		_apply_geometry_flags(mesh_inst)
 		_button_root.add_child(mesh_inst)
 		var label := str(btn.get("label", ""))
 		## Textured buttons stay caption-free — the picture is the affordance.
@@ -396,6 +447,7 @@ func _add_button_glyph(parent: MeshInstance3D, label: String, base: Color) -> vo
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	glyph.material_override = mat
 	glyph.position = Vector3(0.0, 0.0, -BUTTON_DEPTH)
+	_apply_geometry_flags(glyph)
 	parent.add_child(glyph)
 	if label == "+":
 		var vert := MeshInstance3D.new()
@@ -405,6 +457,7 @@ func _add_button_glyph(parent: MeshInstance3D, label: String, base: Color) -> vo
 		vert.mesh = vquad
 		vert.material_override = mat
 		vert.position = Vector3(0.0, 0.0, -BUTTON_DEPTH)
+		_apply_geometry_flags(vert)
 		parent.add_child(vert)
 
 
@@ -430,6 +483,7 @@ func _add_button_label(parent: MeshInstance3D, label: String, base: Color) -> vo
 	## QuadMesh faces −Z; Label3D faces +Z by default — flip to match the panel face.
 	lbl.position = Vector3(0.0, 0.0, -BUTTON_DEPTH)
 	lbl.rotation.y = PI
+	_apply_geometry_flags(lbl)
 	parent.add_child(lbl)
 
 
@@ -451,4 +505,5 @@ func _ensure_marker() -> void:
 	mat.albedo_color = marker_color
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_marker.material_override = mat
+	_apply_geometry_flags(_marker)
 	add_child(_marker)

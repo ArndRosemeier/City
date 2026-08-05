@@ -90,6 +90,34 @@ func _check_score() -> void:
 			_fail("FAIL score_for_max_hp(%s) = %d, expected %d" % [hp, got, want])
 			return
 	print("OK score_for_max_hp")
+	_check_siege_floor()
+
+
+## Siege waves are KayKit fodder (~34 HP). The global score floor pays those nothing, so a live
+## run must raise a one-stone floor or the pot never refills after the stake is spent.
+func _check_siege_floor() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var empty: Array[int] = MonsterGemDropScript.roll_mats(34.0, rng, 0)
+	if not empty.is_empty():
+		_fail("FAIL roll_mats(34) without a floor still paid %d stones" % empty.size())
+		return
+	var floored: Array[int] = MonsterGemDropScript.roll_mats(34.0, rng, 1)
+	if floored.size() != 1:
+		_fail("FAIL roll_mats(34, min_score=1) paid %d stones, want 1" % floored.size())
+		return
+	if MonsterGemDropScript.value_for_mat(floored[0]) != 1:
+		_fail("FAIL siege floor stone is not a tier-1 gem")
+		return
+	## A body that already scores must not be capped down to the floor.
+	var big: Array[int] = MonsterGemDropScript.roll_mats(110.0, rng, 1)
+	var score := 0
+	for mat in big:
+		score += MonsterGemDropScript.value_for_mat(mat)
+	if score != 2:
+		_fail("FAIL roll_mats(110, min_score=1) scored %d, want 2" % score)
+		return
+	print("OK siege min_score floor")
 
 
 func _check_partition() -> void:

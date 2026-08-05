@@ -1,10 +1,15 @@
-## Runtime owner of a Siege Quarter: the pot, the waves, the Lodestone, and the player's
-## temporary `SIEGE_DEFENDER` allegiance.
+## Runtime owner of a Siege Quarter: the pot, the waves, the five stones, the eight hell gates, and
+## the player's temporary `SIEGE_DEFENDER` allegiance.
 ##
 ## Player-initiated, like the Arena. Streaming the tile in only stands the controller up;
 ## nothing spawns until `start_run` stakes gems into the pot. Kill hauls during a run feed
 ## the pot (via `CityRoot.grant_monster_kill_haul`); withdrawing banks it, and losing the
 ## Lodestone burns it.
+##
+## The five stones are why a run is a map rather than a plaza. Four outer stones stand ~100 m out and
+## the centre cannot be hurt while any of them lives, so pressure has to be answered where it lands.
+## The horde finds them through `BeaconRegistry` rather than through aggro — a stone 100 m away
+## across a district is invisible to every ordinary acquisition rule.
 class_name SiegeController
 extends Node3D
 
@@ -15,9 +20,36 @@ const SiegeLodestonePanelScript := preload("res://scripts/city/siege_lodestone_p
 const SiegePadPanelScript := preload("res://scripts/city/siege_pad_panel.gd")
 const SiegeTowerCatalogScript := preload("res://scripts/city/siege_tower_catalog.gd")
 const MonsterRosterScript := preload("res://scripts/city/monster_roster.gd")
+const SiegeShieldArcVfxScript := preload("res://scripts/city/siege_shield_arc_vfx.gd")
 
-## How far above a gate mouth a body is dropped.
+## One objective's whole runtime state. A stone is not a combat entity — it has no body, no collider
+## and no hitbox — which is why five of them cost no more than the contact tick one of them did.
+class StoneState:
+	extends RefCounted
+
+	var label: String = ""
+	var pos: Vector3 = Vector3.ZERO
+	var hp: float = 0.0
+	var hp_max: float = 0.0
+	## Flat metres in which an attacker both stops walking and deals contact damage.
+	var vuln_radius_m: float = 5.0
+	## Height of the crystal's apex above `pos`, for the shield arc's anchor.
+	var apex_m: float = 0.0
+	## Beacon this stone is currently registered as, or 0 when the horde cannot perceive it. The
+	## centre stays at 0 until the last outer stone falls — that is the shield, mechanically.
+	var beacon_id: int = 0
+	var is_centre: bool = false
+	var alive: bool = true
+	## The light bridge to the centre. Outer stones only.
+	var arc: Node3D = null
+
+
+## How far above a hell gate's mouth a body is dropped.
 const SPAWN_LIFT_M := 0.2
+## How far in front of a mouth a body appears, in voxels. In front rather than behind: the mouth
+## plane is `LOS_VEIL`, which bodies walk through but the navigator reads as solid, so a body born
+## on the far side would have to path out of a wall.
+const SPAWN_STEP_VOX := 3.0
 ## Floor under the authored vulnerability radius, measured out from the crystal's shell. The
 ## crystal is solid, so the radius has to clear it by more than UndeadGoalProvider's ring inset
 ## — otherwise attackers would be sent to stand inside GLASS_LIT and dance around it instead.
@@ -28,11 +60,34 @@ const PANEL_CLEARANCE_M := 1.4
 ## Clearance between the pad's top face and the lay-flat "+" plate, so its collider and mesh do
 ## not z-fight the foundation voxels.
 const PAD_PLATE_LIFT_M := 0.05
+## Where a tower's combat host stands above the pad surface cell. The host is a point rather than
+## a mesh, so this only has to sit inside the stamp — the muzzle is lifted separately.
+const TOWER_HOST_LIFT_M := 0.6
+## Plates built per frame. A quarter carries hundreds of build sites and each plate is eight
+## nodes, so standing them all up in the frame the run starts is a visible hitch.
+const PLATES_PER_FRAME := 8
+## How close the player must be for a plate's collider to go live, and how often that is
+## re-evaluated. The colliders cannot simply stay on: `CityWalker._try_world_interact` raycasts
+## 100 m and a `Ui3D` hit swallows the shot before it fires, so a field of live plates would eat
+## every shot aimed low. View culling (`Ui3D.set_view_distance_m`) is separate and much longer.
+const PLATE_TOUCH_M := 5.0
+const PLATE_PROXIMITY_INTERVAL_SEC := 0.2
+## A wave always shows up, even when the soft target is already met by bodies chewing a stone
+## somewhere the player abandoned. Zero-body waves would switch the siege off by inaction.
+const MIN_WAVE_BATCH := 2
+## Hell-gate mouth light: range and the energy a full-weight gate burns at. The tell is a forecast —
+## it shows where the *next* wave is coming from, so a player who reads it can pre-build a flank.
+const GATE_LIGHT_RANGE_M := 26.0
+const GATE_LIGHT_ENERGY := 7.0
+## Emissive pip in the mouth, so the tell survives being read from outside the light's range.
+const GATE_PIP_RADIUS_M := 0.7
 
+## There is no "wave cleared" state: waves land on a timer and leftovers keep chewing, so the only
+## phases are before the first wave and after it. See §10 of the design doc.
 enum Phase {
 	IDLE,
-	INTERMISSION,
-	WAVE,
+	DEPLOY,
+	RUNNING,
 	LOST,
 	WITHDRAWN,
 }
@@ -51,23 +106,45 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 var _phase: Phase = Phase.IDLE
 var _wave: int = 0
-var _intermission_left: float = 0.0
+## Countdown of the pre-run deployment window, then of the gap to the next wave.
+var _deploy_left: float = 0.0
+var _wave_left: float = 0.0
 var _spawn_queue: PackedStringArray = PackedStringArray()
 var _spawn_cd: float = 0.0
+## Drip between bodies of the current batch, sized so the batch spans part of the wave period.
+var _drip_interval: float = 0.55
 ## Living attackers this controller owns this run.
 var _alive: Array[UndeadUnit] = []
 ## Living towers (meshless UndeadUnits) owned by this run.
 var _towers: Array[UndeadUnit] = []
 ## pad_index → tower unit (or null when empty).
 var _pad_tower: Dictionary = {}
-## pad_index → the lay-flat "+" plate on that pad. Untyped: these are preload instances, and a
-## `class_name` element type here has to resolve before the script cache is warm.
-var _pad_panels: Array = []
+## pad_index → the lay-flat "+" plate on that pad. A Dictionary rather than an array because
+## plates are built a few per frame, so the collection is sparse until the queue drains. Values are
+## untyped: these are preload instances, and a `class_name` element type here has to resolve
+## before the script cache is warm.
+var _pad_panels: Dictionary = {}
+## Pad indices still waiting for a plate.
+var _plate_queue: PackedInt32Array = PackedInt32Array()
+var _plate_prox_acc: float = 0.0
 
 ## item_id → count. Session-local; never touches inventory until withdraw or is lost on fail.
 var _pot: Dictionary = {}
-var _lodestone_hp: float = 0.0
-var _lodestone_hp_max: float = 0.0
+## The centre plus the four outer stones, built at `start_run`. Empty outside a run.
+var _stones: Array[StoneState] = []
+var _centre: StoneState = null
+## Per-hell-gate spawn weight for this wave and for the next one. The next-wave table is the
+## forecast the mouth lights show; the current one is what `_pick_gate` draws from.
+var _gate_weights: PackedFloat32Array = PackedFloat32Array()
+var _next_gate_weights: PackedFloat32Array = PackedFloat32Array()
+## Gate that carried this wave and the one that will carry the next, so a bearing never repeats
+## twice running and the HUD can name where the pressure is about to come from.
+var _primary_gate: int = -1
+var _next_primary_gate: int = -1
+## Mouth lights and pips, parallel to `layout.hell_gates`.
+var _gate_lights: Array[OmniLight3D] = []
+var _gate_pips: Array[MeshInstance3D] = []
+var _gate_pip_mats: Array[StandardMaterial3D] = []
 var _owns_defender_faction: bool = false
 var _shutting_down: bool = false
 var _panel: SiegeLodestonePanel = null
@@ -76,11 +153,25 @@ var _panel_refresh_acc: float = 0.0
 ## Authored tuning, read once at setup.
 var _min_stake_total: int = 5
 var _lodestone_base_hp: float = 400.0
+var _outer_stone_hp: float = 250.0
 var _lodestone_vuln_radius_m: float = 5.0
-var _intermission_sec: float = 8.0
-var _base_wave_size: int = 6
-var _wave_size_growth: int = 2
+## Weight of the gate a wave picks as its primary, the floor every other gate keeps, and how fast
+## weight falls away with angular distance from the primary bearing.
+var _gate_primary_share: float = 1.0
+var _gate_weight_floor: float = 0.08
+var _gate_falloff: float = 1.6
+## Ground around the crystal that has to be empty of attackers before the pot can be banked.
+var _withdraw_clear_radius_m: float = 20.0
+var _deploy_sec: float = 45.0
+var _wave_period_sec: float = 120.0
+## Share of the wave period the batch's drip is spread across, so pressure is continuous rather
+## than a five-second dump followed by silence.
+var _wave_drip_fraction: float = 0.5
+var _alive_target_base: int = 10
+var _alive_target_growth: int = 2
+## Ceiling on the soft alive target, not a wall the spawner slams into.
 var _district_cap: int = 34
+## Floor under the computed drip — the batch never spawns faster than this.
 var _spawn_interval_sec: float = 0.55
 var _hp_growth: float = 0.12
 var _damage_growth: float = 0.08
@@ -121,6 +212,11 @@ func setup(
 	_read_constants()
 	_build_roster()
 	_phase = Phase.IDLE
+	## Stones and their arcs belong to the *tile*, not to a run. A player who walks into a Siege
+	## quarter should be able to read what the place is before staking anything: four bridges of light
+	## converging on one crystal say "these four protect that one" without a word of UI.
+	_build_stones()
+	_ensure_shield_arcs()
 	_spawn_lodestone_panel()
 	set_process(true)
 	print(
@@ -139,6 +235,9 @@ func shutdown() -> void:
 		_pot.clear()
 		_phase = Phase.LOST
 	_end_run(true)
+	## The arcs are the only thing that outlives a run, so tearing the tile down is the one place
+	## they have to be taken away explicitly.
+	_clear_shield_arcs()
 	set_process(false)
 
 
@@ -147,7 +246,7 @@ func _exit_tree() -> void:
 
 
 func is_running() -> bool:
-	return _phase == Phase.INTERMISSION or _phase == Phase.WAVE
+	return _phase == Phase.DEPLOY or _phase == Phase.RUNNING
 
 
 func phase() -> Phase:
@@ -170,19 +269,50 @@ func pot_total() -> int:
 
 
 func lodestone_hp() -> float:
-	return _lodestone_hp
+	return _centre.hp if _centre != null else 0.0
 
 
 func lodestone_hp_max() -> float:
-	return _lodestone_hp_max
+	return _centre.hp_max if _centre != null else 0.0
+
+
+## The five pools, centre first. Read-only for the HUD and the tests.
+func stones() -> Array[StoneState]:
+	return _stones
+
+
+func outer_stones_alive() -> int:
+	var n := 0
+	for stone: StoneState in _stones:
+		if not stone.is_centre and stone.alive:
+			n += 1
+	return n
+
+
+## True while an outer stone still stands, meaning contact on the Lodestone does nothing.
+func centre_shielded() -> bool:
+	return outer_stones_alive() > 0
 
 
 func min_stake_total() -> int:
 	return _min_stake_total
 
 
-func intermission_left() -> float:
-	return _intermission_left
+## Seconds left of the pre-run deployment window. Zero once the first wave has landed.
+func deploy_left() -> float:
+	return _deploy_left
+
+
+## Seconds until the next wave lands.
+func wave_left() -> float:
+	return _wave_left
+
+
+## How many attackers the district aims to keep alive at the current wave. A target, not a wall:
+## bodies already alive count against it, so an ignored flank thins the next wave instead of the
+## spawner slamming into a cap.
+func alive_target() -> int:
+	return mini(_alive_target_base + maxi(_wave - 1, 0) * _alive_target_growth, _district_cap)
 
 
 func alive_count() -> int:
@@ -204,7 +334,7 @@ func lodestone_world_pos() -> Vector3:
 	)
 
 
-## Compact stats for SiegeHud. `active` is false outside INTERMISSION/WAVE.
+## Compact stats for SiegeHud. `active` is false outside DEPLOY/RUNNING.
 func get_hud_stats() -> Dictionary:
 	return {
 		"active": is_running(),
@@ -212,11 +342,18 @@ func get_hud_stats() -> Dictionary:
 		"wave": _wave,
 		"pot_total": pot_total(),
 		"pot": pot_snapshot(),
-		"lodestone_hp": _lodestone_hp,
-		"lodestone_hp_max": _lodestone_hp_max,
-		"intermission_left": _intermission_left,
+		"lodestone_hp": lodestone_hp(),
+		"lodestone_hp_max": lodestone_hp_max(),
+		"deploy_left": _deploy_left,
+		"wave_left": _wave_left,
 		"alive": _alive.size(),
+		"alive_target": alive_target(),
 		"queued": _spawn_queue.size(),
+		"withdraw_reason": withdraw_block_reason(),
+		"outer_alive": outer_stones_alive(),
+		"outer_total": layout.outer_stone_count() if layout != null else 0,
+		"centre_shielded": centre_shielded(),
+		"next_pressure": next_pressure_label(),
 	}
 
 
@@ -274,8 +411,7 @@ func start_run(stake: Dictionary) -> bool:
 			return false
 		_pot[item_id] = int(_pot.get(item_id, 0)) + n
 
-	_lodestone_hp_max = _lodestone_base_hp
-	_lodestone_hp = _lodestone_hp_max
+	_reset_stones()
 	_wave = 0
 	_alive.clear()
 	_spawn_queue.clear()
@@ -285,22 +421,79 @@ func start_run(stake: Dictionary) -> bool:
 	)
 	_owns_defender_faction = true
 	_clear_towers()
-	## Phase first: a pad console builds its face from `is_running()`, so spawning the
-	## consoles before the intermission opens leaves every one of them empty.
-	_begin_intermission()
+	_register_outer_beacons()
+	_ensure_shield_arcs()
+	_spawn_gate_lights()
+	## First forecast before the deployment window ends, so the mouths are already telling the
+	## player where wave one lands while there is still time to build for it.
+	_roll_next_gate_weights()
+	_apply_gate_lights()
+	## Phase first: a pad plate builds its face from `is_running()`, so queueing the plates
+	## before the run opens leaves every one of them empty.
+	_begin_deploy()
 	_spawn_pad_panels()
 	_refresh_panel()
 	print(
-		"SiegeController: run started — pot=%d gems, lodestone=%.0f hp"
-		% [pot_total(), _lodestone_hp_max]
+		"SiegeController: run started — pot=%d gems, centre=%.0f hp behind %d outer stones, %d build sites"
+		% [pot_total(), lodestone_hp_max(), outer_stones_alive(), layout.pad_count()]
 	)
 	return true
 
 
-## Bank the pot into inventory and end the run. Only legal between waves.
+## Flat metres around the Lodestone that must be clear of attackers before the pot can be banked.
+func withdraw_clear_radius_m() -> float:
+	return _withdraw_clear_radius_m
+
+
+## Live attackers inside the withdrawal ring. Zero means the console will bank.
+func withdraw_blockers() -> int:
+	if not is_running():
+		return 0
+	var aim := lodestone_world_pos()
+	var r2 := _withdraw_clear_radius_m * _withdraw_clear_radius_m
+	var n := 0
+	for unit: UndeadUnit in _alive:
+		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
+			continue
+		var d2 := Vector2(
+			unit.global_position.x - aim.x, unit.global_position.z - aim.z
+		).length_squared()
+		if d2 <= r2:
+			n += 1
+	return n
+
+
+## Why the pot cannot be banked right now, or "" when it can.
+##
+## Two halves, one radius: the player has to be standing on the crystal's ground, and that ground
+## has to be clear of attackers. The button lives on the HUD rather than out in the quarter, so the
+## rule is what keeps cashing out physical — otherwise the player could bank from the rim without
+## ever walking back, and a pot that costs nothing to keep is not a gamble. Waves land on a clock
+## and never stop, so every minute the pot grows is a minute this ring is harder to own.
+func withdraw_block_reason() -> String:
+	if not is_running():
+		return "No siege is running"
+	var lode := lodestone_world_pos()
+	var here := _player_position()
+	var gap := Vector2(here.x - lode.x, here.z - lode.z).length()
+	if gap > _withdraw_clear_radius_m:
+		return "Too far from the Lodestone — %dm out" % int(round(gap))
+	var blockers := withdraw_blockers()
+	if blockers > 0:
+		return (
+			"%d attacker%s within %dm of the Lodestone"
+			% [blockers, "" if blockers == 1 else "s", int(round(_withdraw_clear_radius_m))]
+		)
+	return ""
+
+
+## Bank the pot into inventory and end the run. False when `withdraw_block_reason` has something
+## to say — a legal player miss, not a fault, so the HUD prints the reason and the run carries on.
 func withdraw() -> bool:
-	if _phase != Phase.INTERMISSION:
-		push_error("SiegeController.withdraw: only between waves (phase=%d)" % int(_phase))
+	if not is_running():
+		push_error("SiegeController.withdraw: no live run (phase=%d)" % int(_phase))
+		return false
+	if not withdraw_block_reason().is_empty():
 		return false
 	var inv: PlayerInventory = _city.call("get_inventory") as PlayerInventory
 	if inv == null:
@@ -337,7 +530,10 @@ func credit_kill_mats(mats: Array[int]) -> int:
 		_pot[item_id] = int(_pot.get(item_id, 0)) + 1
 		paid += 1
 	if paid > 0:
+		_refresh_panel()
 		_refresh_pad_panels()
+		if _city != null and is_instance_valid(_city) and _city.has_method("refresh_siege_build_picker"):
+			_city.call("refresh_siege_build_picker")
 	return paid
 
 
@@ -412,8 +608,17 @@ func build_tower(pad_index: int, tower_id: String) -> bool:
 	var hp := float(def.get("hp"))
 	var unit: UndeadUnit = null
 	if _city.has_method("spawn_siege_tower_at"):
+		## The host sits inside the stamp; its muzzle has to clear the top of it, or every LOS
+		## probe the turret makes starts in its own stone and it silently never fires.
+		var muzzle_h := (
+			SiegeTowerCatalogScript.muzzle_height_m(def, voxel_size) - TOWER_HOST_LIFT_M
+		)
 		unit = _city.call(
-			"spawn_siege_tower_at", combat_id, pad_world + Vector3(0.0, 0.6, 0.0), hp
+			"spawn_siege_tower_at",
+			combat_id,
+			pad_world + Vector3(0.0, TOWER_HOST_LIFT_M, 0.0),
+			hp,
+			muzzle_h
 		) as UndeadUnit
 	if unit == null or not is_instance_valid(unit):
 		push_error("SiegeController.build_tower: spawn failed for '%s'" % combat_id)
@@ -438,17 +643,27 @@ func _process(delta: float) -> void:
 		return
 	if is_running():
 		_prune_alive()
+		_tick_plate_build()
+		_tick_plate_proximity(delta)
 		match _phase:
-			Phase.INTERMISSION:
-				_intermission_left -= delta
-				if _intermission_left <= 0.0:
+			Phase.DEPLOY:
+				_deploy_left -= delta
+				if _deploy_left <= 0.0:
+					_deploy_left = 0.0
 					_begin_wave()
-			Phase.WAVE:
+			Phase.RUNNING:
+				## No end condition. A wave is a scheduled batch, not a room to clear — bodies
+				## the player never reaches keep chewing, and waiting on `_alive` to empty would
+				## hang the run forever the moment anything survives out of reach.
+				_wave_left -= delta
+				if _wave_left <= 0.0:
+					_begin_wave()
 				_tick_spawns(delta)
-				_tick_lodestone(delta)
-				if _spawn_queue.is_empty() and _alive.is_empty() and _lodestone_hp > 0.0:
-					_begin_intermission()
-	## Panel clock / HP readout — labels only; full face rebuilds happen on phase changes.
+				_tick_stones(delta)
+	## Console clock — labels only; full face rebuilds happen on phase changes. Skipped during a
+	## run: the console is hidden then and `SiegeHud` carries the live readout.
+	if is_running():
+		return
 	_panel_refresh_acc += delta
 	if _panel_refresh_acc >= 0.25:
 		_panel_refresh_acc = 0.0
@@ -456,28 +671,50 @@ func _process(delta: float) -> void:
 			_panel.tick_display()
 
 
-func _begin_intermission() -> void:
-	_phase = Phase.INTERMISSION
-	_intermission_left = _intermission_sec
+## The deployment window: staked, plates going up, gates still dark. This is the run's only pause
+## and the player's whole setup time — after the first wave the clock never stops.
+func _begin_deploy() -> void:
+	_phase = Phase.DEPLOY
+	_deploy_left = _deploy_sec
+	_wave_left = 0.0
 	_refresh_panel()
-	print(
-		"SiegeController: intermission %.1fs after wave %d — pot=%d"
-		% [_intermission_sec, _wave, pot_total()]
-	)
+	print("SiegeController: deploying — first wave in %.0fs" % _deploy_sec)
 
 
 func _begin_wave() -> void:
 	_wave += 1
-	_phase = Phase.WAVE
-	var size := mini(_base_wave_size + (_wave - 1) * _wave_size_growth, _district_cap)
+	_phase = Phase.RUNNING
+	_wave_left = _wave_period_sec
+	## The forecast the mouths have been showing becomes this wave's table, then a fresh forecast
+	## goes up for the wave after it. That ordering is the whole point of the tell: what the player
+	## read while building is what actually arrives.
+	_adopt_next_gate_weights()
+	_roll_next_gate_weights()
+	_apply_gate_lights()
+	## Soft target: the batch is the shortfall against where the horde should be, so leftovers
+	## chewing a stone the player walked away from buy quiet and cost stone HP instead of piling
+	## into an ever-growing field.
+	var batch := clampi(alive_target() - _alive.size(), MIN_WAVE_BATCH, _district_cap)
 	_spawn_queue.clear()
-	for _i in range(size):
+	for _i in range(batch):
 		_spawn_queue.append(_pick_body())
+	_drip_interval = maxf(
+		_spawn_interval_sec, (_wave_period_sec * _wave_drip_fraction) / float(batch)
+	)
 	_spawn_cd = 0.0
 	_refresh_panel()
 	print(
-		"SiegeController: wave %d — %d bodies, hp×%.2f dmg×%.2f"
-		% [_wave, size, _wave_hp_mult(), _wave_damage_mult()]
+		"SiegeController: wave %d — %d bodies from %s (alive %d, target %d), drip %.1fs, hp×%.2f dmg×%.2f"
+		% [
+			_wave,
+			batch,
+			gate_bearing_label(_primary_gate),
+			_alive.size(),
+			alive_target(),
+			_drip_interval,
+			_wave_hp_mult(),
+			_wave_damage_mult(),
+		]
 	)
 
 
@@ -487,52 +724,227 @@ func _tick_spawns(delta: float) -> void:
 	_spawn_cd -= delta
 	if _spawn_cd > 0.0:
 		return
-	if _alive.size() >= _district_cap:
-		_spawn_cd = _spawn_interval_sec
-		return
-	## Same soft hold Zoo uses: a full city roster is temporary pressure. Keep the body on the
-	## queue and try again next tick — dequeuing on a null spawn used to erase wave members
-	## and flood the ErrorOverlay with "alive cap reached".
-	if _global_alive() >= MonsterRosterScript.MAX_ALIVE_UNITS:
-		_spawn_cd = _spawn_interval_sec
+	## The global roster ceiling is a frame-rate safety net, not a balance number. Hold the body on
+	## the queue and retry — dequeuing on a null spawn used to erase wave members and flood the
+	## ErrorOverlay with "alive cap reached".
+	if _global_walkers() >= MonsterRosterScript.MAX_ALIVE_UNITS:
+		_spawn_cd = _drip_interval
 		return
 	var body_id := _spawn_queue[0]
 	if not _spawn_attacker(body_id):
-		_spawn_cd = _spawn_interval_sec
+		_spawn_cd = _drip_interval
 		return
 	_spawn_queue.remove_at(0)
-	_spawn_cd = _spawn_interval_sec
+	_spawn_cd = _drip_interval
 
 
-func _global_alive() -> int:
+## Walking bodies across the whole city. Towers are skipped: the roster ceiling bounds walkers, and
+## a quarter plated with 200 immobile towers must not switch the horde attacking them off.
+func _global_walkers() -> int:
 	if not _units_cb.is_valid():
 		return _alive.size()
-	return (_units_cb.call() as Array).size()
+	var n := 0
+	for u: Variant in _units_cb.call() as Array:
+		var unit := u as UndeadUnit
+		if unit == null or not is_instance_valid(unit) or unit.is_siege_tower():
+			continue
+		n += 1
+	return n
 
 
 ## False when the roster refused (cap / nav). The body stays queued for a later tick.
+##
+## Nothing here tells the body what to attack. Beacons do that, and they do it live — a stone that
+## falls while this body is walking to it retargets it on its next query, which a spawn-time aim
+## could never do.
 func _spawn_attacker(body_id: String) -> bool:
-	if not _spawn_cb.is_valid() or layout.gate_count() <= 0:
+	if not _spawn_cb.is_valid() or layout.hell_gate_count() <= 0:
 		return false
-	var gate_i := int(_rng.randi() % layout.gate_count())
-	var gw := layout.gate_world(gate_i, origin_vox)
+	var gate_i := _pick_gate()
+	var gate := layout.hell_gates[gate_i]
+	var gw := gate.world(origin_vox)
 	var pos := Vector3(
 		(float(gw.x) + 0.5) * voxel_size,
 		float(gw.y) * voxel_size + SPAWN_LIFT_M,
 		(float(gw.z) + 0.5) * voxel_size
 	)
-	## Outside the mouth by one cell so the body is not born inside the barricade ring.
-	var outward := layout.gate_dirs[gate_i] * -1
-	pos += Vector3(float(outward.x), 0.0, float(outward.y)) * voxel_size * 3.0
+	pos -= Vector3(float(gate.outward.x), 0.0, float(gate.outward.y)) * voxel_size * SPAWN_STEP_VOX
 	var unit: UndeadUnit = _spawn_cb.call(body_id, pos, true) as UndeadUnit
 	if unit == null or not is_instance_valid(unit):
 		return false
 	unit.set_faction(int(MonsterFactionScript.Id.SIEGE_ATTACKER))
-	## Hold radius *is* the vulnerability radius — see `lodestone_vulnerable_radius_m`.
-	unit.set_push_aim(lodestone_world_pos(), lodestone_vulnerable_radius_m())
 	unit.scale_for_wave(_wave_hp_mult(), _wave_damage_mult())
 	_alive.append(unit)
 	return true
+
+
+# --- Hell gates -------------------------------------------------------------
+
+## Weight table for a wave: one gate is the primary and every other falls away with angular distance
+## from it, never below the floor. A single hot gate would let the player fortify one lane and stop
+## playing; a flat table would make every wave feel the same. Rolled from the district seed and the
+## wave number, so the same tile plays the same order of attacks on a reload.
+func _roll_gate_weights(wave: int, avoid_gate: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	var n := layout.hell_gate_count()
+	if n <= 0:
+		return out
+	var pick := RandomNumberGenerator.new()
+	pick.seed = district_seed ^ (wave * 0x9E3779B9)
+	var primary := int(pick.randi() % n)
+	if n > 1 and primary == avoid_gate:
+		## Two waves from the same mouth read as a bug rather than as pressure.
+		primary = (primary + 1 + int(pick.randi() % (n - 1))) % n
+	var primary_bearing := layout.hell_gates[primary].bearing_rad
+	for i in range(n):
+		var gap := absf(angle_difference(layout.hell_gates[i].bearing_rad, primary_bearing))
+		out.append(
+			maxf(_gate_primary_share * exp(-_gate_falloff * gap), _gate_weight_floor)
+		)
+	return out
+
+
+func _roll_next_gate_weights() -> void:
+	_next_gate_weights = _roll_gate_weights(_wave + 1, _primary_gate)
+	_next_primary_gate = _heaviest_gate(_next_gate_weights)
+
+
+func _adopt_next_gate_weights() -> void:
+	if _next_gate_weights.size() != layout.hell_gate_count():
+		_next_gate_weights = _roll_gate_weights(_wave, _primary_gate)
+	_gate_weights = _next_gate_weights
+	_primary_gate = _heaviest_gate(_gate_weights)
+
+
+func _heaviest_gate(weights: PackedFloat32Array) -> int:
+	var best := -1
+	var best_w := -1.0
+	for i in range(weights.size()):
+		if weights[i] > best_w:
+			best_w = weights[i]
+			best = i
+	return best
+
+
+func _pick_gate() -> int:
+	var n := layout.hell_gate_count()
+	if _gate_weights.size() != n:
+		push_error("SiegeController._pick_gate: no weight table for %d gates" % n)
+		assert(false, "SiegeController: gate weights out of sync")
+		return int(_rng.randi() % n)
+	var total := 0.0
+	for w in _gate_weights:
+		total += w
+	var roll := _rng.randf() * total
+	var acc := 0.0
+	for i in range(n):
+		acc += _gate_weights[i]
+		if roll <= acc:
+			return i
+	return n - 1
+
+
+## Compass name of a gate's bearing, for logs and the HUD. Bearing is measured in district-local
+## voxel space, where +X is east and +Z is south.
+func gate_bearing_label(gate_i: int) -> String:
+	if gate_i < 0 or gate_i >= layout.hell_gate_count():
+		return "nowhere"
+	var deg := rad_to_deg(layout.hell_gates[gate_i].bearing_rad)
+	var octant := int(round(fposmod(deg, 360.0) / 45.0)) % 8
+	return [
+		"the east",
+		"the south-east",
+		"the south",
+		"the south-west",
+		"the west",
+		"the north-west",
+		"the north",
+		"the north-east",
+	][octant]
+
+
+## One line of forecast for the HUD, or "" before the first table exists.
+func next_pressure_label() -> String:
+	if not is_running() or _next_primary_gate < 0:
+		return ""
+	return "Next wave from %s" % gate_bearing_label(_next_primary_gate)
+
+
+## Per-gate weight for the *next* wave. The mouth lights read from this.
+func next_gate_weights() -> PackedFloat32Array:
+	return _next_gate_weights
+
+
+## A light and a glowing pip in every mouth. Voxel materials cannot change emission per instance
+## without a remesh, so the "this one burns brighter" tell has to be nodes rather than paint.
+func _spawn_gate_lights() -> void:
+	_clear_gate_lights()
+	for i in range(layout.hell_gate_count()):
+		var gate := layout.hell_gates[i]
+		var gw := gate.world(origin_vox)
+		var at := Vector3(
+			(float(gw.x) + 0.5) * voxel_size,
+			(float(gw.y) + 4.0) * voxel_size,
+			(float(gw.z) + 0.5) * voxel_size
+		)
+		var light := OmniLight3D.new()
+		light.name = "GateLight%d" % i
+		light.omni_range = GATE_LIGHT_RANGE_M
+		light.light_color = Color(1.0, 0.42, 0.2)
+		light.light_energy = 0.0
+		light.shadow_enabled = false
+		add_child(light)
+		light.global_position = at
+		_gate_lights.append(light)
+
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(1.0, 0.45, 0.22)
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.4, 0.16)
+		mat.emission_energy_multiplier = 0.5
+		var sphere := SphereMesh.new()
+		sphere.radius = GATE_PIP_RADIUS_M
+		sphere.height = GATE_PIP_RADIUS_M * 2.0
+		sphere.radial_segments = 8
+		sphere.rings = 4
+		var pip := MeshInstance3D.new()
+		pip.name = "GatePip%d" % i
+		pip.mesh = sphere
+		pip.material_override = mat
+		pip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(pip)
+		pip.global_position = at
+		_gate_pips.append(pip)
+		_gate_pip_mats.append(mat)
+
+
+## Brightness ∝ the gate's share of the next wave. A mouth at the floor is nearly dark, so scanning
+## the skyline answers "where do I build next" without opening anything.
+func _apply_gate_lights() -> void:
+	if _gate_lights.size() != _next_gate_weights.size():
+		return
+	var top := 0.0
+	for w in _next_gate_weights:
+		top = maxf(top, w)
+	if top <= 0.0:
+		return
+	for i in range(_gate_lights.size()):
+		var share := clampf(_next_gate_weights[i] / top, 0.0, 1.0)
+		_gate_lights[i].light_energy = GATE_LIGHT_ENERGY * share * share
+		_gate_pip_mats[i].emission_energy_multiplier = 0.4 + 5.0 * share * share
+
+
+func _clear_gate_lights() -> void:
+	for light: OmniLight3D in _gate_lights:
+		if light != null and is_instance_valid(light):
+			light.queue_free()
+	for pip: MeshInstance3D in _gate_pips:
+		if pip != null and is_instance_valid(pip):
+			pip.queue_free()
+	_gate_lights.clear()
+	_gate_pips.clear()
+	_gate_pip_mats.clear()
 
 
 ## Flat metres from the Lodestone centre in which an attacker both **stops walking** and
@@ -547,27 +959,218 @@ func lodestone_vulnerable_radius_m() -> float:
 	return maxf(_lodestone_vuln_radius_m, crystal + LODESTONE_RADIUS_SLACK_M)
 
 
-func _tick_lodestone(delta: float) -> void:
-	if _lodestone_hp <= 0.0:
+## Build the run's five pools. Positions come from the layout the composer baked, so the stones the
+## controller ticks are the crystals actually standing on the tile.
+func _build_stones() -> void:
+	_stones.clear()
+	_centre = null
+	var centre := StoneState.new()
+	centre.label = "Lodestone"
+	centre.pos = lodestone_world_pos()
+	centre.hp_max = _lodestone_base_hp
+	centre.hp = centre.hp_max
+	centre.vuln_radius_m = lodestone_vulnerable_radius_m()
+	centre.apex_m = float(layout.lodestone_height_vox + 2) * voxel_size
+	centre.is_centre = true
+	_centre = centre
+	_stones.append(centre)
+	for i in range(layout.outer_stone_count()):
+		var planned := layout.outer_stones[i]
+		var stone := StoneState.new()
+		stone.label = "Outer stone %d" % (i + 1)
+		stone.pos = _stone_world_pos(planned)
+		stone.hp_max = _outer_stone_hp
+		stone.hp = stone.hp_max
+		stone.vuln_radius_m = _stone_vulnerable_radius_m(planned.radius_vox)
+		stone.apex_m = float(planned.height_vox + 2) * voxel_size
+		_stones.append(stone)
+
+
+## Put the five stones back to full for a fresh run, in place rather than rebuilt. Rebuilding would
+## drop the `StoneState` objects that hold the idle arcs, orphaning four sets of geometry under the
+## controller every time a run started.
+func _reset_stones() -> void:
+	if _stones.is_empty():
+		_build_stones()
 		return
-	var aim := lodestone_world_pos()
-	var hit_m := lodestone_vulnerable_radius_m()
-	var hit_r2 := hit_m * hit_m
-	var chewers := 0
+	for stone: StoneState in _stones:
+		stone.hp = stone.hp_max
+		stone.alive = true
+		stone.beacon_id = 0
+
+
+func _stone_world_pos(planned: SiegeLayout.Stone) -> Vector3:
+	var w := planned.world(origin_vox)
+	return Vector3(
+		(float(w.x) + 0.5) * voxel_size,
+		float(w.y) * voxel_size,
+		(float(w.z) + 0.5) * voxel_size
+	)
+
+
+## Same rule as the Lodestone's: the radius has to clear the solid crystal by more than the goal
+## provider's ring inset, or attackers are sent to stand inside `GLASS_LIT` and dance around it.
+func _stone_vulnerable_radius_m(radius_vox: int) -> float:
+	return maxf(
+		_lodestone_vuln_radius_m, float(radius_vox) * voxel_size + LODESTONE_RADIUS_SLACK_M
+	)
+
+
+# --- Beacons ----------------------------------------------------------------
+
+## Null only while the city is being torn down, which is a legitimate state on `shutdown`. A live
+## city that cannot hold beacons is a wiring bug and says so.
+func _beacon_registry() -> BeaconRegistry:
+	if _city == null or not is_instance_valid(_city):
+		return null
+	if not _city.has_method("beacon_registry"):
+		push_error("SiegeController: the city has no beacon registry")
+		assert(false, "SiegeController: city cannot hold beacons")
+		return null
+	return _city.call("beacon_registry") as BeaconRegistry
+
+
+## Make the four outer stones perceivable. The centre is deliberately left out: while it is not a
+## beacon the horde has no reason to walk to it, which is the shield expressed as behaviour rather
+## than as a damage-immunity rule bolted on top of one.
+func _register_outer_beacons() -> void:
+	var registry := _beacon_registry()
+	if registry == null:
+		return
+	for stone: StoneState in _stones:
+		if stone.is_centre or not stone.alive:
+			continue
+		stone.beacon_id = registry.register(
+			stone.pos,
+			stone.vuln_radius_m,
+			int(MonsterFactionScript.Id.SIEGE_ATTACKER)
+		)
+
+
+func _register_centre_beacon() -> void:
+	if _centre == null or _centre.beacon_id != 0:
+		return
+	var registry := _beacon_registry()
+	if registry == null:
+		return
+	_centre.beacon_id = registry.register(
+		_centre.pos,
+		_centre.vuln_radius_m,
+		int(MonsterFactionScript.Id.SIEGE_ATTACKER)
+	)
+
+
+func _unregister_beacon(stone: StoneState) -> void:
+	if stone.beacon_id == 0:
+		return
+	var registry := _beacon_registry()
+	if registry != null and registry.has(stone.beacon_id):
+		registry.unregister(stone.beacon_id)
+	stone.beacon_id = 0
+
+
+func _clear_beacons() -> void:
+	for stone: StoneState in _stones:
+		stone.beacon_id = 0
+	var registry := _beacon_registry()
+	if registry != null:
+		registry.clear_audience(int(MonsterFactionScript.Id.SIEGE_ATTACKER))
+
+
+# --- Shield arcs ------------------------------------------------------------
+
+## Stand an arc over every living outer stone that has none. Idempotent, because it runs at setup, at
+## the start of a run and again when one ends — a stone that fell mid-run gets its bridge back once
+## the run is over, since between runs all four stand again.
+func _ensure_shield_arcs() -> void:
+	if _centre == null or _shutting_down:
+		return
+	var centre_apex := _centre.pos + Vector3.UP * _centre.apex_m
+	for i in range(_stones.size()):
+		var stone := _stones[i]
+		if stone.is_centre or not stone.alive:
+			continue
+		if stone.arc != null and is_instance_valid(stone.arc):
+			continue
+		var arc: Node3D = SiegeShieldArcVfxScript.new() as Node3D
+		arc.name = "ShieldArc%d" % i
+		add_child(arc)
+		arc.call("setup_arc", stone.pos + Vector3.UP * stone.apex_m, centre_apex)
+		stone.arc = arc
+
+
+func _drop_shield_arc(stone: StoneState) -> void:
+	if stone.arc == null or not is_instance_valid(stone.arc):
+		stone.arc = null
+		return
+	stone.arc.call("begin_fade_out")
+	stone.arc = null
+
+
+func _clear_shield_arcs() -> void:
+	for stone: StoneState in _stones:
+		if stone.arc != null and is_instance_valid(stone.arc):
+			stone.arc.queue_free()
+		stone.arc = null
+
+
+# --- Stone damage -----------------------------------------------------------
+
+## Contact damage on every living stone. The centre is skipped while any outer stone stands: bodies
+## may pile onto it and achieve nothing, which turns a lost centre plaza into a problem the player
+## can still solve by going out and holding a flank.
+func _tick_stones(delta: float) -> void:
+	var shielded := centre_shielded()
+	for stone: StoneState in _stones:
+		if not stone.alive:
+			continue
+		if stone.is_centre and shielded:
+			continue
+		var chewers := _chewers_within(stone.pos, stone.vuln_radius_m)
+		if chewers <= 0:
+			continue
+		stone.hp -= float(chewers) * _lodestone_dps_per_attacker * delta
+		if stone.hp > 0.0:
+			continue
+		stone.hp = 0.0
+		stone.alive = false
+		_on_stone_destroyed(stone)
+		if _phase != Phase.RUNNING:
+			## The centre went down and the run is over — nothing left to tick.
+			return
+
+
+func _chewers_within(aim: Vector3, radius_m: float) -> int:
+	var r2 := radius_m * radius_m
+	var n := 0
 	for unit: UndeadUnit in _alive:
 		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
 			continue
 		var d2 := Vector2(
 			unit.global_position.x - aim.x, unit.global_position.z - aim.z
 		).length_squared()
-		if d2 <= hit_r2:
-			chewers += 1
-	if chewers <= 0:
-		return
-	_lodestone_hp -= float(chewers) * _lodestone_dps_per_attacker * delta
-	if _lodestone_hp <= 0.0:
-		_lodestone_hp = 0.0
+		if d2 <= r2:
+			n += 1
+	return n
+
+
+## An outer stone is gone for the rest of the run. There is no repair and no rebuild: the four are
+## the run's clock, and the last one falling is what puts the Lodestone in reach.
+func _on_stone_destroyed(stone: StoneState) -> void:
+	if stone.is_centre:
 		_on_lodestone_destroyed()
+		return
+	_unregister_beacon(stone)
+	_drop_shield_arc(stone)
+	var left := outer_stones_alive()
+	print(
+		"SiegeController: %s fell on wave %d — %d outer stone%s left"
+		% [stone.label, _wave, left, "" if left == 1 else "s"]
+	)
+	if left > 0:
+		return
+	_register_centre_beacon()
+	print("SiegeController: last stand — the Lodestone is exposed")
 
 
 func _on_lodestone_destroyed() -> void:
@@ -587,6 +1190,18 @@ func _end_run(despawn_field: bool) -> void:
 		_city.call("end_siege_run", self)
 	_owns_defender_faction = false
 	_spawn_queue.clear()
+	## Beacons first: a banked pot must not leave the horde walking to stones nobody is defending.
+	_clear_beacons()
+	## The arcs outlive the run: they are the tile's own signage. Stones that fell during it stand
+	## again for the next one, so their bridges come back with them — on teardown they go with the
+	## controller instead, and `_ensure_shield_arcs` refuses to build during shutdown.
+	_reset_stones()
+	_ensure_shield_arcs()
+	_clear_gate_lights()
+	_gate_weights = PackedFloat32Array()
+	_next_gate_weights = PackedFloat32Array()
+	_primary_gate = -1
+	_next_primary_gate = -1
 	if despawn_field:
 		_despawn_alive()
 		_clear_towers()
@@ -623,10 +1238,17 @@ func _wave_damage_mult() -> float:
 func _read_constants() -> void:
 	_min_stake_total = GameData.siege_int("min_stake_total")
 	_lodestone_base_hp = GameData.siege_float("lodestone_hp")
+	_outer_stone_hp = GameData.siege_float("outer_stone_hp")
 	_lodestone_vuln_radius_m = GameData.siege_float("lodestone_vulnerable_radius_m")
-	_intermission_sec = GameData.siege_float("intermission_sec")
-	_base_wave_size = GameData.siege_int("base_wave_size")
-	_wave_size_growth = GameData.siege_int("wave_size_growth")
+	_gate_primary_share = GameData.siege_float("gate_primary_share")
+	_gate_weight_floor = GameData.siege_float("gate_weight_floor")
+	_gate_falloff = GameData.siege_float("gate_falloff")
+	_withdraw_clear_radius_m = GameData.siege_float("withdraw_clear_radius_m")
+	_deploy_sec = GameData.siege_float("deploy_sec")
+	_wave_period_sec = GameData.siege_float("wave_period_sec")
+	_wave_drip_fraction = GameData.siege_float("wave_drip_fraction")
+	_alive_target_base = GameData.siege_int("alive_target_base")
+	_alive_target_growth = GameData.siege_int("alive_target_growth")
 	_district_cap = GameData.siege_int("district_alive_cap")
 	_spawn_interval_sec = GameData.siege_float("spawn_interval_sec")
 	_hp_growth = GameData.siege_float("hp_growth_per_wave")
@@ -680,28 +1302,84 @@ func _pad_world_pos(pad_index: int) -> Vector3:
 	)
 
 
+## Queue a plate for every build site, then stand the first batch up immediately. The rest arrive
+## a few per frame: hundreds of sites at eight nodes each is a hitch if built in one go, and the
+## player cannot press a plate across the quarter in the first second anyway.
 func _spawn_pad_panels() -> void:
 	_clear_pad_panels()
 	if layout == null:
 		return
-	var lode := lodestone_world_pos()
+	_plate_queue = PackedInt32Array()
 	for i in range(layout.pad_count()):
-		var pad := _pad_world_pos(i)
-		var outward := Vector2(pad.x - lode.x, pad.z - lode.z)
-		if outward.length_squared() < 0.01:
-			outward = Vector2(0.0, 1.0)
-		outward = outward.normalized()
-		## Yaw only spins the square plate around its own centre, but keep it approach-relative
-		## so the "+" glyph reads upright from where the player stands (see Ui3D class doc).
-		var yaw := atan2(-outward.x, -outward.y)
-		## `_pad_world_pos` returns the solid plate cell, so the marker goes a hair above its
-		## top face — inside the cell it would be buried in the foundation.
-		var origin := pad + Vector3.UP * (voxel_size + PAD_PLATE_LIFT_M)
-		var panel: Node = SiegePadPanelScript.new() as Node
-		add_child(panel)
-		panel.call("setup_pad", origin, yaw, i)
-		panel.connect("pad_pressed", _on_pad_pressed)
-		_pad_panels.append(panel)
+		_plate_queue.append(i)
+	_tick_plate_build()
+
+
+func _tick_plate_build() -> void:
+	if _plate_queue.is_empty():
+		return
+	var made := 0
+	while made < PLATES_PER_FRAME and not _plate_queue.is_empty():
+		var pad_index := _plate_queue[0]
+		_plate_queue.remove_at(0)
+		made += 1
+		if _pad_tower.get(pad_index, null) != null:
+			continue
+		_build_pad_panel(pad_index)
+
+
+func _build_pad_panel(pad_index: int) -> void:
+	var lode := lodestone_world_pos()
+	var pad := _pad_world_pos(pad_index)
+	var outward := Vector2(pad.x - lode.x, pad.z - lode.z)
+	if outward.length_squared() < 0.01:
+		outward = Vector2(0.0, 1.0)
+	outward = outward.normalized()
+	## Yaw only spins the square plate around its own centre, but keep it approach-relative
+	## so the "+" glyph reads upright from where the player stands (see Ui3D class doc).
+	var yaw := atan2(-outward.x, -outward.y)
+	## `_pad_world_pos` returns the solid plate cell, so the marker goes a hair above its
+	## top face — inside the cell it would be buried in the foundation.
+	var origin := pad + Vector3.UP * (voxel_size + PAD_PLATE_LIFT_M)
+	var panel: Node = SiegePadPanelScript.new() as Node
+	add_child(panel)
+	panel.call("setup_pad", origin, yaw, pad_index)
+	## Born deaf. `_tick_plate_proximity` hands a collider to the plates the player can actually
+	## reach; a fresh plate with a live body would swallow shots from across the quarter.
+	panel.call("set_collision_enabled", false)
+	panel.connect("pad_pressed", _on_pad_pressed)
+	_pad_panels[pad_index] = panel
+
+
+## Colliders follow the player, meshes do not — the plate's own view distance handles drawing.
+func _tick_plate_proximity(delta: float) -> void:
+	_plate_prox_acc += delta
+	if _plate_prox_acc < PLATE_PROXIMITY_INTERVAL_SEC:
+		return
+	_plate_prox_acc = 0.0
+	if _pad_panels.is_empty():
+		return
+	var player := _player_position()
+	var reach2 := PLATE_TOUCH_M * PLATE_TOUCH_M
+	for key: Variant in _pad_panels.keys():
+		var panel := _pad_panels[key] as Node3D
+		if panel == null or not is_instance_valid(panel) or not panel.visible:
+			continue
+		var near := panel.global_position.distance_squared_to(player) <= reach2
+		if bool(panel.call("is_collision_enabled")) != near:
+			panel.call("set_collision_enabled", near)
+
+
+func _player_position() -> Vector3:
+	if (
+		_city == null
+		or not is_instance_valid(_city)
+		or not _city.has_method("get_player_position")
+	):
+		push_error("SiegeController: the city cannot report a player position")
+		assert(false, "SiegeController: no player position")
+		return Vector3.ZERO
+	return _city.call("get_player_position") as Vector3
 
 
 ## Pad caption for the build picker: elevation is the pad's whole identity, so say it before
@@ -719,18 +1397,17 @@ func pad_kind_label(pad_index: int) -> String:
 
 
 func _clear_pad_panels() -> void:
-	for panel_v: Variant in _pad_panels:
-		var panel := panel_v as Node
+	for key: Variant in _pad_panels.keys():
+		var panel := _pad_panels[key] as Node
 		if panel != null and is_instance_valid(panel):
 			panel.queue_free()
 	_pad_panels.clear()
+	_plate_queue = PackedInt32Array()
 	_close_build_picker()
 
 
 func _hide_pad_panel(pad_index: int) -> void:
-	if pad_index < 0 or pad_index >= _pad_panels.size():
-		return
-	var panel := _pad_panels[pad_index] as Node
+	var panel := _pad_panels.get(pad_index, null) as Node
 	if panel != null and is_instance_valid(panel):
 		panel.call("set_hit_enabled", false)
 
@@ -738,8 +1415,8 @@ func _hide_pad_panel(pad_index: int) -> void:
 ## The plates themselves carry no pot state; the affordable list lives in the picker, so a pot
 ## change only has to re-list whatever picker is currently up.
 func _refresh_pad_panels() -> void:
-	for panel_v: Variant in _pad_panels:
-		var panel := panel_v as Node3D
+	for key: Variant in _pad_panels.keys():
+		var panel := _pad_panels[key] as Node3D
 		if panel != null and is_instance_valid(panel) and panel.visible:
 			panel.call("refresh")
 	if _city != null and is_instance_valid(_city):
@@ -766,11 +1443,13 @@ func _close_build_picker() -> void:
 
 func _on_tower_died(_unit: UndeadUnit, _was_giant: bool, pad_index: int) -> void:
 	_pad_tower.erase(pad_index)
-	## Show the pad's "+" again so the player can rebuy at full pot price.
-	if is_running() and pad_index >= 0 and pad_index < _pad_panels.size():
-		var panel := _pad_panels[pad_index] as Node
+	## Show the pad's "+" again so the player can rebuy at full pot price. The collider stays for
+	## `_tick_plate_proximity` to hand back, which is why this re-shows rather than re-enabling hits.
+	if is_running():
+		var panel := _pad_panels.get(pad_index, null) as Node
 		if panel != null and is_instance_valid(panel):
 			panel.call("set_hit_enabled", true)
+			panel.call("set_collision_enabled", false)
 			panel.call("refresh")
 	var kept: Array[UndeadUnit] = []
 	for t: UndeadUnit in _towers:
@@ -797,10 +1476,10 @@ func _spawn_lodestone_panel() -> void:
 	if _panel != null and is_instance_valid(_panel):
 		_panel.queue_free()
 	_panel = null
-	## Gate-side of the Lodestone, face toward the approach (see Ui3D class doc —
+	## Breach-side of the Lodestone, face toward the approach (see Ui3D class doc —
 	## `atan2(outward…)` would aim into the crystal).
 	var outward := Vector2.ZERO
-	for d: Vector2i in layout.gate_dirs:
+	for d: Vector2i in layout.breach_dirs:
 		outward += Vector2(float(-d.x), float(-d.y))
 	if outward.length_squared() < 0.01:
 		outward = Vector2(0.0, 1.0)
@@ -814,7 +1493,6 @@ func _spawn_lodestone_panel() -> void:
 	add_child(_panel)
 	_panel.setup_panel(origin, yaw, self)
 	_panel.start_requested.connect(_on_panel_start)
-	_panel.withdraw_requested.connect(_on_panel_withdraw)
 
 
 func _on_panel_start(stake: Dictionary) -> void:
@@ -822,11 +1500,14 @@ func _on_panel_start(stake: Dictionary) -> void:
 		_refresh_panel()
 
 
-func _on_panel_withdraw() -> void:
-	if not withdraw():
-		_refresh_panel()
-
-
+## The console is a between-runs object, and during a run it is not merely useless but harmful: it
+## stands a metre and a half from the crystal, and `CityWalker._try_world_interact` turns any shot
+## that crosses a `Ui3D` collider into a button press instead of a bolt. A shot aimed at a body by
+## the stone banked a whole run that way. Everything the player needs mid-run is on `SiegeHud`.
 func _refresh_panel() -> void:
-	if _panel != null and is_instance_valid(_panel):
+	if _panel == null or not is_instance_valid(_panel):
+		return
+	var live := is_running()
+	_panel.set_hit_enabled(not live)
+	if not live:
 		_panel.refresh()

@@ -1,13 +1,16 @@
-## World console at the Siege Lodestone: stake gems to start, withdraw between waves.
+## World console at the Siege Lodestone: where a run is staked, and nothing else.
+##
+## Between runs only. `SiegeController._refresh_panel` hides this the whole time a run is live,
+## because a `Ui3D` is pressed by *shooting* it — `CityWalker._try_world_interact` converts any shot
+## that crosses the collider into a button press — and this one stands a metre and a half from the
+## crystal, right where the fight is. Everything the player needs mid-run, the pot tally and the
+## banking button included, lives on `SiegeHud` where no bolt can reach it.
 ##
 ## Click-aim like every other Ui3D (Zoo cloak post, Arena boards) — not the unused E key.
-## The stake is chosen here and handed to `SiegeController.start_run`; the pot itself lives
-## on the controller and is shown on `SiegeHud` once a run is live.
 class_name SiegeLodestonePanel
 extends "res://scripts/city/ui_3d.gd"
 
 signal start_requested(stake: Dictionary)
-signal withdraw_requested()
 
 const InventoryIconCacheScript := preload("res://scripts/city/inventory_icon_cache.gd")
 
@@ -20,14 +23,12 @@ const GEM_IDS: PackedStringArray = [
 ]
 
 const BTN_START := &"start"
-const BTN_WITHDRAW := &"withdraw"
 const BTN_MINUS_PREFIX := "m_"
 const BTN_PLUS_PREFIX := "p_"
 const BTN_COUNT_PREFIX := "c_"
 const BTN_ICON_PREFIX := "i_"
 
 const IDLE_COLOR := Color(0.78, 0.62, 0.22, 1.0)
-const RUN_COLOR := Color(0.35, 0.78, 0.92, 1.0)
 const DANGER_COLOR := Color(0.92, 0.32, 0.28, 1.0)
 const MUTED_COLOR := Color(0.28, 0.26, 0.24, 1.0)
 const OK_COLOR := Color(0.28, 0.72, 0.38, 1.0)
@@ -80,19 +81,10 @@ func refresh() -> void:
 	_refresh_labels()
 
 
-## Clock / HP text only. Cheap enough for a quarter-second tick during a live run.
+## Label text only, for the idle console's own clock. The controller stops ticking this while a run
+## is live because the console is hidden then.
 func tick_display() -> void:
 	_refresh_labels()
-	if _controller == null or not is_instance_valid(_controller):
-		return
-	## Withdraw button carries the live pot total — refresh just that label while waiting.
-	if int(_controller.phase()) == int(SiegeController.Phase.INTERMISSION):
-		add_button(
-			BTN_WITHDRAW,
-			Rect2(0.10, 0.08, 0.80, 0.22),
-			"WITHDRAW  pot %d" % _controller.pot_total(),
-			OK_COLOR
-		)
 
 
 func _rebuild_face() -> void:
@@ -103,10 +95,10 @@ func _rebuild_face() -> void:
 	match phase:
 		SiegeController.Phase.IDLE, SiegeController.Phase.WITHDRAWN, SiegeController.Phase.LOST:
 			_build_idle_face()
-		SiegeController.Phase.INTERMISSION:
-			_build_intermission_face()
-		SiegeController.Phase.WAVE:
-			_build_wave_face()
+		SiegeController.Phase.DEPLOY, SiegeController.Phase.RUNNING:
+			## Buttonless on purpose. The controller hides this console for the whole run, and a
+			## pressable face behind that curtain is exactly the accident that shipped.
+			pass
 	rebuild_buttons()
 
 
@@ -173,29 +165,6 @@ func _build_idle_face() -> void:
 	)
 
 
-func _build_intermission_face() -> void:
-	add_button(
-		BTN_WITHDRAW,
-		Rect2(0.10, 0.08, 0.80, 0.22),
-		"WITHDRAW  pot %d" % _controller.pot_total(),
-		OK_COLOR,
-		true
-	)
-
-
-func _build_wave_face() -> void:
-	## No controls mid-wave — withdrawing mid-fight would be an exploit and the design
-	## only allows it between waves. The face still swallows clicks so the Lodestone is not
-	## a free shoot-through.
-	add_button(
-		&"wave_status",
-		Rect2(0.10, 0.20, 0.80, 0.30),
-		"WAVE %d" % _controller.wave_number(),
-		RUN_COLOR,
-		true
-	)
-
-
 func _build_labels() -> void:
 	_caption = Label3D.new()
 	_caption.name = "Caption"
@@ -252,25 +221,11 @@ func _refresh_labels() -> void:
 			_status.text = "Pot lost — stake again?"
 			_status.modulate = DANGER_COLOR
 			set_surface_glow(Color(0.14, 0.03, 0.03, 1.0), 1.2)
-		SiegeController.Phase.INTERMISSION:
-			_caption.text = "WAVE %d CLEAR" % _controller.wave_number()
-			_caption.modulate = RUN_COLOR
-			_status.text = "Next in %s · pot %d" % [
-				_clock(_controller.intermission_left()),
-				_controller.pot_total(),
-			]
-			_status.modulate = RUN_COLOR
-			set_surface_glow(Color(0.04, 0.10, 0.14, 1.0), 1.4)
-		SiegeController.Phase.WAVE:
-			_caption.text = "WAVE %d" % _controller.wave_number()
+		SiegeController.Phase.DEPLOY, SiegeController.Phase.RUNNING:
+			## Hidden while a run is live; this is only what a stray frame would show.
+			_caption.text = "SIEGE UNDER WAY"
 			_caption.modulate = DANGER_COLOR
-			var frac := 0.0
-			if _controller.lodestone_hp_max() > 0.0:
-				frac = _controller.lodestone_hp() / _controller.lodestone_hp_max()
-			_status.text = "Lodestone %d%% · pot %d" % [
-				int(round(frac * 100.0)),
-				_controller.pot_total(),
-			]
+			_status.text = "Bank from the siege readout"
 			_status.modulate = DANGER_COLOR
 			set_surface_glow(Color(0.14, 0.04, 0.04, 1.0), 1.6)
 
@@ -279,9 +234,6 @@ func _on_button_pressed(button_id: StringName, _uv: Vector2) -> void:
 	var id := String(button_id)
 	if button_id == BTN_START:
 		_try_start()
-		return
-	if button_id == BTN_WITHDRAW:
-		withdraw_requested.emit()
 		return
 	if id.begins_with(BTN_ICON_PREFIX) or id.begins_with(BTN_COUNT_PREFIX):
 		return
@@ -334,8 +286,3 @@ func _gem_label(gem_id: String) -> String:
 	if def == null:
 		return gem_id
 	return def.display_name
-
-
-static func _clock(seconds: float) -> String:
-	var whole := maxi(int(ceil(seconds)), 0)
-	return "%d:%02d" % [whole / 60, whole % 60]

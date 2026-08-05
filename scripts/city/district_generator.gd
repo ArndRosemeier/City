@@ -1079,6 +1079,21 @@ func open_space_bounds() -> Array[AABB]:
 				)
 			)
 		)
+		## Siege is the one theme whose writes leave its reserve: four outer stones ~100 m out,
+		## their 40 m build rings, and eight hell gates ~150 m out. Between them they reach every
+		## corner of the tile, so the honest declaration is a tile-wide band at street level rather
+		## than a dozen boxes that would overlap into the same thing. It is only as tall as the
+		## tallest outer write (stone apex and gate lintel are both deck + 14).
+		out.append(
+			AABB(
+				Vector3(ox, y0, oz),
+				Vector3(
+					float(_planner.cells_x * cell_size),
+					float(SiegeComposer.OUTER_WRITE_HEIGHT_VOX),
+					float(_planner.cells_z * cell_size)
+				)
+			)
+		)
 	return out
 
 
