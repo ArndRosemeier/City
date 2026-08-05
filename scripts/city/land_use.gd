@@ -28,6 +28,9 @@ const ARENA := 15
 const ZOO := 16
 ## Gaming plaza reserve — no housing; built by GamingComposer.
 const GAMING := 17
+## Teleport chamber plot — exactly one per normal district. A building on a building plot, not
+## an open reserve like the spectacle tags above, so it counts as a lot.
+const TELEPORT_LOT := 18
 
 
 static func is_road(tag: int) -> bool:
@@ -42,6 +45,7 @@ static func is_lot(tag: int) -> bool:
 		or tag == MID_LOT
 		or tag == TOWN_LOT
 		or tag == COURTYARD_LOT
+		or tag == TELEPORT_LOT
 	)
 
 

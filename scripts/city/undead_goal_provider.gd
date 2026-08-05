@@ -30,6 +30,10 @@ const PREY_CACHE_SEC := 0.28
 ## Corridors end where they are aimed, so every goal here is aimed at a spot the body can
 ## actually stand on and this is only the slop that counts as being there.
 const ARRIVE_TOLERANCE_M := 1.5
+## Hunt corridors are short on purpose (melee stand-off is ~1 m). The wander/investigate
+## tolerance above is wider than a melee swing, so using it here made bodies "arrive" outside
+## strike range, drop the corridor, re-path, and jiggle in the prey's face forever.
+const HUNT_ARRIVE_TOLERANCE_M := 0.35
 ## How far a committed pedestrian may be from where it was last seen and still be recognised
 ## as the same one. Peds walk under 2 m/s and the query runs every PREY_CACHE_SEC, so half a
 ## metre is the honest drift — the rest is slack for a crowd that respawned around it.
@@ -287,14 +291,20 @@ func _hunt(prey: Vector3) -> NavGoal:
 	var away := from - prey
 	away.y = 0.0
 	var distance := away.length()
-	var stand_off := _hunt_stand_off_m()
-	if distance <= stand_off:
-		## Already in range: hold and let MonsterCombat strike. A trivial go_to(self) goal
-		## completes every physics frame, re-acquires, and re-paths — that alone tanks FPS.
+	var engage := _hunt_engage_m()
+	if distance <= engage:
+		## Close enough to swing: hold and let MonsterCombat strike. A trivial go_to(self)
+		## goal completes every physics frame, re-acquires, and re-paths — that alone tanks FPS.
+		## Engage is the *strike* reach, not the stand-off the corridor aims at: a body that
+		## lands a touch short of stand-off must still fight, not open another approach.
 		_unit.set_combat_prey(prey)
 		return null
+	var stand_off := minf(_hunt_stand_off_m(), engage)
 	return _tagged(
-		NavGoal.go_to_point(prey + away / distance * stand_off, ARRIVE_TOLERANCE_M), TAG_HUNT
+		NavGoal.go_to_point(
+			prey + away / distance * stand_off, HUNT_ARRIVE_TOLERANCE_M
+		),
+		TAG_HUNT
 	)
 
 
@@ -306,6 +316,15 @@ func _hunt_stand_off_m() -> float:
 	if _unit.can_cast():
 		return UndeadUnit.ORB_RANGE_M * UndeadUnit.ORB_STANDOFF_FRACTION
 	return UndeadUnit.MAGE_CLOSE_IN_M
+
+
+## Distance at which a hunt holds and tries to strike. Matches MonsterCombat's melee reach
+## when the kit has one; otherwise the stand-off (ranged kits hold where they shoot from).
+func _hunt_engage_m() -> float:
+	var combat: RefCounted = _unit.combat()
+	if combat != null and combat.has_method("hunt_engage_m"):
+		return float(combat.call("hunt_engage_m"))
+	return _hunt_stand_off_m()
 
 
 func _wander() -> NavGoal:

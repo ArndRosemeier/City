@@ -132,6 +132,8 @@ func _build_zone_form(
 				cylinder_midrise(bmin, bmax, facing, on_plaza)
 			else:
 				midrise_classic(bmin, bmax, facing, on_plaza)
+		LandUse.TELEPORT_LOT:
+			teleport_chamber(bmin, bmax, facing)
 		LandUse.TOWN_LOT:
 			townhouse_row(bmin, bmax, facing)
 		LandUse.COURTYARD_LOT:
@@ -386,6 +388,98 @@ func civic_landmark(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
 	## Cupola drum and lantern read as a landmark against a flat skyline.
 	_note_cylinder(cx, cz, top, top + 6, 3)
 	_note_box(Vector3i(cx - 1, top + 6, cz - 1), Vector3i(cx + 2, top + 9, cz + 2))
+
+
+## Height of the teleport chamber's single storey, in voxels. Tall enough that the launch
+## clears the parapet before the camera swings, and that the beacon column reads as a shaft
+## of light standing in the room rather than a lid on it.
+const TELEPORT_CHAMBER_H_VOX := 16
+## Height of the glowing floor inlay and the parapet crown, in voxels.
+const TELEPORT_TRIM_H_VOX := 1
+
+
+## Open-roofed teleport chamber: metal shell, lit window band, glowing floor ring and corner
+## pilasters. Exactly one per normal district (see DistrictPlanner._place_teleport_chamber),
+## so there is no theme roll here — the planner already decided.
+##
+## The roof is deliberately missing: the hop cutscene launches straight up from the pad in the
+## middle of the room, and the beacon column has to reach the floor from the sky.
+func teleport_chamber(bmin: Vector3i, bmax: Vector3i, facing: int) -> void:
+	var top := bmin.y + TELEPORT_CHAMBER_H_VOX
+	_note_storeys(bmin, bmax, 1, facing)
+	_fill_shell(
+		bmin,
+		Vector3i(bmax.x, top, bmax.z),
+		VoxelMaterial.METAL_PLATE,
+		facing,
+		true,
+		true,
+		true
+	)
+	## `_fill_shell` always caps a storey. Take the cap back off, leaving the walls as a
+	## parapet around an open square of sky.
+	brush.fill_box(
+		Vector3i(bmin.x + 1, top - 1, bmin.z + 1),
+		Vector3i(bmax.x - 1, top, bmax.z - 1),
+		VoxelMaterial.AIR
+	)
+	_teleport_crown(bmin, bmax, top)
+	_teleport_floor_ring(bmin, bmax)
+	_teleport_pilasters(bmin, bmax, top)
+	_note_height(bmin.y, top)
+	_note_box(bmin, Vector3i(bmax.x, top, bmax.z))
+
+
+## Glowing course along the top of the parapet — what you see of the chamber from the street
+## once the beacon has drawn your eye to the block.
+func _teleport_crown(bmin: Vector3i, bmax: Vector3i, top: int) -> void:
+	var y0 := top - TELEPORT_TRIM_H_VOX
+	brush.fill_box(
+		Vector3i(bmin.x, y0, bmin.z), Vector3i(bmin.x + 1, top, bmax.z), VoxelMaterial.FRACTAL_GLOW
+	)
+	brush.fill_box(
+		Vector3i(bmax.x - 1, y0, bmin.z), Vector3i(bmax.x, top, bmax.z), VoxelMaterial.FRACTAL_GLOW
+	)
+	brush.fill_box(
+		Vector3i(bmin.x, y0, bmin.z), Vector3i(bmax.x, top, bmin.z + 1), VoxelMaterial.FRACTAL_GLOW
+	)
+	brush.fill_box(
+		Vector3i(bmin.x, y0, bmax.z - 1), Vector3i(bmax.x, top, bmax.z), VoxelMaterial.FRACTAL_GLOW
+	)
+
+
+## Square ring of light let into the floor, two voxels in from the wall, framing the console
+## ring the runtime props stand on.
+func _teleport_floor_ring(bmin: Vector3i, bmax: Vector3i) -> void:
+	var y := bmin.y + 1
+	var x0 := bmin.x + 3
+	var x1 := bmax.x - 3
+	var z0 := bmin.z + 3
+	var z1 := bmax.z - 3
+	if x1 - x0 < 3 or z1 - z0 < 3:
+		return
+	brush.fill_box(Vector3i(x0, y, z0), Vector3i(x0 + 1, y + 1, z1), VoxelMaterial.FRACTAL_GLOW)
+	brush.fill_box(Vector3i(x1 - 1, y, z0), Vector3i(x1, y + 1, z1), VoxelMaterial.FRACTAL_GLOW)
+	brush.fill_box(Vector3i(x0, y, z0), Vector3i(x1, y + 1, z0 + 1), VoxelMaterial.FRACTAL_GLOW)
+	brush.fill_box(Vector3i(x0, y, z1 - 1), Vector3i(x1, y + 1, z1), VoxelMaterial.FRACTAL_GLOW)
+
+
+## Lit corner posts running the full height, so the inside of the room is legible at night
+## without a single point light.
+func _teleport_pilasters(bmin: Vector3i, bmax: Vector3i, top: int) -> void:
+	var y0 := bmin.y + 2
+	var y1 := top - TELEPORT_TRIM_H_VOX
+	if y1 <= y0:
+		return
+	for corner in [
+		Vector3i(bmin.x + 1, y0, bmin.z + 1),
+		Vector3i(bmax.x - 2, y0, bmin.z + 1),
+		Vector3i(bmin.x + 1, y0, bmax.z - 2),
+		Vector3i(bmax.x - 2, y0, bmax.z - 2),
+	]:
+		brush.fill_box(
+			corner, Vector3i(corner.x + 1, y1, corner.z + 1), VoxelMaterial.FRACTAL_GLOW
+		)
 
 
 ## Title-art spiral: rect podium + hollow cylinder shaft + external helix stair.

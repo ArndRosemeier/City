@@ -107,6 +107,10 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	_test_melee_hunt_lands_inside_swing()
+	if _failed:
+		_quit()
+		return
 	await _test_player_minion_power()
 	_quit()
 
@@ -591,6 +595,57 @@ func _test_crumble_stride_closes_in() -> void:
 		"crumble stride: cage boss closes to %.1f m on MONSTER_BREAKER (artillery %.0f m); "
 		% [stand, preferred]
 		+ "big/Demon still holds %.1f m on MONSTER" % plain_stand
+	)
+
+
+## A hunt corridor that "arrives" outside swing reach is the melee jiggle: stop, re-path, stop.
+## Stand-off + hunt arrive slop must stay inside engage distance.
+func _test_melee_hunt_lands_inside_swing() -> void:
+	var unit := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(50, 1, 40)), "kaykit/Skeleton_Minion")
+	if unit == null:
+		return
+	var combat: RefCounted = unit.combat()
+	if combat == null:
+		_fail("FAIL minion has no combat kit")
+		_despawn(unit)
+		return
+	var stand := float(combat.call("hunt_standoff_m"))
+	var engage := float(combat.call("hunt_engage_m"))
+	var worst := stand + UndeadGoalProvider.HUNT_ARRIVE_TOLERANCE_M
+	if engage + 0.001 < worst:
+		_fail(
+			"FAIL melee hunt can arrive at %.2f m but only swings inside %.2f m"
+			% [worst, engage]
+		)
+		_despawn(unit)
+		return
+	if engage + 0.001 < CombatTable.monster_attack_range_m("melee"):
+		_fail(
+			"FAIL engage %.2f m is inside the table melee reach %.2f m"
+			% [engage, CombatTable.monster_attack_range_m("melee")]
+		)
+		_despawn(unit)
+		return
+	## Outside engage: still wants a corridor. Inside engage: hold.
+	var provider: UndeadGoalProvider = unit.get("_provider") as UndeadGoalProvider
+	if provider == null:
+		_fail("FAIL minion has no goal provider")
+		_despawn(unit)
+		return
+	var far := unit.global_position + Vector3(8.0, 0.0, 0.0)
+	var near := unit.global_position + Vector3(engage * 0.5, 0.0, 0.0)
+	if provider._hunt(far) == null:
+		_fail("FAIL a prey %.0f m out got engage-in-place instead of a corridor" % 8.0)
+		_despawn(unit)
+		return
+	if provider._hunt(near) != null:
+		_fail("FAIL a prey inside engage still opened a hunt corridor")
+		_despawn(unit)
+		return
+	_despawn(unit)
+	print(
+		"melee hunt: stand-off %.2f m + arrive %.2f m = %.2f m ≤ engage %.2f m"
+		% [stand, UndeadGoalProvider.HUNT_ARRIVE_TOLERANCE_M, worst, engage]
 	)
 
 

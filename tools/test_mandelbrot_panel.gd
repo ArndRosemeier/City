@@ -332,6 +332,40 @@ func _check_instant_toggle() -> void:
 		_fail("FAIL bake_texture missing after Instant toggle")
 		panel.queue_free()
 		return
+	## Splash art must be the left/right mirror of the raw bake — Ui3D's readable face
+	## flips X, and Instant Create puts that art on a 2D TextureRect.
+	var viewer: Texture2D = panel.call("bake_texture_for_viewer") as Texture2D
+	if viewer == null or viewer.get_width() != tex.get_width():
+		_fail("FAIL bake_texture_for_viewer missing or wrong size")
+		panel.queue_free()
+		return
+	var raw_img := tex.get_image()
+	var view_img := viewer.get_image()
+	if raw_img == null or view_img == null:
+		_fail("FAIL could not read bake images for viewer-flip check")
+		panel.queue_free()
+		return
+	var y := tex.get_height() / 2
+	var left := raw_img.get_pixel(0, y)
+	var right := raw_img.get_pixel(tex.get_width() - 1, y)
+	if left.is_equal_approx(right):
+		## Symmetric row — can't prove the flip; try a few more rows before giving up.
+		var found_asym := false
+		for yy in range(0, tex.get_height(), 97):
+			left = raw_img.get_pixel(0, yy)
+			right = raw_img.get_pixel(tex.get_width() - 1, yy)
+			if not left.is_equal_approx(right):
+				y = yy
+				found_asym = true
+				break
+		if not found_asym:
+			_fail("FAIL bake edges are symmetric — cannot verify splash flip")
+			panel.queue_free()
+			return
+	if not view_img.get_pixel(0, y).is_equal_approx(raw_img.get_pixel(tex.get_width() - 1, y)):
+		_fail("FAIL bake_texture_for_viewer is not a horizontal flip of the raw bake")
+		panel.queue_free()
+		return
 	var arena: Node3D = MandelbrotArenaScript.new() as Node3D
 	add_child(arena)
 	arena.call("setup", Vector3(0.0, 0.0, 0.0), Vector3(40.0, 0.0, 40.0), 3.0)

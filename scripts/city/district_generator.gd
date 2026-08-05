@@ -111,6 +111,10 @@ var _hill_summit_top: Vector3i = Vector3i(-1, 0, -1)
 var _hill_cave_cage_stand: Vector3i = Vector3i(-1, -1, -1)
 var _lake_island_crowns: Array[Vector3i] = []
 var _park_gazebo: Vector3i = Vector3i(-1, 0, -1)
+## Floor centre of the one teleport chamber (district-local). x=-1 when the tile has none.
+var _teleport_chamber: Vector3i = Vector3i(-1, -1, -1)
+## Clear interior of that chamber (district-local voxels) for sizing the console ring.
+var _teleport_room: AABB = AABB()
 var _fractal_niche: Vector3i = Vector3i(-1, 0, -1)
 var _crypt_rooms: Array[Vector3i] = []
 ## Undead station under the chapel crypt hub (district-local). x=-1 outside Graveyard.
@@ -312,6 +316,8 @@ func _setup_composers() -> void:
 	_hill_cave_cage_stand = Vector3i(-1, -1, -1)
 	_lake_island_crowns = []
 	_park_gazebo = Vector3i(-1, 0, -1)
+	_teleport_chamber = Vector3i(-1, -1, -1)
+	_teleport_room = AABB()
 	_fractal_niche = Vector3i(-1, 0, -1)
 	_crypt_rooms = []
 	_crypt_spawner_vox = Vector3i(-1, -1, -1)
@@ -1031,6 +1037,33 @@ func get_fractal_world_bounds() -> Dictionary:
 	return _fractal_world_bounds.duplicate()
 
 
+## Where the teleport chamber's floor centre is, in *district-local* voxels, or (-1,-1,-1) on a
+## tile that has no chamber (every spectacle theme). Y is the voxel a body stands on.
+func get_teleport_chamber() -> Vector3i:
+	return _teleport_chamber
+
+
+## Interior of the teleport chamber in district-local voxels, so the console ring can be sized
+## to the room instead of guessing. Empty (zero-size) when there is no chamber.
+func get_teleport_chamber_room() -> AABB:
+	return _teleport_room
+
+
+func _record_teleport_chamber(bmin: Vector3i, bmax: Vector3i) -> void:
+	## `_fill_shell` decks the ground storey at bmin.y and fills one course above it, so the
+	## standing surface is bmin.y + 1 and feet land on bmin.y + 2.
+	var floor_y := bmin.y + 2
+	_teleport_chamber = Vector3i((bmin.x + bmax.x) / 2, floor_y, (bmin.z + bmax.z) / 2)
+	_teleport_room = AABB(
+		Vector3(float(bmin.x + 2), float(floor_y), float(bmin.z + 2)),
+		Vector3(
+			float(bmax.x - bmin.x - 4),
+			float(BuildingGrammar.TELEPORT_CHAMBER_H_VOX),
+			float(bmax.z - bmin.z - 4)
+		)
+	)
+
+
 func _compute_fractal_glow_world_bounds() -> Dictionary:
 	if _fractal == null:
 		return {}
@@ -1719,6 +1752,13 @@ func _paint_lot(
 		)
 	_record_building_impostor(grammar.impostor_parts, zone)
 	_record_tall_roof(grammar)
+	if zone == LandUse.TELEPORT_LOT:
+		## No interior registration: the JIT decorator would furnish the console ring with
+		## partition walls and shelving, and there is no second storey to ride an elevator to.
+		_record_teleport_chamber(bmin, bmax)
+		_record_lot_doorways(grammar)
+		grammar.max_height = saved
+		return
 	var building := _record_building_interior(bmin, bmax, cx, cz, zone, grammar)
 	_record_lot_doorways(grammar)
 	_record_elevator_shaft(bmin, bmax, grammar, building)

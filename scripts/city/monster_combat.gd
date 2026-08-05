@@ -27,6 +27,12 @@ const GLOBAL_COOLDOWN_S := 2.0
 ## Stand-off for a terrain-chewing body: close enough to be a physical threat, far enough that
 ## it is not standing inside the player.
 const CHEWER_STANDOFF_M := 3.0
+## Melee corridor aim as a fraction of strike reach. Must leave room for
+## `UndeadGoalProvider.HUNT_ARRIVE_TOLERANCE_M` so arriving still means "can swing".
+const MELEE_STANDOFF_FRACTION := 0.7
+## Reference hit radius for a 1× minion — extras above this grow the swing so a fat body is
+## not forever short of a prey it is already pressing against.
+const MELEE_REFERENCE_HIT_RADIUS_M := 0.55
 
 ## UndeadUnit that owns this kit.
 var _unit: CharacterBody3D = null
@@ -181,8 +187,18 @@ func hunt_standoff_m() -> float:
 	if ranged != "" and ranged != "orb_convert":
 		return maxf(preferred_range_m(), 1.5)
 	if has_attack("melee"):
-		return CombatTableScript.monster_attack_range_m("melee") * 0.85
+		## Inside strike reach, with slack for the hunt arrive radius. Standing at 0.85× and
+		## arriving with 1.5 m of slop used to land bodies outside the swing entirely.
+		return CombatTableScript.monster_attack_range_m("melee") * MELEE_STANDOFF_FRACTION
 	return maxf(preferred_range_m(), 1.5)
+
+
+## Hold-and-strike distance for a hunt. Wider than `hunt_standoff_m` on purpose: the corridor
+## aims at the stand-off, but once the body is inside swing reach it must stop pathing and hit.
+func hunt_engage_m() -> float:
+	if has_attack("melee"):
+		return _melee_reach_m()
+	return hunt_standoff_m()
 
 
 func tick(delta: float) -> void:
@@ -232,7 +248,7 @@ func _pick_attack(dist_m: float) -> String:
 	for attack_id: String in attacks:
 		if float(_cooldown.get(attack_id, 0.0)) > 0.0:
 			continue
-		var reach := CombatTableScript.monster_attack_range_m(attack_id)
+		var reach := _attack_reach_m(attack_id)
 		if dist_m > reach:
 			continue
 		var score := reach
@@ -253,6 +269,22 @@ func _pick_attack(dist_m: float) -> String:
 			best_score = score
 			best = attack_id
 	return best
+
+
+func _attack_reach_m(attack_id: String) -> float:
+	if attack_id == "melee":
+		return _melee_reach_m()
+	return CombatTableScript.monster_attack_range_m(attack_id)
+
+
+## Contact swing, grown with the body's hit volume so a broad attacker is not short of a prey
+## it is already touching.
+func _melee_reach_m() -> float:
+	var base := CombatTableScript.monster_attack_range_m("melee")
+	if _unit == null or not _unit.has_method("hit_radius"):
+		return base
+	var hit_r := float(_unit.call("hit_radius"))
+	return base + maxf(0.0, hit_r - MELEE_REFERENCE_HIT_RADIUS_M)
 
 
 ## Ranged tool whose own timer is up, for the stand-off the navigator holds. Like
@@ -297,7 +329,7 @@ func _finish_windup() -> void:
 		_stop_charged_sfx()
 		return
 	## Re-check range after the telegraph — prey may have walked out.
-	var reach := CombatTableScript.monster_attack_range_m(attack_id)
+	var reach := _attack_reach_m(attack_id)
 	if _flat_distance(_unit.global_position, prey) > reach * 1.15:
 		_stop_charged_sfx()
 		return
@@ -366,19 +398,18 @@ func _execute_melee(prey: Vector3) -> bool:
 	_set_cooldown("melee")
 	var scale := _scale()
 	var at: Vector3 = _unit.global_position
+	var reach := _melee_reach_m()
 	_sfx("play_melee_swing", at, scale)
 	_sfx("play_melee_hit", prey, scale)
 	if _is_player_prey(prey):
 		_hurt_player(DamageSourceScript.Id.MONSTER_MELEE)
 		return true
-	var mob := _hostile_monster_near(prey, CombatTableScript.monster_attack_range_m("melee"))
+	var mob := _hostile_monster_near(prey, reach)
 	if mob != null:
 		_hurt_monster(mob, "melee")
 		return true
 	## Pedestrian: one-shot remove. Nothing here swings at fabric.
-	_unit.call(
-		"try_remove_ped_at", prey, CombatTableScript.monster_attack_range_m("melee")
-	)
+	_unit.call("try_remove_ped_at", prey, reach)
 	return true
 
 

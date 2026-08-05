@@ -222,8 +222,11 @@ func _on_create_requested(
 func _start_instant_create(
 	cx_hp: String, cy_hp: String, scale_hp: String, edge: StringName, panel: Node3D
 ) -> void:
+	## Viewer-oriented bake: the raw texture is mirrored left/right on the panel face.
 	var art: Texture2D = null
-	if panel.has_method("bake_texture"):
+	if panel.has_method("bake_texture_for_viewer"):
+		art = panel.call("bake_texture_for_viewer") as Texture2D
+	elif panel.has_method("bake_texture"):
 		art = panel.call("bake_texture") as Texture2D
 	var root := get_tree().get_first_node_in_group(&"city_root")
 	if root != null and root.has_method("request_fractal_create_wait"):

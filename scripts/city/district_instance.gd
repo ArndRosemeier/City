@@ -15,6 +15,7 @@ const RecipePickupPlacerScript := preload("res://scripts/city/recipe_pickup_plac
 const CastleDoorPlacerScript := preload("res://scripts/city/castle_door_placer.gd")
 const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
+const TeleportChamberScript := preload("res://scripts/city/teleport_chamber.gd")
 const ZooControllerScript := preload("res://scripts/city/zoo_controller.gd")
 const GamingArenaScript := preload("res://scripts/city/gaming_arena.gd")
 const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
@@ -57,6 +58,8 @@ var castle_doors: CastleDoorPlacer
 var mandelbrot_arena: Node3D
 ## Summon boards + lifts + pit wipe. Null outside Arena districts.
 var arena_controller: ArenaController
+## Console ring + launch pad + beacon. Exactly one on every normal tile, null on spectacle ones.
+var teleport_chamber: TeleportChamber
 ## Forever-war spawners + turf hazards + cloak gate. Null outside Monster Zoo districts.
 var zoo_controller: ZooController
 ## Go tables + giant board + invite peds. Null outside Gaming districts.
@@ -315,6 +318,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	if arena_controller != null and is_instance_valid(arena_controller):
 		arena_controller.queue_free()
 	arena_controller = null
+	_clear_teleport_chamber()
 	_clear_zoo_controller()
 	_clear_crypt_spawner()
 	_clear_dungeon_summoners()
@@ -380,6 +384,7 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	if arena_controller != null and is_instance_valid(arena_controller):
 		arena_controller.queue_free()
 	arena_controller = null
+	_clear_teleport_chamber()
 	_clear_zoo_controller()
 	_clear_crypt_spawner()
 	_clear_dungeon_summoners()
@@ -672,6 +677,11 @@ func _stamp_detail_async(epoch: int) -> void:
 	CityProfiler.end("stream_arena_ui")
 	await get_tree().process_frame
 
+	CityProfiler.begin("stream_teleport_chamber")
+	_spawn_teleport_chamber(generator)
+	CityProfiler.end("stream_teleport_chamber")
+	await get_tree().process_frame
+
 	CityProfiler.begin("stream_zoo_war")
 	_spawn_zoo_controller(generator)
 	CityProfiler.end("stream_zoo_war")
@@ -910,6 +920,38 @@ func _spawn_mandelbrot_arena(gen: DistrictGenerator) -> void:
 		_dseed,
 		coord
 	)
+
+
+## Furnish the one teleport chamber this tile baked. Spectacle themes never plan a lot, so
+## `get_teleport_chamber` reports nothing there and the chamber is simply absent.
+func _spawn_teleport_chamber(gen: DistrictGenerator) -> void:
+	if gen == null:
+		return
+	var site := gen.get_teleport_chamber()
+	if site.x < 0:
+		return
+	_clear_teleport_chamber()
+	var room := gen.get_teleport_chamber_room()
+	if room.size.x <= 0.0 or room.size.z <= 0.0:
+		push_error("DistrictInstance: teleport chamber at %s baked with no room" % site)
+		return
+	teleport_chamber = TeleportChamberScript.new() as TeleportChamber
+	teleport_chamber.name = "TeleportChamber"
+	add_child(teleport_chamber)
+	## `site.y` is the voxel the body stands *in*, so the floor surface is its bottom face.
+	var floor_center := Vector3(
+		(float(origin_vox.x + site.x) + 0.5) * _voxel_size,
+		float(origin_vox.y + site.y) * _voxel_size,
+		(float(origin_vox.z + site.z) + 0.5) * _voxel_size
+	)
+	var room_half := minf(room.size.x, room.size.z) * 0.5 * _voxel_size
+	teleport_chamber.build(_world_seed, coord, floor_center, room_half)
+
+
+func _clear_teleport_chamber() -> void:
+	if teleport_chamber != null and is_instance_valid(teleport_chamber):
+		teleport_chamber.queue_free()
+	teleport_chamber = null
 
 
 func _spawn_arena_controller(gen: DistrictGenerator) -> void:

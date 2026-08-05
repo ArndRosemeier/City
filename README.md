@@ -127,8 +127,9 @@ means "pick a new one". The player boots into a random district tile within thre
 tiles of the world origin (chosen from the same seed, so `--city-seed=N` also
 replays the spawn). Override with `--spawn-district=x,z` or `--spawn-theme=hill`
 (or `arena`, `castle`, …). In-game, **J** opens a district-type picker and flies you to the
-nearest matching tile (see [District hops](#district-hops)). The tile at the world origin is
-still always the downtown core theme, even when you spawn elsewhere.
+nearest matching tile (see [District hops](#district-hops)); every normal district also holds a
+[teleport chamber](#teleport-chambers) where you pick a named neighbour instead. The tile at the
+world origin is still always the downtown core theme, even when you spawn elsewhere.
 
 ## District hops
 
@@ -154,6 +155,46 @@ landing: that the hold never ends on its own, that the birds keep being recycled
 it runs, that the camera looks down / up / down, that the descent finishes exactly on the
 footing the hop resolved, and that `finish` always hands the body and the input back.
 `tools/shot_hop.gd -Rendered` photographs all three phases through the player's own camera.
+
+The character used to hang frozen mid-pose for the whole flight, because the locomotion state
+machine runs out of `_physics_process` and the hop turns that off. Each leg now asks the rig for
+a clip directly through `CityWalker.play_cutscene_anim`: take-off on the rise, the airborne loop
+through the hold and most of the drop, and the landing shortly before touchdown.
+
+## Teleport chambers
+
+Every normal district reserves exactly one **teleport chamber** — an open-roofed room with eight
+tilted holo-consoles ringing a launch pad, under a cyan column of light that stands high enough
+to find from anywhere on the tile. It is the second way to travel, next to the **J** picker: the
+picker asks for a *kind* of district and finds the nearest one, a chamber offers the twenty-four
+tiles around this one *by name* and lets you pick.
+
+Placement is guaranteed rather than rolled. `DistrictPlanner._place_teleport_chamber` retags one
+street-facing lot as `LandUse.TELEPORT_LOT` — deliberately after `_place_civic` and before
+`_place_tower_parcels`, since the parcel merge only absorbs `CORE_LOT` and would otherwise
+swallow the chamber into a tower plot. Leaving it to a dice roll would eventually hand somebody a
+district with no console in it. Spectacle themes never zone lots at all and get none for free.
+
+The 5x5 map splits across the eight consoles with nothing shown twice
+(`TeleportChamber.slot_offsets`): each cardinal console carries the two tiles straight ahead of
+it, each diagonal console the 2x2 corner block behind it, which is 4x2 + 4x4 = 24. Every non-zero
+offset in the block has exactly one `(sign(x), sign(z))`, so the split is total and disjoint by
+construction — the console a tile is on is the one you would turn to in order to find it. Panels
+are laid out left-to-right and near-to-far as the map reads, so the ring is one map wrapped around
+you rather than eight lists. Names come from `DistrictName.for_district`, the same source the
+signposts use, so a chamber and a signpost never disagree about a neighbour.
+
+Selecting a panel arms that destination and clears the other seven; the pad lights up, and
+clicking it runs the same hop cutscene as **J** via `CityRoot.request_district_hop_to`. An
+unarmed pad swallows the click rather than doing nothing visible — it is a thing you would never
+want to shoot.
+
+`tools/test_teleport_chamber.gd` covers what would fail silently: exactly one chamber per normal
+theme and none on spectacle tiles, the 24 panels covering the ring once each with no gap and no
+duplicate, arming staying exclusive across the ring, an unarmed pad refusing to launch, and the
+roof being open over the pad — a capped chamber would fire the player into its own ceiling.
+`tools/shot_teleport_chamber.gd -Rendered` photographs the beacon from the street, the ring from
+the pad, and one console close enough to read.
 
 ## District themes
 

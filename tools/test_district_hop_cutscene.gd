@@ -11,6 +11,9 @@
 ##   - The animation hijacks the body and the input. If `finish` ever fails to hand both back
 ##     the player is left frozen and looking at clouds, which is a soft lock.
 ##   - The landing has to end exactly on the footing the hop resolved, not near it.
+##   - The rig's own state machine runs off `_physics_process`, which the hop turns off. Each
+##     leg has to ask for its clip explicitly or the character hangs frozen mid-pose for the
+##     whole flight, which is exactly what this used to do.
 ##
 ## Run: powershell -File tools\run_test.ps1 test_district_hop_cutscene
 extends Node3D
@@ -51,6 +54,7 @@ func _ready() -> void:
 	_check_hold_waits_forever_and_looks_up()
 	_check_hold_keeps_birds_coming()
 	_check_descent_lands_on_its_mark()
+	_check_every_leg_moves_the_body()
 	_check_finish_hands_the_body_back()
 	_check_abandoned_hold_leaves_nothing_behind()
 
@@ -197,6 +201,46 @@ func _check_descent_lands_on_its_mark() -> void:
 	print("descent: %d steps, dipped to %.2f rad, settled at %.2f rad" % [
 		steps, looked_down, _walker.get_pitch()
 	])
+
+
+# ---------------------------------------------------------------------------
+# Character animation
+# ---------------------------------------------------------------------------
+
+## The hop disables `_physics_process`, and that is where the locomotion state machine lives.
+## Nothing else will start a clip during the flight, so each leg has to ask for one by name.
+func _check_every_leg_moves_the_body() -> void:
+	_scene.begin(_walker)
+	_walker.global_position = START
+
+	_scene.start_rise()
+	_expect_clip(DistrictHopCutsceneScript.ANIM_RISE, "the launch")
+	_run_phase()
+
+	_scene.start_hold(Vector3(LANDING.x, LANDING.y + 60.0, LANDING.z))
+	_expect_clip(DistrictHopCutsceneScript.ANIM_HOLD, "the hold")
+	for _step in range(120):
+		_scene.advance(SIM_DT)
+	_expect_clip(DistrictHopCutsceneScript.ANIM_HOLD, "a hold that has been running a while")
+
+	_scene.start_descent(LANDING)
+	## The Quaternius set has no fall clip, so the loop has to carry the drop until the brace.
+	_expect_clip(DistrictHopCutsceneScript.ANIM_HOLD, "the start of the descent")
+	_run_phase()
+	_expect_clip(DistrictHopCutsceneScript.ANIM_LAND, "touchdown")
+	print("anim: %s → %s → %s across the three legs" % [
+		DistrictHopCutsceneScript.ANIM_RISE,
+		DistrictHopCutsceneScript.ANIM_HOLD,
+		DistrictHopCutsceneScript.ANIM_LAND,
+	])
+
+
+func _expect_clip(clip: StringName, during: String) -> void:
+	var playing := String(_walker.current_anim())
+	if not playing.ends_with(String(clip)):
+		_fail("FAIL during %s the character is playing '%s', wanted '%s'" % [
+			during, playing, clip
+		])
 
 
 # ---------------------------------------------------------------------------

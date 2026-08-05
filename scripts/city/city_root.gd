@@ -2812,6 +2812,25 @@ func request_district_hop() -> bool:
 	return true
 
 
+## Hop to a named tile, for the teleport chambers. Same guards as the J picker, which stays
+## exactly as it was — this route skips the type picker because the console already chose.
+func request_district_hop_to(dest: Vector2i) -> bool:
+	if _game_over or _booting or _district_hopping:
+		return false
+	if _walker == null or not is_instance_valid(_walker):
+		return false
+	if _streamer == null or not is_instance_valid(_streamer):
+		return false
+	if _loading_splash == null:
+		push_error("CityRoot: district hop needs LoadingSplash for the bake status line")
+		return false
+	if dest == DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE):
+		return false
+	_district_hopping = true
+	_district_hop_to(dest, _walker.global_position)
+	return true
+
+
 ## Run Instant Mandelbrot Create under a wait splash showing the selected fractal.
 ## `work` must be an async Callable (awaited). Returns false if a splash already owns the screen.
 func request_fractal_create_wait(art: Texture2D, work: Callable) -> bool:

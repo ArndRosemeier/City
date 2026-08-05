@@ -1262,6 +1262,33 @@ func play_action(anim_name: String, allow_toggle: bool = true) -> void:
 	_anim_player.speed_scale = clampf(1.0 / maxf(character_scale, 0.001), 0.05, 4.0)
 
 
+## Drive the rig straight from a cutscene. `_update_locomotion_anim` only runs out of
+## `_physics_process`, which a cutscene disables, so without this the body freezes mid-pose
+## for the whole hop. `_action_playing` is deliberately left alone: the locomotion state
+## machine has to pick up unchanged the moment physics resumes.
+##
+## Returns the clip that actually started, empty when the library has nothing by that name.
+func play_cutscene_anim(clip: StringName, blend: float = 0.15, speed: float = 1.0) -> StringName:
+	if _anim_player == null:
+		return StringName()
+	var path := "%s/%s" % [LIB_NAME, clip]
+	if not _anim_player.has_animation(path):
+		push_error("CityWalker: no cutscene clip '%s' in the action library" % clip)
+		return StringName()
+	_anim_player.play(path, blend)
+	_anim_player.speed_scale = clampf(
+		speed / maxf(character_scale, 0.001), 0.05, 4.0
+	)
+	return StringName(path)
+
+
+## What the rig is playing right now, as a library path. Cutscenes assert on this.
+func current_anim() -> StringName:
+	if _anim_player == null:
+		return StringName()
+	return _anim_player.current_animation
+
+
 func cancel_action() -> void:
 	if not _action_playing:
 		return

@@ -43,6 +43,21 @@ const PITCH_LEVEL := -0.35
 ## Fraction of the descent spent looking down at the arriving district before the camera
 ## starts easing back to a playable angle.
 const DESCENT_LOOK_DOWN_U := 0.55
+## Fraction of the descent after which the body braces for touchdown. There is no separate
+## fall clip in the Quaternius library, so the loop covers the whole drop until this point.
+const DESCENT_LAND_U := 0.82
+
+## Rig clips for the three legs, played straight at the AnimationPlayer — the locomotion state
+## machine runs off `_physics_process`, which the hop turns off, so without these the character
+## would hang in whatever pose the last physics frame left.
+const ANIM_RISE := &"Jump_Start"
+## The library ships this as `Jump_Loop`; Godot's glTF importer reads the `_Loop` suffix as a
+## loop flag and strips it, so the clip lands in the AnimationPlayer as plain `Jump`.
+const ANIM_HOLD := &"Jump"
+const ANIM_LAND := &"Jump_Land"
+## The launch is a fifty-metre throw, not a hop: the take-off pose reads better stretched out.
+const ANIM_RISE_SPEED := 0.7
+const ANIM_HOLD_SPEED := 0.55
 
 ## Birds streaming past during the hold.
 const HOLD_BIRDS := 14
@@ -68,6 +83,8 @@ var _duration: float = 0.0
 var _from_pos: Vector3 = Vector3.ZERO
 var _to_pos: Vector3 = Vector3.ZERO
 var _from_pitch: float = 0.0
+## True once the landing clip has been asked for on this descent.
+var _landed: bool = false
 var _birds: Array[BirdActor] = []
 var _coats: Array[BirdActor.Coat] = []
 var _rng := RandomNumberGenerator.new()
@@ -106,6 +123,7 @@ func start_rise() -> void:
 	_elapsed = 0.0
 	_duration = RISE_SEC
 	_phase = Phase.RISE
+	_walker.play_cutscene_anim(ANIM_RISE, 0.08, ANIM_RISE_SPEED)
 
 
 ## Park over the destination and look up. `hold_pos` is where the streaming bubble needs the
@@ -121,6 +139,7 @@ func start_hold(hold_pos: Vector3) -> void:
 	_elapsed = 0.0
 	_duration = 0.0
 	_phase = Phase.HOLD
+	_walker.play_cutscene_anim(ANIM_HOLD, 0.25, ANIM_HOLD_SPEED)
 	_spawn_hold_birds()
 
 
@@ -136,6 +155,7 @@ func start_descent(feet: Vector3) -> void:
 	_elapsed = 0.0
 	_duration = DESCENT_SEC
 	_phase = Phase.DESCEND
+	_landed = false
 
 
 ## Step the running phase. Called every frame by `_process`; tests drive it directly with a
@@ -213,6 +233,11 @@ func _advance_descent(delta: float) -> void:
 	else:
 		var back := (u - DESCENT_LOOK_DOWN_U) / (1.0 - DESCENT_LOOK_DOWN_U)
 		_walker.set_pitch(lerpf(PITCH_DOWN, PITCH_LEVEL, back))
+	## Braced shortly before touchdown rather than on it, so the landing pose has played
+	## through by the time the feet are actually down.
+	if not _landed and u >= DESCENT_LAND_U:
+		_landed = true
+		_walker.play_cutscene_anim(ANIM_LAND, 0.1, 1.0)
 
 
 ## Smoothstep, so a leg leaves and arrives without a jolt.

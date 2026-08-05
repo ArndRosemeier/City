@@ -168,6 +168,26 @@ func bake_texture() -> Texture2D:
 	return _bake_tex
 
 
+## Bake oriented the way a person standing in front of the panel sees it.
+##
+## Ui3D's readable face is −Z, which mirrors X relative to the raw texture (see the file
+## header). The Instant Create splash is a 2D TextureRect, so it needs this flipped copy or
+## the wait screen shows the fractal sideways from the panel the player just pressed Create on.
+func bake_texture_for_viewer() -> Texture2D:
+	if _bake_tex == null:
+		return null
+	var img := _bake_tex.get_image()
+	if img == null or img.is_empty():
+		push_error("MandelbrotPanel.bake_texture_for_viewer: bake has no image")
+		return _bake_tex
+	var copy := img.duplicate() as Image
+	if copy == null:
+		push_error("MandelbrotPanel.bake_texture_for_viewer: image duplicate failed")
+		return _bake_tex
+	copy.flip_x()
+	return ImageTexture.create_from_image(copy)
+
+
 func is_baking() -> bool:
 	return _baking
 

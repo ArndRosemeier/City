@@ -35,6 +35,9 @@ var large_zoo: Rect2i = Rect2i()
 ## Bounding rect of LandUse.GAMING cells. Empty when unused.
 var large_gaming: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
+## The one teleport chamber plot on this tile, or (-1,-1) on spectacle themes that have no
+## lots at all.
+var teleport_lot: Vector2i = Vector2i(-1, -1)
 ## Multi-cell CORE tower parcels (planner cells). `position` is the anchor corner;
 ## every cell in the rect stays `CORE_LOT`, but only the anchor paints a building.
 var tower_parcels: Array[Rect2i] = []
@@ -67,6 +70,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	pocket_parks.clear()
 	avenue_light_cells.clear()
 	civic_lot = Vector2i(-1, -1)
+	teleport_lot = Vector2i(-1, -1)
 	_reset_tower_parcels()
 	grand_plaza = Rect2i()
 	large_park = Rect2i()
@@ -117,6 +121,10 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 		_stamp_pocket_parks()
 		_assign_zones()
 		_place_civic()
+		## Before the parcel merge on purpose: retagging the cell takes it out of CORE_LOT,
+		## which is the only tag `_place_tower_parcels` will absorb, so the chamber can never
+		## be swallowed by a tower plot.
+		_place_teleport_chamber()
 		_place_tower_parcels()
 	_collect_avenue_lights()
 
@@ -618,6 +626,40 @@ func _place_civic() -> void:
 		return
 	civic_lot = edges[_rng.randi() % edges.size()]
 	grid[civic_lot.y][civic_lot.x] = LandUse.CIVIC_LOT
+
+
+## Reserve the one teleport chamber plot. Every normal district gets exactly one — it is the
+## way off this tile, so leaving it to a dice roll would strand a district behind the J picker.
+##
+## Wants street frontage (the chamber needs a door) and a whole cell to itself. Landlocked
+## cells are refused because the grammar turns those into parkland, which would silently drop
+## the chamber for that tile.
+func _place_teleport_chamber() -> void:
+	var candidates: Array[Vector2i] = []
+	for z in range(1, cells_z - 1):
+		for x in range(1, cells_x - 1):
+			var here := Vector2i(x, z)
+			if here == civic_lot:
+				continue
+			if not LandUse.is_lot(tag_at(x, z)):
+				continue
+			if not _has_street_frontage(x, z):
+				continue
+			candidates.append(here)
+	if candidates.is_empty():
+		push_error("DistrictPlanner: no lot could host the teleport chamber")
+		return
+	teleport_lot = candidates[_rng.randi() % candidates.size()]
+	grid[teleport_lot.y][teleport_lot.x] = LandUse.TELEPORT_LOT
+
+
+func _has_street_frontage(cx: int, cz: int) -> bool:
+	return (
+		LandUse.is_road(tag_at(cx + 1, cz))
+		or LandUse.is_road(tag_at(cx - 1, cz))
+		or LandUse.is_road(tag_at(cx, cz + 1))
+		or LandUse.is_road(tag_at(cx, cz - 1))
+	)
 
 
 ## Parcel shapes in cells, biggest plate first. Rectangles matter: square-only packing
