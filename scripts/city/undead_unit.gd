@@ -7,7 +7,7 @@
 ## Toughness is not a property of the role: it comes off whichever body the catalogue handed
 ## this unit, through `creature_health.gd`, so a two-metre skeleton and a four-metre monster
 ## wearing the same behaviour take a different number of hits. `kill_from_player` is what happens
-## when the last of that runs out rather than what happens on contact.
+## when the last of that runs out rather than what happens on contact (gem haul only on player hits).
 ##
 ## Movement is NavAgent + NavMotor over the baked span field. An UndeadGoalProvider says what
 ## this body wants and the six-rung ladder says what happens when it cannot get there. Escape
@@ -531,7 +531,7 @@ func apply_damage_scaled(
 			log_node.call(
 				"record", attacker_label, body_name, source, taken, 0.0, _health_max, true
 			)
-		kill_from_player()
+		kill_from_player(DamageSourceScript.is_player_vs_creature(source))
 		return true
 	if log_node != null and log_node.has_method("record"):
 		log_node.call(
@@ -557,8 +557,8 @@ func _promote_attacker_after_hit(source: DamageSource.Id, attacker: Node) -> voi
 
 
 ## Death: navigation disposed, the death clip played, `died` emitted, the body freed 1.6 s later.
-## Called by the hit that empties the pool.
-func kill_from_player() -> void:
+## Called by the hit that empties the pool. Gem haul only when that hit was player-sourced.
+func kill_from_player(player_kill: bool = false) -> void:
 	if not _alive:
 		return
 	_alive = false
@@ -567,8 +567,12 @@ func kill_from_player() -> void:
 	_dispose_nav()
 	_drop_health_bar()
 	_play_action(CreatureClips.Action.DEATH)
-	if _city != null and _entry != null and _city.has_method("grant_monster_kill_haul"):
-		_city.call("grant_monster_kill_haul", global_position, _entry.id)
+	if (
+		player_kill
+		and _city != null
+		and _city.has_method("grant_monster_kill_haul")
+	):
+		_city.call("grant_monster_kill_haul", global_position, _health_max)
 	died.emit(self, is_giant())
 	var tree := get_tree()
 	if tree != null:

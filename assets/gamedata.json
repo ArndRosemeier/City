@@ -474,9 +474,7 @@
       "attacks_extra": [
         "charged_blast"
       ],
-      "notes": "Hill cave caged boss — Unique; crumble aura + charged blast.",
-      "kill_gems_min": 12,
-      "kill_gems_max": 18
+      "notes": "Hill cave caged boss — Unique; crumble aura + charged blast."
     },
     {
       "id": "big/Dino",

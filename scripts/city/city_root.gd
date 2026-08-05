@@ -57,6 +57,7 @@ const CheatPanelScript := preload("res://scripts/city/cheat_panel.gd")
 const DistrictEconomyScript := preload("res://scripts/city/district_economy.gd")
 const WorldGamesScript := preload("res://scripts/city/world_games.gd")
 const FractalCascadeScript := preload("res://scripts/city/fractal_cascade.gd")
+const MonsterGemDropScript := preload("res://scripts/city/monster_gem_drop.gd")
 
 ## Sentinel for city_seed: draw a fresh world seed when the game starts.
 const SEED_RANDOM := 0
@@ -2356,15 +2357,13 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 	return true
 
 
-## Off-budget gem trove when the player kills a body that lists kill_gems_min/max.
-func grant_monster_kill_haul(world_pos: Vector3, monster_id: String) -> void:
-	var haul: Vector2i = CombatTableScript.kill_gems_range(monster_id)
-	if haul.y <= 0:
-		return
+## Off-budget gem haul when the player kills a monster. Score is floor(max_hp / 40), paid as
+## tiered stones (see MonsterGemDrop). District ledger is not charged.
+func grant_monster_kill_haul(world_pos: Vector3, max_hp: float) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	var wanted := rng.randi_range(haul.x, haul.y)
-	if wanted <= 0:
+	var haul: Array[int] = MonsterGemDropScript.roll_mats(max_hp, rng)
+	if haul.is_empty():
 		return
 	var vox := Vector3i.ZERO
 	if _terrain != null:
@@ -2373,8 +2372,7 @@ func grant_monster_kill_haul(world_pos: Vector3, monster_id: String) -> void:
 	var coord := _district_coord_for_vox(vox)
 	var paid := 0
 	var pitch_mat := -1
-	for _i in range(wanted):
-		var gem := VoxelMaterial.pick_gem(rng)
+	for gem in haul:
 		if grant_district_gem(coord, gem, false):
 			paid += 1
 			if pitch_mat < 0:
@@ -2382,9 +2380,9 @@ func grant_monster_kill_haul(world_pos: Vector3, monster_id: String) -> void:
 	if paid <= 0:
 		return
 	report_gem_haul(world_pos, paid, pitch_mat)
-	## report_gem_haul names a generic find — boss kills get their own card title after.
+	## report_gem_haul names a generic find — kill hauls get their own card title after.
 	if _loot_toast != null:
-		_loot_toast.set_headline("Boss slain")
+		_loot_toast.set_headline("Monster slain")
 
 
 ## Same flourish as a chest haul: one card headline and one bling for every stone already stacked

@@ -320,28 +320,6 @@ static func aura_def(aura_id: String) -> Dictionary:
 
 
 ## Off-budget gem haul on player kill. Returns Vector2i(min, max); both 0 when none.
-static func kill_gems_range(monster_id: String) -> Vector2i:
-	ensure_loaded()
-	if not _monsters.has(monster_id):
-		push_error("CombatTable.kill_gems_range: unknown monster '%s'" % monster_id)
-		assert(false, "CombatTable: unknown monster for kill gems")
-		return Vector2i.ZERO
-	var body: Dictionary = _monsters[monster_id]
-	var gmin := int(body.get("kill_gems_min", 0))
-	var gmax := int(body.get("kill_gems_max", 0))
-	if gmin < 0 or gmax < 0:
-		push_error("CombatTable.kill_gems_range: negative haul on '%s'" % monster_id)
-		assert(false, "CombatTable: bad kill_gems")
-		return Vector2i.ZERO
-	if gmin > gmax:
-		push_error(
-			"CombatTable.kill_gems_range: kill_gems_min > max on '%s'" % monster_id
-		)
-		assert(false, "CombatTable: bad kill_gems range")
-		return Vector2i.ZERO
-	return Vector2i(gmin, gmax)
-
-
 ## Python: combat_resolve.effective_attack_damage
 static func effective_attack_damage(attack_id: String, damage_mult: float) -> Dictionary:
 	if damage_mult <= 0.0:

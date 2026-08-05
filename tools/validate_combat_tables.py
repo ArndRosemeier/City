@@ -492,17 +492,6 @@ def validate_monster(
             _check_list_enums(
                 where, base, values, attack_ids, behaviour_ids, errors, aura_ids
             )
-    if "kill_gems_min" in mon or "kill_gems_max" in mon:
-        require_non_negative_number(mon, "kill_gems_min", where, errors)
-        require_non_negative_number(mon, "kill_gems_max", where, errors)
-        if (
-            "kill_gems_min" in mon
-            and "kill_gems_max" in mon
-            and isinstance(mon["kill_gems_min"], (int, float))
-            and isinstance(mon["kill_gems_max"], (int, float))
-            and float(mon["kill_gems_min"]) > float(mon["kill_gems_max"])
-        ):
-            fail(f"{where}: kill_gems_min must be <= kill_gems_max", errors)
     return mid
 
 
