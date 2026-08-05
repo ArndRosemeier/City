@@ -68,9 +68,12 @@ func _check_theme_patterns() -> void:
 
 
 func _check_specialness() -> void:
+	## Every theme whose planner gives it edge stubs only, so there is no through-street for a
+	## signpost to stand on. Siege is deliberately absent: it keeps the full street grid.
 	var expected := [
 		DistrictTheme.HILL, DistrictTheme.GRAVEYARD, DistrictTheme.LAKE,
 		DistrictTheme.CASTLE, DistrictTheme.FRACTAL, DistrictTheme.ARENA,
+		DistrictTheme.ZOO, DistrictTheme.GAMING,
 	]
 	for id in range(DistrictTheme.COUNT):
 		var want: bool = expected.has(id)

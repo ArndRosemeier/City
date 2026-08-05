@@ -32,21 +32,28 @@ const HUD_COMPASS := 19
 ## Monster Zoo spectator cloak countdown. Top of the band because it is the one readout that
 ## says whether the thing walking at you is allowed to hit you, and it expires on a clock.
 const HUD_ZOO_CLOAK := 20
-const HUD_MAX := 20
+## Siege Quarter run strip: wave, pot, Lodestone HP. Above the cloak because a live defence
+## is the thing that decides whether the stake survives, and it has a clock of its own.
+const HUD_SIEGE := 21
+const HUD_MAX := 21
 
 ## Panels that own the screen while open. Above every HUD surface, below every takeover.
 ## CityRoot closes the other one when either opens, so only ever one of these is up.
-const MODAL_SETTINGS := 21
-const MODAL_INVENTORY := 22
-const MODAL_CHARACTER_EDITOR := 23
-const MODAL_MONSTER_SUMMON := 24
+const MODAL_SETTINGS := 22
+const MODAL_INVENTORY := 23
+const MODAL_CHARACTER_EDITOR := 24
+const MODAL_MONSTER_SUMMON := 25
 ## Save / load / new game. Session lifecycle, kept out of Settings so graphics knobs and the
 ## decision to throw the run away are never one mis-click apart.
-const MODAL_GAME := 25
+const MODAL_GAME := 26
 ## Debug fill / teleport panel. A modal rather than a debug overlay so it owns the cursor and
 ## the HUD the same way Inventory does — dumping a probe into a translucent layer over play
 ## left the mouse stuck in freelook.
-const MODAL_CHEAT := 26
+const MODAL_CHEAT := 27
+## Siege tower picker, opened from a pad's "+" plate. A modal rather than a HUD popup: it owns
+## the cursor the player just clicked a world panel with, and leaving blaster fire live under an
+## open recipe list is how you spend a gem and shoot your own Lodestone in the same click.
+const MODAL_SIEGE_BUILD := 28
 
 ## Whole-screen state changes, above any modal.
 const GAME_OVER := 40

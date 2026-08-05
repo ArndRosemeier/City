@@ -4,6 +4,11 @@ extends RefCounted
 
 const WorldArterialsScript := preload("res://scripts/city/world_arterials.gd")
 
+## Side of the besieged quarter in planner cells. Eight cells is 8 × 28 voxels × 0.5 m ≈ 112 m —
+## a few blocks, which is what a readable defence needs. Spreading it over the whole 392 × 280 m
+## tile would put the pads too far apart to support each other.
+const SIEGE_QUARTER_CELLS := 8
+
 ## District personality — palette, density and height profile. Set before build().
 var theme: DistrictTheme = null
 var cell_size: int = 28
@@ -34,6 +39,11 @@ var large_arena: Rect2i = Rect2i()
 var large_zoo: Rect2i = Rect2i()
 ## Bounding rect of LandUse.GAMING cells. Empty when unused.
 var large_gaming: Rect2i = Rect2i()
+## Besieged ground on a Siege tile, in planner cells. Empty on every other theme.
+##
+## Cells inside it keep their ordinary tags: the siege is an overlay on the street grid, not a
+## reserve that replaced it, because the streets are the lanes the horde walks.
+var siege_quarter: Rect2i = Rect2i()
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## The one teleport chamber plot on this tile, or (-1,-1) on spectacle themes that have no
 ## lots at all.
@@ -82,6 +92,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	large_arena = Rect2i()
 	large_zoo = Rect2i()
 	large_gaming = Rect2i()
+	siege_quarter = Rect2i()
 
 	if theme.id == DistrictTheme.HILL:
 		## Edge stubs only — a full arterial cross would slice the massif into wedges.
@@ -126,6 +137,10 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 		## be swallowed by a tower plot.
 		_place_teleport_chamber()
 		_place_tower_parcels()
+		if theme.id == DistrictTheme.SIEGE:
+			## Last, and additive: the siege reads the finished grid rather than steering it, so
+			## a Siege tile is a normal quarter that got barricaded.
+			_build_siege_quarter()
 	_collect_avenue_lights()
 
 
@@ -452,6 +467,24 @@ func _stamp_grand_plaza() -> void:
 	grand_plaza = Rect2i(px, pz, 6, 5)
 	grand_plaza = _clamp_rect(grand_plaza)
 	_fill_rect(grand_plaza, LandUse.PLAZA, true)
+
+
+## Besieged ground: a square of blocks centred on the grand plaza, so the Lodestone ends up
+## standing in the open square the urban pass already cleared.
+##
+## `_stamp_grand_plaza` is unconditional on every non-spectacle theme, so a Siege tile without
+## one is a broken bake rather than a quiet variation.
+func _build_siege_quarter() -> void:
+	if grand_plaza.size.x <= 0 or grand_plaza.size.y <= 0:
+		push_error("DistrictPlanner: a Siege tile has no grand plaza to stand the Lodestone in")
+		assert(false, "DistrictPlanner: siege without a grand plaza")
+		return
+	var centre := grand_plaza.position + grand_plaza.size / 2
+	var span_x := mini(SIEGE_QUARTER_CELLS, cells_x)
+	var span_z := mini(SIEGE_QUARTER_CELLS, cells_z)
+	var min_x := clampi(centre.x - span_x / 2, 0, cells_x - span_x)
+	var min_z := clampi(centre.y - span_z / 2, 0, cells_z - span_z)
+	siege_quarter = Rect2i(min_x, min_z, span_x, span_z)
 
 
 func _stamp_satellite_plazas() -> void:

@@ -17,6 +17,7 @@ const MandelbrotArenaScript := preload("res://scripts/city/mandelbrot_arena.gd")
 const ArenaControllerScript := preload("res://scripts/city/arena_controller.gd")
 const TeleportChamberScript := preload("res://scripts/city/teleport_chamber.gd")
 const ZooControllerScript := preload("res://scripts/city/zoo_controller.gd")
+const SiegeControllerScript := preload("res://scripts/city/siege_controller.gd")
 const GamingArenaScript := preload("res://scripts/city/gaming_arena.gd")
 const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
 const ChessArenaScript := preload("res://scripts/city/chess_arena.gd")
@@ -62,6 +63,8 @@ var arena_controller: ArenaController
 var teleport_chamber: TeleportChamber
 ## Forever-war spawners + turf hazards + cloak gate. Null outside Monster Zoo districts.
 var zoo_controller: ZooController
+## Pot / waves / Lodestone. Null outside Siege districts; idle until the player stakes.
+var siege_controller: SiegeController
 ## Go tables + giant board + invite peds. Null outside Gaming districts.
 var gaming_arena: GamingArena
 ## Permanent Tetris cabinets in the Gaming quarter's arcade, plus the NPCs that play two of
@@ -161,6 +164,16 @@ func allows_auto_actors() -> bool:
 		and tid != DistrictTheme.ZOO
 		and tid != DistrictTheme.GAMING
 	)
+
+
+## Pedestrians only. Siege keeps lamps/signposts/cars (streets are the lanes) but an empty
+## sidewalk — otherwise the horde peels off to chase civilians instead of the Lodestone.
+func allows_pedestrians() -> bool:
+	if not allows_auto_actors():
+		return false
+	if generator == null or generator.theme == null:
+		return true
+	return generator.theme.id != DistrictTheme.SIEGE
 
 
 func configure(
@@ -320,6 +333,7 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	arena_controller = null
 	_clear_teleport_chamber()
 	_clear_zoo_controller()
+	_clear_siege_controller()
 	_clear_crypt_spawner()
 	_clear_dungeon_summoners()
 	cave_cage_stand_world = Vector3.INF
@@ -386,6 +400,7 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	arena_controller = null
 	_clear_teleport_chamber()
 	_clear_zoo_controller()
+	_clear_siege_controller()
 	_clear_crypt_spawner()
 	_clear_dungeon_summoners()
 	cave_cage_stand_world = Vector3.INF
@@ -569,17 +584,19 @@ func _stamp_detail_async(epoch: int) -> void:
 	await get_tree().process_frame
 
 	## Fractal is a quiet plaza: edge roads exist for world continuity, but no crowd,
-	## traffic or lamps spawn on this tile.
+	## traffic or lamps spawn on this tile. Siege skips pedestrians only (see
+	## `allows_pedestrians`) so the horde is not distracted by civilians.
 	var day_night := get_tree().get_first_node_in_group(&"day_night")
 	if allows_auto_actors():
-		CityProfiler.begin("stream_crowd")
-		crowd = CrowdDirectorScript.new()
-		crowd.name = "Crowd"
-		crowd.pedestrian_count = _crowd_count
-		add_child(crowd)
-		crowd.setup(_topology.sidewalks, camera, _dseed)
-		CityProfiler.end("stream_crowd")
-		await get_tree().process_frame
+		if allows_pedestrians():
+			CityProfiler.begin("stream_crowd")
+			crowd = CrowdDirectorScript.new()
+			crowd.name = "Crowd"
+			crowd.pedestrian_count = _crowd_count
+			add_child(crowd)
+			crowd.setup(_topology.sidewalks, camera, _dseed)
+			CityProfiler.end("stream_crowd")
+			await get_tree().process_frame
 
 		CityProfiler.begin("stream_vehicles")
 		vehicles = VehicleDirectorScript.new()
@@ -685,6 +702,11 @@ func _stamp_detail_async(epoch: int) -> void:
 	CityProfiler.begin("stream_zoo_war")
 	_spawn_zoo_controller(generator)
 	CityProfiler.end("stream_zoo_war")
+	await get_tree().process_frame
+
+	CityProfiler.begin("stream_siege")
+	_spawn_siege_controller(generator)
+	CityProfiler.end("stream_siege")
 	await get_tree().process_frame
 
 	CityProfiler.begin("stream_gaming")
@@ -1132,6 +1154,40 @@ func _clear_zoo_controller() -> void:
 		zoo_controller.shutdown()
 		zoo_controller.queue_free()
 	zoo_controller = null
+
+
+## Stand the Siege controller up. Nothing spawns until the player stakes gems at the Lodestone.
+func _spawn_siege_controller(gen: DistrictGenerator) -> void:
+	if gen == null:
+		return
+	var layout: SiegeLayout = gen.get_siege_layout()
+	if layout == null:
+		return
+	_clear_siege_controller()
+	var city := _find_city_root()
+	if city == null:
+		push_error("DistrictInstance: the Siege Quarter needs CityRoot for waves and the pot")
+		return
+	siege_controller = SiegeControllerScript.new() as SiegeController
+	add_child(siege_controller)
+	siege_controller.setup(
+		layout,
+		origin_vox,
+		_voxel_size,
+		_dseed,
+		city,
+		Callable(city, "spawn_monster_at"),
+		Callable(city, "alive_undead_units"),
+		Callable(city, "despawn_undead_unit")
+	)
+
+
+## An active run restores the player's faction on shutdown; an idle controller just frees.
+func _clear_siege_controller() -> void:
+	if siege_controller != null and is_instance_valid(siege_controller):
+		siege_controller.shutdown()
+		siege_controller.queue_free()
+	siege_controller = null
 
 
 ## Undead forever-war pad in the crypt hub under the chapel — no gazebo, just the station.

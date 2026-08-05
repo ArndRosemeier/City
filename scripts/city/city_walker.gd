@@ -1165,10 +1165,10 @@ func combat_faction() -> int:
 	return _combat_faction
 
 
-## Change whose side the player is on. The Monster Zoo's spectator cloak is the only thing
-## in the game that calls this; it restores HUMAN when the cloak runs out. A bad id here
-## would silently make the player un-huntable everywhere, so it is rejected rather than
-## clamped.
+## Change whose side the player is on. Callers today: the Monster Zoo's spectator cloak, and
+## the Siege Quarter for the duration of a run (`SIEGE_DEFENDER`). Both restore HUMAN when
+## they end. A bad id here would silently make the player un-huntable everywhere, so it is
+## rejected rather than clamped.
 func set_combat_faction(id: int) -> void:
 	if not MonsterFactionScript.all().has(id as MonsterFactionScript.Id):
 		push_error("CityWalker.set_combat_faction: %d is not a MonsterFaction.Id" % id)

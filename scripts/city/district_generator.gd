@@ -14,6 +14,7 @@ const FractalComposerScript := preload("res://scripts/city/fractal_composer.gd")
 const ArenaComposerScript := preload("res://scripts/city/arena_composer.gd")
 const ZooComposerScript := preload("res://scripts/city/zoo_composer.gd")
 const GamingComposerScript := preload("res://scripts/city/gaming_composer.gd")
+const SiegeComposerScript := preload("res://scripts/city/siege_composer.gd")
 const BuildingGrammarScript := preload("res://scripts/city/building_grammar.gd")
 const CityBrushScript := preload("res://scripts/city/city_brush.gd")
 const CastleDoorwayScript := preload("res://scripts/city/castle_doorway.gd")
@@ -84,6 +85,7 @@ var _fractal: FractalComposer
 var _arena: ArenaComposer
 var _zoo: ZooComposer
 var _gaming: GamingComposer
+var _siege: SiegeComposer
 ## Survives end_generate so DistrictInstance can spawn MandelbrotArena.
 var _fractal_world_bounds: Dictionary = {}
 var _grammar: BuildingGrammar
@@ -128,6 +130,8 @@ var _arena_layout: ArenaLayout = null
 var _zoo_layout: ZooLayout = null
 ## Gaming plaza plan from the compose pass; outlives the composer for runtime tables.
 var _gaming_layout: GamingLayout = null
+## Siege plan from the compose pass; outlives the composer for the runtime wave controller.
+var _siege_layout: SiegeLayout = null
 ## World voxel origin of this district tile (local paint stays 0..size).
 var origin_vox: Vector3i = Vector3i.ZERO
 var district_coord: Vector2i = Vector2i.ZERO
@@ -210,6 +214,11 @@ func get_zoo_layout() -> ZooLayout:
 ## The gaming plaza plan in *district-local* voxel coords, or null outside Gaming districts.
 func get_gaming_layout() -> GamingLayout:
 	return _gaming_layout
+
+
+## The siege plan in *district-local* voxel coords, or null outside Siege districts.
+func get_siege_layout() -> SiegeLayout:
+	return _siege_layout
 
 
 ## Daylight cave mouths (district-local XZ) from the hill compose pass.
@@ -376,6 +385,15 @@ func _setup_composers() -> void:
 	_gaming.cell_size = cell_size
 	_gaming.voxel_size = voxel_size
 	_gaming_layout = null
+
+	_siege = SiegeComposerScript.new()
+	_siege.brush = _brush
+	_siege.rng = _rng
+	_siege.ground_y = ground_thickness
+	_siege.planner = _planner
+	_siege.cell_size = cell_size
+	_siege.voxel_size = voxel_size
+	_siege_layout = null
 
 	_grammar = BuildingGrammarScript.new()
 	_grammar.brush = _brush
@@ -632,6 +650,7 @@ func decorate_open_spaces() -> void:
 		_brush == null or _planner == null or _plaza == null or _park == null
 		or _hill == null or _graveyard == null or _lake == null or _castle == null
 		or _fractal == null or _arena == null or _zoo == null or _gaming == null
+		or _siege == null
 	):
 		return
 	var lgaming := _planner.large_gaming
@@ -762,6 +781,21 @@ func decorate_open_spaces() -> void:
 		var qmin := Vector3i(p.x * cell_size, ground_thickness, p.y * cell_size)
 		var qmax := Vector3i((p.x + 1) * cell_size, ground_thickness + 1, (p.y + 1) * cell_size)
 		_park.compose_pocket(qmin, qmax)
+	## Siege last, and additive rather than instead: a Siege tile is a finished urban quarter that
+	## then gets barricaded, so the pass needs the roads, plazas and facades already standing.
+	## It only ever writes solid voxels — never AIR — which is why `decorate_open_spaces_far` can
+	## skip it without leaving holes for the full bake to fail to overwrite on upgrade.
+	var sq := _planner.siege_quarter
+	if sq.size.x > 0:
+		_rng.seed = DistrictCoord.feature_seed(city_seed, 11)
+		var qsmin := Vector3i(
+			sq.position.x * cell_size, ground_thickness, sq.position.y * cell_size
+		)
+		var qsmax := Vector3i(
+			sq.end.x * cell_size, ground_thickness + 1, sq.end.y * cell_size
+		)
+		_siege.compose(qsmin, qsmax)
+		_siege_layout = _siege.layout
 
 
 func decorate_open_spaces_far() -> void:
@@ -1027,6 +1061,22 @@ func open_space_bounds() -> Array[AABB]:
 			AABB(
 				Vector3(ox + p.x * cell_size, y0, oz + p.y * cell_size),
 				Vector3(cell_size, yh, cell_size)
+			)
+		)
+	var sq := _planner.siege_quarter
+	if sq.size.x > 0:
+		## The whole quarter has to be editable, not just an open reserve: the barricade ring runs
+		## along its edges, the Lodestone stands in the middle, and pads go on roofs. The height
+		## has to clear the tallest roof a pad may sit on, plus its corner studs — a pad written
+		## above this box is silently dropped on the streamed path.
+		out.append(
+			AABB(
+				Vector3(ox + sq.position.x * cell_size, y0, oz + sq.position.y * cell_size),
+				Vector3(
+					sq.size.x * cell_size,
+					float(SiegeComposer.ROOF_PAD_MAX_VOX + 4),
+					sq.size.y * cell_size
+				)
 			)
 		)
 	return out

@@ -32,7 +32,11 @@ const ARENA := 10
 const ZOO := 11
 ## Outer-ring gaming plaza: Go tables, invite peds, giant live-synced voxel board.
 const GAMING := 12
-const COUNT := 13
+## Besieged quarter: a normal street grid with a barricaded block, tower foundation pads and
+## a Lodestone in the grand plaza. The only urban theme with a runtime controller — it keeps
+## roads, lots and signposts precisely because streets are the lanes the horde walks.
+const SIEGE := 13
+const COUNT := 14
 
 ## Districts within this many tiles of the world origin are always the high-rise core.
 const CORE_RING := 0
@@ -90,12 +94,13 @@ static func for_district(world_seed: int, coord: Vector2i) -> DistrictTheme:
 	elif ring == 2:
 		choices = PackedInt32Array([
 			OLD_TOWN, CIVIC_QUARTER, GARDEN_RESIDENTIAL, WATERFRONT_INDUSTRIAL, HILL,
-			GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA, ZOO, GAMING
+			GRAVEYARD, LAKE, CASTLE, FRACTAL, ARENA, ZOO, GAMING, SIEGE
 		])
 	else:
 		choices = PackedInt32Array([
 			GARDEN_RESIDENTIAL, HILL, OLD_TOWN, WATERFRONT_INDUSTRIAL, GRAVEYARD,
 			GARDEN_RESIDENTIAL, LAKE, OLD_TOWN, CASTLE, FRACTAL, ARENA, ZOO, GAMING,
+			SIEGE,
 		])
 	return make(choices[pick % choices.size()])
 
@@ -170,6 +175,12 @@ static func parse_theme_id(raw: String) -> int:
 		"go": GAMING,
 		"boards": GAMING,
 		"gogaming": GAMING,
+		"siege": SIEGE,
+		"siegequarter": SIEGE,
+		"bulwark": SIEGE,
+		"lodestone": SIEGE,
+		"towerdefense": SIEGE,
+		"td": SIEGE,
 	}
 	if aliases.has(key):
 		return int(aliases[key])
@@ -598,6 +609,43 @@ static func make(theme_id: int) -> DistrictTheme:
 			t.wild_chance = 0.0
 			t.park_count = 0
 			t.road_density = 0.0
+			t.median_planting = false
+		SIEGE:
+			t.display_name = "Siege Quarter"
+			t.blurb = "A barricaded block around a Lodestone — buy towers with gems and hold the horde."
+			t.name_pattern = "%s Bulwark"
+			t.wall_mats = PackedInt32Array([
+				VoxelMaterial.CONCRETE, VoxelMaterial.BRICK_DARK, VoxelMaterial.STONE
+			])
+			t.townhouse_mats = PackedInt32Array([
+				VoxelMaterial.BRICK_DARK, VoxelMaterial.BRICK, VoxelMaterial.CONCRETE
+			])
+			t.roof_mats = PackedInt32Array([VoxelMaterial.ROOF, VoxelMaterial.METAL_PLATE])
+			t.base_mat = VoxelMaterial.STONE
+			t.tower_shaft_mat = VoxelMaterial.CONCRETE
+			t.accent_mat = VoxelMaterial.METAL_PLATE
+			t.band_mats = PackedInt32Array([
+				VoxelMaterial.METAL_PLATE, VoxelMaterial.STONE, VoxelMaterial.BRICK_DARK,
+				VoxelMaterial.CONCRETE
+			])
+			t.sidewalk_mat = VoxelMaterial.SIDEWALK
+			t.plaza_mat = VoxelMaterial.GRAVEL
+			t.plaza_inner_mat = VoxelMaterial.PLAZA
+			t.intensity_bias = -0.08
+			## Rooftop pads only mean anything if some roofs sit inside a 10 m jump and the rest
+			## inside a cloudstone hop — a downtown skyline would put every one out of reach.
+			t.height_scale = 0.55
+			t.tower_chance = 0.15
+			t.modern_chance = 0.4
+			t.spiral_chance = 0.0
+			t.l_mass_chance = 0.3
+			t.cylinder_chance = 0.08
+			## Deliberately tame. A defence has to be readable, and wild massing eats exactly the
+			## sightlines the pads were placed for.
+			t.wild_chance = 0.08
+			t.park_count = 2
+			## Streets are the lanes the horde walks, so this stays as dense as any downtown.
+			t.road_density = 0.92
 			t.median_planting = false
 		_:
 			push_error("DistrictTheme.make: unknown theme id %d" % theme_id)

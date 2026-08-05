@@ -3,6 +3,15 @@
 ## Local XY plane, facing −Z. Pointer hits report UV in [0,1]² (bottom-left origin).
 ## Named button regions live in the base class; subclasses handle `button_pressed` /
 ## `surface_pressed` for domain logic (Mandelbrot zoom, menus, etc.).
+##
+## Orientation (read before placing a panel — this gets inverted often):
+## `begin(origin, face_yaw)` aims the readable face along world
+## `(-sin(face_yaw), 0, -cos(face_yaw))`. To face a world look direction `L`
+## use `atan2(-L.x, -L.z)`. Equivalently: if the panel sits at `anchor + offset`
+## and should be read from the far side of that offset (player approaches from
+## outside), pass `atan2(-offset.x, -offset.z)` — `atan2(offset.x, offset.z)`
+## points the face *back at the anchor* (teleport lecterns want that; Lodestone
+## / gate posts usually do not).
 class_name Ui3D
 extends Node3D
 
@@ -42,6 +51,8 @@ var _buttons: Array[Dictionary] = []
 var last_press_uv: Vector2 = Vector2.INF
 
 
+## Place the panel. `face_yaw` is Y rotation in radians — see class doc for the
+## look-direction formula; do not assume `atan2(offset.x, offset.z)` faces outward.
 func begin(origin: Vector3, face_yaw: float) -> void:
 	global_position = origin
 	rotation = Vector3(0.0, face_yaw, 0.0)

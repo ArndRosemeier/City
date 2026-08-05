@@ -1898,6 +1898,174 @@
         "wave_hunter"
       ],
       "auras": []
+    },
+    "siege/arc_pylon": {
+      "hp_mult": 1.0,
+      "damage_mult": 1.15,
+      "speed_mult": 0.0,
+      "aggro_range_m": 32.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 26.0,
+      "armor_mult": 1.0,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "attacks": [
+        "eye_laser"
+      ],
+      "attack_damage": {
+        "eye_laser": {
+          "vs_player": 20.7,
+          "vs_mob": 20.7
+        }
+      },
+      "tags": [
+        "immobile",
+        "siege_tower"
+      ],
+      "crowd_roles": [],
+      "auras": []
+    },
+    "siege/bloom_mortar": {
+      "hp_mult": 1.0,
+      "damage_mult": 1.25,
+      "speed_mult": 0.0,
+      "aggro_range_m": 30.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 22.0,
+      "armor_mult": 1.05,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "attacks": [
+        "charged_blast"
+      ],
+      "attack_damage": {
+        "charged_blast": {
+          "vs_player": 62.5,
+          "vs_mob": 62.5
+        }
+      },
+      "tags": [
+        "immobile",
+        "siege_tower"
+      ],
+      "crowd_roles": [],
+      "auras": []
+    },
+    "siege/frost_lance": {
+      "hp_mult": 1.0,
+      "damage_mult": 1.05,
+      "speed_mult": 0.0,
+      "aggro_range_m": 48.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 40.0,
+      "armor_mult": 0.95,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "attacks": [
+        "eye_laser"
+      ],
+      "attack_damage": {
+        "eye_laser": {
+          "vs_player": 18.9,
+          "vs_mob": 18.9
+        }
+      },
+      "tags": [
+        "immobile",
+        "siege_tower"
+      ],
+      "crowd_roles": [],
+      "auras": []
+    },
+    "siege/prism_spire": {
+      "hp_mult": 1.0,
+      "damage_mult": 1.8,
+      "speed_mult": 0.0,
+      "aggro_range_m": 36.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 28.0,
+      "armor_mult": 1.2,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "attacks": [
+        "eye_laser"
+      ],
+      "attack_damage": {
+        "eye_laser": {
+          "vs_player": 32.4,
+          "vs_mob": 32.4
+        }
+      },
+      "tags": [
+        "immobile",
+        "siege_tower"
+      ],
+      "crowd_roles": [],
+      "auras": []
+    },
+    "siege/resin_vat": {
+      "hp_mult": 1.0,
+      "damage_mult": 1.1,
+      "speed_mult": 0.0,
+      "aggro_range_m": 12.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 4.0,
+      "armor_mult": 1.1,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "attacks": [
+        "stomp"
+      ],
+      "attack_damage": {
+        "stomp": {
+          "vs_player": 55.0,
+          "vs_mob": 55.0
+        }
+      },
+      "tags": [
+        "immobile",
+        "siege_tower"
+      ],
+      "crowd_roles": [],
+      "auras": []
+    },
+    "siege/splinter_post": {
+      "hp_mult": 1.0,
+      "damage_mult": 0.85,
+      "speed_mult": 0.0,
+      "aggro_range_m": 26.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 20.0,
+      "armor_mult": 0.9,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "attacks": [
+        "blaster"
+      ],
+      "attack_damage": {
+        "blaster": {
+          "vs_player": 15.3,
+          "vs_mob": 15.3
+        }
+      },
+      "tags": [
+        "immobile",
+        "siege_tower"
+      ],
+      "crowd_roles": [],
+      "auras": []
     }
   }
 }

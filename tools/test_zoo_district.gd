@@ -99,8 +99,13 @@ func _ready() -> void:
 
 
 func _check_theme_wiring() -> bool:
-	if DistrictTheme.COUNT != 12:
-		_fail("FAIL DistrictTheme.COUNT is %d, expected 12 with Zoo" % DistrictTheme.COUNT)
+	## Zoo has to be a real id in the enum. Asserting an absolute COUNT instead just breaks every
+	## time a theme is added, which says nothing about whether the Zoo is wired up.
+	if DistrictTheme.ZOO < 0 or DistrictTheme.ZOO >= DistrictTheme.COUNT:
+		_fail(
+			"FAIL DistrictTheme.ZOO is %d, outside 0..%d"
+			% [DistrictTheme.ZOO, DistrictTheme.COUNT - 1]
+		)
 		return false
 	if DistrictTheme.parse_theme_id("zoo") != DistrictTheme.ZOO:
 		_fail("FAIL --spawn-theme=zoo does not resolve to the Zoo theme")

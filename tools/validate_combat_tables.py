@@ -65,7 +65,9 @@ ALLOWED_CROWD_ROLES = frozenset(
     }
 )
 ## Allegiances an authored body may take. MonsterFaction also has `human`, which the player
-## and pedestrians wear — no combat-table row may claim it.
+## and pedestrians wear — no combat-table row may claim it. `siege_attacker` is a spawn-time
+## override only. `siege_defender` is authored on meshless foundation-tower rows that have no
+## CreatureCatalog entry (the voxel stamp is the visual).
 ALLOWED_FACTIONS = frozenset(
     {
         "undead",
@@ -75,6 +77,7 @@ ALLOWED_FACTIONS = frozenset(
         "grove",
         "arcane",
         "unique",
+        "siege_defender",
     }
 )
 
@@ -642,6 +645,9 @@ def validate_combat_table_document(
     for mid, count in sorted(seen.items()):
         if count != 1:
             fail(f"monster id '{mid}' appears {count} times (want exactly once)", errors)
+        ## Siege towers are combat rows without a creature mesh — skip the 1:1 catalog rule.
+        if mid.startswith("siege/"):
+            continue
         if catalog_set and mid not in catalog_set:
             fail(f"monster id '{mid}' is not in CreatureCatalog", errors)
 

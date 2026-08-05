@@ -324,6 +324,25 @@
       "crowd_roles": [
         "dungeon_guard"
       ]
+    },
+    "siege_tower": {
+      "intent": "Immobile siege foundation turret — speed 0, acquires attackers by aggro range, no leash walk.",
+      "hp_mult": 1.0,
+      "damage_mult": 1.0,
+      "speed_mult": 0.0,
+      "aggro_range_m": 28.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 22.0,
+      "armor_mult": 1.0,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "tags": [
+        "siege_tower",
+        "immobile"
+      ],
+      "crowd_roles": []
     }
   },
   "monsters": [
@@ -1014,6 +1033,96 @@
       "crowd_roles": [
         "ambient"
       ]
+    },
+    {
+      "id": "siege/splinter_post",
+      "faction": "siege_defender",
+      "templates": [
+        "siege_tower"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "blaster"
+      ],
+      "aggro_range_m": 26.0,
+      "preferred_range_m": 20.0,
+      "damage_mult": 0.85,
+      "armor_mult": 0.9
+    },
+    {
+      "id": "siege/resin_vat",
+      "faction": "siege_defender",
+      "templates": [
+        "siege_tower"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "stomp"
+      ],
+      "aggro_range_m": 12.0,
+      "preferred_range_m": 4.0,
+      "damage_mult": 1.1,
+      "armor_mult": 1.1
+    },
+    {
+      "id": "siege/arc_pylon",
+      "faction": "siege_defender",
+      "templates": [
+        "siege_tower"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "eye_laser"
+      ],
+      "aggro_range_m": 32.0,
+      "preferred_range_m": 26.0,
+      "damage_mult": 1.15,
+      "armor_mult": 1.0
+    },
+    {
+      "id": "siege/frost_lance",
+      "faction": "siege_defender",
+      "templates": [
+        "siege_tower"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "eye_laser"
+      ],
+      "aggro_range_m": 48.0,
+      "preferred_range_m": 40.0,
+      "damage_mult": 1.05,
+      "armor_mult": 0.95
+    },
+    {
+      "id": "siege/bloom_mortar",
+      "faction": "siege_defender",
+      "templates": [
+        "siege_tower"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "charged_blast"
+      ],
+      "aggro_range_m": 30.0,
+      "preferred_range_m": 22.0,
+      "damage_mult": 1.25,
+      "armor_mult": 1.05
+    },
+    {
+      "id": "siege/prism_spire",
+      "faction": "siege_defender",
+      "templates": [
+        "siege_tower"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "eye_laser"
+      ],
+      "aggro_range_m": 36.0,
+      "preferred_range_m": 28.0,
+      "damage_mult": 1.8,
+      "armor_mult": 1.2
     }
   ],
   "items": {
@@ -37600,7 +37709,8 @@
       "fractal": 20,
       "arena": 15,
       "zoo": 12,
-      "gaming": 14
+      "gaming": 14,
+      "siege": 30
     },
     "rarity_weights": {
       "gem_quartz": 48,
@@ -37667,6 +37777,25 @@
     "spawn_pressure_k": 0.9,
     "per_territory_cap": 2,
     "district_alive_cap": 34
+  },
+  "siege": {
+    "min_stake_total": 5,
+    "lodestone_hp": 400.0,
+    "lodestone_vulnerable_radius_m": 5.0,
+    "intermission_sec": 8.0,
+    "base_wave_size": 6,
+    "wave_size_growth": 2,
+    "district_alive_cap": 34,
+    "spawn_interval_sec": 0.55,
+    "hp_growth_per_wave": 0.12,
+    "damage_growth_per_wave": 0.08,
+    "lodestone_dps_per_attacker": 8.0,
+    "source_factions": [
+      "undead",
+      "horde",
+      "beast",
+      "infernal"
+    ]
   },
   "crypt": {
     "spawn_lift_m": 0.2,
@@ -38327,6 +38456,104 @@
       "along_half": 1,
       "depth_vox": 2,
       "notes": "While walking, destructible voxels ahead crumble with cascades. Skips cave-cage materials."
+    }
+  },
+  "siege_towers": {
+    "splinter_post": {
+      "display_name": "Splinter Post",
+      "combat_id": "siege/splinter_post",
+      "gem": "gem_quartz",
+      "hint": "Cheap chip damage — the backbone",
+      "hp": 120.0,
+      "cost": {
+        "gem_quartz": 1
+      },
+      "stamp": {
+        "height": 5,
+        "radius": 1,
+        "mat": 25,
+        "cap_mat": 28
+      }
+    },
+    "resin_vat": {
+      "display_name": "Resin Vat",
+      "combat_id": "siege/resin_vat",
+      "gem": "gem_amber",
+      "hint": "Close-range splash (slow TBD)",
+      "hp": 160.0,
+      "cost": {
+        "gem_amber": 1
+      },
+      "stamp": {
+        "height": 4,
+        "radius": 2,
+        "mat": 14,
+        "cap_mat": 14
+      }
+    },
+    "arc_pylon": {
+      "display_name": "Arc Pylon",
+      "combat_id": "siege/arc_pylon",
+      "gem": "gem_topaz",
+      "hint": "Mid-tier single target",
+      "hp": 140.0,
+      "cost": {
+        "gem_topaz": 1
+      },
+      "stamp": {
+        "height": 7,
+        "radius": 1,
+        "mat": 26,
+        "cap_mat": 26
+      }
+    },
+    "frost_lance": {
+      "display_name": "Frost Lance",
+      "combat_id": "siege/frost_lance",
+      "gem": "gem_sapphire",
+      "hint": "Long range — reaches pushers early",
+      "hp": 110.0,
+      "cost": {
+        "gem_sapphire": 1
+      },
+      "stamp": {
+        "height": 8,
+        "radius": 1,
+        "mat": 13,
+        "cap_mat": 6
+      }
+    },
+    "bloom_mortar": {
+      "display_name": "Bloom Mortar",
+      "combat_id": "siege/bloom_mortar",
+      "gem": "gem_emerald",
+      "hint": "Area blast — punishes clumps",
+      "hp": 150.0,
+      "cost": {
+        "gem_emerald": 1
+      },
+      "stamp": {
+        "height": 5,
+        "radius": 2,
+        "mat": 5,
+        "cap_mat": 5
+      }
+    },
+    "prism_spire": {
+      "display_name": "Prism Spire",
+      "combat_id": "siege/prism_spire",
+      "gem": "gem_diamond",
+      "hint": "High DPS boss answer",
+      "hp": 200.0,
+      "cost": {
+        "gem_diamond": 1
+      },
+      "stamp": {
+        "height": 9,
+        "radius": 1,
+        "mat": 26,
+        "cap_mat": 28
+      }
     }
   }
 }

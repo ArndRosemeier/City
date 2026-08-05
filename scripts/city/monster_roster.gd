@@ -4,9 +4,13 @@ class_name MonsterRoster
 extends Node3D
 
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
+const CombatTableScript := preload("res://scripts/city/combat_table.gd")
 
-## Soft cap shared by every summon path (N-key, arena, invasion waves).
-const MAX_ALIVE_UNITS := 40
+## Soft cap shared by every summon path (N-key, arena, invasion, siege, zoo).
+## Siege alone can hold `district_alive_cap` attackers plus a pad full of towers, so this has
+## to sit well above that district number — otherwise a live defence starves itself and the
+## ErrorOverlay floods with "alive cap reached" instead of waiting for a kill.
+const MAX_ALIVE_UNITS := 80
 ## CityRoot's terrain child — NavMotor near-tier needs the live VoxelTerrain node.
 const TERRAIN_NODE_NAME := "VoxelTerrain"
 ## Units stamped by UndeadInvasionDirector (waves / orb converts). Arena uses ArenaCombat.
@@ -80,6 +84,46 @@ func count_role(want_role: UndeadUnit.Role) -> int:
 ## Debug / N-key / Arena: named catalogue body. `for_invasion` stamps wipe ownership for waves.
 ## `invasion` is an UndeadInvasionDirector when the body belongs to that scenario (typed Node
 ## to avoid a class_name cycle with the director / CityRoot).
+## Meshless Siege Quarter tower. Registers like any other unit so splash / LOS / combat
+## find it, but skips CreatureCatalog (the voxel stamp is the body).
+func spawn_siege_tower(
+	combat_id: String,
+	world_pos: Vector3,
+	authored_hp: float,
+	body_seed: int = -1
+) -> UndeadUnit:
+	if combat_id.is_empty():
+		push_error("MonsterRoster.spawn_siege_tower: empty combat id")
+		assert(false, "MonsterRoster: empty tower combat id")
+		return null
+	if not CombatTableScript.has_monster(combat_id):
+		push_error("MonsterRoster.spawn_siege_tower: unknown combat id '%s'" % combat_id)
+		assert(false, "MonsterRoster: unknown tower combat id")
+		return null
+	_prune_units()
+	if count_alive() >= MAX_ALIVE_UNITS:
+		## Soft cap: a short pot or a full horde is expected pressure, not a fault.
+		return null
+	var unit := UndeadUnit.new()
+	unit.name = "SiegeTower_%d" % _next_id
+	_next_id += 1
+	add_child(unit)
+	unit.setup_siege_tower(
+		self,
+		_city,
+		world_pos,
+		_terrain,
+		_lod,
+		combat_id,
+		authored_hp,
+		body_seed if body_seed >= 0 else randi()
+	)
+	unit.died.connect(_on_unit_died)
+	unit.tree_exiting.connect(_on_unit_tree_exiting.bind(unit))
+	_units.append(unit)
+	return unit
+
+
 func spawn_by_id(
 	body_id: String,
 	world_pos: Vector3,
@@ -102,7 +146,7 @@ func spawn_by_id(
 		return null
 	_prune_units()
 	if count_alive() >= MAX_ALIVE_UNITS:
-		push_error("MonsterRoster.spawn_by_id: alive cap %d reached" % MAX_ALIVE_UNITS)
+		## Soft cap: callers that care (Zoo, Siege) hold and retry; N-key just fails quietly.
 		return null
 	return spawn_role(
 		role_for_entry(entry), world_pos, body_seed, body_id, for_invasion, invasion

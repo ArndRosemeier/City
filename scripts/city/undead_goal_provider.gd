@@ -19,6 +19,8 @@ const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 ## Goal tags, so `goal_reached` knows which behaviour just finished.
 const TAG_HUNT := &"hunt"
 const TAG_WANDER := &"wander"
+## Walk a standing objective (Siege Lodestone) when nothing living is acquirable.
+const TAG_PUSH := &"push"
 
 ## How far prey may drift before the corridor is rebuilt for where it is now.
 const RETARGET_SLACK_M := 3.0
@@ -34,6 +36,9 @@ const ARRIVE_TOLERANCE_M := 1.5
 ## tolerance above is wider than a melee swing, so using it here made bodies "arrive" outside
 ## strike range, drop the corridor, re-path, and jiggle in the prey's face forever.
 const HUNT_ARRIVE_TOLERANCE_M := 0.35
+## How far inside a push objective's vulnerability radius its stand ring sits. Aiming *at* the
+## radius would let arrive slop park bodies a hair outside it, where they neither hold nor hurt.
+const PUSH_RING_INSET_M := 0.75
 ## How far a committed pedestrian may be from where it was last seen and still be recognised
 ## as the same one. Peds walk under 2 m/s and the query runs every PREY_CACHE_SEC, so half a
 ## metre is the honest drift — the rest is slack for a crowd that respawned around it.
@@ -161,7 +166,9 @@ func goal_reached(_request: NavGoalRequest, goal: NavGoal) -> void:
 				## Else still investigating — next_goal re-issues the LKP walk.
 			else:
 				_unit.on_prey_in_range()
-		TAG_WANDER:
+		TAG_WANDER, TAG_PUSH:
+			## Arrival just frees the agent to ask again — push re-issues if still short,
+			## or holds so the Siege controller can apply Lodestone contact damage.
 			pass
 		_:
 			push_error(
@@ -246,7 +253,12 @@ func _retarget_engage_in_place(agent: NavAgent) -> void:
 
 
 ## Hot→Investigate on first loss; keep LKP goal while investigating; null when cleared.
+## Immobile towers skip Investigate entirely — see `_committed_aim`.
 func _handle_lost_prey() -> NavGoal:
+	if _is_immobile():
+		_clear_pursuit()
+		_unit.set_combat_prey(Vector3.INF)
+		return null
 	if _pursuit == Pursuit.HOT and _lkp != Vector3.INF:
 		_begin_investigate()
 	if _pursuit != Pursuit.INVESTIGATE or _lkp == Vector3.INF:
@@ -279,7 +291,18 @@ func _hunt_goal() -> NavGoal:
 		else:
 			_unit.set_combat_prey(Vector3.INF)
 			var memory := _handle_lost_prey()
-			goal = memory if memory != null else _wander()
+			if memory != null:
+				goal = memory
+			else:
+				## Siege attackers (and anything else with a standing push) walk the objective
+				## before they shuffle. Without this the horde would never reach the Lodestone
+				## — defenders are unacquirable, so there is never a hunt target on the way in.
+				if _unit.push_aim() != Vector3.INF:
+					## Null from `_push_goal` here means "inside the vulnerability radius, hold".
+					## Wandering on that null is what kept the horde circling the Lodestone.
+					goal = _push_goal()
+				else:
+					goal = _wander()
 	CityProfiler.end("undead_hunt_pick")
 	return goal
 
@@ -329,6 +352,31 @@ func _hunt_engage_m() -> float:
 
 func _wander() -> NavGoal:
 	return _tagged(NavGoal.wander(_unit.global_position, WANDER_RADIUS_M), TAG_WANDER)
+
+
+## Standing push (Lodestone). Null once the body is inside the objective's vulnerability
+## radius, meaning **hold here** — callers must not read that as "nothing to do" and wander
+## off, because holding still is what lets the controller land contact damage.
+##
+## The aim is the *centre* of a solid objective. Pathing into that point forever PATH_PARTIALs
+## around the shell (melee "dance"). Walk to a standable ring instead, set a little inside the
+## vulnerability radius so any re-path only ever moves the body further in.
+func _push_goal() -> NavGoal:
+	var aim := _unit.push_aim()
+	if aim == Vector3.INF:
+		return null
+	var vuln_r := _unit.push_hold_m()
+	var from := _unit.global_position
+	var away := Vector2(from.x - aim.x, from.z - aim.z)
+	var dist := away.length()
+	if dist <= vuln_r:
+		return null
+	var ring_r := maxf(vuln_r - PUSH_RING_INSET_M, 0.5)
+	var ring := aim
+	if dist > 0.01:
+		var dir := away / dist
+		ring = Vector3(aim.x + dir.x * ring_r, aim.y, aim.z + dir.y * ring_r)
+	return _tagged(NavGoal.go_to_point(ring, ARRIVE_TOLERANCE_M), TAG_PUSH)
 
 
 func _tagged(goal: NavGoal, tag: StringName) -> NavGoal:
@@ -382,6 +430,10 @@ func _nearest_living_prey() -> Vector3:
 ## Aim at the committed target, Vector3.INF when it cannot be seen right now. Drops the
 ## commitment — freeing the caller to pick again — when the target is dead, gone, or has put
 ## the leash between itself and this body.
+##
+## Immobile bodies (siege towers, `speed_mult` 0): lost LOS means release, not Investigate.
+## A tower cannot walk to a last-known point, so holding the commitment would trap the barrel
+## on a target it can no longer hit.
 func _committed_aim() -> Vector3:
 	if not has_committed_target():
 		return Vector3.INF
@@ -390,8 +442,19 @@ func _committed_aim() -> Vector3:
 		_clear_target()
 		return Vector3.INF
 	if not _city.has_voxel_line_of_sight(_eye(), aim):
+		if _is_immobile():
+			_clear_target()
 		return Vector3.INF
 	return aim
+
+
+func _is_immobile() -> bool:
+	if _unit != null and _unit.has_method("is_siege_tower") and bool(_unit.call("is_siege_tower")):
+		return true
+	var combat: RefCounted = _unit.combat() if _has_unit() else null
+	if combat == null:
+		return false
+	return float(combat.call("speed_mult")) <= 0.0
 
 
 func _target_aim() -> Vector3:
@@ -426,7 +489,7 @@ func _acquire_prey() -> Vector3:
 	## { "aim": Vector3, "node": Node, "dist": float }
 	var candidates: Array[Dictionary] = []
 
-	if _city.is_player_alive() and _hostile_to(_city.player_faction()):
+	if _city.is_player_alive() and _can_acquire(_city.player_faction()):
 		var ppos := _city.get_player_target_position()
 		var d_player := _flat(from, ppos)
 		if d_player <= range_m:
@@ -434,13 +497,13 @@ func _acquire_prey() -> Vector3:
 				{"aim": ppos, "node": _city.get_player_node(), "dist": d_player}
 			)
 
-	if _hostile_to(_city.ped_faction()):
+	if _can_acquire(_city.ped_faction()):
 		for aim: Vector3 in _ped_aims(from, range_m):
 			var d_ped := _flat(from, aim)
 			if d_ped <= range_m:
 				candidates.append({"aim": aim, "node": null, "dist": d_ped})
 
-	for other: UndeadUnit in _city.collect_hostile_monsters(from, range_m, _unit):
+	for other: UndeadUnit in _city.collect_acquirable_monsters(from, range_m, _unit):
 		var mob_aim := other.global_position + Vector3(0.0, 1.0, 0.0)
 		candidates.append(
 			{"aim": mob_aim, "node": other, "dist": _flat(from, mob_aim)}
@@ -472,6 +535,11 @@ func _clear_target() -> void:
 
 func _hostile_to(other_faction: int) -> bool:
 	return MonsterFactionScript.is_hostile(_unit.faction(), other_faction)
+
+
+## Fresh prey only — forced retaliation bypasses this via `_forced_prey_aim`.
+func _can_acquire(other_faction: int) -> bool:
+	return MonsterFactionScript.can_acquire(_unit.faction(), other_faction)
 
 
 ## Pedestrian aim points (chest height) inside `radius_m` of `centre`.

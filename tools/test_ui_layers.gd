@@ -18,10 +18,13 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/player_energy_hud.gd", "layer": UiLayers.HUD_ENERGY},
 	{"path": "res://scripts/city/player_boost_hud.gd", "layer": UiLayers.HUD_BUFF},
 	{"path": "res://scripts/city/player_compass_hud.gd", "layer": UiLayers.HUD_COMPASS},
+	{"path": "res://scripts/city/zoo_cloak_hud.gd", "layer": UiLayers.HUD_ZOO_CLOAK},
+	{"path": "res://scripts/city/siege_hud.gd", "layer": UiLayers.HUD_SIEGE},
 	{"path": "res://scripts/city/city_settings_panel.gd", "layer": UiLayers.MODAL_SETTINGS},
 	{"path": "res://scripts/city/player_inventory_panel.gd", "layer": UiLayers.MODAL_INVENTORY},
 	{"path": "res://scripts/city/character_editor.gd", "layer": UiLayers.MODAL_CHARACTER_EDITOR},
 	{"path": "res://scripts/city/monster_summon_panel.gd", "layer": UiLayers.MODAL_MONSTER_SUMMON},
+	{"path": "res://scripts/city/siege_build_picker.gd", "layer": UiLayers.MODAL_SIEGE_BUILD},
 	{"path": "res://scripts/city/game_menu_panel.gd", "layer": UiLayers.MODAL_GAME},
 	{"path": "res://scripts/city/cheat_panel.gd", "layer": UiLayers.MODAL_CHEAT},
 	{"path": "res://scripts/city/loading_splash.gd", "layer": UiLayers.LOADING_SPLASH},
@@ -46,6 +49,8 @@ const HUD: Array[int] = [
 	UiLayers.HUD_LOOT,
 	UiLayers.HUD_BUFF,
 	UiLayers.HUD_COMPASS,
+	UiLayers.HUD_ZOO_CLOAK,
+	UiLayers.HUD_SIEGE,
 ]
 
 const MODALS: Array[int] = [
@@ -53,6 +58,7 @@ const MODALS: Array[int] = [
 	UiLayers.MODAL_INVENTORY,
 	UiLayers.MODAL_CHARACTER_EDITOR,
 	UiLayers.MODAL_MONSTER_SUMMON,
+	UiLayers.MODAL_SIEGE_BUILD,
 	UiLayers.MODAL_GAME,
 	UiLayers.MODAL_CHEAT,
 ]

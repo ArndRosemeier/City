@@ -16,6 +16,7 @@ const PlayerHealthHudScript := preload("res://scripts/city/player_health_hud.gd"
 const PlayerBoostHudScript := preload("res://scripts/city/player_boost_hud.gd")
 const PlayerCompassHudScript := preload("res://scripts/city/player_compass_hud.gd")
 const ZooCloakHudScript := preload("res://scripts/city/zoo_cloak_hud.gd")
+const SiegeHudScript := preload("res://scripts/city/siege_hud.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
@@ -44,6 +45,7 @@ const PlayerLoadoutScript := preload("res://scripts/city/player_loadout.gd")
 const TrapProjectileScript := preload("res://scripts/city/trap_projectile.gd")
 const ArmedTrapScript := preload("res://scripts/city/armed_trap.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
+const SiegeBuildPickerScript := preload("res://scripts/city/siege_build_picker.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
@@ -115,12 +117,16 @@ var _loadout: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 var _player_minion: UndeadUnit = null
 ## Seconds left before the living ally is auto-dismissed.
 var _player_minion_life_left: float = 0.0
+## Active Siege Quarter run (pot + waves). Null outside a committed defence.
+var _siege_run: SiegeController = null
 var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
 var _boost_hud: CanvasLayer
 var _compass_hud: PlayerCompassHud
 ## Spectator cloak countdown. Only a Monster Zoo's controller ever puts it on screen.
 var _zoo_cloak_hud: CanvasLayer
+## Siege Quarter run strip: wave / pot / Lodestone. Bound to `active_siege_run()`.
+var _siege_hud: CanvasLayer
 var _debris_root: Node3D
 var _cascade: NativeCascadeDebris
 var _gem_lights: GemLightDirector
@@ -171,6 +177,8 @@ var _inventory_panel: PlayerInventoryPanel
 ## Transient card that shows what just came in — the inventory is closed while you play.
 var _loot_toast: LootToast
 var _monster_summon_panel: MonsterSummonPanel
+## Tower list for one Siege pad, opened by that pad's "+" plate.
+var _siege_build_picker: SiegeBuildPicker
 var _game_menu: GameMenuPanel
 var _cheat_panel: CheatPanel
 ## Save payload waiting to be poured into the next walker. Set before a regenerate (boot resume,
@@ -521,6 +529,10 @@ func is_monster_summon_open() -> bool:
 	return _monster_summon_panel != null and bool(_monster_summon_panel.call("is_open"))
 
 
+func is_siege_build_picker_open() -> bool:
+	return _siege_build_picker != null and _siege_build_picker.is_open()
+
+
 func is_game_menu_open() -> bool:
 	return _game_menu != null and _game_menu.is_open()
 
@@ -537,6 +549,7 @@ func is_modal_open() -> bool:
 		is_settings_open()
 		or is_inventory_open()
 		or is_monster_summon_open()
+		or is_siege_build_picker_open()
 		or is_game_menu_open()
 		or is_cheat_open()
 	)
@@ -588,6 +601,7 @@ func _refresh_hud_visibility() -> void:
 			"set_top_bar_visible",
 			not is_inventory_open()
 			and not is_monster_summon_open()
+			and not is_siege_build_picker_open()
 			and not is_game_menu_open()
 			and not is_cheat_open()
 		)
@@ -684,6 +698,11 @@ func _build_hud() -> void:
 	_zoo_cloak_hud.name = "ZooCloakHud"
 	add_child(_zoo_cloak_hud)
 
+	_siege_hud = SiegeHudScript.new() as CanvasLayer
+	_siege_hud.name = "SiegeHud"
+	add_child(_siege_hud)
+	_siege_hud.call("bind_city", self)
+
 	_undead_hud = UndeadInvasionHudScript.new()
 	_undead_hud.name = "UndeadInvasionHud"
 	add_child(_undead_hud)
@@ -749,6 +768,12 @@ func _build_hud() -> void:
 	_monster_summon_panel.opened.connect(_on_monster_summon_opened)
 	_monster_summon_panel.closed.connect(_on_monster_summon_closed)
 	_monster_summon_panel.summon_requested.connect(_on_monster_summon_requested)
+
+	_siege_build_picker = SiegeBuildPickerScript.new()
+	_siege_build_picker.name = "SiegeBuildPicker"
+	add_child(_siege_build_picker)
+	_siege_build_picker.opened.connect(_on_siege_build_picker_opened)
+	_siege_build_picker.closed.connect(_on_siege_build_picker_closed)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
 	call_deferred("_apply_saved_controls")
@@ -966,6 +991,43 @@ func _on_monster_summon_closed() -> void:
 		_walker.release_capture()
 
 
+## Called by SiegeController when a pad's "+" plate is pressed. The list opens at the cursor the
+## player just aimed with, so the pad they picked stays in view.
+func open_siege_build_picker(pad_index: int, controller: Node) -> void:
+	if _siege_build_picker == null or not is_instance_valid(_siege_build_picker):
+		push_error("CityRoot.open_siege_build_picker: no picker")
+		assert(false, "CityRoot: siege build picker missing")
+		return
+	var at := get_viewport().get_mouse_position()
+	_siege_build_picker.open_for_pad(pad_index, controller, at)
+
+
+func close_siege_build_picker() -> void:
+	if _siege_build_picker != null and is_instance_valid(_siege_build_picker):
+		_siege_build_picker.close_panel()
+
+
+## Pot changed under an open list (a kill credited, another pad bought). Re-list in place.
+func refresh_siege_build_picker() -> void:
+	if _siege_build_picker != null and is_instance_valid(_siege_build_picker):
+		_siege_build_picker.refresh()
+
+
+func _on_siege_build_picker_opened() -> void:
+	_close_other_modals_except("siege_build")
+	_refresh_hud_visibility()
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_siege_build_picker_closed() -> void:
+	_refresh_hud_visibility()
+	if is_modal_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
 func _on_game_menu_requested() -> void:
 	if _game_menu == null:
 		return
@@ -1124,6 +1186,8 @@ func _close_other_modals_except(keep: String) -> void:
 		_inventory_panel.call("close_panel")
 	if keep != "summon" and is_monster_summon_open():
 		_monster_summon_panel.call("close_panel")
+	if keep != "siege_build" and is_siege_build_picker_open():
+		_siege_build_picker.close_panel()
 	if keep != "game" and is_game_menu_open():
 		_game_menu.close_panel()
 	if keep != "cheat" and is_cheat_open():
@@ -1207,6 +1271,18 @@ func capture_summon_aim() -> void:
 			player.distance_to(point) if player != Vector3.INF and point.is_finite() else -1.0,
 		]
 	)
+
+
+## Meshless Siege Quarter tower at an explicit world point (pad centre).
+func spawn_siege_tower_at(
+	combat_id: String, world_pos: Vector3, authored_hp: float
+) -> UndeadUnit:
+	_ensure_monster_roster()
+	if _monsters == null:
+		push_error("CityRoot.spawn_siege_tower_at: no MonsterRoster")
+		assert(false, "CityRoot: no MonsterRoster")
+		return null
+	return _monsters.spawn_siege_tower(combat_id, world_pos, authored_hp)
 
 
 ## Spawn a catalogue body at an explicit world point (Arena lifts, tests).
@@ -2359,11 +2435,22 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 
 ## Off-budget gem haul when the player kills a monster. Score is floor(max_hp / 40), paid as
 ## tiered stones (see MonsterGemDrop). District ledger is not charged.
+##
+## During a Siege run the haul feeds the pot instead of the inventory — skin in the game, and
+## the unbounded wave faucet never touches the progression economy until the player withdraws.
 func grant_monster_kill_haul(world_pos: Vector3, max_hp: float) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	var haul: Array[int] = MonsterGemDropScript.roll_mats(max_hp, rng)
 	if haul.is_empty():
+		return
+	var siege := active_siege_run()
+	if siege != null:
+		var pot_paid := siege.credit_kill_mats(haul)
+		if pot_paid > 0:
+			report_gem_haul(world_pos, pot_paid, haul[0])
+			if _loot_toast != null:
+				_loot_toast.set_headline("Siege pot")
 		return
 	var vox := Vector3i.ZERO
 	if _terrain != null:
@@ -2525,6 +2612,31 @@ func set_player_combat_faction(id: int) -> void:
 	if _walker == null or not is_instance_valid(_walker):
 		return
 	_walker.set_combat_faction(id)
+
+
+## Active Siege Quarter run, or null. Kill hauls and streaming pin consult this.
+func active_siege_run() -> SiegeController:
+	if _siege_run != null and is_instance_valid(_siege_run) and _siege_run.is_running():
+		return _siege_run
+	return null
+
+
+## Called by SiegeController when a run starts. One run at a time — a second start is a bug.
+func begin_siege_run(ctrl: SiegeController) -> void:
+	if ctrl == null or not is_instance_valid(ctrl):
+		push_error("CityRoot.begin_siege_run: null controller")
+		assert(false, "CityRoot: null siege controller")
+		return
+	if _siege_run != null and is_instance_valid(_siege_run) and _siege_run != ctrl:
+		push_error("CityRoot.begin_siege_run: a siege is already running")
+		assert(false, "CityRoot: overlapping siege runs")
+		return
+	_siege_run = ctrl
+
+
+func end_siege_run(ctrl: SiegeController) -> void:
+	if _siege_run == ctrl:
+		_siege_run = null
 
 
 ## Spectator cloak countdown, driven by whichever Monster Zoo granted the cloak.
@@ -3253,6 +3365,9 @@ func _regenerate() -> void:
 		_boost_hud.call("clear_display")
 	if _zoo_cloak_hud != null and is_instance_valid(_zoo_cloak_hud):
 		_zoo_cloak_hud.call("hide_countdown")
+	if _siege_hud != null and is_instance_valid(_siege_hud):
+		_siege_hud.call("clear_display")
+		_siege_hud.call("bind_city", self)
 	if _compass_hud != null and is_instance_valid(_compass_hud):
 		_compass_hud.clear_display()
 	if _undead_hud != null and is_instance_valid(_undead_hud):
@@ -5074,8 +5189,24 @@ func collect_actor_positions(from: Vector3, max_dist: float) -> PackedVector3Arr
 
 ## Living hostile monsters within max_dist (XZ) for `hunter`. Bodies rather than points,
 ## because a hunter commits to one target and has to recognise it again next tick.
+## Bodies `hunter` may hurt (damage / splash). Fresh prey search uses
+## `collect_acquirable_monsters` — siege defenders are hostile for damage but not for acquire.
 func collect_hostile_monsters(
 	from: Vector3, max_dist: float, hunter: UndeadUnit = null
+) -> Array[UndeadUnit]:
+	return _collect_monsters(from, max_dist, hunter, false)
+
+
+## Bodies `hunter` may pick as a fresh hunt target. Siege defenders are excluded here so the
+## horde walks past silent towers; forced retaliation still finds them via promote_attacker.
+func collect_acquirable_monsters(
+	from: Vector3, max_dist: float, hunter: UndeadUnit = null
+) -> Array[UndeadUnit]:
+	return _collect_monsters(from, max_dist, hunter, true)
+
+
+func _collect_monsters(
+	from: Vector3, max_dist: float, hunter: UndeadUnit, acquirable_only: bool
 ) -> Array[UndeadUnit]:
 	var out: Array[UndeadUnit] = []
 	if _monsters == null or not is_instance_valid(_monsters):
@@ -5089,7 +5220,10 @@ func collect_hostile_monsters(
 		if hunter != null:
 			if unit == hunter:
 				continue
-			if not hunter.is_hostile_to(unit):
+			if acquirable_only:
+				if not hunter.can_acquire_prey(unit):
+					continue
+			elif not hunter.is_hostile_to(unit):
 				continue
 		var d2 := Vector2(
 			unit.global_position.x - from.x, unit.global_position.z - from.z
@@ -5113,7 +5247,8 @@ func find_nearest_monster_position(
 
 
 ## Nearest living hostile monster for `hunter` (or any other unit when `hunter` is null).
-## Null when none in range.
+## Null when none in range. Uses damage-hostility, not acquire — combat splash must still
+## find a siege defender the attacker was forced onto.
 func find_nearest_hostile_monster(
 	from: Vector3, max_dist: float, hunter: UndeadUnit = null
 ) -> UndeadUnit:
@@ -6408,6 +6543,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if is_monster_summon_open():
 			_monster_summon_panel.close_panel()
+			get_viewport().set_input_as_handled()
+			return
+		if is_siege_build_picker_open():
+			_siege_build_picker.close_panel()
 			get_viewport().set_input_as_handled()
 			return
 		if is_game_menu_open():

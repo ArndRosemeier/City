@@ -24,6 +24,7 @@ const THEME_NAME_TO_ID: Dictionary = {
 	"arena": 10,
 	"zoo": 11,
 	"gaming": 12,
+	"siege": 13,
 }
 
 static var _loaded: bool = false
@@ -232,6 +233,36 @@ static func zoo_int(key: String) -> int:
 		assert(false, "GameData: missing zoo constant")
 		return 0
 	return int(sec[key])
+
+
+# --- Siege Quarter ----------------------------------------------------------
+
+## Pot stake, Lodestone HP, wave growth, spawn cadence and source factions.
+static func siege() -> Dictionary:
+	return _section("siege")
+
+
+static func siege_float(key: String) -> float:
+	var sec := siege()
+	if not sec.has(key):
+		push_error("GameData.siege_float: missing 'siege.%s'" % key)
+		assert(false, "GameData: missing siege constant")
+		return 0.0
+	return float(sec[key])
+
+
+static func siege_int(key: String) -> int:
+	var sec := siege()
+	if not sec.has(key):
+		push_error("GameData.siege_int: missing 'siege.%s'" % key)
+		assert(false, "GameData: missing siege constant")
+		return 0
+	return int(sec[key])
+
+
+## Tower catalogue for the Siege Quarter (`siege_towers` section).
+static func siege_towers() -> Dictionary:
+	return _section("siege_towers")
 
 
 # --- Graveyard crypt undead station ----------------------------------------

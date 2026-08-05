@@ -151,10 +151,20 @@ var _combat: RefCounted = null
 var _aura: RefCounted = null
 ## MonsterFaction.Id for this body. Set once the catalogue entry is known.
 var _faction: int = -1
+## Optional standing destination when no living prey is acquirable (Siege Lodestone).
+var _push_aim: Vector3 = Vector3.INF
+## Flat metres from `_push_aim` inside which this body stops walking and holds. The objective
+## owns this number: it is the same radius that decides whether the body is hurting it, so a
+## body that stopped is always a body dealing damage.
+var _push_hold_m: float = 1.5
 ## Cached living-prey aim for the combat tick (refreshed with the goal provider).
 var _combat_prey: Vector3 = Vector3.INF
 ## Accumulator for stride SFX while locomoting (mirrors CityWalker cadence).
 var _footstep_accum: float = 0.0
+## True for meshless Siege Quarter foundation towers (voxel stamp is the visual).
+var _siege_tower: bool = false
+## Authored max HP for siege towers (CreatureHealth is meaningless for a building).
+var _authored_hp: float = 0.0
 
 
 ## `p_seed` decides which body out of the catalogue this unit wears and every procedural
@@ -197,6 +207,59 @@ func setup(
 	_build_nav()
 	_play_action(CreatureClips.Action.IDLE)
 	CityProfiler.end("undead_setup")
+
+
+## Meshless foundation turret for the Siege Quarter. Combat comes from a `siege/…` table row;
+## the voxel stamp is the visual. Not added to the `undead` group so player aim does not treat
+## it as a free target (friendly-fire is also rejected in `apply_damage_scaled`).
+func setup_siege_tower(
+	roster: MonsterRoster,
+	city: CityRoot,
+	world_pos: Vector3,
+	terrain: VoxelTerrain,
+	lod: NavLod,
+	combat_id: String,
+	authored_hp: float,
+	p_seed: int
+) -> void:
+	if combat_id.is_empty():
+		push_error("UndeadUnit.setup_siege_tower: empty combat_id")
+		assert(false, "UndeadUnit: empty tower combat id")
+		return
+	if authored_hp <= 0.0:
+		push_error("UndeadUnit.setup_siege_tower: non-positive hp %f" % authored_hp)
+		assert(false, "UndeadUnit: bad tower hp")
+		return
+	role = Role.MINION
+	_siege_tower = true
+	_authored_hp = authored_hp
+	_body_id = combat_id
+	_roster = roster
+	_invasion = null
+	_city = city
+	_terrain = terrain
+	_lod = lod
+	_seed = p_seed
+	global_position = world_pos
+	character_scale = 1.0
+	_alive = true
+	collision_layer = 2
+	collision_mask = 1
+	name = "SiegeTower_%s" % combat_id.get_file()
+	CityProfiler.begin("undead_setup")
+	_build_body()
+	_bind_combat_for_id(combat_id)
+	set_faction(int(MonsterFactionScript.Id.SIEGE_DEFENDER))
+	_reset_health()
+	_apply_scale()
+	_build_health_bar()
+	state = State.SEEK_PED
+	_build_nav()
+	CityProfiler.end("undead_setup")
+
+
+func is_siege_tower() -> bool:
+	return _siege_tower
 
 
 func is_alive() -> bool:
@@ -278,11 +341,63 @@ func faction() -> int:
 	return _faction
 
 
-## True when this unit may hunt / hurt `other` (different faction).
+## True when this unit may hurt `other`. Fresh prey acquisition is `can_acquire_prey`.
 func is_hostile_to(other: UndeadUnit) -> bool:
 	if other == null or not is_instance_valid(other):
 		return false
 	return MonsterFactionScript.is_hostile(_faction, other.faction())
+
+
+## True when this unit may pick `other` as a fresh hunt target (not forced retaliation).
+func can_acquire_prey(other: UndeadUnit) -> bool:
+	if other == null or not is_instance_valid(other):
+		return false
+	return MonsterFactionScript.can_acquire(_faction, other.faction())
+
+
+## Spawn-time (or controller) faction override. Loud on a bad id — silently wearing SPECTATOR
+## or SIEGE_DEFENDER would make a body un-huntable for the wrong reason.
+func set_faction(id: int) -> void:
+	if not MonsterFactionScript.all().has(id as MonsterFactionScript.Id):
+		push_error("UndeadUnit.set_faction: %d is not a MonsterFaction.Id" % id)
+		assert(false, "UndeadUnit: bad faction")
+		return
+	_faction = id
+
+
+## Standing push destination when nothing else is worth hunting (Siege Lodestone, …).
+## `Vector3.INF` clears it. The goal provider walks here before it wanders.
+func set_push_aim(world: Vector3, hold_m: float = 1.5) -> void:
+	_push_aim = world
+	_push_hold_m = maxf(hold_m, 0.5)
+
+
+func push_aim() -> Vector3:
+	return _push_aim
+
+
+func push_hold_m() -> float:
+	return _push_hold_m
+
+
+## Scale HP and damage after spawn for a wave multiplier. Keeps the current health fraction
+## so a mid-fight respec would not heal; fresh spawns are at full either way.
+func scale_for_wave(hp_factor: float, damage_factor: float) -> void:
+	if _combat == null:
+		push_error("UndeadUnit %s: scale_for_wave before combat bind" % name)
+		assert(false, "UndeadUnit: no combat for wave scale")
+		return
+	if hp_factor <= 0.0 or damage_factor <= 0.0:
+		push_error(
+			"UndeadUnit.scale_for_wave: non-positive factors hp=%f dmg=%f"
+			% [hp_factor, damage_factor]
+		)
+		assert(false, "UndeadUnit: bad wave scale")
+		return
+	var next_hp := float(_combat.call("hp_mult")) * hp_factor
+	_combat.call("set_hp_mult", next_hp)
+	_combat.call("multiply_damage_mult", damage_factor)
+	_update_health_for_scale()
 
 
 ## Player Minion power: same catalogue body, human allegiance, half size / HP / attack damage.
@@ -512,6 +627,13 @@ func apply_damage_scaled(
 			% [name, DamageSourceScript.source_name(source)]
 		)
 		return false
+	## Own towers are unshootable — the player is SIEGE_DEFENDER during a run, and splash
+	## from player weapons must not chew the pads they just spent the pot on.
+	if (
+		_siege_tower
+		and DamageSourceScript.is_player_vs_creature(source)
+	):
+		return false
 	var armor := 1.0
 	if _combat != null:
 		armor = maxf(float(_combat.call("armor_mult")), 0.001)
@@ -519,7 +641,9 @@ func apply_damage_scaled(
 	var raw := DamageSourceScript.amount(source) * scale / armor
 	_health -= raw
 	var taken := minf(raw, before)
-	var body_name: String = _entry.id if _entry != null else String(name)
+	var body_name: String = _body_id if not _body_id.is_empty() else String(name)
+	if _entry != null:
+		body_name = _entry.id
 	var tree := Engine.get_main_loop() as SceneTree
 	var log_node: Node = null
 	if tree != null:
@@ -531,7 +655,7 @@ func apply_damage_scaled(
 			log_node.call(
 				"record", attacker_label, body_name, source, taken, 0.0, _health_max, true
 			)
-		kill_from_player(DamageSourceScript.is_player_vs_creature(source))
+		kill_from_player(DamageSourceScript.is_player_vs_creature(source), attacker)
 		return true
 	if log_node != null and log_node.has_method("record"):
 		log_node.call(
@@ -557,8 +681,9 @@ func _promote_attacker_after_hit(source: DamageSource.Id, attacker: Node) -> voi
 
 
 ## Death: navigation disposed, the death clip played, `died` emitted, the body freed 1.6 s later.
-## Called by the hit that empties the pool. Gem haul only when that hit was player-sourced.
-func kill_from_player(player_kill: bool = false) -> void:
+## Called by the hit that empties the pool. Gem haul for player kills, and for siege-tower
+## kills during a run (those feed the pot the same way).
+func kill_from_player(player_kill: bool = false, killer: Node = null) -> void:
 	if not _alive:
 		return
 	_alive = false
@@ -567,8 +692,13 @@ func kill_from_player(player_kill: bool = false) -> void:
 	_dispose_nav()
 	_drop_health_bar()
 	_play_action(CreatureClips.Action.DEATH)
+	var credit := player_kill
+	if not credit and killer != null and is_instance_valid(killer) and killer.has_method("faction"):
+		if int(killer.call("faction")) == int(MonsterFactionScript.Id.SIEGE_DEFENDER):
+			credit = true
 	if (
-		player_kill
+		credit
+		and not _siege_tower
 		and _city != null
 		and _city.has_method("grant_monster_kill_haul")
 	):
@@ -576,7 +706,7 @@ func kill_from_player(player_kill: bool = false) -> void:
 	died.emit(self, is_giant())
 	var tree := get_tree()
 	if tree != null:
-		tree.create_timer(1.6).timeout.connect(queue_free)
+		tree.create_timer(1.6 if not _siege_tower else 0.05).timeout.connect(queue_free)
 	else:
 		queue_free()
 
@@ -757,9 +887,13 @@ func _bind_combat() -> void:
 		assert(false, "UndeadUnit: no body for combat")
 		return
 	_faction = int(MonsterFactionScript.for_body(_entry.id))
-	var stats: RefCounted = CombatTableScript.resolve(_entry.id)
+	_bind_combat_for_id(_entry.id)
+
+
+func _bind_combat_for_id(combat_id: String) -> void:
+	var stats: RefCounted = CombatTableScript.resolve(combat_id)
 	if stats == null:
-		push_error("UndeadUnit %s: CombatTable.resolve failed for '%s'" % [name, _entry.id])
+		push_error("UndeadUnit %s: CombatTable.resolve failed for '%s'" % [name, combat_id])
 		assert(false, "UndeadUnit: combat resolve failed")
 		return
 	_combat = MonsterCombatScript.new()
@@ -773,6 +907,11 @@ func _bind_combat() -> void:
 
 
 func _reset_health() -> void:
+	if _siege_tower:
+		_health_max = _authored_hp
+		_health = _health_max
+		health_changed.emit(_health, _health_max)
+		return
 	var base := CreatureHealthScript.for_scale(_entry, character_scale)
 	var mult := 1.0
 	if _combat != null:
@@ -786,6 +925,11 @@ func _reset_health() -> void:
 ## and a monster halfway through a fight stays halfway through it — a giant that healed to full
 ## by growing would be a giant nobody could ever wear down.
 func _update_health_for_scale() -> void:
+	if _siege_tower:
+		## A tower's pool is authored in `siege_towers` and there is no catalogue entry to
+		## derive a tier from. Buildings never stand on a grow pad either, so the scale that
+		## drives this recompute never moves.
+		return
 	var base := CreatureHealthScript.for_scale(_entry, character_scale)
 	var mult := 1.0
 	if _combat != null:
