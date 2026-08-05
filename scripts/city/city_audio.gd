@@ -37,6 +37,9 @@ var _meteor_whine_stream: AudioStream
 var _meteor_crash_stream: AudioStream
 var _tendril_drone_stream: AudioStream
 var _tendril_tick_stream: AudioStream
+## Soft airy wobble while the player has any cloudstone buff stacks.
+var _cloud_wobble_stream: AudioStream
+var _cloud_wobble_player: AudioStreamPlayer
 var _gem_pickup_stream: AudioStream
 ## Chest lid and the flourish for a whole haul. No pack has either mood, so both are synthesized.
 var _chest_open_stream: AudioStream
@@ -110,6 +113,11 @@ func _ready() -> void:
 	_bling_player.name = "TreasureBling"
 	_bling_player.bus = &"Master"
 	add_child(_bling_player)
+	_cloud_wobble_player = AudioStreamPlayer.new()
+	_cloud_wobble_player.name = "CloudBuffWobble"
+	_cloud_wobble_player.bus = &"Master"
+	_cloud_wobble_player.volume_db = -18.0
+	add_child(_cloud_wobble_player)
 	_whine_player = _make_dedicated_player("MeteorWhine", 420.0, 18.0)
 	_crash_player = _make_dedicated_player("MeteorCrash", 720.0, 42.0)
 	_crash_player.attenuation_filter_cutoff_hz = 5000.0
@@ -162,7 +170,31 @@ func toggle() -> bool:
 	else:
 		_play_ui(_ui_off)
 		_stop_infection_sfx()
+		stop_cloud_buff_wobble()
 	return enabled
+
+
+## Soft non-positional wobble while `stacks > 0`. Quiet bed — not a combat cue.
+func set_cloud_buff_wobble(stacks: int) -> void:
+	if stacks <= 0 or not enabled:
+		stop_cloud_buff_wobble()
+		return
+	if _cloud_wobble_player == null or _cloud_wobble_stream == null:
+		return
+	var t := clampf(float(stacks - 1) / 9.0, 0.0, 1.0)
+	_cloud_wobble_player.volume_db = lerpf(-20.0, -15.5, t)
+	_cloud_wobble_player.pitch_scale = lerpf(0.94, 1.06, t)
+	if _cloud_wobble_player.playing:
+		return
+	_cloud_wobble_player.stream = _cloud_wobble_stream
+	_cloud_wobble_player.play()
+
+
+func stop_cloud_buff_wobble() -> void:
+	if _cloud_wobble_player == null:
+		return
+	if _cloud_wobble_player.playing:
+		_cloud_wobble_player.stop()
 
 
 func is_enabled() -> bool:
@@ -775,6 +807,7 @@ func _load_banks() -> void:
 	_dissolve_hiss_stream = _build_dissolve_hiss()
 	_tendril_drone_stream = _build_tendril_drone()
 	_tendril_tick_stream = _build_tendril_tick()
+	_cloud_wobble_stream = _build_cloud_wobble()
 	_gem_pickup_stream = _build_gem_pickup()
 	_chest_open_stream = _build_chest_open()
 	_bling_stream = _build_treasure_bling()
@@ -956,6 +989,29 @@ func _build_dissolve_hiss() -> AudioStreamWAV:
 		var air := sin(TAU * 90.0 * t) * 0.12 * smoothstep(0.35, 0.9, t) * exp(-t * 1.2)
 		return (crack + shimmer + grit + energy + air) * env
 	)
+
+
+func _build_cloud_wobble() -> AudioStreamWAV:
+	## Soft airy wobble for cloudstone buffs — low, breathy, never sharp.
+	const DUR := 2.6
+	var stream := _synthesize(DUR, func(t: float, _i: int) -> float:
+		var wob := sin(TAU * 0.32 * t)
+		var air := sin(TAU * 52.0 * t + wob * 1.6) * 0.42
+		var soft := sin(TAU * 88.0 * t - wob * 2.1) * 0.28
+		var drift := sin(TAU * 130.0 * t + sin(TAU * 0.55 * t) * 1.4) * 0.18
+		var hush := sin(TAU * 210.0 * t) * 0.06 * (0.5 + 0.5 * sin(TAU * 1.1 * t))
+		var breath := 0.62 + 0.38 * sin(TAU * 0.4 * t + wob * 0.5)
+		var seam := 1.0
+		if t < 0.08:
+			seam = smoothstep(0.0, 0.08, t)
+		elif t > DUR - 0.08:
+			seam = 1.0 - smoothstep(DUR - 0.08, DUR, t)
+		return (air + soft + drift + hush) * breath * seam * 0.38
+	)
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_begin = 0
+	stream.loop_end = int(DUR * 22050.0)
+	return stream
 
 
 func _build_tendril_drone() -> AudioStreamWAV:

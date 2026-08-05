@@ -145,12 +145,14 @@ const ZOO_PLATE_RIM := 266
 const CAVE_CAGE_FRAME := 267
 const CAVE_CAGE_LINE := 268
 const CAVE_CAGE_GLASS := 269
+## Crafted cloud block — soft gravity pad; billowy shader, not ore.
+const CLOUDSTONE := 270
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
 ## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-const COUNT := 270
+const COUNT := 271
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -212,6 +214,7 @@ static func is_walkable_surface(id: int) -> bool:
 		or id == GLASS
 		or id == GLASS_LIT
 		or id == TIMBER
+		or id == CLOUDSTONE
 		or is_fractal_band(id)
 		or is_zoo_turf(id)
 		or id == ZOO_PLATE_RIM
@@ -237,7 +240,7 @@ static func is_diggable_substrate(id: int) -> bool:
 ## collapsing column. Stone and cave fabric cascade like built structure.
 static func is_self_supporting_terrain(id: int) -> bool:
 	match id:
-		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, ZOO_PLATE_RIM:
+		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, ZOO_PLATE_RIM, CLOUDSTONE:
 			return true
 		_:
 			return is_fractal_band(id) or is_zoo_turf(id)
@@ -632,6 +635,8 @@ static func color(id: int) -> Color:
 		ZOO_PLATE_RIM:
 			## Near-black curb — frames the glowing well without competing with it.
 			return Color(0.16, 0.15, 0.18)
+		CLOUDSTONE:
+			return Color(0.86, 0.92, 1.0, 0.92)
 		_:
 			if is_room_prop(id):
 				return Color(0.55, 0.4, 0.26)

@@ -59,6 +59,8 @@ static func _shape_for(def: InventoryCatalog.ItemDef) -> Mesh:
 		return _block(Vector3.ONE * PREVIEW_SIZE)
 	if def.is_boost:
 		return _flask_for(def.id)
+	if def.is_cloudstone:
+		return _bead(PREVIEW_SIZE * 0.48)
 	match def.gem_mat_id:
 		VoxelMaterial.GEM_QUARTZ:
 			return _column(6, 0.21, PREVIEW_SIZE)
@@ -225,10 +227,19 @@ static func _material_for(def: InventoryCatalog.ItemDef) -> Material:
 		return trap_material()
 	if def.is_boost:
 		return tonic_material(def.id)
+	if def.is_cloudstone:
+		return cloudstone_material()
 	if def.gem_mat_id >= 0:
 		return gem_icon_material(def.gem_mat_id)
 	push_error("InventoryItemVisual: item '%s' has no material mapping" % def.id)
 	return StandardMaterial3D.new()
+
+
+static func cloudstone_material() -> ShaderMaterial:
+	var mat := VoxelBlockLibrary.surface_material(VoxelMaterial.CLOUDSTONE, true).duplicate() as ShaderMaterial
+	mat.set_shader_parameter("emission_strength", 0.55)
+	mat.set_shader_parameter("puff_speed", 0.4)
+	return mat
 
 
 ## The world gem look with its cave glow turned down. VoxelBlockLibrary hands out one shared

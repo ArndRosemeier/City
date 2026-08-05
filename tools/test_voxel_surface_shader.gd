@@ -7,6 +7,7 @@ const SURFACE_SHADER := "res://assets/city/shaders/voxel_surface.gdshader"
 const GLASS_SHADER := "res://assets/city/shaders/voxel_glass.gdshader"
 const WATER_SHADER := "res://assets/city/shaders/voxel_water.gdshader"
 const FOLIAGE_SHADER := "res://assets/city/shaders/voxel_foliage.gdshader"
+const CLOUDSTONE_SHADER := "res://assets/city/shaders/voxel_cloudstone.gdshader"
 const OUT_PNG := "res://tools/voxel_surface_preview.png"
 
 ## Names VoxelBlockLibrary sets from GDScript — each must exist as a shader uniform.
@@ -29,6 +30,10 @@ const REQUIRED_UNIFORMS := {
 	FOLIAGE_SHADER: [
 		"albedo_tex", "tint", "roughness_base", "metallic_base", "alpha_scissor",
 		"lot_meters", "tint_variation",
+	],
+	CLOUDSTONE_SHADER: [
+		"tint", "shadow_tint", "roughness_base", "metallic_base", "object_space",
+		"puff_scale", "puff_speed", "emission_strength", "edge_softness",
 	],
 }
 
@@ -75,16 +80,19 @@ func _check_specs() -> void:
 			return
 		kinds[spec.kind] = int(kinds.get(spec.kind, 0)) + 1
 	print(
-		"OK specs: %d opaque, %d glass, %d water, %d foliage"
+		"OK specs: %d opaque, %d glass, %d water, %d foliage, %d cloudstone"
 		% [
 			int(kinds.get(VoxelSurfaceSpec.Kind.OPAQUE, 0)),
 			int(kinds.get(VoxelSurfaceSpec.Kind.GLASS, 0)),
 			int(kinds.get(VoxelSurfaceSpec.Kind.WATER, 0)),
 			int(kinds.get(VoxelSurfaceSpec.Kind.FOLIAGE, 0)),
+			int(kinds.get(VoxelSurfaceSpec.Kind.CLOUDSTONE, 0)),
 		]
 	)
 	if int(kinds.get(VoxelSurfaceSpec.Kind.FOLIAGE, 0)) < 2:
 		_fail("FAIL expected LEAVES+YEW foliage kinds")
+	if int(kinds.get(VoxelSurfaceSpec.Kind.CLOUDSTONE, 0)) < 1:
+		_fail("FAIL expected CLOUDSTONE surface kind")
 
 
 func _slab(holder: Node3D, size: Vector3, pos: Vector3, id: int) -> void:

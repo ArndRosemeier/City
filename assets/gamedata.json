@@ -1087,6 +1087,13 @@
       "flags": [
         "trap"
       ]
+    },
+    "cloudstone": {
+      "display_name": "Cloudstone",
+      "stack_max": 99,
+      "flags": [
+        "cloudstone"
+      ]
     }
   },
   "craft_recipes": {
@@ -1114,6 +1121,14 @@
         "gem_quartz": 5
       },
       "output_id": "trap",
+      "output_count": 1
+    },
+    "cloudstone_from_amber": {
+      "display_name": "Cloudstone",
+      "inputs": {
+        "gem_amber": 2
+      },
+      "output_id": "cloudstone",
       "output_count": 1
     }
   },
@@ -37397,6 +37412,20 @@
           10,
           0,
           25
+        ]
+      ]
+    },
+    "cloudstone": {
+      "display_name": "Cloudstone",
+      "hint": "Soft cloud block - lowers gravity while underfoot",
+      "consume_item": "cloudstone",
+      "consume_count": 1,
+      "voxels": [
+        [
+          0,
+          0,
+          0,
+          270
         ]
       ]
     }

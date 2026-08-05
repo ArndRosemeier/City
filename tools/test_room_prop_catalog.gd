@@ -172,10 +172,10 @@ func _check_material_tables() -> void:
 			% [VoxelMaterial.LEAVES_DARK, VoxelMaterial.BRANCH_Z]
 		)
 		return
-	if VoxelMaterial.COUNT != VoxelMaterial.LEAVES_DARK + 1:
+	if VoxelMaterial.COUNT != VoxelMaterial.CLOUDSTONE + 1:
 		_fail(
-			"FAIL COUNT=%d leaves a gap after LEAVES_DARK=%d"
-			% [VoxelMaterial.COUNT, VoxelMaterial.LEAVES_DARK]
+			"FAIL COUNT=%d must be CLOUDSTONE=%d + 1"
+			% [VoxelMaterial.COUNT, VoxelMaterial.CLOUDSTONE]
 		)
 		return
 	if VoxelMaterial.is_destructible(VoxelMaterial.ARENA_SHELL):
@@ -198,6 +198,7 @@ func _check_material_tables() -> void:
 		["BRANCH_X", VoxelMaterial.BRANCH_X],
 		["BRANCH_Z", VoxelMaterial.BRANCH_Z],
 		["LEAVES_DARK", VoxelMaterial.LEAVES_DARK],
+		["CLOUDSTONE", VoxelMaterial.CLOUDSTONE],
 		["COUNT", VoxelMaterial.COUNT],
 		["TIMBER", VoxelMaterial.TIMBER],
 	]:

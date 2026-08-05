@@ -16,7 +16,7 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/undead_invasion_hud.gd", "layer": UiLayers.HUD_UNDEAD},
 	{"path": "res://scripts/city/city_minimap.gd", "layer": UiLayers.HUD_MINIMAP},
 	{"path": "res://scripts/city/player_energy_hud.gd", "layer": UiLayers.HUD_ENERGY},
-	{"path": "res://scripts/city/player_boost_hud.gd", "layer": UiLayers.HUD_BOOST},
+	{"path": "res://scripts/city/player_boost_hud.gd", "layer": UiLayers.HUD_BUFF},
 	{"path": "res://scripts/city/player_compass_hud.gd", "layer": UiLayers.HUD_COMPASS},
 	{"path": "res://scripts/city/city_settings_panel.gd", "layer": UiLayers.MODAL_SETTINGS},
 	{"path": "res://scripts/city/player_inventory_panel.gd", "layer": UiLayers.MODAL_INVENTORY},
@@ -44,7 +44,7 @@ const HUD: Array[int] = [
 	UiLayers.HUD_ACTION_BAR,
 	UiLayers.HUD_HEALTH,
 	UiLayers.HUD_LOOT,
-	UiLayers.HUD_BOOST,
+	UiLayers.HUD_BUFF,
 	UiLayers.HUD_COMPASS,
 ]
 

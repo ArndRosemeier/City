@@ -662,7 +662,7 @@ func _build_hud() -> void:
 	add_child(_health_hud)
 
 	_boost_hud = PlayerBoostHudScript.new() as CanvasLayer
-	_boost_hud.name = "PlayerBoostHud"
+	_boost_hud.name = "PlayerBuffHud"
 	add_child(_boost_hud)
 
 	_compass_hud = PlayerCompassHudScript.new() as PlayerCompassHud
@@ -4460,6 +4460,16 @@ func _on_build_chosen(recipe_id: String) -> void:
 	var recipe: BuildCatalog.Recipe = BuildCatalogScript.by_id(recipe_id)
 	if recipe == null:
 		return
+	if not recipe.consume_item.is_empty():
+		if _inventory == null:
+			push_error("CityRoot: build '%s' needs inventory to spend %s" % [recipe_id, recipe.consume_item])
+			return
+		if _inventory.count_of(recipe.consume_item) < recipe.consume_count:
+			print(
+				"CityRoot: need %d %s to place %s"
+				% [recipe.consume_count, InventoryCatalog.display_name(recipe.consume_item), recipe.display_name]
+			)
+			return
 	var aim: Dictionary = _walker.call("aim_ground_at_cursor") as Dictionary
 	var hit: Vector3
 	if bool(aim.get("did_hit", false)):
@@ -4470,6 +4480,18 @@ func _on_build_chosen(recipe_id: String) -> void:
 	var written: int = BuildPlacerScript.place(
 		_terrain, _tool, _brush, recipe, hit, _walker.global_position
 	)
+	if written <= 0:
+		print("CityRoot: build %s wrote no voxels at %s" % [recipe.display_name, hit])
+		return
+	if not recipe.consume_item.is_empty():
+		if not _inventory.remove(recipe.consume_item, recipe.consume_count):
+			push_error(
+				"CityRoot: spent check passed but remove failed for %s x%d"
+				% [recipe.consume_item, recipe.consume_count]
+			)
+			return
+		if _inventory_panel != null and _inventory_panel.has_method("_refresh"):
+			_inventory_panel.call("_refresh")
 	print("CityRoot: built %s (%d voxels) at %s" % [recipe.display_name, written, hit])
 
 

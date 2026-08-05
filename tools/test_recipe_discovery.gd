@@ -92,20 +92,38 @@ func _check_catalog_has_a_schematic_per_power() -> void:
 	print("OK one schematic per gated power, crafts still produce items")
 
 
+func _starter_schematic_count() -> int:
+	## Adventure grant_starter teaches schematics for gated starter unlocks (e.g. hardness).
+	var n := 0
+	for id in AbilityRegistry.STARTER_UNLOCKS:
+		var schematic_id := InventoryCatalog.schematic_id_for_ability(str(id))
+		if InventoryCatalog.has_recipe(schematic_id):
+			n += 1
+	return n
+
+
 func _check_mode_starting_books() -> void:
 	var adv: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 	adv.reset_adventure()
-	if not adv.known_recipes.is_empty():
-		_fail("FAIL adventure must start with an empty cookbook")
-	if adv.missing_recipe_ids().size() != InventoryCatalog.all_recipe_ids().size():
-		_fail("FAIL adventure should be missing every recipe")
+	var starters := _starter_schematic_count()
+	if adv.known_recipes.size() != starters:
+		_fail(
+			"FAIL adventure cookbook should be only starter schematics (want %d got %d)"
+			% [starters, adv.known_recipes.size()]
+		)
+	if adv.missing_recipe_ids().size() != InventoryCatalog.all_recipe_ids().size() - starters:
+		_fail("FAIL adventure should be missing every non-starter recipe")
 	if adv.knows_recipe(InventoryCatalog.RECIPE_TRAP):
 		_fail("FAIL adventure must not know the trap recipe")
+	if adv.knows_recipe(InventoryCatalog.RECIPE_CLOUDSTONE):
+		_fail("FAIL adventure must not know the cloudstone craft")
 
 	var sand: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 	sand.reset_sandbox()
 	if not sand.knows_recipe(InventoryCatalog.RECIPE_TRAP):
 		_fail("FAIL sandbox must know every craft recipe")
+	if not sand.knows_recipe(InventoryCatalog.RECIPE_CLOUDSTONE):
+		_fail("FAIL sandbox must know the cloudstone craft")
 	if not sand.knows_ability_schematic(AbilityRegistry.ID_MINION):
 		_fail("FAIL sandbox must know every schematic")
 	if not sand.missing_recipe_ids().is_empty():
@@ -158,15 +176,16 @@ func _check_pickup_learns_then_pays_gems() -> void:
 	var site := RecipePickupPlacer.site_id(
 		RecipePickupPlacer.SITE_HILL_SUMMIT, Vector2i(3, -1), 0
 	)
+	var before_n := city._loadout.known_recipes.size()
 	if not city.collect_recipe_pickup(site, Vector3(10.0, 20.0, 10.0)):
 		_fail("FAIL the first scroll should have taught something")
-	if city._loadout.known_recipes.size() != 1:
+	if city._loadout.known_recipes.size() != before_n + 1:
 		_fail("FAIL a scroll must teach exactly one recipe")
 	if not city.is_recipe_site_looted(site):
 		_fail("FAIL the site should be marked looted")
 	if city.collect_recipe_pickup(site, Vector3(10.0, 20.0, 10.0)):
 		_fail("FAIL a looted site must not pay again")
-	if city._loadout.known_recipes.size() != 1:
+	if city._loadout.known_recipes.size() != before_n + 1:
 		_fail("FAIL the second collect changed the cookbook")
 
 	## Full cookbook: the same kind of site now has to pay a rare stone instead.

@@ -57,6 +57,16 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			)
 			water.collision_mask = 2
 			return water
+		VoxelMaterial.CLOUDSTONE:
+			## Billowy multi-lobe puff — not a cube. Collision stays a squat box so the
+			## pad is still a walkable footing under the fluff.
+			return _mesh_model(
+				id,
+				_mesh_cloudstone(),
+				true,
+				false,
+				AABB(Vector3(0.12, 0.0, 0.12), Vector3(0.76, 0.62, 0.76))
+			)
 		VoxelMaterial.GLASS:
 			## Engine cube geometry — custom full-cell meshes were wound such that
 			## cull_back dropped every face (windows read as air holes). Opaque cube
@@ -614,6 +624,71 @@ static func _mesh_water() -> ArrayMesh:
 	return _box_mesh(Vector3.ZERO, Vector3.ONE)
 
 
+## Soft cloud puff: overlapping UV-spheres in the unit cell (Minecraft-ish fluff).
+static func _mesh_cloudstone() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	## Lobes sit slightly above the floor so the silhouette reads as floating fluff.
+	_emit_uv_sphere(st, Vector3(0.50, 0.40, 0.50), 0.36, 10, 6)
+	_emit_uv_sphere(st, Vector3(0.26, 0.36, 0.46), 0.26, 8, 5)
+	_emit_uv_sphere(st, Vector3(0.74, 0.38, 0.54), 0.27, 8, 5)
+	_emit_uv_sphere(st, Vector3(0.48, 0.34, 0.26), 0.24, 8, 5)
+	_emit_uv_sphere(st, Vector3(0.52, 0.42, 0.74), 0.25, 8, 5)
+	_emit_uv_sphere(st, Vector3(0.50, 0.62, 0.48), 0.28, 8, 5)
+	_emit_uv_sphere(st, Vector3(0.34, 0.52, 0.34), 0.18, 7, 4)
+	_emit_uv_sphere(st, Vector3(0.68, 0.54, 0.62), 0.17, 7, 4)
+	st.index()
+	return st.commit()
+
+
+static func _emit_uv_sphere(
+	st: SurfaceTool, center: Vector3, radius: float, segments: int, rings: int
+) -> void:
+	var segs := maxi(segments, 4)
+	var rngs := maxi(rings, 2)
+	for ring in range(rngs):
+		var v0 := float(ring) / float(rngs)
+		var v1 := float(ring + 1) / float(rngs)
+		var y0 := cos(PI * v0)
+		var y1 := cos(PI * v1)
+		var r0 := sin(PI * v0)
+		var r1 := sin(PI * v1)
+		for seg in range(segs):
+			var u0 := float(seg) / float(segs)
+			var u1 := float(seg + 1) / float(segs)
+			var a0 := u0 * TAU
+			var a1 := u1 * TAU
+			var n00 := Vector3(cos(a0) * r0, y0, sin(a0) * r0)
+			var n10 := Vector3(cos(a1) * r0, y0, sin(a1) * r0)
+			var n11 := Vector3(cos(a1) * r1, y1, sin(a1) * r1)
+			var n01 := Vector3(cos(a0) * r1, y1, sin(a0) * r1)
+			var p00 := center + n00 * radius
+			var p10 := center + n10 * radius
+			var p11 := center + n11 * radius
+			var p01 := center + n01 * radius
+			## Skip degenerate rings at the poles.
+			if r0 > 0.0001:
+				st.set_normal(n00.normalized())
+				st.set_uv(Vector2(u0, v0))
+				st.add_vertex(p00)
+				st.set_normal(n10.normalized())
+				st.set_uv(Vector2(u1, v0))
+				st.add_vertex(p10)
+				st.set_normal(n11.normalized())
+				st.set_uv(Vector2(u1, v1))
+				st.add_vertex(p11)
+			if r1 > 0.0001:
+				st.set_normal(n00.normalized())
+				st.set_uv(Vector2(u0, v0))
+				st.add_vertex(p00)
+				st.set_normal(n11.normalized())
+				st.set_uv(Vector2(u1, v1))
+				st.add_vertex(p11)
+				st.set_normal(n01.normalized())
+				st.set_uv(Vector2(u0, v1))
+				st.add_vertex(p01)
+
+
 ## Full-cell glass volume (same idea as water — continuous sheet, not inset panes).
 static func _mesh_glass() -> ArrayMesh:
 	return _box_mesh(Vector3.ZERO, Vector3.ONE)
@@ -718,6 +793,7 @@ const SURFACE_SHADER := "res://assets/city/shaders/voxel_surface.gdshader"
 const DEBRIS_SHADER := "res://assets/city/shaders/voxel_debris.gdshader"
 const GLASS_SHADER := "res://assets/city/shaders/voxel_glass.gdshader"
 const WATER_SHADER := "res://assets/city/shaders/voxel_water.gdshader"
+const CLOUDSTONE_SHADER := "res://assets/city/shaders/voxel_cloudstone.gdshader"
 const FOLIAGE_SHADER := "res://assets/city/shaders/voxel_foliage.gdshader"
 ## World height of the street deck (ground_thickness+1)*voxel_size with thickness=6.
 const STREET_DECK_Y := 3.5
@@ -823,6 +899,18 @@ static func _build_surface_material(id: int, object_space: bool) -> ShaderMateri
 			mat.set_shader_parameter("wave_speed", 0.7)
 			mat.set_shader_parameter("fresnel_strength", 0.45)
 			mat.set_shader_parameter("sparkle", 1.2)
+		VoxelSurfaceSpec.Kind.CLOUDSTONE:
+			mat.shader = _load_shader(CLOUDSTONE_SHADER)
+			mat.set_shader_parameter("tint", spec.tint)
+			mat.set_shader_parameter("shadow_tint", Color(0.55, 0.62, 0.78, 1.0))
+			mat.set_shader_parameter("roughness_base", spec.roughness)
+			mat.set_shader_parameter("metallic_base", spec.metallic)
+			mat.set_shader_parameter("object_space", 1.0 if object_space else 0.0)
+			mat.set_shader_parameter("puff_scale", 1.15)
+			mat.set_shader_parameter("puff_speed", 0.22)
+			mat.set_shader_parameter("emission_strength", 0.35)
+			mat.set_shader_parameter("edge_softness", 0.45)
+			return mat
 		VoxelSurfaceSpec.Kind.FOLIAGE:
 			## UV alpha cutout — same shader for terrain and debris (no world projection).
 			mat.shader = _load_shader(FOLIAGE_SHADER)

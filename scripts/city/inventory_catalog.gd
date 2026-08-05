@@ -19,10 +19,12 @@ const ID_DIAMOND := "gem_diamond"
 const ID_TRAP := "trap"
 const ID_BOOST_SPEED := "boost_speed"
 const ID_BOOST_REGEN := "boost_regen"
+const ID_CLOUDSTONE := "cloudstone"
 
 const RECIPE_TRAP := "trap_from_quartz"
 const RECIPE_BOOST_SPEED := "boost_speed_craft"
 const RECIPE_BOOST_REGEN := "boost_regen_craft"
+const RECIPE_CLOUDSTONE := "cloudstone_from_amber"
 
 const RECIPE_KIND_CRAFT := "craft"
 const RECIPE_KIND_SCHEMATIC := "schematic"
@@ -40,6 +42,8 @@ class ItemDef:
 	var is_trap: bool = false
 	## Drinkable temporary boost.
 	var is_boost: bool = false
+	## Placeable cloudstone charge (build stamp spends one).
+	var is_cloudstone: bool = false
 
 
 class Recipe:
@@ -83,6 +87,8 @@ static func ensure_loaded() -> void:
 						item.is_trap = true
 					"boost":
 						item.is_boost = true
+					"cloudstone":
+						item.is_cloudstone = true
 					"gem":
 						pass
 					_:

@@ -1,4 +1,4 @@
-## Speed / regen tonic feedback: world aura layers and HUD chips track the walker timers.
+## Speed / regen tonic feedback: world aura layers and the HUD buff area track walker timers.
 ##
 ## Run: powershell -File tools\run_test.ps1 test_boost_aura
 extends Node
@@ -20,6 +20,7 @@ func _ready() -> void:
 	await _check_walker_boost_sync()
 	await _check_shield_toggle()
 	await _check_hud_chips()
+	await _check_hud_cloud_stacks()
 	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
 
@@ -168,14 +169,27 @@ func _check_hud_chips() -> void:
 		hud.queue_free()
 		return
 	if root.visible:
-		_fail("FAIL boost HUD shows chips with no tonic")
+		_fail("FAIL buff HUD shows chips with no tonic")
+	var buff_area := root.get_node_or_null("BuffArea") as Control
+	if buff_area == null:
+		_fail("FAIL buff HUD missing BuffArea")
+		walker.queue_free()
+		hud.queue_free()
+		return
+	if buff_area is PanelContainer:
+		_fail("FAIL BuffArea should have no panel background")
+		walker.queue_free()
+		hud.queue_free()
+		return
+	if not buff_area.position.is_equal_approx(Vector2(16.0, 38.0)):
+		_fail("FAIL BuffArea should sit below the FPS line, got %s" % buff_area.position)
 
 	walker.begin_speed_boost(12.0)
 	hud.call("_refresh")
 	if not root.visible:
-		_fail("FAIL boost HUD stayed hidden after speed tonic")
-	var speed_chip := root.get_node_or_null("BoostRow/SpeedChip") as Control
-	var regen_chip := root.get_node_or_null("BoostRow/RegenChip") as Control
+		_fail("FAIL buff HUD stayed hidden after speed tonic")
+	var speed_chip := root.get_node_or_null("BuffArea/BuffRow/SpeedChip") as Control
+	var regen_chip := root.get_node_or_null("BuffArea/BuffRow/RegenChip") as Control
 	if speed_chip == null or not speed_chip.visible:
 		_fail("FAIL Speed chip not visible")
 	if regen_chip != null and regen_chip.visible:
@@ -186,8 +200,8 @@ func _check_hud_chips() -> void:
 	if regen_chip == null or not regen_chip.visible:
 		_fail("FAIL Regen chip not visible after regen tonic")
 
-	var grow_chip := root.get_node_or_null("BoostRow/GrowChip") as Control
-	var shrink_chip := root.get_node_or_null("BoostRow/ShrinkChip") as Control
+	var grow_chip := root.get_node_or_null("BuffArea/BuffRow/GrowChip") as Control
+	var shrink_chip := root.get_node_or_null("BuffArea/BuffRow/ShrinkChip") as Control
 	if grow_chip != null and grow_chip.visible:
 		_fail("FAIL Grow chip visible without temp scale")
 	if shrink_chip != null and shrink_chip.visible:
@@ -210,10 +224,74 @@ func _check_hud_chips() -> void:
 	if shrink_chip == null or not shrink_chip.visible:
 		_fail("FAIL Shrink chip not visible after shrink")
 	if grow_chip != null and grow_chip.visible:
-		_fail("FAIL Grow chip still visible during shrink")
+		_fail("FAIL Grow chip still visible during grow")
 
 	hud.call("clear_display")
 	if root.visible:
-		_fail("FAIL boost HUD root stayed up after clear_display")
+		_fail("FAIL buff HUD root stayed up after clear_display")
+	walker.queue_free()
+	hud.queue_free()
+
+
+func _check_hud_cloud_stacks() -> void:
+	var walker: CityWalker = CityWalkerScript.new() as CityWalker
+	walker.name = "CloudHudWalker"
+	add_child(walker)
+	var hud: CanvasLayer = PlayerBoostHudScript.new() as CanvasLayer
+	hud.name = "CloudBuffHud"
+	add_child(hud)
+	await get_tree().process_frame
+	hud.call("bind_walker", walker)
+	await get_tree().process_frame
+
+	var root := hud.get_node_or_null("Root") as Control
+	var cloud_row := root.get_node_or_null("BuffArea/BuffRow/CloudRow") as Control
+	if cloud_row == null:
+		_fail("FAIL buff area missing CloudRow")
+		walker.queue_free()
+		hud.queue_free()
+		return
+	if cloud_row.visible:
+		_fail("FAIL CloudRow visible with zero stacks")
+
+	walker._cloud_stacks = 3
+	hud.call("_refresh")
+	if not root.visible or not cloud_row.visible:
+		_fail("FAIL CloudRow stayed hidden with stacks")
+	var shown := 0
+	for child in cloud_row.get_children():
+		if child is Control and (child as Control).visible:
+			shown += 1
+	if shown != 3:
+		_fail("FAIL want 3 cloud icons, got %d" % shown)
+	var cloud_sep := cloud_row.get_theme_constant("separation")
+	if cloud_sep >= 0:
+		_fail("FAIL cloud stacks should half-overlap (negative separation), got %d" % cloud_sep)
+	var first_cloud := cloud_row.get_node_or_null("Cloud_1") as Control
+	if first_cloud == null or not first_cloud.is_processing():
+		_fail("FAIL cloud icons should run an idle animation process")
+	walker.begin_speed_boost(5.0)
+	hud.call("_refresh")
+	hud.set("_anim_t", 0.35)
+	hud.call("_animate_chips")
+	var speed_chip := root.get_node_or_null("BuffArea/BuffRow/SpeedChip") as Control
+	if speed_chip == null or not speed_chip.visible:
+		_fail("FAIL speed chip missing for pulse check")
+	elif is_equal_approx(speed_chip.scale.x, 1.0) and is_equal_approx(speed_chip.modulate.a, 1.0):
+		_fail("FAIL tonic chips should pulse scale/alpha in the idle loop")
+
+	walker._cloud_stacks = 10
+	hud.call("_refresh")
+	shown = 0
+	for child in cloud_row.get_children():
+		if child is Control and (child as Control).visible:
+			shown += 1
+	if shown != 10:
+		_fail("FAIL want 10 cloud icons at max stacks, got %d" % shown)
+
+	walker._cloud_stacks = 0
+	hud.call("_refresh")
+	if cloud_row.visible:
+		_fail("FAIL CloudRow stayed up after stacks cleared")
 	walker.queue_free()
 	hud.queue_free()

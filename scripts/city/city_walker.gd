@@ -77,6 +77,15 @@ const SWIM_OVERLAY_LATCH_SEC := 0.2
 const SWIM_EXIT_BOOST_SEC := 0.4
 ## After a rim hop, ignore water so submersion cannot pull us back in.
 const SWIM_EXIT_IMMUNE_SEC := 0.55
+## Cloudstone column buff: +1 stack/sec underfoot, −1 / 5s when clear; each stack −0.2g.
+const CLOUD_BUFF_MAX := 10
+const CLOUD_GAIN_INTERVAL_SEC := 1.0
+const CLOUD_LOSS_INTERVAL_SEC := 5.0
+const CLOUD_GRAVITY_FRAC_PER_STACK := 0.2
+## Each stack adds this fraction of the current locomotion speed (walk / sprint / swim).
+const CLOUD_SPEED_FRAC_PER_STACK := 0.1
+const CLOUD_CEILING_M := 50.0
+const CLOUD_COLUMN_SCAN_VOX := 64
 
 @export var walk_speed: float = 5.0
 @export var sprint_speed: float = 8.5
@@ -280,6 +289,12 @@ var _boost_regen_left: float = 0.0
 var _boost_regen_mul: float = 1.0
 ## Soft shell VFX while a tonic timer is live (see boost_aura_vfx.gd).
 var _boost_aura: Node3D
+## Stacks from standing over CLOUDSTONE voxels (see `_tick_cloud_buff`).
+var _cloud_stacks: int = 0
+var _cloud_gain_left: float = 0.0
+var _cloud_loss_left: float = 0.0
+var _cloud_ceiling_anchor_y: float = 0.0
+var _cloud_has_ceiling_anchor: bool = false
 var _temp_scale_left: float = 0.0
 var _temp_scale_restore: float = 0.0
 ## Ability id last started from a mouse chord, so release stops the right hold.
@@ -990,6 +1005,7 @@ func _tick_status_effects(delta: float) -> void:
 		_boost_regen_left = maxf(_boost_regen_left - delta, 0.0)
 	if speed_was != (_boost_speed_left > 0.0) or regen_was != (_boost_regen_left > 0.0):
 		_sync_boost_aura()
+	_tick_cloud_buff(delta)
 	if _temp_scale_left > 0.0:
 		_temp_scale_left = maxf(_temp_scale_left - delta, 0.0)
 		if _temp_scale_left <= 0.0 and _temp_scale_restore > 0.0:
@@ -999,6 +1015,104 @@ func _tick_status_effects(delta: float) -> void:
 		var drain := AbilityRegistry.SHIELD_DRAIN_PER_SEC * delta
 		if not try_spend_energy(drain):
 			set_shield_held(false)
+
+
+func cloud_stacks() -> int:
+	return _cloud_stacks
+
+
+func _effective_gravity() -> float:
+	var base := float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+	return base * (1.0 - CLOUD_GRAVITY_FRAC_PER_STACK * float(_cloud_stacks))
+
+
+func _cloud_speed_mul() -> float:
+	return 1.0 + CLOUD_SPEED_FRAC_PER_STACK * float(_cloud_stacks)
+
+
+func _tick_cloud_buff(delta: float) -> void:
+	var before := _cloud_stacks
+	var under := _column_has_cloudstone()
+	if under:
+		_cloud_loss_left = 0.0
+		if _cloud_stacks >= CLOUD_BUFF_MAX:
+			_cloud_gain_left = CLOUD_GAIN_INTERVAL_SEC
+			_sync_cloud_buff_audio(before)
+			return
+		if _cloud_gain_left <= 0.0:
+			_cloud_gain_left = CLOUD_GAIN_INTERVAL_SEC
+		_cloud_gain_left -= delta
+		while _cloud_gain_left <= 0.0 and _cloud_stacks < CLOUD_BUFF_MAX:
+			_cloud_stacks += 1
+			if _cloud_stacks < CLOUD_BUFF_MAX:
+				_cloud_gain_left += CLOUD_GAIN_INTERVAL_SEC
+			else:
+				_cloud_gain_left = CLOUD_GAIN_INTERVAL_SEC
+		_sync_cloud_buff_audio(before)
+		return
+	_cloud_gain_left = 0.0
+	if _cloud_stacks <= 0:
+		_cloud_loss_left = 0.0
+		_cloud_has_ceiling_anchor = false
+		_sync_cloud_buff_audio(before)
+		return
+	if _cloud_loss_left <= 0.0:
+		_cloud_loss_left = CLOUD_LOSS_INTERVAL_SEC
+	_cloud_loss_left -= delta
+	while _cloud_loss_left <= 0.0 and _cloud_stacks > 0:
+		_cloud_stacks -= 1
+		if _cloud_stacks > 0:
+			_cloud_loss_left += CLOUD_LOSS_INTERVAL_SEC
+		else:
+			_cloud_loss_left = 0.0
+			_cloud_has_ceiling_anchor = false
+	_sync_cloud_buff_audio(before)
+
+
+func _sync_cloud_buff_audio(stacks_before: int) -> void:
+	## Only touch audio when presence or stack count changes — avoid per-frame spam.
+	if _cloud_stacks == stacks_before:
+		return
+	var audio := _city_audio()
+	if audio == null or not audio.has_method("set_cloud_buff_wobble"):
+		return
+	audio.call("set_cloud_buff_wobble", _cloud_stacks)
+
+
+func _column_has_cloudstone() -> bool:
+	if _voxel_motion == null or not bool(_voxel_motion.call("has_terrain")):
+		return false
+	var x := global_position.x
+	var z := global_position.z
+	## Start just under the soles and walk the column down toward bedrock.
+	var y0 := global_position.y - 0.12 * maxf(character_scale, 0.001)
+	for i in CLOUD_COLUMN_SCAN_VOX:
+		var id := _voxel_id_at(Vector3(x, y0 - float(i) * VOXEL_SIZE_M, z))
+		if id == VoxelMaterial.CLOUDSTONE:
+			return true
+		if id == VoxelMaterial.BEDROCK:
+			return false
+	return false
+
+
+func _apply_cloud_ceiling(grounded: bool) -> void:
+	if _cloud_stacks <= 0:
+		_cloud_has_ceiling_anchor = false
+		return
+	var gravity := _effective_gravity()
+	if grounded and gravity > 0.0:
+		_cloud_ceiling_anchor_y = global_position.y
+		_cloud_has_ceiling_anchor = true
+		return
+	if not _cloud_has_ceiling_anchor:
+		_cloud_ceiling_anchor_y = _last_grounded_y
+		_cloud_has_ceiling_anchor = true
+	var ceiling := _cloud_ceiling_anchor_y + CLOUD_CEILING_M
+	if global_position.y <= ceiling:
+		return
+	global_position.y = ceiling
+	if velocity.y > 0.0:
+		velocity.y = 0.0
 
 
 func _ensure_boost_aura() -> void:
@@ -1810,18 +1924,20 @@ func _physics_process(delta: float) -> void:
 		velocity.x = 0.0
 		velocity.z = 0.0
 		_end_jump_rise()
-		if not _floor_contacted():
-			var gravity_edit: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+		var gravity_edit := _effective_gravity()
+		var floor_edit := _floor_contacted()
+		if not floor_edit or gravity_edit <= 0.0:
 			velocity.y -= gravity_edit * delta
 		else:
 			velocity.y = 0.0
 			if not _feet_aligned and _skeleton != null and character_scale < ray_ground_scale:
 				_align_soles_to_floor()
 		_apply_body_motion(delta)
+		_apply_cloud_ceiling(floor_edit and gravity_edit > 0.0)
 		_apply_camera_angles()
 		return
 
-	var gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+	var gravity := _effective_gravity()
 	var ray_mode := character_scale >= ray_ground_scale
 	if _land_anim_left > 0.0:
 		_land_anim_left = maxf(_land_anim_left - delta, 0.0)
@@ -1869,7 +1985,9 @@ func _physics_process(delta: float) -> void:
 
 	_set_physics_terrain_collision(false)
 	var grounded := _floor_contacted()
-	if grounded and not _jumping:
+	## Negative cloud gravity lifts off the pad — do not glue soles while falling “up”.
+	var stick_floor := grounded and not _jumping and gravity > 0.0
+	if stick_floor:
 		_coyote_left = coyote_time_sec
 		_last_grounded_y = global_position.y
 		## Remember a stand above the bedrock clamp so cave shaft falls can snap back.
@@ -1899,6 +2017,8 @@ func _physics_process(delta: float) -> void:
 	var speed := walk_speed * SWIM_SPEED_FACTOR if _swimming else (sprint_speed if sprinting else walk_speed)
 	if _boost_speed_left > 0.0:
 		speed *= _boost_speed_mul
+	if _cloud_stacks > 0:
+		speed *= _cloud_speed_mul()
 	speed *= character_scale
 	_moving = wish.length_squared() > 0.0001
 	if exiting_pool:
@@ -1932,6 +2052,7 @@ func _physics_process(delta: float) -> void:
 	var wish_speed := speed if _moving else 0.0
 	_apply_body_motion(delta)
 	_stabilize_vertical(ray_mode)
+	_apply_cloud_ceiling(stick_floor)
 	## After physics: sink through water colliders and hold chest-deep.
 	if _swimming and _swim_exit_boost_left <= 0.0:
 		_apply_swim_submersion()
@@ -2512,6 +2633,9 @@ func _update_jump_rise(_delta: float) -> void:
 		_end_jump_rise()
 		return
 	var max_h := jump_height_max_m * maxf(character_scale, 0.001)
+	## Hold-jump cancels gravity, so stretch the rise ceiling with cloud stacks.
+	if _cloud_stacks > 0:
+		max_h *= 1.0 + CLOUD_GRAVITY_FRAC_PER_STACK * float(_cloud_stacks)
 	if global_position.y - _jump_start_y >= max_h:
 		_end_jump_rise()
 		return

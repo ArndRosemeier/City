@@ -15,6 +15,8 @@ enum Kind {
 	WATER,
 	## voxel_foliage.gdshader — UV alpha cutout on leaf / yew cards
 	FOLIAGE,
+	## voxel_cloudstone.gdshader — soft billowy craft block
+	CLOUDSTONE,
 }
 
 var kind: Kind = Kind.OPAQUE
@@ -355,6 +357,13 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			s.tint = Color(0.5, 0.78, 0.9, 0.62)
 			s.roughness = 0.06
 			s.metallic = 0.05
+		VoxelMaterial.CLOUDSTONE:
+			s.kind = Kind.CLOUDSTONE
+			s.albedo_file = "plaster.jpg"
+			s.tile_meters = Vector2(4.0, 4.0)
+			s.tint = Color(0.86, 0.92, 1.0, 0.92)
+			s.roughness = 0.82
+			s.metallic = 0.0
 		VoxelMaterial.CAVE_WALL:
 			s.albedo_file = "cave_wall.jpg"
 			s.normal_file = "cave_wall_normal.jpg"

@@ -23,8 +23,10 @@ const HUD_HEALTH := 16
 ## The loot card. Top of the HUD band: it is transient and sits over the bars for a second or two,
 ## and a find the player cannot see is the whole thing this surface exists to fix.
 const HUD_LOOT := 17
-## Active tonic chips (speed / regen). Above the bars, below loot so a find still owns the eye.
-const HUD_BOOST := 18
+## Buff area under the FPS line (cloud stacks, tonic chips, grow/shrink). Below loot so a
+## find still owns the eye. `HUD_BOOST` kept as an alias for older call sites / tests.
+const HUD_BUFF := 18
+const HUD_BOOST := HUD_BUFF
 ## Heading rose. Top of the band with loot: always-on travel chrome, never over a find card.
 const HUD_COMPASS := 19
 ## Monster Zoo spectator cloak countdown. Top of the band because it is the one readout that

@@ -14,6 +14,9 @@ class Recipe:
 	var hint: String = ""
 	## Packed as [ox, oy, oz, material_id] per voxel — compact and typed.
 	var voxels: PackedInt32Array = PackedInt32Array()
+	## When set, placing spends this many inventory charges (empty = free POC stamp).
+	var consume_item: String = ""
+	var consume_count: int = 0
 
 
 static var _by_id: Dictionary = {}
@@ -44,6 +47,12 @@ static func ensure_loaded() -> void:
 		r.id = id
 		r.display_name = str(row.get("display_name", id))
 		r.hint = str(row.get("hint", ""))
+		r.consume_item = str(row.get("consume_item", ""))
+		r.consume_count = int(row.get("consume_count", 0))
+		if not r.consume_item.is_empty() and r.consume_count <= 0:
+			push_error("BuildCatalog: '%s' consume_item set without consume_count" % id)
+			assert(false, "BuildCatalog: bad consume_count")
+			continue
 		var voxels_raw: Variant = row.get("voxels", [])
 		if typeof(voxels_raw) != TYPE_ARRAY:
 			push_error("BuildCatalog: '%s' voxels must be an array" % id)

@@ -83,8 +83,11 @@ pub const CAVE_CAGE_FRAME: i32 = 267;
 pub const CAVE_CAGE_LINE: i32 = 268;
 #[allow(dead_code)]
 pub const CAVE_CAGE_GLASS: i32 = 269;
+/// Crafted cloud block — gravity pad. Keep in sync with `voxel_material.gd`.
+#[allow(dead_code)]
+pub const CLOUDSTONE: i32 = 270;
 /// Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-pub const COUNT: i32 = 270;
+pub const COUNT: i32 = 271;
 
 #[inline]
 pub fn is_zoo_fence(id: i32) -> bool {
@@ -163,6 +166,7 @@ pub fn is_self_supporting_terrain(id: i32) -> bool {
     matches!(
         id,
         DIRT | GRAVEL | PARK | GRAVE_SOIL | GRAVE_PATH | FRACTAL_GLOW | ZOO_PLATE_RIM
+            | CLOUDSTONE
     ) || (id >= FRACTAL_BAND_0 && id <= FRACTAL_BAND_15)
         || id == FRACTAL_INTERIOR
         || is_zoo_turf(id)

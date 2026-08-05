@@ -1,7 +1,9 @@
-## Top-of-HUD chips for active speed / regen tonics and temporary grow / shrink.
+## HUD buff area — active status effects just below the FPS / score line.
 ##
-## World auras are the primary read for tonics; these chips cover first-person camera
-## angles and confirm which timer is still ticking when several are stacked.
+## No panel chrome: icons sit on the world. Same-buff stacks (cloudstone) half-overlap;
+## different buff types sit in a loose row beside each other. Visible icons run a small
+## idle loop (cloud bob / chip pulse) so active buffs read as live.
+## CityRoot owns the CanvasLayer lifecycle; this only binds a walker and polls it.
 extends CanvasLayer
 
 const InventoryItemVisualScript := preload("res://scripts/city/inventory_item_visual.gd")
@@ -11,10 +13,65 @@ const SPEED_COLOR := InventoryItemVisualScript.TONIC_SPEED_COLOR
 const REGEN_COLOR := InventoryItemVisualScript.TONIC_REGEN_COLOR
 const GROW_COLOR := AbilityIconVisualScript.GROW_GREEN
 const SHRINK_COLOR := AbilityIconVisualScript.SHRINK_VIOLET
+const CLOUD_ICON_MAX := 10
+## Matches CityRoot FPS label at (16, 12) with font 18 — one line below.
+const BUFF_AREA_POS := Vector2(16.0, 38.0)
+const CHIP_PULSE_HZ := 0.55
+const CHIP_PULSE_SCALE := 0.045
+const CHIP_PULSE_ALPHA := 0.12
+
+## One soft cloud silhouette for a single cloudstone stack.
+class BuffCloudIcon:
+	extends Control
+
+	const SIZE := Vector2(22.0, 16.0)
+	const BOB_PX := 1.8
+	const BOB_HZ := 0.85
+	const PUFF_HZ := 1.1
+	const PUFF_AMT := 0.07
+
+	var phase: float = 0.0
+	var _t: float = 0.0
+
+	func setup(index: int) -> void:
+		phase = float(index) * 0.55
+		_t = phase
+
+	func _ready() -> void:
+		custom_minimum_size = SIZE
+		size = SIZE
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_process(true)
+
+	func _process(delta: float) -> void:
+		if not visible:
+			return
+		_t += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		## Draw-space bob/puff — HBox owns Control.position, so motion stays in the mesh.
+		var bob := sin(_t * TAU * BOB_HZ + phase) * BOB_PX
+		var puff := 1.0 + PUFF_AMT * sin(_t * TAU * PUFF_HZ + phase * 1.3)
+		var origin := Vector2(SIZE.x * 0.5, SIZE.y * 0.5 + bob)
+		var fill := Color(0.9, 0.94, 1.0, 0.92 + 0.06 * sin(_t * TAU * PUFF_HZ + phase))
+		var rim := Color(0.55, 0.7, 0.95, 0.5 + 0.12 * sin(_t * TAU * BOB_HZ + phase + 0.4))
+		_draw_disc(origin, Vector2(0.0, 0.5) * puff, 6.8 * puff, rim)
+		_draw_disc(origin, Vector2(0.0, 0.5) * puff, 5.6 * puff, fill)
+		_draw_disc(origin, Vector2(-4.5, -0.5) * puff, 4.8 * puff, fill)
+		_draw_disc(origin, Vector2(4.5, -0.2) * puff, 4.6 * puff, fill)
+		_draw_disc(origin, Vector2(0.0, -3.0) * puff, 4.2 * puff, fill)
+
+	func _draw_disc(origin: Vector2, offset: Vector2, radius: float, colour: Color) -> void:
+		draw_circle(origin + offset, radius, colour)
+
 
 var _walker: Node
 var _root: Control
+var _buff_area: Control
 var _row: HBoxContainer
+var _cloud_row: HBoxContainer
+var _cloud_icons: Array[Control] = []
 var _speed_chip: PanelContainer
 var _regen_chip: PanelContainer
 var _grow_chip: PanelContainer
@@ -23,10 +80,11 @@ var _speed_label: Label
 var _regen_label: Label
 var _grow_label: Label
 var _shrink_label: Label
+var _anim_t: float = 0.0
 
 
 func _ready() -> void:
-	layer = UiLayers.HUD_BOOST
+	layer = UiLayers.HUD_BUFF
 	_root = Control.new()
 	_root.name = "Root"
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -34,18 +92,36 @@ func _ready() -> void:
 	_root.visible = false
 	add_child(_root)
 
+	_buff_area = Control.new()
+	_buff_area.name = "BuffArea"
+	_buff_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_buff_area.position = BUFF_AREA_POS
+	_root.add_child(_buff_area)
+
 	_row = HBoxContainer.new()
-	_row.name = "BoostRow"
+	_row.name = "BuffRow"
 	_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_row.add_theme_constant_override("separation", 8)
-	_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_row.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_row.offset_left = -280.0
-	_row.offset_right = 280.0
-	_row.offset_top = -210.0
-	_row.offset_bottom = -178.0
-	_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	_root.add_child(_row)
+	_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	_buff_area.add_child(_row)
+
+	_cloud_row = HBoxContainer.new()
+	_cloud_row.name = "CloudRow"
+	_cloud_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	## Half-icon step: each cloud covers half of the previous one.
+	_cloud_row.add_theme_constant_override("separation", -int(BuffCloudIcon.SIZE.x * 0.5))
+	_cloud_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	_cloud_row.visible = false
+	_row.add_child(_cloud_row)
+	for i in CLOUD_ICON_MAX:
+		var icon := BuffCloudIcon.new()
+		icon.name = "Cloud_%d" % (i + 1)
+		icon.visible = false
+		## Later stacks draw on top of earlier ones in the overlap.
+		icon.z_index = i
+		icon.setup(i)
+		_cloud_row.add_child(icon)
+		_cloud_icons.append(icon)
 
 	_speed_chip = _make_chip("SpeedChip", SPEED_COLOR)
 	_speed_label = _speed_chip.get_node("Label") as Label
@@ -77,8 +153,10 @@ func clear_display() -> void:
 		_root.visible = false
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_anim_t += delta
 	_refresh()
+	_animate_chips()
 
 
 func _refresh() -> void:
@@ -91,6 +169,7 @@ func _refresh() -> void:
 	var regen_left := 0.0
 	var scale_left := 0.0
 	var scale_sign := 0
+	var clouds := 0
 	if _walker.has_method("speed_boost_left"):
 		speed_left = float(_walker.call("speed_boost_left"))
 	if _walker.has_method("regen_boost_left"):
@@ -99,15 +178,21 @@ func _refresh() -> void:
 		scale_left = float(_walker.call("temp_scale_left"))
 	if _walker.has_method("temp_scale_sign"):
 		scale_sign = int(_walker.call("temp_scale_sign"))
+	if _walker.has_method("cloud_stacks"):
+		clouds = clampi(int(_walker.call("cloud_stacks")), 0, CLOUD_ICON_MAX)
 
 	var show_speed := speed_left > 0.05
 	var show_regen := regen_left > 0.05
 	var show_grow := scale_left > 0.05 and scale_sign > 0
 	var show_shrink := scale_left > 0.05 and scale_sign < 0
+	var show_clouds := clouds > 0
 	_speed_chip.visible = show_speed
 	_regen_chip.visible = show_regen
 	_grow_chip.visible = show_grow
 	_shrink_chip.visible = show_shrink
+	_cloud_row.visible = show_clouds
+	for i in _cloud_icons.size():
+		_cloud_icons[i].visible = i < clouds
 	if show_speed and _speed_label != null:
 		_speed_label.text = "Speed  %ds" % ceili(speed_left)
 	if show_regen and _regen_label != null:
@@ -116,8 +201,26 @@ func _refresh() -> void:
 		_grow_label.text = "Grow  %ds" % ceili(scale_left)
 	if show_shrink and _shrink_label != null:
 		_shrink_label.text = "Shrink  %ds" % ceili(scale_left)
-	## Keep CanvasLayer visibility under CityRoot's HUD band; only hide the chips.
-	_root.visible = show_speed or show_regen or show_grow or show_shrink
+	## Keep CanvasLayer visibility under CityRoot's HUD band; only hide the area.
+	_root.visible = show_speed or show_regen or show_grow or show_shrink or show_clouds
+
+
+func _animate_chips() -> void:
+	_pulse_chip(_speed_chip, 0.0)
+	_pulse_chip(_regen_chip, 1.1)
+	_pulse_chip(_grow_chip, 2.0)
+	_pulse_chip(_shrink_chip, 2.8)
+
+
+func _pulse_chip(chip: Control, phase: float) -> void:
+	if chip == null or not chip.visible:
+		return
+	## Containers own position; scale/modulate keep the idle loop without fighting layout.
+	var wave := sin(_anim_t * TAU * CHIP_PULSE_HZ + phase)
+	chip.pivot_offset = chip.size * 0.5
+	var s := 1.0 + CHIP_PULSE_SCALE * wave
+	chip.scale = Vector2(s, s)
+	chip.modulate = Color(1.0, 1.0, 1.0, 1.0 - CHIP_PULSE_ALPHA * 0.5 + CHIP_PULSE_ALPHA * 0.5 * wave)
 
 
 func _make_chip(node_name: String, accent: Color) -> PanelContainer:
@@ -125,15 +228,16 @@ func _make_chip(node_name: String, accent: Color) -> PanelContainer:
 	panel.name = node_name
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.visible = false
+	## Transparent fill — only the accent rim + label, matching the open buff area.
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.07, 0.09, 0.86)
-	style.border_color = Color(accent.r, accent.g, accent.b, 0.85)
+	style.bg_color = Color(0, 0, 0, 0)
+	style.border_color = Color(accent.r, accent.g, accent.b, 0.9)
 	style.set_border_width_all(2)
 	style.set_corner_radius_all(6)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 4
-	style.content_margin_bottom = 4
+	style.content_margin_left = 8
+	style.content_margin_right = 8
+	style.content_margin_top = 2
+	style.content_margin_bottom = 2
 	panel.add_theme_stylebox_override("panel", style)
 
 	var label := Label.new()
