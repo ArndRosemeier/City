@@ -10,4 +10,11 @@ When the user asks to **commit** (or commit and push):
 - Stage **all** modified and untracked project files that belong in git — do not leave related leftovers out of the commit to keep the message “focused.”
 - Do not selectively omit scripts, assets, tools, `.cursor/rules`, launchers, or docs that are part of the current working tree unless they are secrets (`.env`, credentials) or clearly machine-local junk (build caches, `.godot/` imports, personal notes outside the repo).
 - If changes span multiple concerns, prefer **one commit with a message that covers them**, or multiple commits that **together** clear the working tree — never finish with intentional uncommitted project files after a commit request.
+- **Before** `git commit`, run the publish tracking gate when the working tree added or renamed any `scripts/**/*.gd`, `scripts/**/*.gdshader`, `assets/**/*.gdshader`, or `tools/test_*.gd` (or when untracked `*.uid` / other project files are present):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_tracking.ps1 -Root .
+```
+
+  If it reports missing `.uid` sidecars, generate them with a headless import, `git add` the new `*.uid` files, and re-run the check until it prints `Tracking OK`. Do not commit a tree that would fail publish for tracking reasons.
 - Still follow the usual git safety rules (no force-push to main, no amend unless allowed, no secrets).

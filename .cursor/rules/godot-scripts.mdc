@@ -44,6 +44,27 @@ If another script types a variable as the new class (`var x: MyNewClass`), headl
 
 After **git pull** that brings new/renamed classes: refresh cache with `--import` (see `godot-class-cache-pull.mdc`).
 
+## New `.gd` / `.gdshader` under `scripts/` (and new `tools/test_*.gd`)
+
+Godot writes a sibling `.uid` on first import (`uid://…`). Publish and CI require those sidecars to be **tracked** — a commit that adds only the source is incomplete and blocks `publish_portable_release.bat`.
+
+After creating a new gameplay/test script (or shader under `scripts/` / `assets/`):
+
+1. Generate sidecars (also refreshes the class cache):
+
+```powershell
+.\tools\godot\Godot_v4.6-voxel_win64.exe --headless --path . --import
+```
+
+2. Confirm `path/to/file.gd.uid` exists on disk and stage it with the source.
+3. Before calling the change done (and always before commit when new sources were added):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_tracking.ps1 -Root .
+```
+
+Expect `Tracking OK`. Do not invent `.uid` contents by hand.
+
 ## Seeding gems
 
 World gem **type** always comes from `VoxelMaterial.random_gem(rng)` (or `random_gem_from` when the pool is restricted). Weights live in `assets/gamedata.json` → `district_gems.rarity_weights`. Theme totals only set **how many** gems a district owes (`DistrictEconomy.roll_budgets`); each entry is typed by `random_gem`. Do not `randi` a `GEM_*` id at a seed site. Native duplicates of the curve (e.g. `hill_paint::random_gem`) must stay in lockstep with gamedata.
