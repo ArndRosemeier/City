@@ -1,8 +1,8 @@
 shader_type spatial;
-/// Tower bars sit inside their own stamp at the foundation. Creatures clear that with
-/// `camera_pull`; pulling a tower bar detaches it at an angle. Instead: no pull, no depth test —
-/// the strip stays at the true base and still draws over the voxels that would bury it.
-render_mode unshaded, cull_back, shadows_disabled, depth_test_disabled;
+/// Tower bars sit inside their own stamp at the foundation. A short `camera_pull` (set from
+/// `fit_over_structure`) clears those nearby voxels the way a creature bar clears its legs —
+/// depth testing stays on, so a wall between the camera and the tower still hides the strip.
+render_mode unshaded, cull_back, shadows_disabled;
 
 uniform float bar_aspect = 6.25;
 uniform float frame_fraction : hint_range(0.0, 0.5) = 0.16;

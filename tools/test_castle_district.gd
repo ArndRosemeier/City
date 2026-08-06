@@ -153,6 +153,7 @@ func _ready() -> void:
 	_check_dungeon_entries(layout)
 	_check_dungeon_plan(layout)
 	_check_dungeon_rooms(layout)
+	_check_dungeon_openings(layout)
 	_check_dungeon_stairs(layout)
 	_check_dungeon_tall(layout)
 	_check_dungeon_tree("seed %d" % _world_seed, layout)
@@ -252,6 +253,14 @@ func _check_layout(coord: Vector2i) -> DistrictPlanner:
 # Voxels
 # ---------------------------------------------------------------------------
 
+## The castle's masonry, either fresh or weathered. Moss creeps over courtyard flags, wall
+## feet and batter risers wherever the noise says so, so any column of this fortress may come
+## back as the mossy id — an assertion that names only the fresh one fails on the seeds where
+## the dressing happened to land on the column it sampled.
+func _is_castle_stone(id: int) -> bool:
+	return id == VoxelMaterial.CASTLE_BLOCK or id == VoxelMaterial.CASTLE_BLOCK_MOSSY
+
+
 func _check_masonry(res: Dictionary) -> void:
 	var counts := _count_above_deck(res["blocks"], int(res["ground_thickness"]))
 	var ashlar := int(counts.get(VoxelMaterial.CASTLE_BLOCK, 0))
@@ -284,10 +293,7 @@ func _check_tower_masonry(layout: CastleLayout) -> void:
 					if m == VoxelMaterial.AIR:
 						continue
 					sampled += 1
-					if (
-						m != VoxelMaterial.CASTLE_BLOCK
-						and m != VoxelMaterial.CASTLE_BLOCK_MOSSY
-					):
+					if not _is_castle_stone(m):
 						foreign += 1
 						worst = m
 	print("tower shafts: %d voxels sampled, %d not castle block" % [sampled, foreign])
@@ -358,7 +364,7 @@ func _check_vertical_budget(layout: CastleLayout, ground_thickness: int) -> void
 		)
 		return
 	var at := layout.courtyard_center
-	if _vox(at.x, layout.courtyard_y, at.y) != VoxelMaterial.CASTLE_BLOCK:
+	if not _is_castle_stone(_vox(at.x, layout.courtyard_y, at.y)):
 		_fail(
 			"FAIL the middle of the bailey is %d at Y=%d, not castle block"
 			% [_vox(at.x, layout.courtyard_y, at.y), layout.courtyard_y]
@@ -370,14 +376,16 @@ func _check_vertical_budget(layout: CastleLayout, ground_thickness: int) -> void
 	## Phase 3 inverted the old assertion here. The plinth is no longer solid all the way down —
 	## the dungeon is inside it — so what has to hold is that the band stayed inside its own
 	## budget: an unbroken slab over it and untouched bedrock under it.
-	var thin := 0
+	var holes := PackedInt32Array()
 	for y in range(layout.dungeon_y1 + 1, layout.courtyard_y + 1):
 		if _vox(at.x, y, at.y) == VoxelMaterial.AIR:
-			thin += 1
-	if thin > 0:
+			holes.append(y)
+	if not holes.is_empty():
 		_fail(
 			"FAIL %d of the %d slab voxels between the dungeon and the bailey at %s are air"
-			% [thin, layout.courtyard_y - layout.dungeon_y1, at]
+			% [holes.size(), layout.courtyard_y - layout.dungeon_y1, at]
+			+ " (Y=%s of the band Y%d..%d)"
+			% [holes, layout.dungeon_y1 + 1, layout.courtyard_y]
 		)
 		return
 	for y2 in range(0, layout.dungeon_y0):
@@ -857,6 +865,67 @@ func _check_openings(layout: CastleLayout) -> void:
 	if min_h < MIN_HEAD:
 		_fail("FAIL a doorway has only %d voxels of headroom, the profile needs %d"
 			% [min_h, MIN_HEAD])
+
+
+## The same measurement for the dungeon's grilles, which is where it matters most: the keep has
+## a handful of doorways and the warren below has a hundred, every one of them an edge some
+## chamber's only route runs through. Measured through the full depth of the wall and on both
+## thresholds, because the plan graph counts a doorway as an edge the moment it is recorded —
+## a grille the carve left half-cut, or one opening onto a column nothing can stand in, is a
+## chamber that is connected on paper and sealed in the world.
+func _check_dungeon_openings(layout: CastleLayout) -> void:
+	if layout.dungeon_doorways.is_empty():
+		return
+	var min_w := 99
+	var min_h := 99
+	var narrowest: CastleDoorway = null
+	for d: CastleDoorway in layout.dungeon_doorways:
+		var y := d.floor_y + 1
+		var side := d.side()
+		for step in range(d.depth):
+			var mid := d.center + d.axis * step
+			if _vox(mid.x, y, mid.y) != VoxelMaterial.AIR:
+				_fail(
+					"FAIL %s is still solid %d voxels into the wall at %s"
+					% [d.describe(), step, mid]
+				)
+				return
+			var w := 1
+			for dir: int in [-1, 1]:
+				var t := 1
+				while t < 32:
+					if _vox((mid + side * (t * dir)).x, y, (mid + side * (t * dir)).y) \
+							!= VoxelMaterial.AIR:
+						break
+					w += 1
+					t += 1
+			if w < min_w:
+				min_w = w
+				narrowest = d
+			min_h = mini(min_h, _headroom(mid, d.floor_y))
+		## Both sides of it, the columns the plan graph reads as the chambers it joins.
+		for at: Vector2i in [d.center - d.axis, d.center + d.axis * d.depth]:
+			if not _stands_on(at, d.floor_y):
+				_fail(
+					"FAIL %s opens onto %s, where a body cannot stand on Y=%d"
+					% [d.describe(), at, d.floor_y]
+				)
+				return
+	print(
+		"dungeon openings: %d grilles, narrowest %d voxels (%s), least headroom %d"
+		% [layout.dungeon_doorways.size(), min_w, narrowest.describe(), min_h]
+	)
+	if min_w < MIN_WALK_W:
+		_fail(
+			"FAIL %s is only %d voxels wide — nav has no clearance through it"
+			% [narrowest.describe(), min_w]
+		)
+		return
+	if min_h < MIN_HEAD:
+		_fail(
+			"FAIL a dungeon grille has only %d voxels of headroom, the profile needs %d"
+			% [min_h, MIN_HEAD]
+		)
 
 
 ## Every planned room is a real room: a floor to stand on, a ceiling far enough above it,
@@ -2014,6 +2083,7 @@ func _check_dungeon_reachable(
 					v.floor_y + 1
 				)
 				if path == null:
+					_report_cut(nav, res, layout, l, foot, from_y)
 					_dump_level(layout, l)
 					return
 				checked += 1
@@ -2030,6 +2100,127 @@ func _check_dungeon_reachable(
 			worst_raw,
 		]
 	)
+
+
+## Which side of the cut every chamber on the level ended up on, and what nav makes of the two
+## columns the failed query used. One unreachable chamber is a doorway; a whole wing of them is
+## a partition or a lane claim, and the level map printed after this says which — but only if
+## you know what to look for in it.
+func _report_cut(
+	nav: NavService,
+	res: Dictionary,
+	layout: CastleLayout,
+	level: int,
+	foot: Vector2i,
+	from_y: int
+) -> void:
+	var origin: Vector3i = res["origin_vox"]
+	var from_world := _world(origin, foot.x, from_y, foot.y)
+	var cut: Array[CastleVault] = []
+	var open := 0
+	for v: CastleVault in layout.dungeon_vaults_on(level):
+		var probe := _vault_probe(v)
+		if probe.x < 0:
+			continue
+		var to_world := _world(origin, probe.x, v.floor_y + 1, probe.y)
+		var path := nav.find_path_now(
+			NavProfile.Id.PEDESTRIAN, from_world, to_world, ROUTE_BUDGET
+		)
+		if path.is_complete():
+			open += 1
+		else:
+			cut.append(v)
+	print("cut: %d of %d chambers on level %d are unreachable" % [cut.size(), open + cut.size(), level])
+	for v: CastleVault in cut:
+		for d: CastleDoorway in layout.dungeon_doorways:
+			if d.storey != v.level:
+				continue
+			var near := d.center - d.axis
+			var far := d.center + d.axis * d.depth
+			if not v.rect.has_point(near) and not v.rect.has_point(far):
+				continue
+			var inward := d.axis if v.rect.has_point(far) else -d.axis
+			var out := far if v.rect.has_point(near) else near
+			print(
+				"    %s → %s (%s, far side %s)"
+				% [
+					d.describe(),
+					out,
+					"tree" if d.is_load_bearing() else "loop",
+					(
+						"standable"
+						if _stands_on(out, d.floor_y)
+						else "nothing to stand on"
+					),
+				]
+			)
+			## March the threshold column by column: the cell where reachable turns to
+			## unreachable is the seal, and it is either in the opening or past it.
+			var march := ""
+			for step in range(-3, d.depth + 4):
+				var at := d.center + inward * step
+				if not _stands_on(at, d.floor_y):
+					march += " %s:-" % at
+					continue
+				var ok := nav.find_path_now(
+					NavProfile.Id.PEDESTRIAN,
+					from_world,
+					_world(origin, at.x, d.floor_y + 1, at.y),
+					ROUTE_BUDGET
+				).is_complete()
+				march += " %s:%s" % [at, "R" if ok else "x"]
+			print("     march%s" % march)
+		for st: CastleStair in layout.dungeon_stairs:
+			if v.rect.has_point(st.center_column(0)) or v.rect.has_point(
+				st.center_column(st.run_len() - 1)
+			):
+				print("    %s lands in it" % st.describe())
+		var probe := _vault_probe(v)
+		## The neighbourhood of the probe, column by column: 'R' a pedestrian can reach from
+		## the route's foot, 'x' one nav has a span for and cannot reach, '-' nothing to stand
+		## on. A pocket of 'x' inside a room of 'R' is not a sealed chamber at all.
+		for z in range(probe.y - 4, probe.y + 5):
+			var line := ""
+			for x in range(probe.x - 4, probe.x + 5):
+				var at := Vector2i(x, z)
+				if not _stands_on(at, v.floor_y):
+					line += "-"
+					continue
+				line += (
+					"R"
+					if nav
+					. find_path_now(
+						NavProfile.Id.PEDESTRIAN,
+						from_world,
+						_world(origin, x, v.floor_y + 1, z),
+						ROUTE_BUDGET
+					)
+					. is_complete()
+					else "x"
+				)
+			print("     %4d %s" % [z, line])
+		var hit := nav.nearest_surface(
+			NavProfile.Id.PEDESTRIAN,
+			_world(origin, probe.x, v.floor_y + 1, probe.y),
+			VOXEL_SIZE * 4.0
+		)
+		print(
+			"  %s probe %s — nav %s clearance=%d headroom=%d %.2f m off"
+			% [
+				v.describe(),
+				probe,
+				"snapped" if hit.found else "found nothing",
+				hit.clearance,
+				hit.headroom,
+				(
+					hit.position.distance_to(
+						_world(origin, probe.x, v.floor_y + 1, probe.y)
+					)
+					if hit.found
+					else -1.0
+				),
+			]
+		)
 
 
 ## The Phase 1 promise, end to end at last: a pedestrian on the public street walks over the
@@ -2993,6 +3184,10 @@ func _count_above_deck(blocks: Dictionary, ground_thickness: int) -> Dictionary:
 func _quit() -> void:
 	NavService.reset()
 	if _failed:
+		## Last line before the verdict, because a failing route dumps a level map far longer
+		## than the tail a runner shows — the seed printed at the top has scrolled away by
+		## then, and a fuzzed failure nobody can re-bake is only noise.
+		print("reproduce with CITY_CASTLE_SEED=%d" % _world_seed)
 		print("RESULT: FAILED")
 		get_tree().quit(1)
 	else:

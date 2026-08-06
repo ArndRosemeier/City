@@ -3560,6 +3560,12 @@ func _carve_vault(v: CastleVault) -> void:
 ## there. One flight does both — it leaves a chamber's air, climbs through the slab above it
 ## and arrives on the floor that slab carries.
 func _carve_descent(st: CastleStair) -> void:
+	## The shaft is deliberately one voxel taller than a chamber's head, so a body climbing out
+	## of a flight does not jam against the lip its own well leaves. On the top level that one
+	## voxel is the courtyard slab, and a flight between two levels has no business opening the
+	## bailey floor — so the inside flights stop at the band. A route down from the surface is
+	## the opposite case: breaking that slab is the whole point of it.
+	var shaft_cap := layout.dungeon_y1 if st.to_storey >= 0 else COURTYARD_Y + DUNGEON_SHAFT_HEAD
 	for t in range(st.run_len()):
 		var s := st.surface_at(t)
 		## Arrival columns are a single surface course over open shaft, matching the keep's
@@ -3582,7 +3588,7 @@ func _carve_descent(st: CastleStair) -> void:
 					Vector3i(p.x + 1, s + 1, p.y + 1),
 					VoxelMaterial.CASTLE_BLOCK
 				)
-			_carve_column(p.x, p.y, s + 1, s + DUNGEON_SHAFT_HEAD)
+			_carve_column(p.x, p.y, s + 1, mini(s + DUNGEON_SHAFT_HEAD, shaft_cap))
 
 
 ## Hollowed base of a corner tower, following the tower's own plan rather than assuming a

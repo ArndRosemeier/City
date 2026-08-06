@@ -365,18 +365,21 @@ func _test_a_tower_hangs_its_bar_over_its_stamp() -> void:
 	if bar.visibility_range_end <= 0.0:
 		_fail("FAIL %s draws its bar to infinity" % def.id)
 		return
-	if bar.camera_pull_m() != 0.0:
+	var want_pull := (
+		tower.hit_radius() + want * MonsterHealthBar.CAMERA_PULL_MARGIN_FRACTION
+	)
+	if absf(bar.camera_pull_m() - want_pull) > EPS:
 		_fail(
-			"FAIL %s pulls its bar %.3f m toward the camera — that detaches it at an angle"
-			% [def.id, bar.camera_pull_m()]
+			"FAIL %s pulls its bar %.3f m, want %.3f m to clear its own stamp"
+			% [def.id, bar.camera_pull_m(), want_pull]
 		)
 		return
 	if bar.material_override != MonsterHealthBar.shared_structure_material():
-		_fail("FAIL %s is not on the depth-test-off structure material" % def.id)
+		_fail("FAIL %s is not on the structure health-bar material" % def.id)
 		return
 	print(
-		"tower: %s wears a %.2f m horizontal bar at y=%.2f (half-size, base, xray)"
-		% [def.id, bar.width_m(), bar.position.y]
+		"tower: %s wears a %.2f m horizontal bar at y=%.2f (half-size, base, pull=%.2f)"
+		% [def.id, bar.width_m(), bar.position.y, bar.camera_pull_m()]
 	)
 	await get_tree().process_frame
 	if is_instance_valid(tower):

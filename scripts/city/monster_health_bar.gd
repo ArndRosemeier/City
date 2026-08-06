@@ -79,8 +79,10 @@ func fit_to_body(hit_radius_m: float, body_reach_m: float) -> void:
 ## (`voxel_size_m` down from the combat host), half as wide and thick as a creature bar.
 ## `top_m` is the muzzle height — kept so callers still pass the stamp they sized the host with.
 ##
-## No `camera_pull` (that detaches the strip at an angle). The foundation cell is inside the stamp,
-## so the structure material skips depth test instead — the bar stays planted and still draws.
+## The foundation cell is inside the stamp, so the strip pulls forward by the hit radius the same
+## way a creature bar clears its legs. Depth testing stays on: a wall between the camera and the
+## tower hides the bar. Skipping the depth test used to plant the strip without a pull, and also
+## drew every hostile spire through the keep — a free map of rooms the player had not opened.
 func fit_over_structure(hit_radius_m: float, top_m: float, voxel_size_m: float = 0.5) -> void:
 	if hit_radius_m <= 0.0:
 		push_error("MonsterHealthBar: %f is not a hit radius to size a bar off" % hit_radius_m)
@@ -94,7 +96,7 @@ func fit_over_structure(hit_radius_m: float, top_m: float, voxel_size_m: float =
 	_vertical = false
 	material_override = shared_structure_material()
 	set_instance_shader_parameter("vertical", 0.0)
-	_size_horizontal(hit_radius_m, hit_radius_m, STRUCTURE_SIZE_SCALE, false)
+	_size_horizontal(hit_radius_m, hit_radius_m, STRUCTURE_SIZE_SCALE, true)
 	## One voxel straight down from the host — the foundation cell under the tower centre.
 	_place(-voxel_size_m)
 
@@ -178,7 +180,7 @@ static func shared_material() -> ShaderMaterial:
 	return _shared_material
 
 
-## Same look as `shared_material`, but depth-test off so a base strip inside stamp voxels still shows.
+## Tower bars: same look as `shared_material`, pulled clear of the foundation rather than x-rayed.
 static func shared_structure_material() -> ShaderMaterial:
 	if _shared_structure_material == null:
 		_shared_structure_material = ShaderMaterial.new()
@@ -186,7 +188,6 @@ static func shared_structure_material() -> ShaderMaterial:
 		_shared_structure_material.resource_name = "MonsterHealthBarStructure"
 		_shared_structure_material.set_shader_parameter("bar_aspect", 1.0 / HEIGHT_FRACTION)
 		_shared_structure_material.set_shader_parameter("frame_fraction", FRAME_FRACTION)
-		_shared_structure_material.render_priority = 1
 	return _shared_structure_material
 
 

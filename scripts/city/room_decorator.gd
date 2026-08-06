@@ -62,12 +62,28 @@ const ARENA_ROOM_MAX := 28
 const ARENA_WALL_TARGET := 0.15
 ## Four fractal-band hues, one per pit quarter (evenly spaced on the 16-band wheel).
 const ARENA_QUARTER_BANDS: Array[int] = [0, 4, 8, 12]
+## Columns outside the room the walkability guard reads too, so a chest set beside a doorway
+## is judged against the passage it opens onto instead of against a wall that is not there.
+const GUARD_RING := 1
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
 ## When true (arena default), random chambers punch the maze down to ~15% wall cover.
 ## Gaming sets this false and clears its own installment rectangles afterward.
 var arena_punch_rooms: bool = true
+
+## The walkability guard's view of the room and one ring around it: 1 where a body cannot
+## stand, either because the world is solid there or because this pass put a prop there.
+## Flat because the guard re-walks it once per candidate placement.
+var _guard_rect: Rect2i = Rect2i()
+var _guard_solid: PackedByteArray = PackedByteArray()
+## Derived from `_guard_solid`: 1 where a body with nav's one cell of clearance fits.
+var _guard_walk: PackedByteArray = PackedByteArray()
+## Walkable islands the floor is in right now. A placement that raises this stranded one.
+var _guard_islands: int = 0
+## Columns of the candidate being judged, marked solid until it is committed or dropped.
+var _guard_pending: PackedInt32Array = PackedInt32Array()
+var _guard_pending_islands: int = 0
 
 
 ## Stamp props for `purpose` into `volume`. Returns how many props were written.
@@ -92,6 +108,8 @@ func decorate(volume: RoomVolume, purpose: Purpose) -> int:
 
 	## Columns reserved by the world (stairs, pillars, missing floor, door aprons).
 	var blocked: Dictionary = {}
+	## Reads the world once, for the guard grid and for the reserved columns both.
+	_build_guard(volume)
 	_mark_clears(volume, blocked)
 	_seed_blocked_from_voxels(volume, blocked)
 	_seed_opening_aprons(volume, blocked)
@@ -418,22 +436,14 @@ func _mark_clears(volume: RoomVolume, blocked: Dictionary) -> void:
 
 
 ## Reserve every XZ column that is not a free furniture cell: missing slab, or any
-## non-air already in the clear band (stair flights, supports, prior props).
+## non-air already in the clear band (stair flights, supports, prior props). That is the
+## same question the guard grid answers, so it is read rather than asked of the world twice.
 func _seed_blocked_from_voxels(volume: RoomVolume, blocked: Dictionary) -> void:
-	var y_lo := volume.prop_y()
-	var y_hi := volume.floor_y + volume.air_h
 	for z in range(volume.rect.position.y, volume.rect.end.y):
 		for x in range(volume.rect.position.x, volume.rect.end.x):
 			var p := Vector2i(x, z)
-			if blocked.has(p):
-				continue
-			if brush.get_vox(Vector3i(x, volume.floor_y, z)) == VoxelMaterial.AIR:
+			if _guard_solid[_guard_index(p)] != 0:
 				blocked[p] = true
-				continue
-			for y in range(y_lo, y_hi + 1):
-				if brush.get_vox(Vector3i(x, y, z)) != VoxelMaterial.AIR:
-					blocked[p] = true
-					break
 
 
 ## Walk the room perimeter: AIR in the wall cell outside = doorway / open passage.
@@ -753,13 +763,186 @@ func _apply_step(
 		if slot_i < 0:
 			continue
 		var slot: Vector2i = slots[slot_i]
+		## A prop that closes the last walkable gap out of a corner of the room leaves floor
+		## nothing can reach — the room still has a door, so nothing downstream notices.
+		if role != Role.CEILING and _strands_floor(slot, size, stem):
+			slots.remove_at(slot_i)
+			continue
 		var at := Vector3i(slot.x, y, slot.y)
 		if not RoomPropKit.stamp_brush(brush, at, stem, false):
+			_guard_drop()
 			continue
 		if role != Role.CEILING:
 			_mark_footprint(occupied, slot, size)
+			_guard_take()
 		placed += 1
 	return placed
+
+
+# ---------------------------------------------------------------------------
+# Walkability guard
+# ---------------------------------------------------------------------------
+
+## Whether stamping `stem` at `origin` would leave part of the floor stranded.
+##
+## Nav wants one cell of geodesic clearance, and clearance is Chebyshev: a column with any
+## blocked neighbour — a diagonal one counts — is a column nothing walks through. So two
+## props two columns apart already seal the gap between them, and the room still reads open
+## to anything that measures floor area or probes one column. Only counting the islands
+## catches it.
+##
+## The candidate's columns stay marked when it passes, so the caller commits with
+## `_guard_take` and rolls back with `_guard_drop` if the stamp itself falls through.
+func _strands_floor(origin: Vector2i, size: Vector3i, stem: String) -> bool:
+	_guard_pending = _guard_cells(origin, size, stem)
+	_guard_pending_islands = _guard_islands
+	if _guard_pending.is_empty():
+		return false
+	for i: int in _guard_pending:
+		_guard_solid[i] = 1
+	## Nothing walkable touched means nothing to strand — the common case for a chest set
+	## against a wall, and worth the scan it saves.
+	if _guard_touches_walkable():
+		_guard_pending_islands = _guard_count_islands()
+	if _guard_pending_islands > _guard_islands:
+		_guard_drop()
+		return true
+	return false
+
+
+func _guard_take() -> void:
+	_guard_islands = _guard_pending_islands
+	_guard_pending = PackedInt32Array()
+
+
+func _guard_drop() -> void:
+	for i: int in _guard_pending:
+		_guard_solid[i] = 0
+	_guard_pending = PackedInt32Array()
+	_guard_pending_islands = _guard_islands
+
+
+## Whether the pending columns took walkability away from anything. A prop standing where no
+## body could walk anyway — in the dead ring against a wall — changes no island.
+func _guard_touches_walkable() -> bool:
+	var w := _guard_rect.size.x
+	var n := _guard_walk.size()
+	for i: int in _guard_pending:
+		var ix := i % w
+		for dz in range(-1, 2):
+			for dx in range(-1, 2):
+				var nx := ix + dx
+				if nx < 0 or nx >= w:
+					continue
+				var k := i + dz * w + dx
+				if k < 0 or k >= n:
+					continue
+				if _guard_walk[k] != 0:
+					return true
+	return false
+
+
+## The columns a prop really blocks. Walk-through decor keeps only its origin voxel, so the
+## rest of its footprint is reserved against other props but is still floor a body crosses.
+func _guard_cells(origin: Vector2i, size: Vector3i, stem: String) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var walk := RoomPropCatalog.walk_through_of(RoomPropKit.material_for(stem))
+	for z in range(size.z):
+		for x in range(size.x):
+			if walk and (x != 0 or z != 0):
+				continue
+			var p := origin + Vector2i(x, z)
+			if _guard_rect.has_point(p):
+				out.append(_guard_index(p))
+	return out
+
+
+func _build_guard(volume: RoomVolume) -> void:
+	_guard_rect = volume.rect.grow(GUARD_RING)
+	_guard_solid = PackedByteArray()
+	_guard_solid.resize(_guard_rect.size.x * _guard_rect.size.y)
+	_guard_pending = PackedInt32Array()
+	var y_lo := volume.prop_y()
+	var y_hi := volume.floor_y + volume.air_h
+	for z in range(_guard_rect.position.y, _guard_rect.end.y):
+		for x in range(_guard_rect.position.x, _guard_rect.end.x):
+			var solid := brush.get_vox(Vector3i(x, volume.floor_y, z)) == VoxelMaterial.AIR
+			if not solid:
+				for y in range(y_lo, y_hi + 1):
+					if brush.get_vox(Vector3i(x, y, z)) != VoxelMaterial.AIR:
+						solid = true
+						break
+			_guard_solid[_guard_index(Vector2i(x, z))] = 1 if solid else 0
+	_guard_islands = _guard_count_islands()
+
+
+func _guard_index(p: Vector2i) -> int:
+	return (
+		(p.y - _guard_rect.position.y) * _guard_rect.size.x + (p.x - _guard_rect.position.x)
+	)
+
+
+## Columns a body fits in, the way the nav bake decides it: free, with all eight neighbours
+## free. The grid's own border is never walkable, which is what the ring is for — the room's
+## edge is judged against real walls and real doorways instead of against the border.
+func _guard_mark_walkable() -> void:
+	var w := _guard_rect.size.x
+	var h := _guard_rect.size.y
+	_guard_walk = PackedByteArray()
+	_guard_walk.resize(w * h)
+	for z in range(1, h - 1):
+		var row := z * w
+		for x in range(1, w - 1):
+			var i := row + x
+			if (
+				_guard_solid[i] != 0
+				or _guard_solid[i - 1] != 0
+				or _guard_solid[i + 1] != 0
+				or _guard_solid[i - w] != 0
+				or _guard_solid[i - w - 1] != 0
+				or _guard_solid[i - w + 1] != 0
+				or _guard_solid[i + w] != 0
+				or _guard_solid[i + w - 1] != 0
+				or _guard_solid[i + w + 1] != 0
+			):
+				continue
+			_guard_walk[i] = 1
+
+
+## Islands of walkable floor, flooded the four ways nav steps.
+func _guard_count_islands() -> int:
+	_guard_mark_walkable()
+	var w := _guard_rect.size.x
+	var n := _guard_walk.size()
+	var seen := PackedByteArray()
+	seen.resize(n)
+	var islands := 0
+	var stack := PackedInt32Array()
+	for start in range(n):
+		if seen[start] != 0 or _guard_walk[start] == 0:
+			continue
+		islands += 1
+		seen[start] = 1
+		stack.append(start)
+		while not stack.is_empty():
+			var k: int = stack[stack.size() - 1]
+			stack.remove_at(stack.size() - 1)
+			var kx := k % w
+			## Unrolled and bounds-checked by hand: this is the inner loop of a check that
+			## runs once per candidate prop, and the sideways steps must not wrap the row.
+			if kx > 0 and seen[k - 1] == 0 and _guard_walk[k - 1] != 0:
+				seen[k - 1] = 1
+				stack.append(k - 1)
+			if kx < w - 1 and seen[k + 1] == 0 and _guard_walk[k + 1] != 0:
+				seen[k + 1] = 1
+				stack.append(k + 1)
+			if k >= w and seen[k - w] == 0 and _guard_walk[k - w] != 0:
+				seen[k - w] = 1
+				stack.append(k - w)
+			if k + w < n and seen[k + w] == 0 and _guard_walk[k + w] != 0:
+				seen[k + w] = 1
+				stack.append(k + w)
+	return islands
 
 
 func _find_fitting_slot(
