@@ -596,10 +596,10 @@ func build_tower(pad_index: int, tower_id: String) -> bool:
 		for k: Variant in cost.keys():
 			_pot[String(k)] = int(_pot.get(String(k), 0)) + int(cost[k])
 		return false
-	var written: int = int(
-		SiegeTowerCatalogScript.stamp_at(terrain, brush, def, pad_world)
+	var stamped: Array[Vector3i] = SiegeTowerCatalogScript.stamp_at(
+		terrain, brush, def, pad_world
 	)
-	if written <= 0:
+	if stamped.is_empty():
 		push_error("SiegeController.build_tower: stamp wrote nothing for '%s'" % tower_id)
 		for k: Variant in cost.keys():
 			_pot[String(k)] = int(_pot.get(String(k), 0)) + int(cost[k])
@@ -627,6 +627,7 @@ func build_tower(pad_index: int, tower_id: String) -> bool:
 		return false
 	_towers.append(unit)
 	_pad_tower[pad_index] = unit
+	_ward_claim(unit, stamped)
 	unit.died.connect(_on_tower_died.bind(pad_index))
 	_hide_pad_panel(pad_index)
 	_refresh_panel()
@@ -1441,8 +1442,42 @@ func _close_build_picker() -> void:
 		_city.call("close_siege_build_picker")
 
 
-func _on_tower_died(_unit: UndeadUnit, _was_giant: bool, pad_index: int) -> void:
+# --- Tower voxel ward -------------------------------------------------------
+
+## Null only while the city is being torn down (see `_beacon_registry`).
+func _voxel_ward() -> VoxelWard:
+	if _city == null or not is_instance_valid(_city):
+		return null
+	if not _city.has_method("voxel_ward"):
+		push_error("SiegeController: the city has no voxel ward")
+		assert(false, "SiegeController: city cannot ward voxels")
+		return null
+	return _city.call("voxel_ward") as VoxelWard
+
+
+## Hold a fresh tower's stamp against damage for as long as the tower stands. Its hit points are how
+## it is meant to come down; a blast or a monster's bolt that instead carved the stone out from under
+## it would leave a live turret firing from inside a hole.
+func _ward_claim(unit: UndeadUnit, cells: Array[Vector3i]) -> void:
+	var ward := _voxel_ward()
+	if ward == null:
+		return
+	ward.claim(unit.get_instance_id(), cells)
+
+
+## Give a dead tower's cells back to the world, so the stump it leaves can be cleared like anything
+## else built out of stone.
+func _ward_release(unit: UndeadUnit) -> void:
+	var ward := _voxel_ward()
+	if ward == null:
+		return
+	ward.release(unit.get_instance_id())
+
+
+func _on_tower_died(unit: UndeadUnit, _was_giant: bool, pad_index: int) -> void:
 	_pad_tower.erase(pad_index)
+	if unit != null:
+		_ward_release(unit)
 	## Show the pad's "+" again so the player can rebuy at full pot price. The collider stays for
 	## `_tick_plate_proximity` to hand back, which is why this re-shows rather than re-enabling hits.
 	if is_running():
@@ -1462,6 +1497,7 @@ func _clear_towers() -> void:
 	for unit: UndeadUnit in _towers:
 		if unit == null or not is_instance_valid(unit):
 			continue
+		_ward_release(unit)
 		if _despawn_cb.is_valid():
 			_despawn_cb.call(unit)
 		else:

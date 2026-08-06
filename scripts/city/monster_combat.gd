@@ -239,6 +239,39 @@ func try_attack_living(prey: Vector3) -> bool:
 	return _begin_attack(attack_id, prey)
 
 
+## Swing at something that is not alive — a siege stone the body is standing on.
+##
+## Pure theatre, deliberately: a crystal has no collider and no hitbox, so `SiegeController` drains its
+## hit points for every body inside its radius and no swing could land on it. But a horde felling a
+## 250 hp obelisk by standing near it reads as a horde doing nothing at all, which is exactly what the
+## mode was reported as. So this plays the body's own strike on its own cadence and lands nothing.
+##
+## No windup: a telegraph is a chance to dodge and a stone has none, and routing this through
+## `_finish_windup` would end in `_execute_melee`, which hurts whatever living thing is near the aim.
+## Melee-only for the same reason — a bolt would carve the obelisk's voxels.
+func strike_structure(aim: Vector3) -> bool:
+	if _stats == null or _unit == null or not bool(_unit.call("is_alive")):
+		return false
+	if aim == Vector3.INF:
+		return false
+	## Mid-swing or mid-burst at something else: busy, not idle.
+	if _windup_left > 0.0 or _blaster_burst_left > 0:
+		return true
+	if _global_cooldown > 0.0:
+		return true
+	if not has_attack("melee"):
+		return false
+	if float(_cooldown.get("melee", 0.0)) > 0.0:
+		return true
+	_unit.call("face_combat_prey", aim)
+	_unit.call("play_combat_strike", "melee")
+	_set_cooldown("melee")
+	var scale := _scale()
+	_sfx("play_melee_swing", _unit.global_position, scale)
+	_sfx("play_melee_hit", aim, scale)
+	return true
+
+
 func _pick_attack(dist_m: float) -> String:
 	if _global_cooldown > 0.0:
 		return ""

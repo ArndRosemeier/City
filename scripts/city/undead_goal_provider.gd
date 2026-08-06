@@ -219,6 +219,12 @@ func retarget(agent: NavAgent) -> void:
 			_retarget_engage_in_place(agent)
 		return
 	if goal.tag == TAG_PUSH:
+		## Answering fire outranks the errand. A body on a corridor to a stone is not asked for a
+		## new goal until it arrives, so without this a tower could shoot it the whole way in and
+		## the promotion `promote_attacker` recorded would never become a goal — towers fired, the
+		## horde walked past, and nothing fought back.
+		if _turn_on_attacker(agent):
+			return
 		_retarget_objective(agent)
 		return
 	if goal.tag != TAG_HUNT:
@@ -329,6 +335,9 @@ func _hunt_goal() -> NavGoal:
 		## where it is going, so it skips the crowd query outright. Wandering here is what would
 		## leave three siege flanks untouched all run — the horde grinding stones the player is
 		## nowhere near *is* the mode, and far bodies still walk their corridor (as a lerp).
+		##
+		## Being shot is not handled here. It does not need to be: whatever this picks is retargeted
+		## on the crowd cadence, and `retarget` answers fire from any tier.
 		goal = _push_goal() if _beacon_id != 0 else _wander()
 	else:
 		var prey := _nearest_living_prey()
@@ -465,6 +474,22 @@ func _push_goal() -> NavGoal:
 		var dir := away / dist
 		ring = Vector3(aim.x + dir.x * ring_r, aim.y, aim.z + dir.y * ring_r)
 	return _tagged(NavGoal.go_to_point(ring, ARRIVE_TOLERANCE_M), TAG_PUSH)
+
+
+## The objective this body is close enough to be hurting, or INF when it is not on one.
+##
+## Being inside the radius is precisely the state `_push_goal` answers with "no goal": the body has
+## arrived and the controller is draining the stone for as long as it stays. None of that reads on
+## screen — a stone has no hitbox, so there is no target and no swing — and the body is asked for this
+## so it can at least face what it is destroying and strike at it.
+func objective_strike_aim() -> Vector3:
+	var aim := _objective_aim
+	if aim == Vector3.INF:
+		return Vector3.INF
+	var from := _unit.global_position
+	if Vector2(from.x - aim.x, from.z - aim.z).length() > _objective_hold_m:
+		return Vector3.INF
+	return aim
 
 
 func _tagged(goal: NavGoal, tag: StringName) -> NavGoal:
@@ -681,6 +706,30 @@ func _clear_pursuit() -> void:
 	_investigate_age_sec = 0.0
 	_forced_attacker = null
 	_clear_target()
+
+
+## Drop the current errand and go for whoever is shooting. True when it took over, so callers can
+## skip their own goal choice.
+##
+## Deliberately free of any crowd query — one position read and a leash check. That is what makes it
+## affordable on every push retarget, and it is also the whole policy: a body interrupts an errand for
+## something that hit it, never for something it merely walked past.
+func _turn_on_attacker(agent: NavAgent) -> bool:
+	var hit := _forced_prey_aim()
+	if hit == Vector3.INF:
+		return false
+	_mark_hot_pursuit(hit)
+	_prey = hit
+	_prey_at_msec = Time.get_ticks_msec()
+	_unit.set_combat_prey(hit)
+	var next := _hunt(hit)
+	if next == null:
+		## Already inside strike reach: hold here and let MonsterCombat swing. A corridor to a
+		## point this body is already standing on completes every frame and re-paths forever.
+		agent.abandon_goal()
+	else:
+		agent.set_goal(next)
+	return true
 
 
 ## Forced attacker aim if still valid and inside leash; otherwise drops the sticky target.

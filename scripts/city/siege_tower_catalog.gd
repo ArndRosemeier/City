@@ -144,30 +144,33 @@ static func _stamp_top_oy(voxels: PackedInt32Array) -> int:
 
 
 ## Write the tower's voxels onto live terrain at the pad surface centre (world metres).
-## Returns how many cells were painted.
+##
+## Returns the cells it painted, in world voxel coordinates. The caller needs them, not just a
+## count: a standing tower holds its own stamp against damage (`VoxelWard`), and the only place that
+## knows which cells the stamp actually landed on is here.
 static func stamp_at(
 	terrain: VoxelTerrain,
 	brush: CityBrush,
 	def: RefCounted,
 	pad_world: Vector3
-) -> int:
+) -> Array[Vector3i]:
+	var written: Array[Vector3i] = []
 	if terrain == null or brush == null or def == null:
 		push_error("SiegeTowerCatalog.stamp_at: terrain/brush/def required")
-		return 0
+		return written
 	var voxels: PackedInt32Array = def.get("voxels") as PackedInt32Array
 	var tower_id := str(def.get("id"))
 	if voxels.is_empty():
 		push_error("SiegeTowerCatalog.stamp_at: empty voxels for '%s'" % tower_id)
-		return 0
+		return written
 	var tool: VoxelTool = brush.tool
 	if tool == null:
 		push_error("SiegeTowerCatalog.stamp_at: brush has no tool")
-		return 0
+		return written
 	var local := terrain.to_local(pad_world)
 	var base := Vector3i(int(floor(local.x)), int(floor(local.y)), int(floor(local.z)))
 	## Pad surface voxel is solid plate; tower sits on the air cell above it.
 	base.y += 1
-	var written := 0
 	tool.channel = VoxelBuffer.CHANNEL_TYPE
 	brush.begin_edit()
 	var n := voxels.size() / 4
@@ -183,7 +186,7 @@ static func stamp_at(
 		if existing == VoxelMaterial.BEDROCK:
 			continue
 		brush.set_vox(vox, mat)
-		written += 1
+		written.append(vox)
 	brush.end_edit()
 	return written
 

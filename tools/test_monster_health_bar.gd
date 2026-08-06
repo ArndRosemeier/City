@@ -79,6 +79,10 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	await _test_a_tower_hangs_its_bar_over_its_stamp()
+	if _failed:
+		_quit()
+		return
 	await _test_death_takes_the_bar_with_it()
 	_quit()
 
@@ -303,6 +307,78 @@ func _test_growing_refits_the_bar() -> void:
 		% [GROWN_SCALE, bar.width_m(), bar.fraction()]
 	)
 	await _settle(unit)
+
+
+# ---------------------------------------------------------------------------
+# Siege towers
+# ---------------------------------------------------------------------------
+
+## A siege tower is a health pool with no body: the voxel stamp is the visual, and the combat host
+## stands inside it at pad level. Under the soles — where every creature's bar goes — is therefore
+## inside the pillar, and that is exactly how it was first reported: bars half buried in their own
+## towers. The strip has to clear the stamp, and the muzzle height is what says where that is.
+func _test_a_tower_hangs_its_bar_over_its_stamp() -> void:
+	var defs: Array = SiegeTowerCatalog.all()
+	if defs.is_empty():
+		_fail("FAIL the siege tower catalogue is empty")
+		return
+	var def: SiegeTowerCatalog.Def = defs[0] as SiegeTowerCatalog.Def
+	var muzzle_h := SiegeTowerCatalog.muzzle_height_m(def, VOXEL_SIZE)
+	if muzzle_h <= 0.0:
+		_fail("FAIL '%s' reports a muzzle at %.3f m" % [def.id, muzzle_h])
+		return
+	var tower: UndeadUnit = _director._roster.spawn_siege_tower(
+		def.combat_id, _w(Vector3i(64, 1, 64)), def.hp, muzzle_h, BODY_SEED
+	)
+	if tower == null:
+		_fail("FAIL the roster refused a %s" % def.id)
+		return
+	tower.set_physics_process(false)
+	var bar := tower.health_bar()
+	if bar == null:
+		_fail("FAIL a %s stands with no health bar" % def.id)
+		return
+	var want := tower.hit_radius() * MonsterHealthBar.WIDTH_PER_HIT_RADIUS
+	if absf(bar.width_m() - want) > EPS:
+		_fail("FAIL %s wears a %.3f m bar, want %.3f m" % [def.id, bar.width_m(), want])
+		return
+	var want_y := (
+		muzzle_h
+		+ want * MonsterHealthBar.HEIGHT_FRACTION * 0.5
+		+ want * MonsterHealthBar.FOOT_CLEARANCE_FRACTION
+	)
+	if absf(bar.position.y - want_y) > EPS:
+		_fail(
+			"FAIL %s draws its bar at %.3f m, want %.3f m over the cap"
+			% [def.id, bar.position.y, want_y]
+		)
+		return
+	## The whole strip, not just its centre, has to be above the mass — half of it under the cap
+	## line is the buried bar this case exists for.
+	var bottom := bar.position.y - bar.scale.y * 0.5
+	if bottom <= muzzle_h:
+		_fail(
+			"FAIL the bottom of a %s's bar sits at %.3f m, inside a stamp reaching %.3f m"
+			% [def.id, bottom, muzzle_h]
+		)
+		return
+	if bar.visibility_range_end <= 0.0:
+		_fail("FAIL %s draws its bar to infinity" % def.id)
+		return
+	if bar.camera_pull_m() <= tower.hit_radius():
+		_fail(
+			"FAIL %s pulls its bar %.3f m over a %.3f m footprint"
+			% [def.id, bar.camera_pull_m(), tower.hit_radius()]
+		)
+		return
+	print(
+		"tower: %s hangs a %.2f m bar at %.2f m, clear of a stamp reaching %.2f m"
+		% [def.id, bar.width_m(), bar.position.y, muzzle_h]
+	)
+	await get_tree().process_frame
+	if is_instance_valid(tower):
+		tower.queue_free()
+	await get_tree().process_frame
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
-## How much of a monster is left, drawn as a strip just under its feet.
+## How much of a monster is left, drawn as a strip just under its feet — or, for a siege tower, just
+## over its cap (`fit_over_structure`).
 ##
 ## Only monsters carry one. Pedestrians and vehicles have no health pool at all — one hit removes
 ## them — so a bar under a ped would be a bar that can only ever read full.
@@ -23,8 +24,9 @@ const SHADER: Shader = preload("res://assets/city/shaders/monster_health_bar.gds
 const WIDTH_PER_HIT_RADIUS := 2.0
 ## Height as a fraction of the width, so the strip keeps its proportions on every body.
 const HEIGHT_FRACTION := 0.16
-## Gap from the soles down to the top of the strip, as a fraction of the width — small enough
-## that the bar reads as belonging to the feet, not floating at shin or waist height.
+## Gap between the body and the near edge of the strip, as a fraction of the width — small enough
+## that the bar reads as belonging to the thing it hangs off, not floating beside it. Under the soles
+## for a creature, over the cap for a structure.
 const FOOT_CLEARANCE_FRACTION := 0.06
 ## How far past the body's own silhouette the quad is pulled, as a fraction of the width, so a
 ## bar is never read flush against the thing it is drawn over.
@@ -62,16 +64,51 @@ func fit_to_body(hit_radius_m: float, body_reach_m: float) -> void:
 	if hit_radius_m <= 0.0:
 		push_error("MonsterHealthBar: %f is not a hit radius to size a bar off" % hit_radius_m)
 		return
-	_width = hit_radius_m * WIDTH_PER_HIT_RADIUS
 	## The hit capsule is inside the drawn body by construction, so it is the floor on reach.
-	_pull = maxf(body_reach_m, hit_radius_m) + _width * CAMERA_PULL_MARGIN_FRACTION
-	var height := _width * HEIGHT_FRACTION
-	scale = Vector3(_width, height, _width)
+	_size(hit_radius_m, maxf(body_reach_m, hit_radius_m))
 	## Quad is centred on the node, so the centre sits half a bar plus the sole gap below y=0.
-	position = Vector3(0.0, -(height * 0.5 + _width * FOOT_CLEARANCE_FRACTION), 0.0)
+	_place(-(_height() * 0.5 + _width * FOOT_CLEARANCE_FRACTION))
+
+
+## Hang the strip over a structure rather than under a body. `top_m` is how far the structure's mass
+## reaches above this node's origin; `hit_radius_m` still sizes the bar.
+##
+## A siege tower is its voxel stamp: there are no meshes to measure, and its combat host stands
+## *inside* that stamp at pad level, so the under-the-soles placement every creature gets draws the
+## bar in the middle of the pillar it belongs to — half of it buried in stone. Over the cap it is in
+## open air, where the only thing that can hide it is another building.
+func fit_over_structure(hit_radius_m: float, top_m: float) -> void:
+	if hit_radius_m <= 0.0:
+		push_error("MonsterHealthBar: %f is not a hit radius to size a bar off" % hit_radius_m)
+		return
+	if top_m <= 0.0:
+		push_error("MonsterHealthBar: %f is not a height to hang a bar over" % top_m)
+		return
+	## Nothing is drawn around the axis above the cap, so the strip only needs clearing off its own
+	## footprint — the radius is the whole reach.
+	_size(hit_radius_m, hit_radius_m)
+	_place(top_m + _height() * 0.5 + _width * FOOT_CLEARANCE_FRACTION)
+
+
+## Width, height and how far the quad rides toward the camera. `reach_m` is how far the thing wearing
+## the bar is drawn from its own axis.
+func _size(hit_radius_m: float, reach_m: float) -> void:
+	_width = hit_radius_m * WIDTH_PER_HIT_RADIUS
+	_pull = reach_m + _width * CAMERA_PULL_MARGIN_FRACTION
+	scale = Vector3(_width, _height(), _width)
 	visibility_range_end = _width * SIGHT_RANGE_PER_WIDTH
-	custom_aabb = _sweep_aabb()
 	set_instance_shader_parameter("camera_pull", _pull)
+
+
+## Centre of the quad on the wearer's own axis. Runs after `_size`: the cull box is built out of the
+## width and the pull.
+func _place(centre_y: float) -> void:
+	position = Vector3(0.0, centre_y, 0.0)
+	custom_aabb = _sweep_aabb()
+
+
+func _height() -> float:
+	return _width * HEIGHT_FRACTION
 
 
 ## How much of the track is filled, 0..1. The instance is only written when the number moved, so

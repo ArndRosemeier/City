@@ -32,6 +32,21 @@ const SZ := 120
 const TOWER_MIN := Vector3i(120, 1, 50)
 const TOWER_MAX := Vector3i(140, 33, 70)
 
+## A siege outer stone, painted here exactly as `SiegeComposer._paint_obelisk` paints it: a 9-voxel
+## square plinth flush with the deck, a 7-voxel step one course up, and a 3-voxel needle above that.
+## Copied rather than shared because what is under test is whether a *walker* can reach the middle of
+## this shape — the answer is a property of the geometry, so the geometry has to be the real one.
+const OBELISK_CENTRE := Vector3i(60, 1, 114)
+const OBELISK_FOOTPRINT := 4
+const OBELISK_SHAFT_HALF := 1
+const OBELISK_COURSES := 22
+
+## Hold radius the siege beacons are registered with, and the one the controller actually produces:
+## `SiegeController._stone_vulnerable_radius_m` floors the authored 5 m against an obelisk's own
+## footprint, and 5 m wins. One number for "stop walking" and "you are hurting it", so a body that
+## stops outside it is a body that never damages a stone.
+const STONE_HOLD_M := 5.0
+
 ## Fixed simulation step, so nothing here depends on the headless frame rate.
 const SIM_DT := 0.05
 const MAX_FRAMES := 700
@@ -204,6 +219,18 @@ func _ready() -> void:
 		_quit()
 		return
 	await _test_siege_attacker_walks_to_a_beacon()
+	if _failed:
+		_quit()
+		return
+	await _test_stone_bound_body_settles_inside_the_damage_radius()
+	if _failed:
+		_quit()
+		return
+	await _test_shot_attacker_turns_on_the_tower()
+	if _failed:
+		_quit()
+		return
+	await _test_far_attacker_turns_on_the_tower()
 	if _failed:
 		_quit()
 		return
@@ -701,8 +728,11 @@ func _test_giant_digs_out_through_the_brush() -> void:
 ## on it: the outer stones are ~100 m from the quarter, so a horde that only advanced near the player
 ## would leave three flanks untouched for the whole run.
 func _test_siege_attacker_walks_to_a_beacon() -> void:
-	var start := _w(Vector3i(30, 1, 60))
-	var stone := _w(Vector3i(130, 1, 60))
+	var start := _w(Vector3i(30, 1, 108))
+	## Open deck, deliberately not the sealed tower. A beacon in the middle of that block sends
+	## bodies to a stand ring inside solid brick, so the ladder gives up and they wander — which is
+	## a fine test of the ladder and a useless one for "did it reach its objective".
+	var stone := _w(Vector3i(120, 1, 108))
 	var unit := _spawn(UndeadUnit.Role.MINION, start)
 	if unit == null:
 		return
@@ -712,11 +742,13 @@ func _test_siege_attacker_walks_to_a_beacon() -> void:
 	_city.prey_at = Vector3.INF
 	_city.prey_b = Vector3.INF
 	var registry := _city.beacon_registry()
-	var beacon := registry.register(stone, 5.0, int(MonsterFaction.Id.SIEGE_ATTACKER))
+	var beacon := registry.register(
+		stone, STONE_HOLD_M, int(MonsterFaction.Id.SIEGE_ATTACKER)
+	)
 	NavAgent.reset_events()
 
 	var frames := await _run_far(
-		unit, func() -> bool: return unit.global_position.distance_to(stone) <= 7.0
+		unit, func() -> bool: return _flat(unit.global_position, stone) <= STONE_HOLD_M
 	)
 	if unit.nav_tier() != NavLod.Tier.FAR:
 		_fail(
@@ -724,11 +756,12 @@ func _test_siege_attacker_walks_to_a_beacon() -> void:
 			% NavLod.tier_name(unit.nav_tier())
 		)
 		return
-	var reach := unit.global_position.distance_to(stone)
-	if reach > 7.0:
+	var reach := _flat(unit.global_position, stone)
+	if reach > STONE_HOLD_M:
 		_fail(
-			"FAIL a siege attacker is %.1f m from its beacon after %d ticks (ladder %s)"
-			% [reach, frames, NavLadder.state_name(unit.nav_state())]
+			"FAIL a siege attacker sits %.1f m out after %d ticks, outside the %.1f m it has to be"
+			% [reach, frames, STONE_HOLD_M]
+			+ " within to hurt the stone (ladder %s)" % NavLadder.state_name(unit.nav_state())
 		)
 		return
 	## Ambient wildlife must not see siege stones, or a Siege tile's stones would be chewed down by
@@ -743,6 +776,220 @@ func _test_siege_attacker_walks_to_a_beacon() -> void:
 	registry.unregister(beacon)
 	_city.los_ok = true
 	_despawn(unit)
+
+
+## Arriving at a stone has to mean *inside* its damage radius, and staying there.
+##
+## The radius answers two questions with one number — "stop walking" and "you are hurting it" — so the
+## provider walks bodies to a ring set inside it. But the goal's arrival slop was wider than that
+## inset, so a body could satisfy the goal while still outside the radius: it stopped short, hurt
+## nothing, was handed a fresh ring, drifted a little sideways, arrived again, and orbited the stone
+## for the rest of the run. From the player's chair that is a mob that refuses to attack.
+##
+## The stone is the real one, plinth and needle both, because the reported symptom was bodies milling
+## around an obelisk rather than closing on it — and whether a walker can reach the ring around this
+## shape is a property of the shape.
+func _test_stone_bound_body_settles_inside_the_damage_radius() -> void:
+	var start := _w(OBELISK_CENTRE - Vector3i(30, 0, 0))
+	var stone := _w(OBELISK_CENTRE)
+	var unit := _spawn(UndeadUnit.Role.MINION, start)
+	if unit == null:
+		return
+	unit.set_faction(int(MonsterFaction.Id.SIEGE_ATTACKER))
+	_city.los_ok = false
+	_city.prey_at = Vector3.INF
+	_city.prey_b = Vector3.INF
+	var registry := _city.beacon_registry()
+	var beacon := registry.register(
+		stone, STONE_HOLD_M, int(MonsterFaction.Id.SIEGE_ATTACKER)
+	)
+
+	var frames := await _run(
+		unit, func() -> bool: return _flat(unit.global_position, stone) <= STONE_HOLD_M
+	)
+	var reach := _flat(unit.global_position, stone)
+	if reach > STONE_HOLD_M:
+		_fail(
+			"FAIL the body stalled %.1f m out after %d ticks, outside the %.1f m damage radius"
+			% [reach, frames, STONE_HOLD_M]
+			+ " — it would circle the stone hurting nothing (ladder %s)"
+			% NavLadder.state_name(unit.nav_state())
+		)
+		return
+	## And it holds. Contact damage is applied per tick to bodies inside the radius, so a body that
+	## dips in and wanders back out again is barely better than one that never arrived.
+	var settled := unit.global_position
+	await _tick(unit, 120)
+	var after := _flat(unit.global_position, stone)
+	if after > STONE_HOLD_M:
+		_fail("FAIL the body drifted back out to %.1f m after arriving at %.1f m" % [after, reach])
+		return
+	var drift := _flat(unit.global_position, settled)
+	if drift > 4.0:
+		_fail("FAIL the body slid %.1f m around the stone instead of holding station" % drift)
+		return
+	print(
+		"stone: settled %.1f m inside the %.1f m damage radius in %d ticks, held within %.1f m"
+		% [reach, STONE_HOLD_M, frames, drift]
+	)
+
+	## And it fights what it arrived at. The stone's hit points are drained by proximity, so the swing
+	## is the only thing a player can see — and with nothing living in range, a body facing the stone
+	## can only have been turned there by striking at it.
+	if unit.combat_prey() != Vector3.INF:
+		_fail("FAIL something living got in the way, so this proves nothing about stones")
+		return
+	var want := atan2(stone.x - unit.global_position.x, stone.z - unit.global_position.z)
+	## Turned away by hand first: walking in left it roughly facing the stone already, so without
+	## this the check would pass on a body that does nothing at all.
+	unit.rotation.y = wrapf(want + PI, -PI, PI)
+	await _tick(unit, 160)
+	var off := absf(wrapf(unit.rotation.y - want, -PI, PI))
+	if off > deg_to_rad(30.0):
+		_fail(
+			"FAIL a body inside the damage radius never turned on the stone (%.0f° off) — it is"
+			% rad_to_deg(off)
+			+ " destroying it in total silence"
+		)
+		return
+	print("stone: it turned back onto the stone and swung, %.0f° off centre" % rad_to_deg(off))
+	registry.unregister(beacon)
+	_city.los_ok = true
+	_despawn(unit)
+
+
+## Aggro in this mode is earned by shooting, and this is the half that was missing.
+##
+## A body walking to a stone is not asked for a new goal until it arrives, so a tower could shoot it
+## the whole way in while `promote_attacker` recorded an attacker nothing ever read: towers fired,
+## the horde filed past, and the player watched a fight that only went one way. Only forced
+## retaliation may interrupt an errand — a body that acquired freely would stall on the first tower
+## it passed, which is exactly what the unacquirable-defender rule exists to prevent.
+func _test_shot_attacker_turns_on_the_tower() -> void:
+	var start := _w(Vector3i(60, 1, 100))
+	var stone := _w(Vector3i(150, 1, 100))
+	## Behind the body and off the line, so closing on it means giving up ground it already walked.
+	## A tower anywhere along the corridor would be reached by ignoring it and carrying on.
+	var pad := _w(Vector3i(34, 1, 74))
+	var unit := _spawn(UndeadUnit.Role.MINION, start)
+	if unit == null:
+		return
+	unit.set_faction(int(MonsterFaction.Id.SIEGE_ATTACKER))
+	var tower := _spawn(UndeadUnit.Role.MINION, pad)
+	if tower == null:
+		return
+	tower.set_faction(int(MonsterFaction.Id.SIEGE_DEFENDER))
+	## Nothing acquirable anywhere: whatever this body does next, it does because it was hit.
+	_city.los_ok = false
+	_city.prey_at = Vector3.INF
+	_city.prey_b = Vector3.INF
+	var registry := _city.beacon_registry()
+	var beacon := registry.register(stone, 5.0, int(MonsterFaction.Id.SIEGE_ATTACKER))
+
+	## Let it commit to the walk first — the bug lived in the retarget of an errand already
+	## underway, not in the first goal pick.
+	await _tick(unit, 20)
+	var hit_at := unit.global_position
+	var gained := start.distance_to(stone) - hit_at.distance_to(stone)
+	if gained <= 1.0:
+		_fail("FAIL the attacker never set off for its stone (%.1f m gained)" % gained)
+		return
+
+	## One tower hit, exactly as `MonsterCombat._hurt_monster` lands it.
+	var lethal := unit.apply_damage_scaled(
+		DamageSource.for_monster_attack_mob("blaster"), 0.05, "siege_tower", tower
+	)
+	if lethal:
+		_fail("FAIL the test hit killed the attacker, so there was nothing left to retaliate")
+		return
+	var frames := await _run(unit, func() -> bool: return _aims_at(unit, pad))
+	if not _aims_at(unit, pad):
+		_fail(
+			"FAIL a shot attacker never took the tower as its goal in %d ticks (goal %s)"
+			% [frames, _goal_tag(unit)]
+		)
+		return
+	## And it acts on the goal rather than merely holding it: the tower is back the way it came, so
+	## closing on it means giving up ground it had already walked toward the stone.
+	var was := hit_at.distance_to(pad)
+	await _tick(unit, 80)
+	var now := unit.global_position.distance_to(pad)
+	if now >= was - 2.0:
+		_fail("FAIL it aimed at the tower but closed nothing (%.1f m → %.1f m)" % [was, now])
+		return
+	print(
+		"aggro: one tower hit turned a stone-bound attacker around in %d ticks (%.1f m → %.1f m)"
+		% [frames, was, now]
+	)
+	registry.unregister(beacon)
+	_city.los_ok = true
+	_despawn(unit)
+	_despawn(tower)
+
+
+## Answering fire is not a privilege of bodies the player is standing next to.
+##
+## The far tier skips the crowd query to save it, and a wandering body has no errand whose retarget
+## would notice the hit either — so this pins the guarantee rather than the route: a far body that is
+## shot ends up coming for the shooter, here within a few seconds of sim. Towers fire at whatever
+## enters range whether or not anybody is watching that flank, and a flank that cannot fight back is
+## one the player holds with two towers and no attention.
+func _test_far_attacker_turns_on_the_tower() -> void:
+	var start := _w(Vector3i(60, 1, 30))
+	var pad := _w(Vector3i(34, 1, 8))
+	var unit := _spawn(UndeadUnit.Role.MINION, start)
+	if unit == null:
+		return
+	unit.set_faction(int(MonsterFaction.Id.SIEGE_ATTACKER))
+	var tower := _spawn(UndeadUnit.Role.MINION, pad)
+	if tower == null:
+		return
+	tower.set_faction(int(MonsterFaction.Id.SIEGE_DEFENDER))
+	## No beacon and nothing acquirable: left alone this body would only ever wander.
+	_city.los_ok = false
+	_city.prey_at = Vector3.INF
+	_city.prey_b = Vector3.INF
+	if not _city.beacon_registry().is_empty():
+		_fail("FAIL a beacon leaked from an earlier case into the wander test")
+		return
+
+	var lethal := unit.apply_damage_scaled(
+		DamageSource.for_monster_attack_mob("blaster"), 0.05, "siege_tower", tower
+	)
+	if lethal:
+		_fail("FAIL the test hit killed the far attacker")
+		return
+	var frames := await _run_far(unit, func() -> bool: return _aims_at(unit, pad))
+	if unit.nav_tier() != NavLod.Tier.FAR:
+		_fail(
+			"FAIL the body ran at tier %s, so this never tested the far path"
+			% NavLod.tier_name(unit.nav_tier())
+		)
+		return
+	if not _aims_at(unit, pad):
+		_fail(
+			"FAIL a shot far-tier attacker never took the tower as its goal in %d ticks (goal %s)"
+			% [frames, _goal_tag(unit)]
+		)
+		return
+	var was := start.distance_to(pad)
+	var closed := await _run_far(
+		unit, func() -> bool: return unit.global_position.distance_to(pad) <= was - 3.0
+	)
+	var now := unit.global_position.distance_to(pad)
+	if now > was - 3.0:
+		_fail(
+			"FAIL the far body aimed at the tower but closed nothing in %d ticks (%.1f m → %.1f m)"
+			% [closed, was, now]
+		)
+		return
+	print(
+		"aggro: a far-tier wanderer answered fire in %d ticks and closed %.1f m → %.1f m"
+		% [frames, was, now]
+	)
+	_city.los_ok = true
+	_despawn(unit)
+	_despawn(tower)
 
 
 # ---------------------------------------------------------------------------
@@ -818,14 +1065,37 @@ func _tick(unit: UndeadUnit, frames: int) -> void:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+## An outer stone as the composer builds one. Two square plinth steps and a slender needle: a shape
+## that hardly obstructs a walker, which is the whole point of standing one here.
+func _stamp_obelisk(volume: NativeOfflineVoxelVolume) -> void:
+	var c := OBELISK_CENTRE
+	for step in range(2):
+		var r := OBELISK_FOOTPRINT - step
+		volume.fill_box(
+			Vector3i(c.x - r, c.y + step, c.z - r),
+			Vector3i(c.x + r, c.y + step, c.z + r),
+			VoxelMaterial.STONE
+		)
+	var h := OBELISK_SHAFT_HALF
+	volume.fill_box(
+		Vector3i(c.x - h, c.y + 2, c.z - h),
+		Vector3i(c.x + h, c.y + 1 + OBELISK_COURSES, c.z + h),
+		VoxelMaterial.GLASS_LIT
+	)
+
+
 ## Flat concrete deck, wide enough for a giant's eleven cells of clearance, with one sealed
-## brick tower on it.
+## brick tower and one siege obelisk on it.
 func _bake_tile() -> NativeNavBake:
 	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
 	volume.fill_box(Vector3i.ZERO, Vector3i(SX, 1, SZ), VoxelMaterial.CONCRETE)
 	volume.fill_box(TOWER_MIN, TOWER_MAX, VoxelMaterial.BRICK)
+	_stamp_obelisk(volume)
 	var tables := _nav.solidity_tables()
 	var bake := CityVoxelNativeScript.make_nav_bake() as NativeNavBake
+	## Keep the deck's own lanes clear of it: the plinth reaches z 110..118, so every other case on
+	## this tile runs at z <= 108.
+	assert(OBELISK_CENTRE.z - OBELISK_FOOTPRINT > 108, "obelisk sits in another case's lane")
 	var ok: bool = bake.bake_from_volume(
 		volume,
 		ORIGIN,
@@ -851,6 +1121,37 @@ func _offline_brush() -> CityBrush:
 	var brush := CityBrush.new()
 	brush.use_offline_volume()
 	return brush
+
+
+## Ground distance. Every siege radius — hold, damage, withdrawal — is measured flat, because a body
+## at the foot of an 11 m obelisk is at its base, not 11 m from it.
+func _flat(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x - b.x, a.z - b.z).length()
+
+
+## Tag of the goal the body is currently walking, or "-" when it is holding in place.
+func _goal_tag(unit: UndeadUnit) -> String:
+	var agent := unit.nav_agent()
+	if agent == null:
+		return "no-agent"
+	var goal := agent.goal()
+	if goal == null:
+		return "-"
+	return String(goal.tag)
+
+
+## The claim these cases make: the body is going for `target`, not merely near it. Either it is
+## walking a hunt corridor aimed there, or it is holding within strike reach of it.
+func _aims_at(unit: UndeadUnit, target: Vector3) -> bool:
+	var agent := unit.nav_agent()
+	if agent == null:
+		return false
+	var goal := agent.goal()
+	if goal == null:
+		return unit.combat_prey().distance_to(target) <= 3.0
+	if goal.tag != UndeadGoalProvider.TAG_HUNT:
+		return false
+	return goal.point.distance_to(target) <= 6.0
 
 
 func _w(vox: Vector3i) -> Vector3:

@@ -1018,7 +1018,13 @@ func _build_health_bar() -> void:
 func _update_health_bar() -> void:
 	if _health_bar == null:
 		return
-	_health_bar.fit_to_body(hit_radius(), body_reach_m())
+	if _siege_tower:
+		## There is no model to measure and the host stands inside its own stamp at pad level, so
+		## the strip hangs over the mass instead of under feet that are buried in it. The muzzle is
+		## the one height a tower knows about itself, and it already clears the cap.
+		_health_bar.fit_over_structure(hit_radius(), _muzzle_height_m)
+	else:
+		_health_bar.fit_to_body(hit_radius(), body_reach_m())
 	_health_bar.set_fraction(health_fraction())
 
 
@@ -1274,11 +1280,19 @@ func tick(delta: float) -> void:
 
 
 func _tick_combat_strikes() -> void:
-	if _combat == null or _combat_prey == Vector3.INF:
+	if _combat == null:
 		return
-	if not bool(_combat.call("hunts_living")):
+	if _combat_prey != Vector3.INF:
+		if bool(_combat.call("hunts_living")):
+			_combat.call("try_attack_living", _combat_prey)
 		return
-	_combat.call("try_attack_living", _combat_prey)
+	## Nothing living to swing at, but this body may be standing on an objective it is grinding down.
+	if _provider == null:
+		return
+	var aim := _provider.objective_strike_aim()
+	if aim == Vector3.INF:
+		return
+	_combat.call("strike_structure", aim)
 
 
 ## The director has picked this body to become the invasion's giant. It swells where it stands:

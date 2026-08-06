@@ -13,6 +13,7 @@ const MonsterRosterScript := preload("res://scripts/city/monster_roster.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
 const SiegeBuildPickerScript := preload("res://scripts/city/siege_build_picker.gd")
 const BeaconRegistryScript := preload("res://scripts/city/beacon_registry.gd")
+const VoxelWardScript := preload("res://scripts/city/voxel_ward.gd")
 
 ## Nav scaffolding for the one test that spawns a real tower body.
 const VOXEL_SIZE := 0.5
@@ -37,6 +38,7 @@ func _ready() -> void:
 	_check_combat_rows()
 	_check_afford_and_spend()
 	_check_tower_body()
+	_check_voxel_ward()
 	if _failed:
 		print("RESULT: FAILED")
 		get_tree().quit(1)
@@ -359,6 +361,49 @@ func _check_tower_hunts_at_far_tier(tower: UndeadUnit) -> void:
 		print("far tier: tower holds and keeps querying prey instead of wandering")
 		return
 	_fail("FAIL a far tower was handed a %s goal it can never walk" % goal.tag)
+
+
+## A standing tower holds its own stamp against damage, which is what keeps its hit points the only
+## way it comes down: without it a blast carves the footing out from under a live turret. The claim is
+## per cell and per owner rather than a property of stone, because the stone in the wall behind the
+## tower stays as carveable as it ever was — so what has to hold is that a released owner leaves
+## nothing behind, and that two structures cannot both own a cell.
+func _check_voxel_ward() -> void:
+	var ward: VoxelWard = VoxelWardScript.new() as VoxelWard
+	var mine := Vector3i(10, 4, 10)
+	var theirs := Vector3i(20, 4, 20)
+	if ward.holds(mine):
+		_fail("FAIL a fresh ward already holds %v" % mine)
+		return
+	ward.claim(7, [mine, mine + Vector3i.UP] as Array[Vector3i])
+	ward.claim(9, [theirs] as Array[Vector3i])
+	if not ward.holds(mine) or not ward.holds(mine + Vector3i.UP):
+		_fail("FAIL the ward dropped a claimed cell")
+		return
+	if ward.owner_of(mine) != 7 or ward.owner_of(theirs) != 9:
+		_fail(
+			"FAIL the ward reads owners %d and %d"
+			% [ward.owner_of(mine), ward.owner_of(theirs)]
+		)
+		return
+	if ward.cell_count() != 3:
+		_fail("FAIL the ward holds %d cells, want 3" % ward.cell_count())
+		return
+	## Releasing one structure must not touch what another is standing on — two towers dying in the
+	## same wave is the ordinary case.
+	if ward.release(7) != 2:
+		_fail("FAIL releasing owner 7 did not give back its two cells")
+		return
+	if ward.holds(mine) or ward.holds(mine + Vector3i.UP):
+		_fail("FAIL a released cell is still held")
+		return
+	if not ward.holds(theirs):
+		_fail("FAIL releasing one owner took another's cell with it")
+		return
+	if ward.release(7) != 0:
+		_fail("FAIL releasing owner 7 twice gave cells back twice")
+		return
+	print("ward: %d cells claimed per owner, released without touching a neighbour" % 3)
 
 
 func _teardown_tower_scaffold(

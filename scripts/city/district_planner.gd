@@ -8,6 +8,12 @@ const WorldArterialsScript := preload("res://scripts/city/world_arterials.gd")
 ## a few blocks, which is what a readable defence needs. Spreading it over the whole 392 × 280 m
 ## tile would put the pads too far apart to support each other.
 const SIEGE_QUARTER_CELLS := 8
+## Side of each outer stone's monument square, in planner cells — 3 × 28 voxels × 0.5 m = 42 m.
+const SIEGE_STONE_SQUARE_CELLS := 3
+## How far a square may be nudged off its ideal cell, in cells, to find ground that is not road.
+const SIEGE_STONE_NUDGE_CELLS := 3
+## Cells of a square that must be off the carriageway for it to be worth reserving.
+const SIEGE_STONE_MIN_OPEN := 3
 
 ## District personality — palette, density and height profile. Set before build().
 var theme: DistrictTheme = null
@@ -44,6 +50,9 @@ var large_gaming: Rect2i = Rect2i()
 ## Cells inside it keep their ordinary tags: the siege is an overlay on the street grid, not a
 ## reserve that replaced it, because the streets are the lanes the horde walks.
 var siege_quarter: Rect2i = Rect2i()
+## Paved squares held open for the four outer stones, in planner cells. Empty on every other theme.
+## Unlike the quarter this *does* steer the grid — see `_clear_siege_stone_squares`.
+var siege_stone_squares: Array[Rect2i] = []
 var civic_lot: Vector2i = Vector2i(-1, -1)
 ## The one teleport chamber plot on this tile, or (-1,-1) on spectacle themes that have no
 ## lots at all.
@@ -93,6 +102,7 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 	large_zoo = Rect2i()
 	large_gaming = Rect2i()
 	siege_quarter = Rect2i()
+	siege_stone_squares.clear()
 
 	if theme.id == DistrictTheme.HILL:
 		## Edge stubs only — a full arterial cross would slice the massif into wedges.
@@ -131,6 +141,9 @@ func build(size_x: int, size_z: int, seed_value: int, p_cell_size: int = 28, dis
 		_stamp_large_park()
 		_stamp_pocket_parks()
 		_assign_zones()
+		if theme.id == DistrictTheme.SIEGE:
+			## Before every lot placer, because this one *does* steer the grid.
+			_clear_siege_stone_squares()
 		_place_civic()
 		## Before the parcel merge on purpose: retagging the cell takes it out of CORE_LOT,
 		## which is the only tag `_place_tower_parcels` will absorb, so the chamber can never
@@ -467,6 +480,81 @@ func _stamp_grand_plaza() -> void:
 	grand_plaza = Rect2i(px, pz, 6, 5)
 	grand_plaza = _clamp_rect(grand_plaza)
 	_fill_rect(grand_plaza, LandUse.PLAZA, true)
+
+
+## Monument squares for the four outer stones, held open before a single lot is placed.
+##
+## The rest of the siege is an overlay on whatever city the tile grew, and the stones tried to be too:
+## they searched outward from an ideal point for open, flat, sky-clear ground. On a dense tile there is
+## none — two of six sampled world seeds baked a Siege quarter with *no* stones and no gates, because
+## the first stone found nowhere to stand and took the rest of the plan down with it. Clearing the
+## ground up front is also the only cheap way round it: razing afterwards means slicing buildings with
+## a cylinder and leaving their upper storeys hanging over an empty lot.
+##
+## Paved rather than planted, since a park would put trees in exactly the sky the obelisk needs, and
+## three cells wide so both this and the composer's own clamp can pull toward a tile edge and still
+## overlap. The composer's ideal point lands dead centre of its square by construction — its offsets
+## are these, in voxels.
+func _clear_siege_stone_squares() -> void:
+	siege_stone_squares.clear()
+	if grand_plaza.size.x <= 0 or grand_plaza.size.y <= 0:
+		push_error("DistrictPlanner: a Siege tile has no grand plaza to measure stone squares from")
+		assert(false, "DistrictPlanner: siege without a grand plaza")
+		return
+	var centre := grand_plaza.position + grand_plaza.size / 2
+	var off := Vector2i(
+		SiegeComposer.OUTER_RING_X / cell_size, SiegeComposer.OUTER_RING_Z / cell_size
+	)
+	for i in range(SiegeComposer.OUTER_STONE_COUNT):
+		var sx := 1 if (i % 2) == 0 else -1
+		var sz := 1 if i < 2 else -1
+		var square := _open_stone_square(
+			Vector2i(centre.x + sx * off.x, centre.y + sz * off.y)
+		)
+		_fill_rect(square, LandUse.PLAZA, true)
+		siege_stone_squares.append(square)
+
+
+## The square nearest `ideal_cell` with ground worth clearing. Roads are kept — a stone may not stand
+## in a lane the horde walks down — and a two-cell avenue runs straight through some of these ideals,
+## so the square laid on the ideal can be carriageway end to end and reserve nothing whatsoever. That
+## is the shape of the bug this whole reservation exists to fix, one step further out.
+func _open_stone_square(ideal_cell: Vector2i) -> Rect2i:
+	var half := SIEGE_STONE_SQUARE_CELLS / 2
+	var best := Rect2i()
+	var best_open := -1
+	for r in range(0, SIEGE_STONE_NUDGE_CELLS + 1):
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if maxi(absi(dx), absi(dz)) != r:
+					continue
+				var sq := _clamp_rect(
+					Rect2i(
+						ideal_cell.x + dx - half,
+						ideal_cell.y + dz - half,
+						SIEGE_STONE_SQUARE_CELLS,
+						SIEGE_STONE_SQUARE_CELLS
+					)
+				)
+				var open_cells := _non_road_cells(sq)
+				if open_cells > best_open:
+					best = sq
+					best_open = open_cells
+		## Nearest wins: only look further out when this ring has nothing standable in it.
+		if best_open >= SIEGE_STONE_MIN_OPEN:
+			return best
+	return best
+
+
+func _non_road_cells(r: Rect2i) -> int:
+	var n := 0
+	for z in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			if x < 0 or z < 0 or x >= cells_x or z >= cells_z:
+				continue
+			if not LandUse.is_road(grid[z][x]):
+				n += 1
+	return n
 
 
 ## Besieged ground: a square of blocks centred on the grand plaza, so the Lodestone ends up

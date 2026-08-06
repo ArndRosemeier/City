@@ -18,6 +18,7 @@ const PlayerCompassHudScript := preload("res://scripts/city/player_compass_hud.g
 const ZooCloakHudScript := preload("res://scripts/city/zoo_cloak_hud.gd")
 const SiegeHudScript := preload("res://scripts/city/siege_hud.gd")
 const BeaconRegistryScript := preload("res://scripts/city/beacon_registry.gd")
+const VoxelWardScript := preload("res://scripts/city/voxel_ward.gd")
 const DamageSourceScript := preload("res://scripts/city/damage_source.gd")
 const CityAudioScript := preload("res://scripts/city/city_audio.gd")
 const BlastFlashVfxScript := preload("res://scripts/city/blast_flash_vfx.gd")
@@ -124,6 +125,10 @@ var _siege_run: SiegeController = null
 ## the siege controller because a beacon is a city-wide property of a target, and the goal provider
 ## has to reach it from any body on the tile.
 var _beacons: BeaconRegistry = BeaconRegistryScript.new() as BeaconRegistry
+## Voxels a standing structure holds against every kind of damage. Siege towers are the only
+## registrars today: a tower is a health pool, and a blast that carved its stamp instead would
+## leave the pool alive inside a hole. See `VoxelWard`.
+var _ward: VoxelWard = VoxelWardScript.new() as VoxelWard
 var _energy_hud: PlayerEnergyHud
 var _health_hud: PlayerHealthHud
 var _boost_hud: CanvasLayer
@@ -2636,6 +2641,12 @@ func beacon_registry() -> BeaconRegistry:
 	return _beacons
 
 
+## Cells no damage may take, claimed by whatever structure is standing on them. Siege towers claim
+## their stamp while they live and drop it when they die.
+func voxel_ward() -> VoxelWard:
+	return _ward
+
+
 ## Active Siege Quarter run, or null. Kill hauls and streaming pin consult this.
 func active_siege_run() -> SiegeController:
 	if _siege_run != null and is_instance_valid(_siege_run) and _siege_run.is_running():
@@ -4440,7 +4451,7 @@ func apply_charged_blast(hit_world: Vector3, radius_m: float) -> void:
 	const MAX_DEBRIS := 900
 	## One chip roll for the whole blast — same gate as blaster / laser / melee.
 	var allow_chip := _roll_carve_chip()
-	var center_verdict := _carve_verdict(probe_mat)
+	var center_verdict := _carve_verdict(probe_mat, center_vox)
 	if (
 		center_verdict == CarveVerdict.REFUSE
 		or (center_verdict == CarveVerdict.CHIP and not allow_chip)
@@ -4476,6 +4487,10 @@ func _cascade_column_above(top_vox: Vector3i) -> void:
 		return
 	var above := int(_tool.get_voxel(Vector3i(top_vox.x, top_vox.y + 1, top_vox.z)))
 	if VoxelMaterial.is_self_supporting_terrain(above):
+		return
+	if _ward.holds_above(top_vox.x, top_vox.z, top_vox.y):
+		## A structure stands over the break. Collapsing the column would drop the exact cells the
+		## carve was just refused on — a tower cut off at the ankles instead of shot down.
 		return
 	CityProfiler.begin("cascade")
 	_cascade.collapse_column_above(top_vox)
@@ -4535,7 +4550,8 @@ enum CarveVerdict {
 	CHIP,
 	## Two+ tiers above — unlock hardness; always toast.
 	REFUSE,
-	## Bedrock / arena shell / infection body — never yields, no toast.
+	## Bedrock / arena shell / infection body, or a cell a standing structure holds (`VoxelWard`) —
+	## never yields, no toast.
 	IMMUNE,
 }
 
@@ -4608,14 +4624,14 @@ func _player_note_cell(vox: Vector3i, ctx: Dictionary) -> void:
 			_try_start_dissolve(hit_world, mat_id)
 			ctx["handled"] = true
 		PlayerVoxelKind.FRACTAL:
-			if not _carve_allowed(mat_id, allow_chip):
+			if not _carve_allowed(mat_id, vox, allow_chip):
 				return
 			var seed: Vector3i = ctx["fractal_seed"] as Vector3i
 			if seed == _PLAYER_NO_SEED:
 				ctx["fractal_seed"] = vox
 			ctx["handled"] = true
 		PlayerVoxelKind.EXPLOSIVE, PlayerVoxelKind.NORMAL:
-			if not _carve_allowed(mat_id, allow_chip):
+			if not _carve_allowed(mat_id, vox, allow_chip):
 				return
 			(ctx["normal_cells"] as Array).append(vox)
 			ctx["handled"] = true
@@ -4669,13 +4685,19 @@ func _player_emit_normal_cascade(ctx: Dictionary, hit_world: Vector3) -> void:
 		_notify_tetris_damage(detached)
 
 
-## Classify `mat_id` against the player's hardness tier. No RNG — callers roll chip once.
-func _carve_verdict(mat_id: int) -> CarveVerdict:
+## Classify the cell at `vox` (material `mat_id`) against the player's hardness tier. No RNG —
+## callers roll chip once.
+##
+## `vox` decides as much as the material does: a structure standing there may hold its own cells
+## against damage regardless of what it is built out of (see `VoxelWard`).
+func _carve_verdict(mat_id: int, vox: Vector3i) -> CarveVerdict:
 	if (
 		mat_id == VoxelMaterial.AIR
 		or mat_id == VoxelMaterial.WATER
 		or not VoxelMaterial.is_destructible(mat_id)
 	):
+		return CarveVerdict.IMMUNE
+	if _ward.holds(vox):
 		return CarveVerdict.IMMUNE
 	var need := int(VoxelMaterial.hardness(mat_id))
 	if need == int(VoxelMaterial.Hardness.NEVER):
@@ -4688,9 +4710,9 @@ func _carve_verdict(mat_id: int) -> CarveVerdict:
 	return CarveVerdict.REFUSE
 
 
-## True when this strike may destroy `mat_id`. `allow_chip` is the single per-strike roll.
-func _carve_allowed(mat_id: int, allow_chip: bool = false) -> bool:
-	match _carve_verdict(mat_id):
+## True when this strike may destroy the cell at `vox`. `allow_chip` is the single per-strike roll.
+func _carve_allowed(mat_id: int, vox: Vector3i, allow_chip: bool = false) -> bool:
+	match _carve_verdict(mat_id, vox):
 		CarveVerdict.OK:
 			return true
 		CarveVerdict.CHIP:
@@ -4756,7 +4778,7 @@ func apply_voxel_strike(
 			found = true
 			hit_gem = true
 			break
-		var verdict := _carve_verdict(id)
+		var verdict := _carve_verdict(id, v)
 		match verdict:
 			CarveVerdict.IMMUNE:
 				## Solid that never yields — stop the ray.
@@ -5549,8 +5571,7 @@ func undead_giant_scrape_at(contact_world: Vector3, inward: Vector3, along: Vect
 			var col_z := hit.z + sx.z * a + ix.z * d
 			for y3 in range(y_lo, y_hi + 1):
 				var vox := Vector3i(col_x, y3, col_z)
-				var mat_id := _brush.get_vox(vox)
-				if not VoxelMaterial.is_undead_structure_target(mat_id):
+				if not _monster_may_chew(vox, _brush.get_vox(vox)):
 					continue
 				var carved := _brush.destroy_vox(vox)
 				for entry in carved:
@@ -5754,6 +5775,15 @@ func _building_probe_seed_columns(from: Vector3, max_dist: float) -> Array[Vecto
 	return out
 
 
+## True when a monster peeling structures may take this cell: the fabric test it always used, plus the
+## rule that a standing structure holds its own voxels. A giant scraping a siege tower down cell by
+## cell is the same desync as a player blasting one — the pool would still be standing.
+func _monster_may_chew(vox: Vector3i, mat_id: int) -> bool:
+	if not VoxelMaterial.is_undead_structure_target(mat_id):
+		return false
+	return not _ward.holds(vox)
+
+
 ## Score one XZ column for undead facade work. Returns {score, vox}; score stays below
 ## `beat_score` rejection path as -INF when nothing better was found.
 func _score_building_column(
@@ -5773,8 +5803,7 @@ func _score_building_column(
 	]
 	for dy in range(0, dy_max):
 		var v := Vector3i(base.x, base.y + dy, base.z)
-		var id := int(_tool.get_voxel(v))
-		if not VoxelMaterial.is_undead_structure_target(id):
+		if not _monster_may_chew(v, int(_tool.get_voxel(v))):
 			continue
 		var center := _terrain.to_global(
 			Vector3(float(v.x) + 0.5, float(v.y) + 0.5, float(v.z) + 0.5)
@@ -5812,8 +5841,7 @@ func _carve_building_sphere_counted(local_center: Vector3, radius_vox: float) ->
 				if center.distance_squared_to(local_center) > r2 + 0.0001:
 					continue
 				var vox := Vector3i(x, y, z)
-				var id := _brush.get_vox(vox)
-				if not VoxelMaterial.is_undead_structure_target(id):
+				if not _monster_may_chew(vox, _brush.get_vox(vox)):
 					continue
 				removed += _brush.destroy_vox(vox).size()
 	_brush.end_edit()
@@ -6308,8 +6336,9 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 	var cz := int(floor(local_center.z))
 	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var allow_chip := _roll_carve_chip()
-	var center_mat := _brush.get_vox(Vector3i(cx, cy, cz)) if _brush != null else VoxelMaterial.AIR
-	var center_verdict := _carve_verdict(center_mat)
+	var center_vox := Vector3i(cx, cy, cz)
+	var center_mat := _brush.get_vox(center_vox) if _brush != null else VoxelMaterial.AIR
+	var center_verdict := _carve_verdict(center_mat, center_vox)
 	if (
 		center_verdict == CarveVerdict.REFUSE
 		or (center_verdict == CarveVerdict.CHIP and not allow_chip)
@@ -6324,7 +6353,7 @@ func _carve_destructible_sphere_counted(local_center: Vector3, radius_vox: float
 					continue
 				var vox := Vector3i(x, y, z)
 				var mat_id := _brush.get_vox(vox)
-				if not _carve_allowed(mat_id, allow_chip):
+				if not _carve_allowed(mat_id, vox, allow_chip):
 					continue
 				removed += _brush.destroy_vox(vox).size()
 	_brush.end_edit()

@@ -41,6 +41,10 @@ const OBELISK_TIP_COURSES := 3
 ## objective rather than from the tile centre, because the Lodestone stands in the grand plaza and
 ## the planner puts that wherever the urban pass cleared a square — on a tile whose plaza is off
 ## centre, a ring around the tile's middle is not a ring around the thing it is supposed to shield.
+##
+## Read by `DistrictPlanner`, which holds a monument square open at each of these four points before
+## it zones a single lot, and stands the stones in those squares rather than at the raw offsets. The
+## offsets stay here because the ring is the composer's geometry; the planner only reserves for it.
 const OUTER_RING_X := 196
 const OUTER_RING_Z := 140
 ## Two outer stones this close together would be one flank with two crystals on it. Only bites when
@@ -65,6 +69,11 @@ const GATE_STANDOFF := 120
 const GATE_STONE_CLEAR := 120
 ## How far either side of its stone's outward bearing a flanking gate sits, in radians (~20°).
 const GATE_FLANK_RAD := 0.35
+## Bearings a gate may swing to, in radians off its flank, when the outboard point falls off the tile
+## or its ground is unusable. Alternating either way and widening, so the nearest workable bearing to
+## the one the geometry asked for always wins. Capped at ~50°, past which a gate stops belonging to
+## the flank it is named for.
+const GATE_SWING_RAD: Array[float] = [0.0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9]
 ## Mouth half-width in voxels: 5 m of opening, wider than the largest body's clearance.
 const HELL_GATE_HALF_W := 5
 ## Frame height in voxels (6 m) and how wide each side pillar is. The whole portal is one plane —
@@ -79,6 +88,15 @@ const HELL_GATE_CLEAR := 16
 ## — that is where bodies are actually dropped, and a mouth whose apron is a wall spawns the wave
 ## inside a building. Checking only the voxel next to the frame let that through.
 const HELL_GATE_APRON := 4
+
+## Reachability: the lattice the walk flood samples, in voxels. Every step also tests the voxels
+## between two samples, so no wall can be stepped over however thin it is; the step instead sets the
+## narrowest gap that still counts as a route, which at 2 voxels is a 1 m alley.
+const WALK_STEP := 2
+## Air a body needs over the deck to walk a cell, in voxels (2 m).
+const WALK_CLEAR := 4
+## How far the flood may look for ground to start on, in lattice rings.
+const WALK_SEED_RINGS := 12
 
 ## How far the site search may wander from an ideal point before giving up, and how it steps. The
 ## ideal lands wherever the tile's own city put it, which is often a facade or a lot interior.
@@ -152,6 +170,9 @@ var layout: SiegeLayout = null
 ## Spatial hash of taken site centres, bin edge `PAD_SPACING`, so the spacing test stays O(1)
 ## per candidate. A linear scan over every site was fine at eighteen pads and is not at hundreds.
 var _site_bins: Dictionary = {}
+## Deck cells joined to the Lodestone by walkable ground, sampled every `WALK_STEP` voxels. Filled
+## once by `_flood_walk_region`, then read by the stone and gate site tests.
+var _walk_region: Dictionary[Vector2i, bool] = {}
 
 
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -173,6 +194,9 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	layout.deck_y = ground_y
 
 	_plan_lodestone()
+	## Every placement below has to answer "could the horde walk from here to what it came for", so
+	## the walkable ground around the objective is flooded once, before anything is added to the tile.
+	_flood_walk_region()
 	_plan_outer_stones()
 	_plan_hell_gates()
 	_plan_breaches()
@@ -246,22 +270,143 @@ func _quarter_keepout() -> Rect2i:
 ## near it — and the ideal is pulled back inside the tile first, since a Lodestone near a border would
 ## otherwise send half the ring off the map.
 func _plan_outer_stones() -> void:
-	var centre := layout.lodestone_xz
+	var squares := planner.siege_stone_squares
+	if squares.size() != OUTER_STONE_COUNT:
+		push_error(
+			"SiegeComposer: the planner reserved %d stone squares, not %d"
+			% [squares.size(), OUTER_STONE_COUNT]
+		)
+		assert(false, "SiegeComposer: no reserved ground for the outer stones")
+		return
 	for i in range(OUTER_STONE_COUNT):
-		var sx := 1 if (i % 2) == 0 else -1
-		var sz := 1 if i < 2 else -1
+		var square: Rect2i = squares[i]
 		var ideal := _clamp_into_tile(
-			Vector2i(centre.x + sx * OUTER_RING_X, centre.y + sz * OUTER_RING_Z),
+			Vector2i(
+				square.position.x * cell_size + square.size.x * cell_size / 2,
+				square.position.y * cell_size + square.size.y * cell_size / 2
+			),
 			OUTER_STONE_RADIUS + 3
 		)
 		var at := _search_outward(ideal, _is_outer_stone_site, SITE_SEARCH_MAX)
 		if at.x < 0:
 			push_error(
-				"SiegeComposer: no open ground for outer stone %d near %s" % [i, ideal]
+				"SiegeComposer: no open ground for outer stone %d in its square %s near %s"
+				% [i, square, ideal]
 			)
 			assert(false, "SiegeComposer: outer stone has nowhere to stand")
 			continue
 		layout.add_outer_stone(at, ground_y, OUTER_STONE_RADIUS, OUTER_STONE_HEIGHT)
+
+
+# --- reachability -----------------------------------------------------------
+
+## Flood the deck outward from the Lodestone across every cell a body could walk.
+##
+## Placement used to be judged entirely locally: open ground under the frame, an apron in front of the
+## mouth, sky overhead. All three are true in the courtyard of a U-shaped block of flats, and the field
+## report was exactly that — a hell gate in one, with the wave walking out of the mouth into a yard it
+## had no way out of and milling about there for the whole run.
+##
+## One fill answers it for every site. Anything joined to the Lodestone is joined to the outer stones
+## as well, since they are placed under this same rule, so "is this cell in the region" is the whole of
+## "can the horde walk from here to what it came for". What is flooded is the city's own geometry: the
+## barricade and the gates are not painted yet, and neither belongs in the answer — a breach is cut on
+## a road that crosses the wall, and a gate is walk-through at the mouth.
+func _flood_walk_region() -> void:
+	_walk_region.clear()
+	var start := _nearest_walk_sample(layout.lodestone_xz)
+	if start.x < 0:
+		push_error(
+			"SiegeComposer: no walkable ground within %d voxels of the Lodestone at %s"
+			% [WALK_SEED_RINGS * WALK_STEP, layout.lodestone_xz]
+		)
+		assert(false, "SiegeComposer: the objective stands on nothing walkable")
+		return
+	var frontier: Array[Vector2i] = [start]
+	_walk_region[start] = true
+	while not frontier.is_empty():
+		var at: Vector2i = frontier.pop_back()
+		for d: Vector2i in _WALK_DIRS:
+			var next := at + d * WALK_STEP
+			if _walk_region.has(next):
+				continue
+			if not _inside_tile(next.x, next.y, 1):
+				continue
+			if not _walk_step_clear(at, d):
+				continue
+			_walk_region[next] = true
+			frontier.append(next)
+	print(
+		"SiegeComposer: %d walkable cells joined to the objective at %s"
+		% [_walk_region.size(), layout.lodestone_xz]
+	)
+
+
+const _WALK_DIRS: Array[Vector2i] = [
+	Vector2i(1, 0),
+	Vector2i(-1, 0),
+	Vector2i(0, 1),
+	Vector2i(0, -1),
+]
+
+
+## Walkable all the way from one lattice sample to its neighbour. Every voxel in between is tested,
+## not just the two ends: a wall one voxel thick sits entirely between two samples, and a flood that
+## skipped it would call every courtyard in the city reachable.
+func _walk_step_clear(from: Vector2i, dir: Vector2i) -> bool:
+	for step in range(1, WALK_STEP + 1):
+		if not _is_walk_cell(from.x + dir.x * step, from.y + dir.y * step):
+			return false
+	return true
+
+
+## A body can stand here: solid deck with room over it. Deliberately the same shape as the nav bake's
+## own rule rather than a list of street materials — pad plating, plinths and building floors are all
+## surfaces to nav, and nav is what the horde actually walks on.
+func _is_walk_cell(x: int, z: int) -> bool:
+	if not VoxelMaterial.is_solid(brush.get_vox(Vector3i(x, ground_y, z))):
+		return false
+	for y in range(ground_y + 1, ground_y + 1 + WALK_CLEAR):
+		if brush.get_vox(Vector3i(x, y, z)) != VoxelMaterial.AIR:
+			return false
+	return true
+
+
+func _snap_walk(at: Vector2i) -> Vector2i:
+	return Vector2i(at.x - at.x % WALK_STEP, at.y - at.y % WALK_STEP)
+
+
+## Lattice sample nearest `at` that a body can stand on, or (-1, -1) when there is none within
+## `WALK_SEED_RINGS`. The Lodestone centre is a plaza cell, so this almost always answers on ring 0.
+func _nearest_walk_sample(at: Vector2i) -> Vector2i:
+	var home := _snap_walk(at)
+	for r in range(0, WALK_SEED_RINGS + 1):
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if maxi(absi(dx), absi(dz)) != r:
+					continue
+				var s := home + Vector2i(dx, dz) * WALK_STEP
+				if not _inside_tile(s.x, s.y, 1):
+					continue
+				if _is_walk_cell(s.x, s.y):
+					return s
+	return Vector2i(-1, -1)
+
+
+## True when a body standing at (x, z) could walk to the objective, and so to every stone. The
+## candidate rarely lands on the lattice, so its own lattice square answers for it — a metre of slack,
+## against courtyards tens of metres across.
+func _walk_reaches_objective(x: int, z: int) -> bool:
+	if _walk_region.is_empty():
+		## The fill failed and said so. Refusing every site after that would bury one loud error
+		## under thirteen more.
+		return true
+	var home := _snap_walk(Vector2i(x, z))
+	for dz: int in [0, WALK_STEP]:
+		for dx: int in [0, WALK_STEP]:
+			if _walk_region.has(home + Vector2i(dx, dz)):
+				return true
+	return false
 
 
 ## Two hell gates flanking each outer stone, standing `GATE_STANDOFF` beyond it along the line out
@@ -279,19 +424,32 @@ func _plan_hell_gates() -> void:
 			## Radial from the stone, so the flank angle means what it says. Offsetting on a wider
 			## ellipse around the centre instead squashed the angle and dropped one gate of every
 			## pair almost on top of the stone it was meant to threaten.
-			var ideal := _clamp_into_tile(
-				Vector2i(
-					stone.xz.x + int(round(cos(b) * float(GATE_STANDOFF))),
-					stone.xz.y + int(round(sin(b) * float(GATE_STANDOFF)))
-				),
-				HELL_GATE_HALF_W + HELL_GATE_PILLAR_W + 3
-			)
-			var outward := _cardinal_of(b)
-			var at := _search_outward(
-				ideal, _is_hell_gate_site.bind(outward), GATE_SEARCH_MAX
-			)
+			var margin := HELL_GATE_HALF_W + HELL_GATE_PILLAR_W + 3
+			var ideal := Vector2i(-1, -1)
+			var outward := Vector2i.ZERO
+			var at := Vector2i(-1, -1)
+			## A stone near a tile border throws its outboard point off the map, and clamping it back
+			## only pins the mouth to the edge where nothing fits. Swinging the bearing around the
+			## stone keeps the standoff exactly and still reads as the same flank.
+			for swing: float in GATE_SWING_RAD:
+				var try_b := b + swing
+				var p := Vector2i(
+					stone.xz.x + int(round(cos(try_b) * float(GATE_STANDOFF))),
+					stone.xz.y + int(round(sin(try_b) * float(GATE_STANDOFF)))
+				)
+				if not _inside_tile(p.x, p.y, margin):
+					continue
+				ideal = p
+				outward = _cardinal_of(try_b)
+				at = _search_outward(ideal, _is_hell_gate_site.bind(outward), GATE_SEARCH_MAX)
+				if at.x >= 0:
+					b = try_b
+					break
 			if at.x < 0:
-				push_error("SiegeComposer: no open ground for a hell gate near %s" % ideal)
+				push_error(
+					"SiegeComposer: no open ground for a hell gate off stone %s (last ideal %s)"
+					% [stone.xz, ideal]
+				)
 				assert(false, "SiegeComposer: hell gate has nowhere to stand")
 				continue
 			layout.add_hell_gate(Vector3i(at.x, ground_y, at.y), outward, b)
@@ -348,6 +506,10 @@ func _is_outer_stone_site(x: int, z: int) -> bool:
 	for other: SiegeLayout.Stone in layout.outer_stones:
 		if _flat_dist(x, z, other.xz.x, other.xz.y) < float(OUTER_STONE_MIN_GAP):
 			return false
+	## A stone the horde cannot walk to is a shield that never falls. Open flat ground with clear sky
+	## describes a courtyard too, which is why this is a separate question from the sweeps below.
+	if not _walk_reaches_objective(x, z):
+		return false
 	for dz in range(-plinth, plinth + 1):
 		for dx in range(-plinth, plinth + 1):
 			if _flat_dist(x + dx, z + dz, x, z) > float(plinth):
@@ -382,6 +544,10 @@ func _is_hell_gate_site(x: int, z: int, outward: Vector2i) -> bool:
 	## Centre column first: it rejects lot interiors and anything under a canopy before the
 	## footprint sweep runs, and the centre is what a body is dropped in front of.
 	if not _is_clear_gate_column(x, z):
+		return false
+	## The apron has to be joined to the rest of the tile, not merely clear. This is the courtyard
+	## rule: a mouth in a U-shaped block passes every local test and strands its whole lane.
+	if not _walk_reaches_objective(x - outward.x * HELL_GATE_APRON, z - outward.y * HELL_GATE_APRON):
 		return false
 	var along := Vector2i(-outward.y, outward.x)
 	## Ground under the frame plane and immediately either side of it.

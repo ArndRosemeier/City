@@ -14,6 +14,8 @@ const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd"
 const CityWalkerScript := preload("res://scripts/city/city_walker.gd")
 
 const WORLD_SEED := 42
+## Seeds that each baked a broken Siege quarter before the planner reserved ground for the stones.
+const OTHER_SEEDS: Array[int] = [1, 1234, 20260806]
 const MAX_RING := 8
 const BLOCK := 16
 
@@ -357,10 +359,19 @@ func _ready() -> void:
 	if not _check_hell_gates(layout, blocks, deck, planner):
 		_quit()
 		return
+	if not _check_horde_can_walk(layout, blocks, deck, planner):
+		_quit()
+		return
+	if not _check_sealed_yard_is_not_a_site(planner):
+		_quit()
+		return
 	if not _check_editable_bounds(gen, layout, deck):
 		_quit()
 		return
 	if not _check_offcentre_tile():
+		_quit()
+		return
+	if not _check_other_seeds():
 		_quit()
 		return
 
@@ -614,6 +625,225 @@ func _check_hell_gates(
 			return false
 	print("hell gates: %d veiled, unbreakable mouths outboard of the stones" % veiled)
 	return true
+
+
+## Can the horde get anywhere out of its mouths? Every other gate check is local — a veil, an
+## unbreakable pillar, a standable step out — and all of them pass for a mouth in the courtyard of a
+## U-shaped block of flats. That is what the field report was: the wave walked out and milled about in a
+## yard, with no way to the stones and none to the centre.
+##
+## Flooded over the *baked* tile rather than the composer's own model, so the barricade is standing and
+## its breaches are the only way through it. One fill from the objective has to reach all eight aprons
+## and all four stones, or some flank of the run is decoration.
+func _check_horde_can_walk(
+	layout: SiegeLayout, blocks: Dictionary, deck: int, planner: DistrictPlanner
+) -> bool:
+	var tile := Vector2i(
+		planner.cells_x * DistrictCoord.CELL_SIZE, planner.cells_z * DistrictCoord.CELL_SIZE
+	)
+	var region := _flood_deck(blocks, deck, tile, layout.lodestone_xz)
+	if region.size() < 1000:
+		_fail(
+			"FAIL only %d walkable cells joined to the Lodestone — the objective is walled in"
+			% region.size()
+		)
+		return false
+	for s in range(layout.outer_stone_count()):
+		var stone := layout.outer_stone_at(s)
+		if not _ring_in_region(region, stone.xz, stone.radius_vox + 3):
+			_fail(
+				"FAIL outer stone %d at %s is cut off from the objective — a shield nothing can reach"
+				% [s, stone.xz]
+			)
+			return false
+	for i in range(layout.hell_gate_count()):
+		var gate := layout.hell_gate_at(i)
+		var apron := Vector2i(
+			gate.mouth.x - gate.outward.x * SiegeComposer.HELL_GATE_APRON,
+			gate.mouth.z - gate.outward.y * SiegeComposer.HELL_GATE_APRON
+		)
+		if not _square_in_region(region, apron):
+			_fail(
+				"FAIL hell gate %d opens onto ground cut off from the stones and the centre (apron %s)"
+				% [i, apron]
+			)
+			return false
+	print(
+		"walk: %d deck cells joined to the objective, reaching all %d stones and all %d mouths"
+		% [region.size(), layout.outer_stone_count(), layout.hell_gate_count()]
+	)
+	return true
+
+
+## One seed is not a city plan.
+##
+## Everything above is measured on seed 42, and seed 42 has never been the tile that broke. Both
+## failures found so far were shapes that seed happened not to produce: a two-cell avenue running
+## straight through an outer stone's ideal point, and a stone near enough to a tile border that its
+## gates' outboard points fell off the map. Each baked a Siege quarter the player could walk into and
+## find nothing to fight over — 1 and 1234 with no stones and no mouths at all, 20260806 with half its
+## mouths missing — and each looked perfectly healthy from here.
+func _check_other_seeds() -> bool:
+	for s: int in OTHER_SEEDS:
+		var coord := DistrictTheme.find_coord_for_theme(s, DistrictTheme.SIEGE, MAX_RING)
+		if DistrictTheme.for_district(s, coord).id != DistrictTheme.SIEGE:
+			_fail("FAIL seed %d has no Siege tile in ring 0..%d" % [s, MAX_RING])
+			return false
+		var res: Dictionary = DistrictBakeJobScript.bake({"coord": coord, "world_seed": s})
+		if not bool(res.get("ok", false)):
+			_fail("FAIL seed %d bake: %s" % [s, res.get("error", "?")])
+			return false
+		var gen: DistrictGenerator = res["generator"]
+		var layout: SiegeLayout = gen.get_siege_layout()
+		if layout == null:
+			_fail("FAIL seed %d baked a Siege tile with no layout" % s)
+			return false
+		if layout.outer_stone_count() != SiegeComposer.OUTER_STONE_COUNT:
+			_fail(
+				"FAIL seed %d %s stood %d outer stones, not %d — a flank with nothing on it"
+				% [s, coord, layout.outer_stone_count(), SiegeComposer.OUTER_STONE_COUNT]
+			)
+			return false
+		if layout.hell_gate_count() != SiegeComposer.HELL_GATE_COUNT:
+			_fail(
+				"FAIL seed %d %s opened %d hell gates, not %d — a flank the horde never comes from"
+				% [s, coord, layout.hell_gate_count(), SiegeComposer.HELL_GATE_COUNT]
+			)
+			return false
+		if not layout.is_valid():
+			_fail("FAIL seed %d %s is not runnable: %s" % [s, coord, layout.describe()])
+			return false
+	print("seeds: %s each stood five stones and eight mouths" % str(OTHER_SEEDS))
+	return true
+
+
+## The rule that answers the report, on geometry built to state it: ground inside a walled yard is not
+## a site however open, flat and sky-clear it is. Synthetic rather than hunted for in seeds, because the
+## tile that produced the report is not this one — and the wall here is a single voxel thick, which also
+## pins the part of the flood that tests the cells *between* two lattice samples. A fill that stepped
+## over a one-voxel wall would call every courtyard in the city reachable.
+func _check_sealed_yard_is_not_a_site(planner: DistrictPlanner) -> bool:
+	var deck := 6
+	var tile := Vector2i(
+		planner.cells_x * DistrictCoord.CELL_SIZE, planner.cells_z * DistrictCoord.CELL_SIZE
+	)
+	var volume := CityVoxelNativeScript.make_volume() as NativeOfflineVoxelVolume
+	volume.fill_box(Vector3i.ZERO, Vector3i(tile.x, deck + 1, tile.y), VoxelMaterial.ASPHALT)
+	var yard := Rect2i(80, 80, 40, 40)
+	var wall_top := deck + 1 + SiegeComposer.WALK_CLEAR + 2
+	for x in range(yard.position.x - 1, yard.end.x + 1):
+		for z: int in [yard.position.y - 1, yard.end.y]:
+			volume.fill_box(
+				Vector3i(x, deck + 1, z), Vector3i(x + 1, wall_top, z + 1), VoxelMaterial.BRICK
+			)
+	for z in range(yard.position.y - 1, yard.end.y + 1):
+		for x: int in [yard.position.x - 1, yard.end.x]:
+			volume.fill_box(
+				Vector3i(x, deck + 1, z), Vector3i(x + 1, wall_top, z + 1), VoxelMaterial.BRICK
+			)
+
+	var brush := CityBrush.new()
+	brush.use_offline_volume(volume)
+	var comp := SiegeComposer.new()
+	comp.brush = brush
+	comp.rng = RandomNumberGenerator.new()
+	comp.planner = planner
+	comp.ground_y = deck
+	comp.cell_size = DistrictCoord.CELL_SIZE
+	comp.layout = SiegeLayout.new()
+	comp.layout.deck_y = deck
+	comp.layout.lodestone_xz = Vector2i(tile.x / 2, tile.y / 2)
+	comp._flood_walk_region()
+
+	var outside := Vector2i(tile.x / 2, tile.y / 2 + 40)
+	if not comp._walk_reaches_objective(outside.x, outside.y):
+		_fail("FAIL open ground at %s reads as cut off from the objective beside it" % outside)
+		return false
+	var inside := yard.position + yard.size / 2
+	if comp._walk_reaches_objective(inside.x, inside.y):
+		_fail(
+			"FAIL a yard sealed by a one-voxel wall at %s reads as reachable — the flood steps over walls"
+			% inside
+		)
+		return false
+	print("yard: a walled yard is not a site, while the open deck beside the objective is")
+	return true
+
+
+## Deck cells a body can walk from `from`, sampled on the same lattice the composer floods on.
+func _flood_deck(
+	blocks: Dictionary, deck: int, tile: Vector2i, from: Vector2i
+) -> Dictionary:
+	var region: Dictionary = {}
+	var step := SiegeComposer.WALK_STEP
+	var start := Vector2i(-1, -1)
+	## The objective itself is a plinth now, so the fill starts on the first walkable ground beside it.
+	for r in range(0, SiegeComposer.WALK_SEED_RINGS + 1):
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if maxi(absi(dx), absi(dz)) != r or start.x >= 0:
+					continue
+				var s := Vector2i(
+					from.x - from.x % step + dx * step, from.y - from.y % step + dz * step
+				)
+				if _walkable_deck(blocks, deck, s.x, s.y):
+					start = s
+	if start.x < 0:
+		return region
+	var frontier: Array[Vector2i] = [start]
+	region[start] = true
+	while not frontier.is_empty():
+		var at: Vector2i = frontier.pop_back()
+		for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next := at + d * step
+			if region.has(next):
+				continue
+			if next.x < 1 or next.y < 1 or next.x >= tile.x - 1 or next.y >= tile.y - 1:
+				continue
+			var blocked := false
+			for k in range(1, step + 1):
+				if not _walkable_deck(blocks, deck, at.x + d.x * k, at.y + d.y * k):
+					blocked = true
+					break
+			if blocked:
+				continue
+			region[next] = true
+			frontier.append(next)
+	return region
+
+
+func _walkable_deck(blocks: Dictionary, deck: int, x: int, z: int) -> bool:
+	if _probe(blocks, x, deck, z) <= VoxelMaterial.AIR:
+		return false
+	for y in range(deck + 1, deck + 1 + SiegeComposer.WALK_CLEAR):
+		if _probe(blocks, x, y, z) != VoxelMaterial.AIR:
+			return false
+	return true
+
+
+## True when any of the four lattice cells around `at` was reached.
+func _square_in_region(region: Dictionary, at: Vector2i) -> bool:
+	var step := SiegeComposer.WALK_STEP
+	var home := Vector2i(at.x - at.x % step, at.y - at.y % step)
+	for dz: int in [0, step]:
+		for dx: int in [0, step]:
+			if region.has(home + Vector2i(dx, dz)):
+				return true
+	return false
+
+
+## True when the fill reached any point on the ring `radius` out from `centre` — the ground a body
+## has to stand on to hit a stone, since the stone itself is solid.
+func _ring_in_region(region: Dictionary, centre: Vector2i, radius: int) -> bool:
+	for a in range(16):
+		var ang := TAU * float(a) / 16.0
+		var p := Vector2i(
+			centre.x + int(round(cos(ang) * float(radius))),
+			centre.y + int(round(sin(ang) * float(radius)))
+		)
+		if _square_in_region(region, p):
+			return true
+	return false
 
 
 func _check_gate_standoff(i: int, mouth: Vector2i, layout: SiegeLayout) -> bool:
