@@ -61,8 +61,10 @@ var _lkp: Vector3 = Vector3.INF
 var _pursuit: Pursuit = Pursuit.NONE
 ## Simulated seconds in Investigate (advanced from UndeadUnit.tick — not wall clock).
 var _investigate_age_sec: float = 0.0
-## Whoever last hurt this body — overrides the committed target until it leaves the leash.
-var _forced_attacker: Node = null
+## Aggro queue of actors that hurt this body. Index 0 is the current target: later hitters enqueue
+## behind it and do not steal the chase. The head drops only when it becomes unreachable (dead,
+## freed, outside the leash, or the navigator gives up on the corridor to it).
+var _aggro_queue: Array[Node] = []
 ## The body this hunter committed to. The player and other monsters are nodes; pedestrians
 ## are crowd positions with no node to hold, so their commitment is the last aim point and
 ## is re-matched against the fresh crowd every query. Exactly one of the two is ever set.
@@ -99,9 +101,10 @@ func last_known_prey() -> Vector3:
 	return _lkp
 
 
-## True while a damage-driven attacker is sticky pursuit prey.
+## True while a damage-driven attacker is still on the aggro queue.
 func has_forced_attacker() -> bool:
-	return _forced_attacker != null and is_instance_valid(_forced_attacker)
+	_prune_aggro_heads()
+	return not _aggro_queue.is_empty()
 
 
 ## True while this body is holding one chosen target rather than re-picking every query.
@@ -109,15 +112,22 @@ func has_committed_target() -> bool:
 	return _target_node != null or _target_ped != Vector3.INF
 
 
-## Promote `attacker` (player body or UndeadUnit) above the committed target.
+## Enqueue `attacker` (player body or UndeadUnit) for retaliation.
+##
+## The first hitter becomes the chase; anyone who lands a blow while that chase is live joins the
+## queue behind them. Swapping to every new hitter made melee bodies ping-pong between attackers and
+## never close the gap — so the top of the queue only changes when that target becomes unreachable.
 func promote_attacker(attacker: Node) -> void:
 	if not _has_unit() or attacker == null or not is_instance_valid(attacker):
 		return
 	if attacker == _unit:
 		return
-	_forced_attacker = attacker
+	if not _aggro_queue.has(attacker):
+		_aggro_queue.append(attacker)
 	_prey_at_msec = -1000000
-	var aim := _aim_of_attacker(attacker)
+	## Always aim at the *head*, even when this call only appended a second hitter. Setting prey to
+	## the newcomer here was half of the ping-pong: combat swung at B while the feet still walked to A.
+	var aim := _forced_prey_aim()
 	if aim != Vector3.INF:
 		_mark_hot_pursuit(aim)
 		_prey = aim
@@ -185,12 +195,30 @@ func goal_reached(_request: NavGoalRequest, goal: NavGoal) -> void:
 
 ## The ladder gave up. NavAgent has already counted and warned, so nothing is smoothed over
 ## here — but sending the body straight back at the same unreachable thing would only repeat
-## it, so the next goal takes it somewhere else first.
+## it. If that thing was the aggro head *and* this body cannot fight it without a corridor,
+## drop it and serve the next hitter; otherwise look somewhere else first.
+##
+## A failed hunt is not automatically an unreachable head. Stand-off points next to a siege tower
+## often sit inside its stamp, so the navigator reports GOAL_UNREACHABLE the moment a melee body
+## is close enough to swing — and treating that as "drop the tower" is exactly the walk-away-
+## after-one-hit bug. In strike reach the fight continues without a path; only a head that is
+## dead, unleashed, or still too far to engage is actually unreachable.
 func goal_failed(_request: NavGoalRequest, goal: NavGoal, state: NavLadder.State) -> void:
 	if not _has_unit():
 		return
 	_prey = Vector3.INF
 	_prey_at_msec = -1000000
+	if goal.tag == TAG_HUNT and not _aggro_queue.is_empty():
+		_drop_aggro_head_if_unreachable()
+	var next_forced := _forced_prey_aim()
+	if next_forced != Vector3.INF:
+		_mark_hot_pursuit(next_forced)
+		_prey = next_forced
+		_unit.set_combat_prey(next_forced)
+		_unit.on_goal_failed(goal, state)
+		## Stay in retaliation — do not wander off a live queue because one corridor failed.
+		_wander_next = false
+		return
 	_clear_pursuit()
 	_unit.set_combat_prey(Vector3.INF)
 	_unit.on_goal_failed(goal, state)
@@ -371,7 +399,10 @@ func _hunt(prey: Vector3) -> NavGoal:
 	away.y = 0.0
 	var distance := away.length()
 	var engage := _hunt_engage_m()
-	if distance <= engage or _is_immobile():
+	## Prey volume (creature capsule or tower stamp). Distance is centre-to-centre; engage is the
+	## swing length past the surface, or stand-off aims land inside solid stamps and fail forever.
+	var prey_r := _prey_hit_radius_m(prey)
+	if distance <= engage + prey_r or _is_immobile():
 		## Close enough to swing: hold and let MonsterCombat strike. A trivial go_to(self)
 		## goal completes every physics frame, re-acquires, and re-paths — that alone tanks FPS.
 		## Engage is the *strike* reach, not the stand-off the corridor aims at: a body that
@@ -382,7 +413,7 @@ func _hunt(prey: Vector3) -> NavGoal:
 		## stand-off and the aggro range would have it re-acquiring instead of shooting.
 		_unit.set_combat_prey(prey)
 		return null
-	var stand_off := minf(_hunt_stand_off_m(), engage)
+	var stand_off := minf(_hunt_stand_off_m(), engage) + prey_r
 	return _tagged(
 		NavGoal.go_to_point(
 			prey + away / distance * stand_off, HUNT_ARRIVE_TOLERANCE_M
@@ -408,6 +439,37 @@ func _hunt_engage_m() -> float:
 	if combat != null and combat.has_method("hunt_engage_m"):
 		return float(combat.call("hunt_engage_m"))
 	return _hunt_stand_off_m()
+
+
+## Flat body / structure radius of whatever `prey` is aiming at. Zero when the aim is a ped
+## point or the player (their capsule is already baked into table reach / player checks).
+func _prey_hit_radius_m(prey: Vector3) -> float:
+	if prey == Vector3.INF:
+		return 0.0
+	## Hunt retarget can run after a tower died this frame; `as UndeadUnit` on a freed RefCounted
+	## errors before any null check. Prune first, then cast only a still-live node.
+	_prune_aggro_heads()
+	if not _aggro_queue.is_empty():
+		var head_node: Node = _aggro_queue[0]
+		if head_node != null and is_instance_valid(head_node):
+			var head := head_node as UndeadUnit
+			if head != null and head.is_alive():
+				var aim := _aim_of_attacker(head)
+				if aim != Vector3.INF and _flat(aim, prey) <= 0.75:
+					return float(head.hit_radius())
+	if _target_node != null and is_instance_valid(_target_node):
+		var sticky := _target_node as UndeadUnit
+		if sticky != null and sticky.is_alive():
+			var sticky_aim := _aim_of_attacker(sticky)
+			if sticky_aim != Vector3.INF and _flat(sticky_aim, prey) <= 0.75:
+				return float(sticky.hit_radius())
+	if _city != null and _city.has_method("find_nearest_hostile_monster"):
+		var near: UndeadUnit = _city.call(
+			"find_nearest_hostile_monster", prey, 0.75, _unit
+		) as UndeadUnit
+		if near != null and is_instance_valid(near):
+			return float(near.hit_radius())
+	return 0.0
 
 
 func _wander() -> NavGoal:
@@ -503,8 +565,8 @@ func _tagged(goal: NavGoal, tag: StringName) -> NavGoal:
 
 ## Aim point of whoever this body is fighting, or Vector3.INF for nobody visible.
 ##
-## Order of authority: the attacker that last hurt it, then the target it already committed
-## to, then a fresh pick. A committed target that is in range but out of sight yields INF on
+## Order of authority: the head of the aggro queue, then the target it already committed to,
+## then a fresh pick. A committed target that is in range but out of sight yields INF on
 ## purpose — the caller turns that into Investigate, which is how a hunter loses somebody,
 ## rather than into an excuse to swap onto a nearer body.
 func _nearest_living_prey() -> Vector3:
@@ -704,7 +766,7 @@ func _clear_pursuit() -> void:
 	_pursuit = Pursuit.NONE
 	_lkp = Vector3.INF
 	_investigate_age_sec = 0.0
-	_forced_attacker = null
+	_aggro_queue.clear()
 	_clear_target()
 
 
@@ -732,22 +794,57 @@ func _turn_on_attacker(agent: NavAgent) -> bool:
 	return true
 
 
-## Forced attacker aim if still valid and inside leash; otherwise drops the sticky target.
+## Aim of the aggro head if it is still reachable; otherwise drops dead heads until one is, or
+## the queue is empty. "Unreachable" here is dead / freed / outside the leash — navigator failure
+## drops the head in `goal_failed` instead, because that is the only place that knows the corridor
+## itself gave up.
 func _forced_prey_aim() -> Vector3:
-	if _forced_attacker == null or not is_instance_valid(_forced_attacker):
-		_forced_attacker = null
+	_prune_aggro_heads()
+	if _aggro_queue.is_empty():
 		return Vector3.INF
-	var aim := _aim_of_attacker(_forced_attacker)
-	if aim == Vector3.INF:
-		_forced_attacker = null
-		return Vector3.INF
-	if not _inside_leash(aim):
-		_forced_attacker = null
-		return Vector3.INF
-	return aim
+	return _aim_of_attacker(_aggro_queue[0])
+
+
+## Drop heads that can no longer be fought. Does not reorder the rest of the queue.
+func _prune_aggro_heads() -> void:
+	while not _aggro_queue.is_empty():
+		var attacker: Node = _aggro_queue[0]
+		if attacker == null or not is_instance_valid(attacker):
+			_aggro_queue.remove_at(0)
+			continue
+		var aim := _aim_of_attacker(attacker)
+		if aim == Vector3.INF or not _inside_leash(aim):
+			_aggro_queue.remove_at(0)
+			continue
+		return
+
+
+## After a hunt corridor dies: drop the head only when this body cannot fight it from where it
+## stands. In engage range the head stays — the navigator failing is not the same as the target
+## being gone.
+func _drop_aggro_head_if_unreachable() -> void:
+	if _aggro_queue.is_empty():
+		return
+	var head: Node = _aggro_queue[0]
+	if head == null or not is_instance_valid(head):
+		_aggro_queue.remove_at(0)
+		return
+	var aim := _aim_of_attacker(head)
+	if aim == Vector3.INF or not _inside_leash(aim):
+		_aggro_queue.remove_at(0)
+		return
+	var head_r := 0.0
+	var head_unit := head as UndeadUnit
+	if head_unit != null and head_unit.has_method("hit_radius"):
+		head_r = float(head_unit.call("hit_radius"))
+	if _flat(_unit.global_position, aim) > _hunt_engage_m() + head_r:
+		## Still needs a corridor to fight, and that corridor is what just failed.
+		_aggro_queue.remove_at(0)
 
 
 func _aim_of_attacker(attacker: Node) -> Vector3:
+	if attacker == null or not is_instance_valid(attacker):
+		return Vector3.INF
 	var unit := attacker as UndeadUnit
 	if unit != null:
 		if not unit.is_alive():
@@ -756,7 +853,7 @@ func _aim_of_attacker(attacker: Node) -> Vector3:
 	## Player body from CityRoot, or any Node3D stand-in (headless stubs).
 	if _city != null and _city.has_method("get_player_node"):
 		var player: Node = _city.call("get_player_node") as Node
-		if player != null and attacker == player and _city.is_player_alive():
+		if player != null and is_instance_valid(player) and attacker == player and _city.is_player_alive():
 			return _city.get_player_target_position()
 	var as3 := attacker as Node3D
 	if as3 != null:

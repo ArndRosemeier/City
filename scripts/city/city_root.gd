@@ -48,6 +48,7 @@ const TrapProjectileScript := preload("res://scripts/city/trap_projectile.gd")
 const ArmedTrapScript := preload("res://scripts/city/armed_trap.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const SiegeBuildPickerScript := preload("res://scripts/city/siege_build_picker.gd")
+const SiegeDetailsModalScript := preload("res://scripts/city/siege_details_modal.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
@@ -189,6 +190,8 @@ var _loot_toast: LootToast
 var _monster_summon_panel: MonsterSummonPanel
 ## Tower list for one Siege pad, opened by that pad's "+" plate.
 var _siege_build_picker: SiegeBuildPicker
+## Zone helper sheet, opened from the Lodestone console's Details button.
+var _siege_details: SiegeDetailsModal
 var _game_menu: GameMenuPanel
 var _cheat_panel: CheatPanel
 ## Save payload waiting to be poured into the next walker. Set before a regenerate (boot resume,
@@ -543,6 +546,10 @@ func is_siege_build_picker_open() -> bool:
 	return _siege_build_picker != null and _siege_build_picker.is_open()
 
 
+func is_siege_details_open() -> bool:
+	return _siege_details != null and _siege_details.is_open()
+
+
 func is_game_menu_open() -> bool:
 	return _game_menu != null and _game_menu.is_open()
 
@@ -560,6 +567,7 @@ func is_modal_open() -> bool:
 		or is_inventory_open()
 		or is_monster_summon_open()
 		or is_siege_build_picker_open()
+		or is_siege_details_open()
 		or is_game_menu_open()
 		or is_cheat_open()
 	)
@@ -612,6 +620,7 @@ func _refresh_hud_visibility() -> void:
 			not is_inventory_open()
 			and not is_monster_summon_open()
 			and not is_siege_build_picker_open()
+			and not is_siege_details_open()
 			and not is_game_menu_open()
 			and not is_cheat_open()
 		)
@@ -784,6 +793,12 @@ func _build_hud() -> void:
 	add_child(_siege_build_picker)
 	_siege_build_picker.opened.connect(_on_siege_build_picker_opened)
 	_siege_build_picker.closed.connect(_on_siege_build_picker_closed)
+
+	_siege_details = SiegeDetailsModalScript.new() as SiegeDetailsModal
+	_siege_details.name = "SiegeDetails"
+	add_child(_siege_details)
+	_siege_details.opened.connect(_on_siege_details_opened)
+	_siege_details.closed.connect(_on_siege_details_closed)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
 	call_deferred("_apply_saved_controls")
@@ -1017,7 +1032,7 @@ func close_siege_build_picker() -> void:
 		_siege_build_picker.close_panel()
 
 
-## Pot changed under an open list (a kill credited, another pad bought). Re-list in place.
+## Bag changed under an open list (another pad bought). Re-list in place.
 func refresh_siege_build_picker() -> void:
 	if _siege_build_picker != null and is_instance_valid(_siege_build_picker):
 		_siege_build_picker.refresh()
@@ -1031,6 +1046,35 @@ func _on_siege_build_picker_opened() -> void:
 
 
 func _on_siege_build_picker_closed() -> void:
+	_refresh_hud_visibility()
+	if is_modal_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+## Lodestone Details — the short blurb on the console is not enough for a first visit.
+func open_siege_details() -> void:
+	if _siege_details == null or not is_instance_valid(_siege_details):
+		push_error("CityRoot.open_siege_details: no details modal")
+		assert(false, "CityRoot: siege details modal missing")
+		return
+	_siege_details.open_panel()
+
+
+func close_siege_details() -> void:
+	if _siege_details != null and is_instance_valid(_siege_details):
+		_siege_details.close_panel()
+
+
+func _on_siege_details_opened() -> void:
+	_close_other_modals_except("siege_details")
+	_refresh_hud_visibility()
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_siege_details_closed() -> void:
 	_refresh_hud_visibility()
 	if is_modal_open():
 		return
@@ -1198,6 +1242,8 @@ func _close_other_modals_except(keep: String) -> void:
 		_monster_summon_panel.call("close_panel")
 	if keep != "siege_build" and is_siege_build_picker_open():
 		_siege_build_picker.close_panel()
+	if keep != "siege_details" and is_siege_details_open():
+		_siege_details.close_panel()
 	if keep != "game" and is_game_menu_open():
 		_game_menu.close_panel()
 	if keep != "cheat" and is_cheat_open():
@@ -1285,14 +1331,20 @@ func capture_summon_aim() -> void:
 
 ## Meshless Siege Quarter tower at an explicit world point (pad centre).
 func spawn_siege_tower_at(
-	combat_id: String, world_pos: Vector3, authored_hp: float, muzzle_height_m: float
+	combat_id: String,
+	world_pos: Vector3,
+	authored_hp: float,
+	muzzle_height_m: float,
+	structure_hit_radius_m: float
 ) -> UndeadUnit:
 	_ensure_monster_roster()
 	if _monsters == null:
 		push_error("CityRoot.spawn_siege_tower_at: no MonsterRoster")
 		assert(false, "CityRoot: no MonsterRoster")
 		return null
-	return _monsters.spawn_siege_tower(combat_id, world_pos, authored_hp, muzzle_height_m)
+	return _monsters.spawn_siege_tower(
+		combat_id, world_pos, authored_hp, muzzle_height_m, structure_hit_radius_m
+	)
 
 
 ## Spawn a catalogue body at an explicit world point (Arena lifts, tests).
@@ -2645,6 +2697,39 @@ func beacon_registry() -> BeaconRegistry:
 ## their stamp while they live and drop it when they die.
 func voxel_ward() -> VoxelWard:
 	return _ward
+
+
+## Clear `cells` through the brush funnel and optionally tumble them as blast debris — the same
+## scatter the player's carve uses. Returns how many `{vox, mat}` entries were destroyed.
+##
+## Siege towers call this on death so the pad is empty again and the fall reads like any other
+## destruction, not a silent `set_vox(AIR)`.
+func destroy_voxels_with_debris(
+	cells: Array[Vector3i], blast_center_world: Vector3, scatter: bool = true
+) -> int:
+	if _brush == null or cells.is_empty():
+		return 0
+	var detached: Array = []
+	_brush.begin_edit()
+	for vox: Vector3i in cells:
+		for entry: Variant in _brush.destroy_vox(vox):
+			detached.append(entry)
+	_brush.end_edit()
+	if detached.is_empty():
+		return 0
+	if scatter:
+		_ensure_cascade_debris()
+		if _cascade != null and is_instance_valid(_cascade):
+			if _cascade.has_method("detach_blast_voxels"):
+				CityProfiler.begin("cascade_detach")
+				_cascade.call("detach_blast_voxels", detached, blast_center_world)
+				CityProfiler.end("cascade_detach")
+			elif _cascade.has_method("detach_voxels"):
+				CityProfiler.begin("cascade_detach")
+				_cascade.detach_voxels(detached)
+				CityProfiler.end("cascade_detach")
+		_notify_destruction(blast_center_world, 20.0)
+	return detached.size()
 
 
 ## Active Siege Quarter run, or null. Kill hauls and streaming pin consult this.
@@ -6598,6 +6683,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if is_siege_build_picker_open():
 			_siege_build_picker.close_panel()
+			get_viewport().set_input_as_handled()
+			return
+		if is_siege_details_open():
+			_siege_details.close_panel()
 			get_viewport().set_input_as_handled()
 			return
 		if is_game_menu_open():

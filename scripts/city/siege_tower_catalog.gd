@@ -12,6 +12,10 @@ const GameDataScript := preload("res://scripts/city/game_data.gd")
 const STAMP_BASE_CELLS := 1
 ## Air left between the top of a tower's stamp and its muzzle.
 const MUZZLE_CLEARANCE_M := 0.35
+## Extra metres past the solid stamp face so a body pressed against the voxels can still count as
+## touching the host. Stones solve the same job with `vuln_radius_m`; towers take living combat
+## damage, so this lands on `UndeadUnit.hit_radius` instead.
+const STRUCTURE_HIT_SLACK_M := 1.2
 
 
 class Def:
@@ -22,13 +26,15 @@ class Def:
 	var gem: String = ""
 	var hint: String = ""
 	var hp: float = 0.0
-	## item_id → count, spent from the siege pot.
+	## item_id → count, spent from the player's inventory.
 	var cost: Dictionary = {}
 	## Packed as [ox, oy, oz, material_id] relative to the pad surface centre.
 	var voxels: PackedInt32Array = PackedInt32Array()
 	## Highest voxel offset in the stamp. The combat host needs this to put its muzzle above its
 	## own mass — see `muzzle_height_m`.
 	var stamp_top_oy: int = 0
+	## Authored stamp radius in voxels (manhattan diamond). Drives `structure_hit_radius_m`.
+	var stamp_radius_vox: int = 1
 
 
 static var _by_id: Dictionary = {}
@@ -80,7 +86,10 @@ static func ensure_loaded() -> void:
 			push_error("SiegeTowerCatalog: '%s' has empty cost" % id)
 			assert(false, "SiegeTowerCatalog: empty cost")
 			continue
-		d.voxels = _stamp_voxels(row.get("stamp", {}), id)
+		var stamp_raw: Variant = row.get("stamp", {})
+		if typeof(stamp_raw) == TYPE_DICTIONARY:
+			d.stamp_radius_vox = maxi(int((stamp_raw as Dictionary).get("radius", 1)), 0)
+		d.voxels = _stamp_voxels(stamp_raw, id)
 		if d.voxels.is_empty():
 			push_error("SiegeTowerCatalog: '%s' stamp produced no voxels" % id)
 			assert(false, "SiegeTowerCatalog: empty stamp")
@@ -132,6 +141,20 @@ static func muzzle_height_m(def: RefCounted, voxel_size: float) -> float:
 	## `STAMP_BASE_CELLS + top_oy + 1` cells up.
 	var cells := STAMP_BASE_CELLS + int(def.get("stamp_top_oy")) + 1
 	return float(cells) * voxel_size + MUZZLE_CLEARANCE_M
+
+
+## Flat metres from pad centre within which a melee body can treat the tower as in reach.
+## Clears the solid stamp face (`radius + 0.5` cells) plus capsule slack — not a physics hitbox,
+## the same kind of volume stones expose as `vuln_radius_m`.
+static func structure_hit_radius_m(def: RefCounted, voxel_size: float) -> float:
+	if def == null:
+		push_error("SiegeTowerCatalog.structure_hit_radius_m: def required")
+		return 0.0
+	if voxel_size <= 0.0:
+		push_error("SiegeTowerCatalog.structure_hit_radius_m: bad voxel size %f" % voxel_size)
+		return 0.0
+	var radius_vox := maxi(int(def.get("stamp_radius_vox")), 0)
+	return (float(radius_vox) + 0.5) * voxel_size + STRUCTURE_HIT_SLACK_M
 
 
 ## Tallest voxel offset in a packed stamp.

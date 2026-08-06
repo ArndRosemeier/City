@@ -106,6 +106,7 @@ func spawn_siege_tower(
 	world_pos: Vector3,
 	authored_hp: float,
 	muzzle_height_m: float,
+	structure_hit_radius_m: float,
 	body_seed: int = -1
 ) -> UndeadUnit:
 	if combat_id.is_empty():
@@ -133,6 +134,7 @@ func spawn_siege_tower(
 		combat_id,
 		authored_hp,
 		muzzle_height_m,
+		structure_hit_radius_m,
 		body_seed if body_seed >= 0 else randi()
 	)
 	unit.died.connect(_on_unit_died)

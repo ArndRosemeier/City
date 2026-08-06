@@ -165,6 +165,10 @@ var _footstep_accum: float = 0.0
 var _siege_tower: bool = false
 ## Authored max HP for siege towers (CreatureHealth is meaningless for a building).
 var _authored_hp: float = 0.0
+## Flat structure volume for siege towers (stamp face + slack). Zero for creatures — they keep the
+## capsule `hit_radius`. Not a physics collider; hunt engage and melee gap use it the way stones
+## use `vuln_radius_m`.
+var _structure_hit_radius_m: float = 0.0
 ## Muzzle height above this body's origin in metres, or a negative for "derive it from body span".
 ## Siege towers must set it: they stand inside their own voxel stamp, and the muzzle is where every
 ## line-of-sight probe starts. See `muzzle_world`.
@@ -225,6 +229,7 @@ func setup_siege_tower(
 	combat_id: String,
 	authored_hp: float,
 	muzzle_height_m: float,
+	structure_hit_radius_m: float,
 	p_seed: int
 ) -> void:
 	if combat_id.is_empty():
@@ -241,10 +246,18 @@ func setup_siege_tower(
 		)
 		assert(false, "UndeadUnit: bad tower muzzle height")
 		return
+	if structure_hit_radius_m <= 0.0:
+		push_error(
+			"UndeadUnit.setup_siege_tower: non-positive structure hit radius %f"
+			% structure_hit_radius_m
+		)
+		assert(false, "UndeadUnit: bad tower structure hit radius")
+		return
 	role = Role.MINION
 	_siege_tower = true
 	_authored_hp = authored_hp
 	_muzzle_height_m = muzzle_height_m
+	_structure_hit_radius_m = structure_hit_radius_m
 	_body_id = combat_id
 	_roster = roster
 	_invasion = null
@@ -568,6 +581,10 @@ func _span_tall() -> float:
 
 
 func hit_radius() -> float:
+	## Towers: the stamp footprint, not the invisible host capsule. Hunt / melee / bolts all aim
+	## at the host point inside the mass; without this, a body at the wall is forever out of reach.
+	if _structure_hit_radius_m > 0.0:
+		return _structure_hit_radius_m
 	return HIT_RADIUS_BASE_M * _span_wide() * character_scale
 
 

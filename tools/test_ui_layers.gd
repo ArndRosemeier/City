@@ -25,6 +25,7 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/character_editor.gd", "layer": UiLayers.MODAL_CHARACTER_EDITOR},
 	{"path": "res://scripts/city/monster_summon_panel.gd", "layer": UiLayers.MODAL_MONSTER_SUMMON},
 	{"path": "res://scripts/city/siege_build_picker.gd", "layer": UiLayers.MODAL_SIEGE_BUILD},
+	{"path": "res://scripts/city/siege_details_modal.gd", "layer": UiLayers.MODAL_SIEGE_DETAILS},
 	{"path": "res://scripts/city/game_menu_panel.gd", "layer": UiLayers.MODAL_GAME},
 	{"path": "res://scripts/city/cheat_panel.gd", "layer": UiLayers.MODAL_CHEAT},
 	{"path": "res://scripts/city/loading_splash.gd", "layer": UiLayers.LOADING_SPLASH},
@@ -70,6 +71,7 @@ const MODALS: Array[int] = [
 	UiLayers.MODAL_CHARACTER_EDITOR,
 	UiLayers.MODAL_MONSTER_SUMMON,
 	UiLayers.MODAL_SIEGE_BUILD,
+	UiLayers.MODAL_SIEGE_DETAILS,
 	UiLayers.MODAL_GAME,
 	UiLayers.MODAL_CHEAT,
 ]

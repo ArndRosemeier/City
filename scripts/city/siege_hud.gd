@@ -18,7 +18,7 @@ const OK := Color(0.45, 0.88, 0.55, 1.0)
 const MUTED := Color(0.62, 0.60, 0.58, 1.0)
 
 ## Typed array literal (not PackedStringArray(...)) — GDScript only treats `= [...]` as const.
-## Same order as the stake console, so the tally reads the way the stake was chosen.
+## Quartz → diamond, the same order every other gem readout in the game uses.
 const GEM_IDS: PackedStringArray = [
 	"gem_quartz", "gem_amber", "gem_topaz", "gem_sapphire", "gem_emerald", "gem_diamond",
 ]

@@ -9,7 +9,8 @@
 ## whether the thing exists.
 ##
 ## Ownership is by instance id, so the claim dies with the structure: once released the cells are
-## ordinary again and whatever rubble is left can be cleared like any other.
+## ordinary again. Callers that own a structure usually clear those cells themselves on death
+## (siege towers scatter them); the ward only stops caring.
 ##
 ## Cells are world voxel coordinates — the same space `CityBrush.get_vox` and the player's carve
 ## verdict work in. Small by construction (a tower stamp is tens of cells), so a plain hash of cells
@@ -41,15 +42,16 @@ func claim(owner_id: int, cells: Array[Vector3i]) -> void:
 		_owner_of[vox] = owner_id
 
 
-## Drop everything `owner_id` holds. Returns how many cells went back to being ordinary.
-func release(owner_id: int) -> int:
+## Drop everything `owner_id` holds. Returns the cells that went back to being ordinary, so a
+## dying structure can clear or scatter exactly what it claimed without keeping a second list.
+func release(owner_id: int) -> Array[Vector3i]:
 	var dropped: Array[Vector3i] = []
 	for vox: Vector3i in _owner_of:
 		if _owner_of[vox] == owner_id:
 			dropped.append(vox)
 	for vox: Vector3i in dropped:
 		_owner_of.erase(vox)
-	return dropped.size()
+	return dropped
 
 
 func clear() -> void:

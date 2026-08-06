@@ -33,7 +33,7 @@ const HUD_COMPASS := 19
 ## says whether the thing walking at you is allowed to hit you, and it expires on a clock.
 const HUD_ZOO_CLOAK := 20
 ## Siege Quarter run strip: wave, pot, Lodestone HP. Above the cloak because a live defence
-## is the thing that decides whether the stake survives, and it has a clock of its own.
+## is the thing that decides whether the pot survives, and it has a clock of its own.
 const HUD_SIEGE := 21
 const HUD_MAX := 21
 
@@ -54,6 +54,8 @@ const MODAL_CHEAT := 27
 ## the cursor the player just clicked a world panel with, and leaving blaster fire live under an
 ## open recipe list is how you spend a gem and shoot your own Lodestone in the same click.
 const MODAL_SIEGE_BUILD := 28
+## Siege zone helper sheet, opened from the Lodestone console's Details button.
+const MODAL_SIEGE_DETAILS := 29
 
 ## Whole-screen state changes, above any modal.
 const GAME_OVER := 40

@@ -137,7 +137,8 @@ func _ready() -> void:
 
 ## A tower is a health pool with a bar over it, and its stamp is the only part of it the player's own
 ## weapons can reach at all. If a blast carves that stamp, the pool goes on standing and firing from
-## inside a hole — so a living tower holds its cells (`VoxelWard`) and gives them back when it dies.
+## inside a hole — so a living tower holds its cells (`VoxelWard`), and death demolishes the stamp so
+## the pad is empty and buildable again.
 ##
 ## Both halves are checked here rather than in `test_siege_towers` because this is the only harness with
 ## real terrain under a real pad: the fixture there has no live brush to stamp into.
@@ -146,8 +147,13 @@ func _check_tower_voxels_are_warded(city: CityRoot, ctrl: SiegeController) -> vo
 	if pad < 0:
 		_fail("FAIL the tile planned no tower pads")
 		return
+	var inv := city.get_inventory()
+	if inv == null:
+		_fail("FAIL no inventory to pay for a tower")
+		return
+	inv.add("gem_quartz", 1)
 	if not ctrl.build_tower(pad, "splinter_post"):
-		_fail("FAIL the pot would not buy a Splinter Post on pad %d" % pad)
+		_fail("FAIL the bag would not buy a Splinter Post on pad %d" % pad)
 		return
 	var tower: UndeadUnit = ctrl._pad_tower[pad] as UndeadUnit
 	var terrain := city.voxel_terrain()
@@ -177,8 +183,7 @@ func _check_tower_voxels_are_warded(city: CityRoot, ctrl: SiegeController) -> vo
 			% [mat, cell]
 		)
 		return
-	## Killed the way a wave kills it. The cells go back to being ordinary stone: the stump a dead
-	## tower leaves has to be clearable like anything else.
+	## Killed the way a wave kills it. The stamp is demolished — pad free, cells air, ward gone.
 	var swings := 0
 	while tower.is_alive() and swings < 400:
 		tower.apply_damage_scaled(DamageSource.Id.MONSTER_MELEE_MOB, 1.0, "probe", null)
@@ -189,11 +194,17 @@ func _check_tower_voxels_are_warded(city: CityRoot, ctrl: SiegeController) -> vo
 	if ward.holds(cell):
 		_fail("FAIL a dead tower still holds %v" % cell)
 		return
-	if city._carve_verdict(mat, cell) == CityRoot.CarveVerdict.IMMUNE:
-		_fail("FAIL the stump of a dead tower is still immune to the player")
+	if brush.get_vox(cell) != VoxelMaterial.AIR:
+		_fail(
+			"FAIL a dead tower left material %d at %v — the pad is not free"
+			% [brush.get_vox(cell), cell]
+		)
+		return
+	if ctrl._pad_tower.get(pad, null) != null:
+		_fail("FAIL pad %d is still marked occupied after the tower died" % pad)
 		return
 	print(
-		"ward: a Splinter Post on pad %d shrugged off a charged blast, and gave its cells back"
+		"ward: a Splinter Post on pad %d shrugged off a charged blast, then demolished to air"
 		% pad
 		+ " when %d mob swings felled it" % swings
 	)
@@ -355,14 +366,8 @@ func _goal_tag(unit: UndeadUnit) -> String:
 
 
 func _stake(city: CityRoot, ctrl: SiegeController) -> bool:
-	var inv := city.get_inventory()
-	if inv == null:
-		_fail("FAIL no player inventory to stake from")
-		return false
-	var n := ctrl.min_stake_total()
-	inv.add("gem_quartz", n)
-	if not ctrl.start_run({"gem_quartz": n}):
-		_fail("FAIL the run would not start on a %d gem stake" % n)
+	if not ctrl.start_run():
+		_fail("FAIL the run would not start")
 		return false
 	return true
 

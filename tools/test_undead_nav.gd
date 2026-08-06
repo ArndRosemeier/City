@@ -230,6 +230,14 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	await _test_melee_hunt_fail_keeps_the_tower()
+	if _failed:
+		_quit()
+		return
+	await _test_hunt_survives_a_freed_tower_in_aggro()
+	if _failed:
+		_quit()
+		return
 	await _test_far_attacker_turns_on_the_tower()
 	if _failed:
 		_quit()
@@ -925,6 +933,97 @@ func _test_shot_attacker_turns_on_the_tower() -> void:
 	_city.los_ok = true
 	_despawn(unit)
 	_despawn(tower)
+
+
+## A failed hunt corridor next to a living tower must not clear retaliation.
+##
+## Hunt stand-off now aims past the tower's stamp hit radius, but a corridor can still die
+## next to a living pad (blocked approach, arrive slop). Treating that as "unreachable, drop
+## the head" made attackers land one hit and walk back to the stone with the tower still standing.
+func _test_melee_hunt_fail_keeps_the_tower() -> void:
+	var pad := _w(Vector3i(40, 1, 40))
+	## Inside melee engage of a minion (~1.8 m), so a failed corridor is not "too far to fight".
+	var stand := _w(Vector3i(42, 1, 40))
+	var unit := _spawn(UndeadUnit.Role.MINION, stand)
+	if unit == null:
+		return
+	unit.set_faction(int(MonsterFaction.Id.SIEGE_ATTACKER))
+	var tower := _spawn(UndeadUnit.Role.MINION, pad)
+	if tower == null:
+		return
+	tower.set_faction(int(MonsterFaction.Id.SIEGE_DEFENDER))
+	_city.los_ok = false
+	_city.prey_at = Vector3.INF
+	_city.prey_b = Vector3.INF
+	var lethal := unit.apply_damage_scaled(
+		DamageSource.for_monster_attack_mob("blaster"), 0.05, "siege_tower", tower
+	)
+	if lethal:
+		_fail("FAIL the test hit killed the attacker")
+		return
+	var provider := unit.goal_provider()
+	if provider == null or not provider.has_forced_attacker():
+		_fail("FAIL tower shot did not enqueue retaliation")
+		return
+	var failed := NavGoal.go_to_point(pad, 0.35)
+	failed.tag = UndeadGoalProvider.TAG_HUNT
+	provider.goal_failed(null, failed, NavLadder.State.GOAL_UNREACHABLE)
+	if not provider.has_forced_attacker():
+		_fail("FAIL a melee-range hunt failure dropped the living tower from the queue")
+		return
+	var aim := tower.global_position + Vector3(0.0, 1.0, 0.0)
+	if provider.last_known_prey().distance_to(aim) > 1.5:
+		_fail(
+			"FAIL after hunt failure LKP %s is not the tower"
+			% str(provider.last_known_prey())
+		)
+		return
+	if unit.combat_prey().distance_to(aim) > 1.5:
+		_fail(
+			"FAIL after hunt failure combat prey %s is not the tower"
+			% str(unit.combat_prey())
+		)
+		return
+	print("aggro: melee-range hunt failure keeps the living tower on the queue")
+	_city.los_ok = true
+	_despawn(unit)
+	_despawn(tower)
+
+
+## A tower that dies while still head of the aggro queue must not crash hunt retarget.
+## `_prey_hit_radius_m` used to `as UndeadUnit` the queue head before `is_instance_valid`.
+func _test_hunt_survives_a_freed_tower_in_aggro() -> void:
+	var pad := _w(Vector3i(40, 1, 40))
+	var stand := _w(Vector3i(42, 1, 40))
+	var unit := _spawn(UndeadUnit.Role.MINION, stand)
+	if unit == null:
+		return
+	unit.set_faction(int(MonsterFaction.Id.SIEGE_ATTACKER))
+	var tower := _spawn(UndeadUnit.Role.MINION, pad)
+	if tower == null:
+		return
+	tower.set_faction(int(MonsterFaction.Id.SIEGE_DEFENDER))
+	_city.los_ok = false
+	_city.prey_at = Vector3.INF
+	_city.prey_b = Vector3.INF
+	unit.apply_damage_scaled(
+		DamageSource.for_monster_attack_mob("blaster"), 0.05, "siege_tower", tower
+	)
+	var provider := unit.goal_provider()
+	if provider == null or not provider.has_forced_attacker():
+		_fail("FAIL freed-tower case never enqueued the tower")
+		return
+	var aim := tower.global_position + Vector3(0.0, 1.0, 0.0)
+	tower.free()
+	## Must not throw "Trying to cast a freed object" from `_prey_hit_radius_m`.
+	var goal: NavGoal = provider._hunt(aim)
+	if provider.has_forced_attacker():
+		_fail("FAIL freed tower stayed on the aggro queue after hunt")
+		_despawn(unit)
+		return
+	print("aggro: hunt after a freed tower prunes the queue (goal %s)" % str(goal))
+	_city.los_ok = true
+	_despawn(unit)
 
 
 ## Answering fire is not a privilege of bodies the player is standing next to.

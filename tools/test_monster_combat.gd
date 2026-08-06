@@ -99,6 +99,10 @@ func _ready() -> void:
 	if _failed:
 		_quit()
 		return
+	await _test_aggro_queue_keeps_first_hitter()
+	if _failed:
+		_quit()
+		return
 	await _test_global_cooldown()
 	if _failed:
 		_quit()
@@ -381,6 +385,75 @@ func _test_factions_and_mob_melee() -> void:
 	_despawn(undead_a)
 	_despawn(undead_b)
 	_despawn(beast)
+
+
+## A second hitter must not steal the chase.
+##
+## Last-attacker-wins made melee bodies abort every approach the moment someone else landed a hit,
+## so they ping-ponged between attackers and never reached either. The queue keeps the first hitter
+## on top until that target is unreachable — dead here — and only then serves the next.
+func _test_aggro_queue_keeps_first_hitter() -> void:
+	var victim := _spawn(UndeadUnit.Role.MINION, _w(Vector3i(40, 1, 80)), "big/Frog")
+	var first := _spawn(
+		UndeadUnit.Role.MINION, _w(Vector3i(42, 1, 80)), "kaykit/Skeleton_Minion"
+	)
+	var second := _spawn(
+		UndeadUnit.Role.MINION, _w(Vector3i(40, 1, 82)), "kaykit/Skeleton_Warrior"
+	)
+	if victim == null or first == null or second == null:
+		return
+	var provider := victim.goal_provider()
+	if provider == null:
+		_fail("FAIL victim has no goal provider")
+		return
+	first.set_combat_prey(victim.global_position)
+	if not bool(first.combat().call("try_attack_living", victim.global_position)):
+		_fail("FAIL first hitter could not land a blow")
+		return
+	if not provider.has_forced_attacker():
+		_fail("FAIL first hit did not enqueue retaliation")
+		return
+	var aim_first := first.global_position + Vector3(0.0, 1.0, 0.0)
+	if provider.last_known_prey().distance_to(aim_first) > 1.5:
+		_fail("FAIL revenge LKP after first hit is not the first hitter")
+		return
+	second.set_combat_prey(victim.global_position)
+	if not bool(second.combat().call("try_attack_living", victim.global_position)):
+		_fail("FAIL second hitter could not land a blow")
+		return
+	if provider.last_known_prey().distance_to(aim_first) > 1.5:
+		_fail(
+			"FAIL second hit stole the chase — LKP %s is not the first hitter"
+			% str(provider.last_known_prey())
+		)
+		return
+	if victim.combat_prey().distance_to(aim_first) > 1.5:
+		_fail(
+			"FAIL combat prey flipped to the second hitter (%s)"
+			% str(victim.combat_prey())
+		)
+		return
+	## First hitter dies: the head is unreachable, so the queue must advance to the second.
+	first.apply_damage_scaled(DamageSource.Id.PLAYER_BLASTER, 1000.0, "test_kill", null)
+	if first.is_alive():
+		_fail("FAIL could not kill the first hitter to free the queue head")
+		return
+	## Bust the prey cache the same way a later hit would, so `_forced_prey_aim` runs again.
+	provider.promote_attacker(second)
+	var aim_second := second.global_position + Vector3(0.0, 1.0, 0.0)
+	if not provider.has_forced_attacker():
+		_fail("FAIL queue emptied when the first hitter died — second was waiting")
+		return
+	if provider.last_known_prey().distance_to(aim_second) > 1.5:
+		_fail(
+			"FAIL after the first died, LKP %s is not the second hitter"
+			% str(provider.last_known_prey())
+		)
+		return
+	print("aggro queue: first hitter sticky until dead, then second takes the head")
+	_despawn(victim)
+	_despawn(first)
+	_despawn(second)
 
 
 ## One shared recovery after any attack. A multi-attack kit used to empty its whole pool the

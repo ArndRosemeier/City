@@ -19,7 +19,6 @@ const EYE := 1.7
 ## against their own glow, high enough that the quarter is not in its own shadow.
 const SHOT_HOUR := 9.5
 ## What the run is staked with. Quartz only, because the pot's contents are not what this looks at.
-const STAKE_GEM := "gem_quartz"
 ## How far above the surface the walker is parked. It is only here to keep voxels meshed, but a body
 ## dropped *at* a base voxel is inside the ground — and CityRoot then reads the tile as underground,
 ## dims the sun and photographs a lit sky over a black city.
@@ -196,15 +195,9 @@ func _shoot_hud(centre: Vector3, deck: float) -> void:
 	compass.visible = false
 
 
-func _start_run(city: CityRoot, ctrl: SiegeController) -> bool:
-	var inv := city.get_inventory()
-	if inv == null:
-		push_error("FAIL no player inventory to stake from")
-		return false
-	var n := ctrl.min_stake_total()
-	inv.add(STAKE_GEM, n)
-	if not ctrl.start_run({STAKE_GEM: n}):
-		push_error("FAIL the run would not start on a %d × %s stake" % [n, STAKE_GEM])
+func _start_run(_city: CityRoot, ctrl: SiegeController) -> bool:
+	if not ctrl.start_run():
+		push_error("FAIL the run would not start")
 		return false
 	return true
 

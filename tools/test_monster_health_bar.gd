@@ -327,8 +327,9 @@ func _test_a_tower_hangs_its_bar_over_its_stamp() -> void:
 	if muzzle_h <= 0.0:
 		_fail("FAIL '%s' reports a muzzle at %.3f m" % [def.id, muzzle_h])
 		return
+	var hit_r := SiegeTowerCatalog.structure_hit_radius_m(def, VOXEL_SIZE)
 	var tower: UndeadUnit = _director._roster.spawn_siege_tower(
-		def.combat_id, _w(Vector3i(64, 1, 64)), def.hp, muzzle_h, BODY_SEED
+		def.combat_id, _w(Vector3i(64, 1, 64)), def.hp, muzzle_h, hit_r, BODY_SEED
 	)
 	if tower == null:
 		_fail("FAIL the roster refused a %s" % def.id)

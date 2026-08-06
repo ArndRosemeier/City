@@ -125,8 +125,8 @@ func _check_spectator_untouched() -> void:
 
 
 func _check_gamedata() -> void:
-	if GameData.siege_int("min_stake_total") < 1:
-		_fail("FAIL siege.min_stake_total missing or zero")
+	if GameData.siege().has("min_stake_total"):
+		_fail("FAIL siege.min_stake_total is gone — staking was abolished")
 	if GameData.siege_float("lodestone_hp") < 1.0:
 		_fail("FAIL siege.lodestone_hp missing or zero")
 	if GameData.siege_int("district_alive_cap") != 34:
@@ -173,12 +173,8 @@ func _check_gamedata() -> void:
 	if typeof(factions) != TYPE_ARRAY or (factions as Array).is_empty():
 		_fail("FAIL siege.source_factions empty")
 	print(
-		"gamedata: min_stake=%d lodestone=%.0f factions=%d"
-		% [
-			GameData.siege_int("min_stake_total"),
-			GameData.siege_float("lodestone_hp"),
-			(factions as Array).size(),
-		]
+		"gamedata: lodestone=%.0f factions=%d"
+		% [GameData.siege_float("lodestone_hp"), (factions as Array).size()]
 	)
 
 
@@ -222,7 +218,7 @@ func _make_layout() -> SiegeLayout:
 	return layout
 
 
-## Pot stake / spend / kill credit without spawning a real wave.
+## Pot kill credit / inventory tower spend / withdraw without spawning a real wave.
 func _check_pot_and_stake() -> void:
 	var city := _FakeCity.new()
 	city.name = "FakeCity"
@@ -247,24 +243,18 @@ func _check_pot_and_stake() -> void:
 	if ctrl.get_node_or_null("SiegeLodestonePanel") == null:
 		_fail("FAIL Lodestone panel was not spawned")
 		return
-	if ctrl.min_stake_total() != GameData.siege_int("min_stake_total"):
-		_fail("FAIL min_stake_total getter disagrees with gamedata")
 
-	## Short stake rejected.
-	if ctrl.start_run({"gem_quartz": 1}):
-		_fail("FAIL start_run accepted a stake below the minimum")
-	## Rich enough.
 	city.inventory.add("gem_quartz", 10)
 	city.inventory.add("gem_amber", 2)
-	if not ctrl.start_run({"gem_quartz": 5, "gem_amber": 1}):
-		_fail("FAIL start_run rejected a valid stake")
+	if not ctrl.start_run():
+		_fail("FAIL start_run rejected a free start")
 		return
-	if city.inventory.count_of("gem_quartz") != 5:
-		_fail("FAIL stake did not pull quartz from inventory")
-	if city.inventory.count_of("gem_amber") != 1:
-		_fail("FAIL stake did not pull amber from inventory")
-	if ctrl.pot_total() != 6:
-		_fail("FAIL pot_total is %d, want 6" % ctrl.pot_total())
+	if city.inventory.count_of("gem_quartz") != 10:
+		_fail("FAIL start_run pulled quartz from inventory — staking is abolished")
+	if city.inventory.count_of("gem_amber") != 2:
+		_fail("FAIL start_run pulled amber from inventory — staking is abolished")
+	if ctrl.pot_total() != 0:
+		_fail("FAIL pot_total is %d, want empty at start" % ctrl.pot_total())
 	if city.player_faction() != int(MonsterFaction.Id.SIEGE_DEFENDER):
 		_fail("FAIL player was not switched to SIEGE_DEFENDER")
 	if city.active_siege != ctrl:
@@ -275,19 +265,23 @@ func _check_pot_and_stake() -> void:
 	var paid := ctrl.credit_kill_mats(mats)
 	if paid != 2:
 		_fail("FAIL credit_kill_mats paid %d, want 2" % paid)
-	if ctrl.pot_total() != 8:
-		_fail("FAIL pot after kill haul is %d, want 8" % ctrl.pot_total())
+	if ctrl.pot_total() != 2:
+		_fail("FAIL pot after kill haul is %d, want 2" % ctrl.pot_total())
 	if city.inventory.count_of("gem_topaz") != 0:
 		_fail("FAIL kill haul leaked into inventory during a run")
 
-	## Spend for a tower.
-	if not ctrl.spend_from_pot({"gem_quartz": 3}):
-		_fail("FAIL spend_from_pot rejected an affordable cost")
-	var pot_after: Dictionary = ctrl.pot_snapshot()
-	if int(pot_after.get("gem_quartz", 0)) != 2:
-		_fail("FAIL pot quartz after spend is wrong")
-	if ctrl.spend_from_pot({"gem_diamond": 1}):
-		_fail("FAIL spend_from_pot accepted a cost the pot cannot cover")
+	## Towers spend from the bag; the pot is untouched.
+	if not ctrl.spend_tower_cost({"gem_quartz": 3}):
+		_fail("FAIL spend_tower_cost rejected an affordable cost")
+	if city.inventory.count_of("gem_quartz") != 7:
+		_fail(
+			"FAIL quartz after tower spend is %d, want 7"
+			% city.inventory.count_of("gem_quartz")
+		)
+	if ctrl.pot_total() != 2:
+		_fail("FAIL tower spend drained the pot — costs come from the bag")
+	if ctrl.spend_tower_cost({"gem_diamond": 1}):
+		_fail("FAIL spend_tower_cost accepted a cost the bag cannot cover")
 
 	## `start_run` opens the deployment window — the run's only pause, before the first wave.
 	var phase_now: int = int(ctrl.phase())
@@ -300,8 +294,8 @@ func _check_pot_and_stake() -> void:
 	city.player_pos = ctrl.lodestone_world_pos()
 	if not ctrl.withdraw():
 		_fail("FAIL withdraw failed during a live run")
-	if city.inventory.count_of("gem_quartz") != 5 + 2:
-		## started with 10, staked 5 (left 5), pot had 2 quartz left after spend, banked → 7
+	if city.inventory.count_of("gem_quartz") != 7:
+		## started with 10, spent 3 on a tower, pot had no quartz to bank
 		_fail(
 			"FAIL quartz after withdraw is %d, want 7"
 			% city.inventory.count_of("gem_quartz")
@@ -312,7 +306,7 @@ func _check_pot_and_stake() -> void:
 		_fail("FAIL player faction not restored after withdraw")
 	if city.active_siege != null:
 		_fail("FAIL siege run still registered after withdraw")
-	print("pot: stake → kill credit → spend → withdraw all round-trip")
+	print("pot: free start → kill credit → bag spend → withdraw all round-trip")
 	_check_kill_haul_toasts(ctrl)
 	_check_vulnerability_radius(ctrl, layout)
 
@@ -373,13 +367,12 @@ func _check_withdraw_ring(ctrl: SiegeController, city: _FakeCity) -> void:
 ## `grant_monster_kill_haul` path and assert the toast lights up for KayKit-tier HP too.
 func _check_kill_haul_toasts(ctrl: SiegeController) -> void:
 	if not ctrl.is_running():
-		## Withdraw ended the previous run — stake again so `active_siege_run` accepts credit.
+		## Withdraw ended the previous run — start again so `active_siege_run` accepts credit.
 		var city: _FakeCity = ctrl.get_parent().get_node("FakeCity") as _FakeCity
 		if city == null:
 			_fail("FAIL haul toast check lost the fake city")
 			return
-		city.inventory.add("gem_quartz", 5)
-		if not ctrl.start_run({"gem_quartz": 5}):
+		if not ctrl.start_run():
 			_fail("FAIL could not restart a run for the haul toast check")
 			return
 	var toast: LootToast = LootToast.new() as LootToast
@@ -491,8 +484,8 @@ func _check_shield_and_gates() -> void:
 	var ctrl: SiegeController = SiegeControllerScript.new() as SiegeController
 	add_child(ctrl)
 	ctrl.setup(layout, Vector3i.ZERO, 0.5, 42, city, Callable(), Callable(), Callable())
-	if not ctrl.start_run({"gem_quartz": 5}):
-		_fail("FAIL could not stake a run for the shield check")
+	if not ctrl.start_run():
+		_fail("FAIL could not start a run for the shield check")
 		return
 	if ctrl.stones().size() != 5:
 		_fail("FAIL run built %d stone pools, want 5" % ctrl.stones().size())
@@ -582,11 +575,11 @@ func _check_idle_arcs() -> void:
 		_fail("FAIL an idle Siege tile shows %d shield arcs, want 4" % _live_arcs(ctrl))
 		return
 	if ctrl.stones().size() != 5:
-		_fail("FAIL setup built %d stone pools, want 5 before any stake" % ctrl.stones().size())
+		_fail("FAIL setup built %d stone pools, want 5 before any start" % ctrl.stones().size())
 		return
 
-	if not ctrl.start_run({"gem_quartz": 5}):
-		_fail("FAIL could not stake a run for the arc check")
+	if not ctrl.start_run():
+		_fail("FAIL could not start a run for the arc check")
 		return
 	if _live_arcs(ctrl) != 4:
 		_fail("FAIL staking a run left %d arcs standing" % _live_arcs(ctrl))

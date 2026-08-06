@@ -2,7 +2,7 @@
 ##
 ## Sits at the mouse rather than centre screen: the player just clicked a specific pad in the
 ## world, and a centred dialog would make them look away from the thing they are placing. Only
-## recipes the pot can pay for are listed — a greyed row the player can press is a dead end.
+## recipes the bag can pay for are listed — a greyed row the player can press is a dead end.
 class_name SiegeBuildPicker
 extends CanvasLayer
 
@@ -50,7 +50,7 @@ func pad_index() -> int:
 	return _pad_index
 
 
-## Open for one pad. `controller` answers `can_afford` and owns the pot.
+## Open for one pad. `controller` answers `can_afford` against the player's bag.
 func open_for_pad(pad_index_in: int, controller: Node, at: Vector2) -> void:
 	if controller == null or not is_instance_valid(controller):
 		push_error("SiegeBuildPicker.open_for_pad: no controller")
@@ -94,7 +94,7 @@ func listed_tower_ids() -> PackedStringArray:
 	return out
 
 
-## Pot changed while the list is up (a kill credited, another pad spent). Re-list in place.
+## Bag changed while the list is up (another pad spent). Re-list in place.
 func refresh() -> void:
 	if not _open:
 		return
@@ -166,7 +166,7 @@ func _rebuild_rows() -> void:
 	if listed == 0:
 		var none := Label.new()
 		none.name = "Empty"
-		none.text = "No gems in the pot for a tower yet."
+		none.text = "No gems in your bag for a tower yet."
 		none.modulate = Color(0.75, 0.78, 0.85)
 		_rows.add_child(none)
 	_title.text = "%s — build" % _pad_caption.capitalize()
@@ -225,7 +225,7 @@ func _on_row_pressed(tower_id: String) -> void:
 		return
 	var pad := _pad_index
 	var ctrl := _controller
-	## Close first: the build stamps voxels and spawns a body, and the pot refresh that follows
+	## Close first: the build stamps voxels and spawns a body, and the bag refresh that follows
 	## would otherwise re-list a picker for a pad that is already occupied.
 	close_panel()
 	if ctrl == null or not is_instance_valid(ctrl):

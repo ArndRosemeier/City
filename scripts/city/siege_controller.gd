@@ -2,9 +2,9 @@
 ## the player's temporary `SIEGE_DEFENDER` allegiance.
 ##
 ## Player-initiated, like the Arena. Streaming the tile in only stands the controller up;
-## nothing spawns until `start_run` stakes gems into the pot. Kill hauls during a run feed
-## the pot (via `CityRoot.grant_monster_kill_haul`); withdrawing banks it, and losing the
-## Lodestone burns it.
+## nothing spawns until `start_run`. Towers are paid from the player's bag; kill hauls during a
+## run feed the pot (via `CityRoot.grant_monster_kill_haul`); withdrawing banks it, and losing the
+## Lodestone burns it. The pot is loot, not a stake — the player never pays into it.
 ##
 ## The five stones are why a run is a map rather than a plaza. Four outer stones stand ~100 m out and
 ## the centre cannot be hurt while any of them lives, so pressure has to be answered where it lands.
@@ -151,7 +151,6 @@ var _panel: SiegeLodestonePanel = null
 var _panel_refresh_acc: float = 0.0
 
 ## Authored tuning, read once at setup.
-var _min_stake_total: int = 5
 var _lodestone_base_hp: float = 400.0
 var _outer_stone_hp: float = 250.0
 var _lodestone_vuln_radius_m: float = 5.0
@@ -220,8 +219,8 @@ func setup(
 	_spawn_lodestone_panel()
 	set_process(true)
 	print(
-		"SiegeController: ready — %s, roster=%d bodies, min_stake=%d"
-		% [layout.describe(), _roster.size(), _min_stake_total]
+		"SiegeController: ready — %s, roster=%d bodies"
+		% [layout.describe(), _roster.size()]
 	)
 
 
@@ -294,10 +293,6 @@ func centre_shielded() -> bool:
 	return outer_stones_alive() > 0
 
 
-func min_stake_total() -> int:
-	return _min_stake_total
-
-
 ## Seconds left of the pre-run deployment window. Zero once the first wave has landed.
 func deploy_left() -> float:
 	return _deploy_left
@@ -357,59 +352,19 @@ func get_hud_stats() -> Dictionary:
 	}
 
 
-## Stake gems from inventory and open the run. `stake` is item_id → count. False when the
-## stake is short, the inventory cannot cover it, or a run is already live.
-func start_run(stake: Dictionary) -> bool:
+## Open the run with an empty pot. False when a run is already live.
+##
+## Towers are paid from the bag as they are built; kill loot fills the pot. There is no stake —
+## starting used to drain gems the player had not yet chosen to spend, and the pot is loot now.
+func start_run() -> bool:
 	if is_running():
 		push_error("SiegeController.start_run: a run is already live")
 		return false
 	if _phase == Phase.LOST or _phase == Phase.WITHDRAWN:
 		## A finished controller can be restarted after a withdraw; a loss leaves the tile
-		## idle until the player stakes again.
+		## idle until the player starts again.
 		_phase = Phase.IDLE
-	var total := 0
-	for k: Variant in stake.keys():
-		var item_id := String(k)
-		var n := int(stake[k])
-		if n <= 0:
-			continue
-		if not InventoryCatalogScript.has_item(item_id):
-			push_error("SiegeController.start_run: unknown item '%s'" % item_id)
-			return false
-		total += n
-	if total < _min_stake_total:
-		push_error(
-			"SiegeController.start_run: stake %d is below the minimum %d"
-			% [total, _min_stake_total]
-		)
-		return false
-	var inv: PlayerInventory = _city.call("get_inventory") as PlayerInventory
-	if inv == null:
-		push_error("SiegeController.start_run: no inventory")
-		return false
-	for k: Variant in stake.keys():
-		var item_id := String(k)
-		var n := int(stake[k])
-		if n <= 0:
-			continue
-		if inv.count_of(item_id) < n:
-			push_error(
-				"SiegeController.start_run: need %d × %s, have %d"
-				% [n, item_id, inv.count_of(item_id)]
-			)
-			return false
-	## Pull only after every check passes — a short stake must not drain part of a bag.
 	_pot.clear()
-	for k: Variant in stake.keys():
-		var item_id := String(k)
-		var n := int(stake[k])
-		if n <= 0:
-			continue
-		if not inv.remove(item_id, n):
-			push_error("SiegeController.start_run: remove failed for %s" % item_id)
-			assert(false, "SiegeController: inventory remove failed after count check")
-			return false
-		_pot[item_id] = int(_pot.get(item_id, 0)) + n
 
 	_reset_stones()
 	_wave = 0
@@ -434,8 +389,8 @@ func start_run(stake: Dictionary) -> bool:
 	_spawn_pad_panels()
 	_refresh_panel()
 	print(
-		"SiegeController: run started — pot=%d gems, centre=%.0f hp behind %d outer stones, %d build sites"
-		% [pot_total(), lodestone_hp_max(), outer_stones_alive(), layout.pad_count()]
+		"SiegeController: run started — centre=%.0f hp behind %d outer stones, %d build sites"
+		% [lodestone_hp_max(), outer_stones_alive(), layout.pad_count()]
 	)
 	return true
 
@@ -537,38 +492,61 @@ func credit_kill_mats(mats: Array[int]) -> int:
 	return paid
 
 
-## Spend from the pot (tower purchase). False when the pot cannot cover the cost.
-func spend_from_pot(cost: Dictionary) -> bool:
+## Spend tower gems from the player's bag. False when the bag cannot cover the cost.
+func spend_tower_cost(cost: Dictionary) -> bool:
 	if not is_running():
-		push_error("SiegeController.spend_from_pot: no run")
+		push_error("SiegeController.spend_tower_cost: no run")
 		return false
 	if not can_afford(cost):
+		return false
+	var inv := inventory()
+	if inv == null:
+		push_error("SiegeController.spend_tower_cost: no inventory")
 		return false
 	for k: Variant in cost.keys():
 		var item_id := String(k)
 		var n := int(cost[k])
 		if n <= 0:
 			continue
-		_pot[item_id] = int(_pot[item_id]) - n
-		if int(_pot[item_id]) <= 0:
-			_pot.erase(item_id)
+		if not inv.remove(item_id, n):
+			push_error(
+				"SiegeController.spend_tower_cost: remove failed for %s after afford check"
+				% item_id
+			)
+			assert(false, "SiegeController: inventory remove failed after count check")
+			return false
 	return true
 
 
 func can_afford(cost: Dictionary) -> bool:
 	if not is_running():
 		return false
+	var inv := inventory()
+	if inv == null:
+		return false
 	for k: Variant in cost.keys():
 		var item_id := String(k)
 		var n := int(cost[k])
 		if n <= 0:
 			continue
-		if int(_pot.get(item_id, 0)) < n:
+		if inv.count_of(item_id) < n:
 			return false
 	return true
 
 
-## Buy `tower_id` onto an empty pad. Stamps voxels, spawns the combat host, spends the pot.
+func _refund_tower_cost(cost: Dictionary) -> void:
+	var inv := inventory()
+	if inv == null:
+		push_error("SiegeController._refund_tower_cost: no inventory to restore")
+		return
+	for k: Variant in cost.keys():
+		var item_id := String(k)
+		var n := int(cost[k])
+		if n > 0:
+			inv.add(item_id, n)
+
+
+## Buy `tower_id` onto an empty pad. Stamps voxels, spawns the combat host, spends the bag.
 func build_tower(pad_index: int, tower_id: String) -> bool:
 	if not is_running():
 		push_error("SiegeController.build_tower: no run")
@@ -583,26 +561,23 @@ func build_tower(pad_index: int, tower_id: String) -> bool:
 	if def == null:
 		return false
 	var cost: Dictionary = def.get("cost") as Dictionary
-	## A short pot is a legal player miss, not a fault — the pad console shows the price and
-	## mutes its BUILD. Everything below this line is a genuine error if it fails.
-	if not spend_from_pot(cost):
+	## A short bag is a legal player miss, not a fault — the picker only lists what they can pay.
+	## Everything below this line is a genuine error if it fails.
+	if not spend_tower_cost(cost):
 		return false
 	var pad_world := _pad_world_pos(pad_index)
 	var brush: CityBrush = _city.call("voxel_brush") as CityBrush
 	var terrain: VoxelTerrain = _city.call("voxel_terrain") as VoxelTerrain
 	if brush == null or terrain == null:
 		push_error("SiegeController.build_tower: city has no brush/terrain")
-		## Refund — we already deducted.
-		for k: Variant in cost.keys():
-			_pot[String(k)] = int(_pot.get(String(k), 0)) + int(cost[k])
+		_refund_tower_cost(cost)
 		return false
 	var stamped: Array[Vector3i] = SiegeTowerCatalogScript.stamp_at(
 		terrain, brush, def, pad_world
 	)
 	if stamped.is_empty():
 		push_error("SiegeController.build_tower: stamp wrote nothing for '%s'" % tower_id)
-		for k: Variant in cost.keys():
-			_pot[String(k)] = int(_pot.get(String(k), 0)) + int(cost[k])
+		_refund_tower_cost(cost)
 		return false
 	var combat_id := str(def.get("combat_id"))
 	var hp := float(def.get("hp"))
@@ -613,17 +588,19 @@ func build_tower(pad_index: int, tower_id: String) -> bool:
 		var muzzle_h := (
 			SiegeTowerCatalogScript.muzzle_height_m(def, voxel_size) - TOWER_HOST_LIFT_M
 		)
+		## Stamp footprint as a living hit volume — mobs stand at the wall, not at pad centre.
+		var hit_r := SiegeTowerCatalogScript.structure_hit_radius_m(def, voxel_size)
 		unit = _city.call(
 			"spawn_siege_tower_at",
 			combat_id,
 			pad_world + Vector3(0.0, TOWER_HOST_LIFT_M, 0.0),
 			hp,
-			muzzle_h
+			muzzle_h,
+			hit_r
 		) as UndeadUnit
 	if unit == null or not is_instance_valid(unit):
 		push_error("SiegeController.build_tower: spawn failed for '%s'" % combat_id)
-		for k: Variant in cost.keys():
-			_pot[String(k)] = int(_pot.get(String(k), 0)) + int(cost[k])
+		_refund_tower_cost(cost)
 		return false
 	_towers.append(unit)
 	_pad_tower[pad_index] = unit
@@ -632,9 +609,11 @@ func build_tower(pad_index: int, tower_id: String) -> bool:
 	_hide_pad_panel(pad_index)
 	_refresh_panel()
 	_refresh_pad_panels()
+	if _city != null and is_instance_valid(_city) and _city.has_method("refresh_siege_build_picker"):
+		_city.call("refresh_siege_build_picker")
 	print(
-		"SiegeController: built %s on pad %d — pot now %d"
-		% [str(def.get("display_name")), pad_index, pot_total()]
+		"SiegeController: built %s on pad %d"
+		% [str(def.get("display_name")), pad_index]
 	)
 	return true
 
@@ -672,7 +651,7 @@ func _process(delta: float) -> void:
 			_panel.tick_display()
 
 
-## The deployment window: staked, plates going up, gates still dark. This is the run's only pause
+## The deployment window: started, plates going up, gates still dark. This is the run's only pause
 ## and the player's whole setup time — after the first wave the clock never stops.
 func _begin_deploy() -> void:
 	_phase = Phase.DEPLOY
@@ -1237,7 +1216,6 @@ func _wave_damage_mult() -> float:
 
 
 func _read_constants() -> void:
-	_min_stake_total = GameData.siege_int("min_stake_total")
 	_lodestone_base_hp = GameData.siege_float("lodestone_hp")
 	_outer_stone_hp = GameData.siege_float("outer_stone_hp")
 	_lodestone_vuln_radius_m = GameData.siege_float("lodestone_vulnerable_radius_m")
@@ -1465,20 +1443,46 @@ func _ward_claim(unit: UndeadUnit, cells: Array[Vector3i]) -> void:
 	ward.claim(unit.get_instance_id(), cells)
 
 
-## Give a dead tower's cells back to the world, so the stump it leaves can be cleared like anything
-## else built out of stone.
-func _ward_release(unit: UndeadUnit) -> void:
+## Give a dead tower's cells back. Returns the cells it held so the stamp can be demolished.
+func _ward_release(unit: UndeadUnit) -> Array[Vector3i]:
+	var empty: Array[Vector3i] = []
 	var ward := _voxel_ward()
-	if ward == null:
+	if ward == null or unit == null:
+		return empty
+	return ward.release(unit.get_instance_id())
+
+
+## Tear the stamp out of the world. Death scatters debris like a player carve; run teardown just
+## clears, so withdrawing a dozen towers does not dump a debris storm on the plaza.
+func _demolish_stamp(unit: UndeadUnit, cells: Array[Vector3i], scatter: bool) -> void:
+	if cells.is_empty() or _city == null or not is_instance_valid(_city):
 		return
-	ward.release(unit.get_instance_id())
+	if not _city.has_method("destroy_voxels_with_debris"):
+		push_error("SiegeController: city cannot demolish tower stamps")
+		assert(false, "SiegeController: city missing destroy_voxels_with_debris")
+		return
+	var centre := Vector3.ZERO
+	if unit != null and is_instance_valid(unit):
+		centre = unit.global_position
+	else:
+		## Fall back to the first cell's world centre when the host is already gone.
+		var vox: Vector3i = cells[0]
+		var terrain: VoxelTerrain = _city.call("voxel_terrain") as VoxelTerrain
+		if terrain != null:
+			centre = terrain.to_global(
+				Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+			)
+		else:
+			centre = Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5) * voxel_size
+	_city.call("destroy_voxels_with_debris", cells, centre, scatter)
 
 
 func _on_tower_died(unit: UndeadUnit, _was_giant: bool, pad_index: int) -> void:
 	_pad_tower.erase(pad_index)
 	if unit != null:
-		_ward_release(unit)
-	## Show the pad's "+" again so the player can rebuy at full pot price. The collider stays for
+		var cells := _ward_release(unit)
+		_demolish_stamp(unit, cells, true)
+	## Show the pad's "+" again so the player can rebuild. The collider stays for
 	## `_tick_plate_proximity` to hand back, which is why this re-shows rather than re-enabling hits.
 	if is_running():
 		var panel := _pad_panels.get(pad_index, null) as Node
@@ -1497,7 +1501,8 @@ func _clear_towers() -> void:
 	for unit: UndeadUnit in _towers:
 		if unit == null or not is_instance_valid(unit):
 			continue
-		_ward_release(unit)
+		var cells := _ward_release(unit)
+		_demolish_stamp(unit, cells, false)
 		if _despawn_cb.is_valid():
 			_despawn_cb.call(unit)
 		else:
@@ -1529,11 +1534,17 @@ func _spawn_lodestone_panel() -> void:
 	add_child(_panel)
 	_panel.setup_panel(origin, yaw, self)
 	_panel.start_requested.connect(_on_panel_start)
+	_panel.details_requested.connect(_on_panel_details)
 
 
-func _on_panel_start(stake: Dictionary) -> void:
-	if not start_run(stake):
+func _on_panel_start() -> void:
+	if not start_run():
 		_refresh_panel()
+
+
+func _on_panel_details() -> void:
+	if _city != null and is_instance_valid(_city) and _city.has_method("open_siege_details"):
+		_city.call("open_siege_details")
 
 
 ## The console is a between-runs object, and during a run it is not merely useless but harmful: it

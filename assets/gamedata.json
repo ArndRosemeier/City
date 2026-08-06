@@ -37779,7 +37779,6 @@
     "district_alive_cap": 34
   },
   "siege": {
-    "min_stake_total": 5,
     "lodestone_hp": 400.0,
     "outer_stone_hp": 250.0,
     "lodestone_vulnerable_radius_m": 5.0,

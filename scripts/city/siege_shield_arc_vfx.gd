@@ -7,7 +7,7 @@
 ## the loudest thing that happens in a run.
 ##
 ## Up whenever the tile is, not just during a run. It is also the quarter's only signage: someone who
-## has never staked anything reads "these four protect that one" off the geometry alone, which is the
+## has never started a run reads "these four protect that one" off the geometry alone, which is the
 ## difference between finding the console and wandering past an odd monument.
 ##
 ## Built as a chain of emissive cylinder segments along a high parabola rather than as one mesh: the

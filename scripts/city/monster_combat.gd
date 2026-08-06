@@ -229,7 +229,9 @@ func try_attack_living(prey: Vector3) -> bool:
 	## Still recovering from the last attack — busy, not out of options.
 	if _global_cooldown > 0.0:
 		return true
-	var dist := _flat_distance(_unit.global_position, prey)
+	## Gap past the prey's own volume (tower stamp / fat capsule). Centre distance alone left
+	## melee bodies stranded at a stamp wall forever short of the host point inside it.
+	var dist := maxf(0.0, _flat_distance(_unit.global_position, prey) - _prey_hit_radius_m(prey))
 	var attack_id := _pick_attack(dist)
 	if attack_id.is_empty():
 		return false
@@ -363,7 +365,8 @@ func _finish_windup() -> void:
 		return
 	## Re-check range after the telegraph — prey may have walked out.
 	var reach := _attack_reach_m(attack_id)
-	if _flat_distance(_unit.global_position, prey) > reach * 1.15:
+	var gap := maxf(0.0, _flat_distance(_unit.global_position, prey) - _prey_hit_radius_m(prey))
+	if gap > reach * 1.15:
 		_stop_charged_sfx()
 		return
 	## Voxel LOS can close during windup (door, corner, glass lip).
@@ -715,3 +718,14 @@ func _hostile_to_player() -> bool:
 
 func _flat_distance(a: Vector3, b: Vector3) -> float:
 	return Vector2(a.x - b.x, a.z - b.z).length()
+
+
+## Living prey's flat hit volume at the aim point. Towers expose stamp footprint via hit_radius;
+## creatures expose their capsule. Zero when nothing hostile sits on the aim (ped / empty air).
+func _prey_hit_radius_m(prey: Vector3) -> float:
+	if prey == Vector3.INF:
+		return 0.0
+	var mob := _hostile_monster_near(prey, 0.75)
+	if mob != null and mob.has_method("hit_radius"):
+		return float(mob.call("hit_radius"))
+	return 0.0
