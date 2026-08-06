@@ -62,7 +62,7 @@ static func has_bespoke_shader(id: int) -> bool:
 	if VoxelMaterial.is_fractal_display(id):
 		return true
 	match id:
-		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE, VoxelMaterial.CAVE_CAGE_LINE, VoxelMaterial.ORB:
+		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE, VoxelMaterial.CAVE_CAGE_LINE, VoxelMaterial.ORB, VoxelMaterial.ALCHEMY_CATALYST:
 			return true
 		_:
 			return false
@@ -351,6 +351,22 @@ static func for_id(id: int) -> VoxelSurfaceSpec:
 			## Full pane. Which windows lamp is decided by stamping GLASS vs GLASS_LIT in the
 			## grammar — a fractional lit_ratio here re-drew a 1 m on/off grid that flickered.
 			s.lit_ratio = 1.0
+		VoxelMaterial.LAB_WINDOW:
+			## Apothecary pane. Same glass path as a lit window, but the sick green tint
+			## is the whole point: it has to read as "wrong" from across the street.
+			s.kind = Kind.GLASS
+			s.albedo_file = "glass.jpg"
+			s.tile_meters = Vector2(4.0, 4.0)
+			s.tint = Color(0.46, 0.92, 0.4, 0.45)
+			s.roughness = 0.12
+			s.metallic = 0.04
+			s.lit_ratio = 1.0
+		VoxelMaterial.ALCHEMY_CATALYST:
+			## Bespoke gem-style glow; the spec only feeds fallback lookups.
+			s.albedo_file = "metal.jpg"
+			s.tint = VoxelMaterial.color(VoxelMaterial.ALCHEMY_CATALYST)
+			s.roughness = 0.2
+			s.metallic = 0.3
 		VoxelMaterial.WATER:
 			s.kind = Kind.WATER
 			s.albedo_file = "water.jpg"

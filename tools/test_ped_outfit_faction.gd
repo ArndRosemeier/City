@@ -15,6 +15,11 @@ const CIVILIAN_SPAWN_SCRIPTS: Array[String] = [
 	"res://scripts/city/tetris_ped_npc.gd",
 	"res://scripts/vehicles/vehicle_visual.gd",
 ]
+## The one script allowed to reach into the hostile pool, and the one function in it: the city's
+## wanted suspect, who has to look like the face on the bill. Named as a function rather than a
+## line number so the exception cannot quietly spread to the code around it.
+const HOSTILE_SCRIPT := "res://scripts/city/wanted_suspect.gd"
+const HOSTILE_EXCEPTION := "_roll"
 const SEEDS := 4000
 
 var _failures: PackedStringArray = PackedStringArray()
@@ -93,7 +98,8 @@ func _check_unregistered_tag_is_rejected() -> void:
 		_fail("entry with an unregistered tag landed in the civilian pool")
 
 
-## Structural half of the guarantee: no civilian spawn path may ask for anything but CIVILIAN.
+## Structural half of the guarantee: no civilian spawn path may ask for anything but CIVILIAN,
+## and the single sanctioned exception has to stay inside the function it was granted to.
 func _check_spawn_call_sites() -> void:
 	for script_path in CIVILIAN_SPAWN_SCRIPTS:
 		var f := FileAccess.open(script_path, FileAccess.READ)
@@ -109,13 +115,46 @@ func _check_spawn_call_sites() -> void:
 			if not (line.contains("PedOutfit") or line.contains("OutfitCatalog")):
 				continue
 			calls += 1
-			if not line.contains("PedOutfit.Faction.CIVILIAN"):
-				_fail(
-					"%s:%d requests an outfit without naming the civilian pool: %s"
-					% [script_path, i + 1, line.strip_edges()]
-				)
+			if line.contains("PedOutfit.Faction.CIVILIAN"):
+				continue
+			_fail(
+				"%s:%d requests an outfit without naming the civilian pool: %s"
+				% [script_path, i + 1, line.strip_edges()]
+			)
 		if calls == 0:
 			_fail("%s has no outfit pick call — this check has gone stale" % script_path)
+	_check_hostile_call_site()
+
+
+## Hostile gear is reachable from exactly one function in the codebase. Anything else that
+## names the pool — a pick, a pool read, a faction constant — is a leak waiting to happen.
+func _check_hostile_call_site() -> void:
+	var reads := 0
+	for script_path in CIVILIAN_SPAWN_SCRIPTS + [HOSTILE_SCRIPT]:
+		var f := FileAccess.open(script_path, FileAccess.READ)
+		if f == null:
+			_fail("cannot read %s" % script_path)
+			continue
+		var lines := f.get_as_text().split("\n")
+		var in_func := ""
+		for i in lines.size():
+			var line: String = lines[i]
+			if line.begins_with("func ") or line.begins_with("static func "):
+				in_func = line.replace("static func ", "func ").substr(5).split("(")[0]
+			if not line.contains("PedOutfit.Faction.HOSTILE"):
+				continue
+			if script_path == HOSTILE_SCRIPT and in_func == HOSTILE_EXCEPTION:
+				reads += 1
+				continue
+			_fail(
+				"%s:%d reaches for hostile gear outside %s: %s"
+				% [script_path, i + 1, HOSTILE_EXCEPTION, line.strip_edges()]
+			)
+	if reads != 1:
+		_fail(
+			"%d call sites draw hostile gear, wanted exactly 1 (in %s)"
+			% [reads, HOSTILE_EXCEPTION]
+		)
 
 
 ## The shipped catalog must classify cleanly, so no entry is silently dropped at boot.

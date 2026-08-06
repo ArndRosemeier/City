@@ -114,7 +114,7 @@ func get_tendril_hud_rows() -> Array:
 func spawn_tendril_at_vox(
 	vox: Vector3i, prev_mat: int = -1, heading: Vector3 = Vector3.ZERO, force: bool = false
 ) -> int:
-	if _tool == null:
+	if not _has_voxels():
 		return -1
 	if _growing_tendril_count() >= max_tendrils:
 		return -1
@@ -123,8 +123,7 @@ func spawn_tendril_at_vox(
 	## Don't double-bind the same lead cell to two tendrils.
 	if _lead_at.has(vox):
 		return -1
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	var current := int(_tool.get_voxel(vox))
+	var current := _read_vox(vox)
 	var stored_prev := prev_mat
 	if stored_prev < 0:
 		if current == VoxelMaterial.INFECTION_LEAD or current == VoxelMaterial.INFECTION:
@@ -176,11 +175,37 @@ func spawn_tendril_at_vox(
 func spawn_tendril_at_world(
 	world_pos: Vector3, prev_mat: int = -1, heading: Vector3 = Vector3.ZERO, force: bool = false
 ) -> int:
-	if _tool == null or _terrain == null:
+	if not _has_voxels() or _terrain == null:
 		return -1
 	if _growing_tendril_count() >= max_tendrils:
 		return -1
 	return spawn_tendril_at_vox(_world_to_vox(world_pos), prev_mat, heading, force)
+
+
+## World position of a tendril's glowing head, or `Vector3.INF` when there is no such
+## tendril. Valid inside `tendril_killed`, which fires before the head is reverted — which
+## is the only moment the caller who pays for the kill can still ask where it happened.
+func tendril_lead_world(tid: int) -> Vector3:
+	if not _tendrils.has(tid):
+		return Vector3.INF
+	var t: Dictionary = _tendrils[tid]
+	return _vox_to_world(t["lead"] as Vector3i)
+
+
+## Whether infected fabric stands within `reach_vox` of `world_pos`. Used by the lab
+## infestation to catch pedestrians who walked into it, so it samples a small box around the
+## body rather than asking any single cell.
+func infection_touches_world(world_pos: Vector3, reach_vox: int = 2) -> bool:
+	if _brush == null:
+		return false
+	var at := _world_to_vox(world_pos)
+	var r := maxi(reach_vox, 0)
+	for y in range(0, r + 2):
+		for z in range(-r, r + 1):
+			for x in range(-r, r + 1):
+				if VoxelMaterial.is_infection(_brush.get_vox(at + Vector3i(x, y, z))):
+					return true
+	return false
 
 
 ## Returns true if a tendril was killed.
@@ -194,8 +219,7 @@ func try_kill_lead_at_vox(vox: Vector3i) -> bool:
 		_kill_tendril(tid)
 		return true
 	## Orphan glowing tip (planted but never registered / forgotten without restore).
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	if int(_tool.get_voxel(vox)) != VoxelMaterial.INFECTION_LEAD:
+	if _read_vox(vox) != VoxelMaterial.INFECTION_LEAD:
 		return false
 	## No lineage to restore — at least clear the dead tip so it can't fake a killable head.
 	_set_voxel(vox, VoxelMaterial.AIR)
@@ -252,7 +276,7 @@ func invalidate_outside_aabb(world_aabb: AABB) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if _tool == null or _tendrils.is_empty():
+	if not _has_voxels() or _tendrils.is_empty():
 		return
 	CityProfiler.begin("infection")
 	## Each tip advances on its own timer at full speed — no shared round-robin budget.
@@ -328,12 +352,11 @@ func _advance_tendril(tid: int) -> bool:
 
 
 func _repair_lead_voxel(tid: int) -> void:
-	if not _tendrils.has(tid) or _tool == null:
+	if not _tendrils.has(tid) or not _has_voxels():
 		return
 	var t: Dictionary = _tendrils[tid]
 	var lead: Vector3i = t["lead"]
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	var id := int(_tool.get_voxel(lead))
+	var id := _read_vox(lead)
 	if id == VoxelMaterial.INFECTION_LEAD:
 		_lead_at[lead] = tid
 		return
@@ -345,8 +368,7 @@ func _repair_lead_voxel(tid: int) -> void:
 func _infect_step(tid: int, from_lead: Vector3i, target: Vector3i) -> void:
 	var t: Dictionary = _tendrils[tid]
 	var cells: Dictionary = t["cells"]
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
-	var prev := int(_tool.get_voxel(target))
+	var prev := _read_vox(target)
 	if not VoxelMaterial.is_infectable(prev) and prev != VoxelMaterial.AIR:
 		return
 	## Demote old lead.
@@ -400,7 +422,6 @@ func _move_lead(tid: int, old_lead: Vector3i, new_lead: Vector3i) -> void:
 
 func _pick_infect_neighbor(tid: int, vox: Vector3i) -> Vector3i:
 	## Shuffle + heavy jiggle, soft general heading, light expand nudge.
-	_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	var t: Dictionary = _tendrils.get(tid, {})
 	var origin: Vector3i = t.get("origin", vox)
 	var heading: Vector3 = t.get("heading", Vector3(1, 0, 0))
@@ -422,7 +443,7 @@ func _pick_infect_neighbor(tid: int, vox: Vector3i) -> Vector3i:
 		## Street deck is the floor — never crawl into diggable stone under pavement.
 		if n.y < min_surface_vox_y:
 			continue
-		var id := int(_tool.get_voxel(n))
+		var id := _read_vox(n)
 		if not VoxelMaterial.is_infectable(id):
 			continue
 		if VoxelMaterial.is_building_fabric(id):
@@ -662,6 +683,19 @@ func _stop_tendril_aura(tid: int) -> void:
 
 func _set_voxel(vox: Vector3i, mat_id: int) -> void:
 	_brush.set_vox(vox, mat_id)
+
+
+## Reads go through the same funnel the writes do, so a tip sees its own unflushed edits and
+## the director works over an offline volume as well as a streamed world.
+func _read_vox(vox: Vector3i) -> int:
+	if _brush != null:
+		return _brush.get_vox(vox)
+	_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	return int(_tool.get_voxel(vox))
+
+
+func _has_voxels() -> bool:
+	return _brush != null or _tool != null
 
 
 func _world_to_vox(world: Vector3) -> Vector3i:

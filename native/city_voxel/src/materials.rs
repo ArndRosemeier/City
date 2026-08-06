@@ -89,8 +89,14 @@ pub const CLOUDSTONE: i32 = 270;
 /// Glowing energy sphere (siege tips / props). Not fractal-display. Keep in sync with GD.
 #[allow(dead_code)]
 pub const ORB: i32 = 271;
+/// Alchemy vat — the shootable prop that starts a city lab infestation. Keep in sync with GD.
+#[allow(dead_code)]
+pub const ALCHEMY_CATALYST: i32 = 272;
+/// Sick green shopfront pane marking that lab from the street. Keep in sync with GD.
+#[allow(dead_code)]
+pub const LAB_WINDOW: i32 = 273;
 /// Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-pub const COUNT: i32 = 272;
+pub const COUNT: i32 = 274;
 
 #[inline]
 pub fn is_zoo_fence(id: i32) -> bool {

@@ -157,12 +157,19 @@ const CLOUDSTONE := 270
 ## Glowing energy sphere — siege tower tips, landmarks, props. Not a GEM_* and not a
 ## fractal-display cell (hitting it must not start the Mandelbrot cascade).
 const ORB := 271
+## The vat an alchemy lab is built around. Ordinary masonry hardness so the starter blaster
+## can crack it — the whole point is that a player may shoot it — and its own id because
+## breaking it is what ignites the infection (see `CityRoot._ignite_alchemy_catalyst`).
+const ALCHEMY_CATALYST := 272
+## Street-facing pane of a lab, swapped in for plain GLASS. The one exterior tell that reads
+## from across the road, so it is a material rather than a tint on the window grammar.
+const LAB_WINDOW := 273
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
 ## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-const COUNT := 272
+const COUNT := 274
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -309,6 +316,11 @@ static func is_door(id: int) -> bool:
 	return id == DOOR
 
 
+## The alchemy vat. Breaking one of these cells ignites a lab infestation.
+static func is_alchemy_catalyst(id: int) -> bool:
+	return id == ALCHEMY_CATALYST
+
+
 ## Carve difficulty. Soft/Rock are always within the starter blaster; Reinforced and Exotic
 ## need hardness unlocks. Never never yields.
 enum Hardness {
@@ -350,7 +362,7 @@ static func hardness(id: int) -> Hardness:
 		or id == CAVE_WALL or id == CAVE_FLOOR or id == CURB or id == ROAD
 		or id == ROAD_LINE or id == CROSSWALK or id == ASPHALT or id == SIDEWALK
 		or id == PLAZA or id == PAINT or id == TIMBER or id == GRAVE_PATH
-		or id == ZOO_PLATE_RIM
+		or id == ZOO_PLATE_RIM or id == ALCHEMY_CATALYST
 		or is_cave_cage(id)
 	):
 		return Hardness.ROCK
@@ -561,6 +573,10 @@ static func color(id: int) -> Color:
 			return Color(0.45, 0.65, 0.82, 0.85)
 		GLASS_LIT:
 			return Color(1.0, 0.85, 0.45, 0.95)
+		LAB_WINDOW:
+			return Color(0.42, 0.86, 0.35, 0.9)
+		ALCHEMY_CATALYST:
+			return Color(0.36, 0.85, 0.3)
 		PLAZA:
 			return Color(0.72, 0.68, 0.58)
 		TILES:

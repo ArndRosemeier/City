@@ -1621,6 +1621,7 @@ func _process(delta: float) -> void:
 		_infection_stream_accum = 0.0
 		CityProfiler.begin("infection_stream")
 		_invalidate_infection_outside_bubble()
+		_tick_lab_infection()
 		CityProfiler.end("infection_stream")
 	if _spawn_meteors_enabled and _walker != null and is_instance_valid(_walker):
 		_meteor_spawn_accum += delta
@@ -2285,6 +2286,7 @@ func _try_place_room_chest() -> void:
 	var chest := inst.ensure_gem_chests().place_chest(coord, world, yaw, room_seed)
 	if chest == null:
 		return
+	inst.watch_gem_chest(world)
 	print(
 		"CityRoot: chest in %s room of district %s at %s"
 		% [RoomDecorator.purpose_name(purpose as RoomDecorator.Purpose), str(coord), str(spot)]
@@ -3496,10 +3498,203 @@ func _finish_district_hop_fail(reason: String, restore_pos: Vector3) -> void:
 			_loading_splash.call("hide_splash")
 
 
-func _on_tendril_killed(_tendril_id: int) -> void:
+func _on_tendril_killed(tendril_id: int) -> void:
 	## Tip-kill restores terrain; vanish any loose infection-textured debris too.
 	if _cascade != null and is_instance_valid(_cascade) and _cascade.has_method("clear_infection_debris"):
 		_cascade.call("clear_infection_debris")
+	if not _lab_tendrils.has(tendril_id):
+		return
+	_lab_tendrils.erase(tendril_id)
+	## Read the head before the revert walk eats it — the signal fires while it still stands.
+	var at: Vector3 = _infection.call("tendril_lead_world", tendril_id) as Vector3
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	_pay_tonics(at, rng.randi_range(LAB_TONIC_MIN, LAB_TONIC_MAX))
+
+
+# ---------------------------------------------------------------------------
+# Alchemy lab infestation
+# ---------------------------------------------------------------------------
+
+## Tendrils this run's labs planted. Meteor tips are not in here, which is what keeps the
+## tonic payout attached to the fight the player chose rather than to the debug toy.
+var _lab_tendrils: Dictionary = {}  # tendril id → true
+
+## Tips one cracked vat spills, and how far around it they look for something to root in.
+const LAB_TENDRIL_SEEDS := 3
+const LAB_SEED_RADIUS_VOX := 3
+## How close a pedestrian has to come to infected fabric before it takes them.
+const LAB_CONVERT_REACH_M := 6.0
+## Tonics one killed tip is worth.
+const LAB_TONIC_MIN := 1
+const LAB_TONIC_MAX := 2
+
+
+## Somebody shot the vat. Clear the catalyst column, then spill tendrils out of the hole it
+## leaves. Public because the carve path is not the only thing that may crack one (tests).
+func ignite_alchemy_catalyst(vox: Vector3i) -> int:
+	if _brush == null or _terrain == null:
+		return 0
+	_ensure_infection_director()
+	var cluster := _alchemy_catalyst_cluster(vox)
+	if cluster.is_empty():
+		return 0
+	_brush.begin_edit()
+	for cell: Vector3i in cluster:
+		_brush.set_vox(cell, VoxelMaterial.AIR)
+	_brush.end_edit()
+	var world := _terrain.to_global(
+		Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
+	)
+	BlastFlashVfxScript.spawn(self, world, 3.5)
+	if _audio != null and _audio.has_method("play_charged_blast_impact"):
+		_audio.call("play_charged_blast_impact", world, 1.4)
+	var planted := _seed_lab_tendrils(vox)
+	if planted == 0:
+		print("CityRoot: alchemy vat broke at %s but found nothing to infect" % str(vox))
+		return 0
+	if _loot_toast != null:
+		_loot_toast.show_message("Something in the vat is growing")
+	print("CityRoot: alchemy vat ignited at %s — %d tendrils" % [str(vox), planted])
+	return planted
+
+
+## Every catalyst cell joined to this one, so one shot takes the whole vat rather than
+## drilling a hole through it and leaving a lit stump.
+func _alchemy_catalyst_cluster(seed_vox: Vector3i) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	if not VoxelMaterial.is_alchemy_catalyst(_brush.get_vox(seed_vox)):
+		return out
+	var seen: Dictionary = {seed_vox: true}
+	var queue: Array[Vector3i] = [seed_vox]
+	while not queue.is_empty():
+		var cell: Vector3i = queue.pop_back()
+		out.append(cell)
+		for step: Vector3i in [
+			Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+			Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+		]:
+			var n := cell + step
+			if seen.has(n):
+				continue
+			seen[n] = true
+			if VoxelMaterial.is_alchemy_catalyst(_brush.get_vox(n)):
+				queue.append(n)
+	return out
+
+
+## Plant the first tips in the fabric around the broken vat: floor, walls, whatever the room
+## is made of. Place-bound by construction — the tendrils grow from where the lab stood.
+func _seed_lab_tendrils(center: Vector3i) -> int:
+	var planted := 0
+	var r := LAB_SEED_RADIUS_VOX
+	for y in range(-r, r + 1):
+		for z in range(-r, r + 1):
+			for x in range(-r, r + 1):
+				if planted >= LAB_TENDRIL_SEEDS:
+					return planted
+				var vox := center + Vector3i(x, y, z)
+				var mat := _brush.get_vox(vox)
+				if not VoxelMaterial.is_infectable(mat):
+					continue
+				var away := Vector3(float(x), float(y) * 0.35, float(z))
+				var tid := int(_infection.call("spawn_tendril_at_vox", vox, mat, away, true))
+				if tid < 0:
+					continue
+				_lab_tendrils[tid] = true
+				planted += 1
+	return planted
+
+
+## Tonic payout for the urban-rot layer. Not gems and never a recipe: the infestation and
+## the hunt are their own small economy, so neither can become the efficient way to farm the
+## main one.
+func _pay_tonics(world_pos: Vector3, count: int) -> void:
+	if _inventory == null or count <= 0:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	for i in range(count):
+		var item_id := (
+			InventoryCatalog.ID_BOOST_REGEN
+			if rng.randf() < 0.5
+			else InventoryCatalog.ID_BOOST_SPEED
+		)
+		if _inventory.add(item_id, 1) != 0:
+			push_error("CityRoot: inventory full — tonic %s could not be stored" % item_id)
+			continue
+		if _loot_toast != null:
+			_loot_toast.add_item(item_id, 1)
+	if _audio != null and world_pos != Vector3.INF:
+		_audio.play_treasure_bling()
+
+
+## Pedestrians who wander into what the lab spilled. They do not flee it — they walk their
+## route, touch it, and come out of it hostile.
+func _tick_lab_infection() -> void:
+	if _lab_tendrils.is_empty() or _infection == null or not is_instance_valid(_infection):
+		return
+	if _streamer == null:
+		return
+	for tid: int in _lab_tendrils.keys():
+		var lead: Vector3 = _infection.call("tendril_lead_world", tid) as Vector3
+		if lead == Vector3.INF:
+			continue
+		for entry: Variant in _streamer.get_loaded_districts():
+			var inst := _as_district_instance(entry)
+			if inst == null or not is_instance_valid(inst) or inst.crowd == null:
+				continue
+			for ped: PedAgent in inst.crowd.collect_agents_in_range(lead, LAB_CONVERT_REACH_M):
+				if not bool(_infection.call("infection_touches_world", ped.global_position)):
+					continue
+				_convert_ped_to_mad(inst.crowd, ped)
+
+
+## Swap one pedestrian for the thing the infection made of them. Silent conversion: there is
+## no corpse, because the body walked off with it.
+func _convert_ped_to_mad(crowd: CrowdDirector, ped: PedAgent) -> void:
+	var was_wanted := crowd.is_wanted(ped)
+	var at: Vector3 = crowd.convert_agent_silent(ped)
+	if at == Vector3.INF:
+		return
+	if was_wanted:
+		crowd.clear_wanted()
+	_ensure_monster_roster()
+	if _monsters == null:
+		return
+	_monsters.spawn_city_hostile(MAD_CITIZEN_BODY_ID, at)
+
+
+## Bodies the street promotes. Named here because both spawns are city rules, not roster ones.
+const MAD_CITIZEN_BODY_ID := "city/mad_citizen"
+const WANTED_KILLER_BODY_ID := "city/wanted_killer"
+
+
+## The marked ped took a hit. They do not fold like a commuter: the ped is swapped for the
+## killer the poster warned about, standing where they stood, already in the fight.
+func promote_wanted_ped(crowd: CrowdDirector, ped: PedAgent) -> bool:
+	var at: Vector3 = crowd.convert_agent_silent(ped)
+	if at == Vector3.INF:
+		return false
+	crowd.clear_wanted()
+	_ensure_monster_roster()
+	if _monsters == null:
+		return false
+	var unit := _monsters.spawn_city_hostile(WANTED_KILLER_BODY_ID, at)
+	if unit == null:
+		return false
+	unit.died.connect(_on_wanted_killer_died, CONNECT_ONE_SHOT)
+	if _loot_toast != null:
+		_loot_toast.show_message("The wanted killer turns on you")
+	print("CityRoot: wanted killer promoted at %.1f,%.1f,%.1f" % [at.x, at.y, at.z])
+	return true
+
+
+## Winning the hunt pays a tonic. Small on purpose — the fight is the content, and the
+## district's gem and recipe economy stays where it was.
+func _on_wanted_killer_died(unit: UndeadUnit, _was_giant: bool) -> void:
+	var at := unit.global_position if is_instance_valid(unit) else Vector3.INF
+	_pay_tonics(at, 1)
 
 
 func _on_tendril_ended(tendril_id: int) -> void:
@@ -4759,6 +4954,9 @@ enum PlayerVoxelKind {
 	DISSOLVE,
 	FRACTAL,
 	EXPLOSIVE,
+	## The alchemy vat in a city lab: breaking it starts the infestation instead of
+	## leaving a hole.
+	CATALYST,
 	NORMAL,
 }
 
@@ -4778,6 +4976,8 @@ func _player_voxel_kind(mat_id: int) -> PlayerVoxelKind:
 		return PlayerVoxelKind.FRACTAL
 	if VoxelMaterial.is_explosive(mat_id):
 		return PlayerVoxelKind.EXPLOSIVE
+	if VoxelMaterial.is_alchemy_catalyst(mat_id):
+		return PlayerVoxelKind.CATALYST
 	if VoxelMaterial.is_destructible(mat_id):
 		return PlayerVoxelKind.NORMAL
 	return PlayerVoxelKind.NONE
@@ -4818,6 +5018,11 @@ func _player_note_cell(vox: Vector3i, ctx: Dictionary) -> void:
 				Vector3(float(vox.x) + 0.5, float(vox.y) + 0.5, float(vox.z) + 0.5)
 			)
 			_try_start_dissolve(hit_world, mat_id)
+			ctx["handled"] = true
+		PlayerVoxelKind.CATALYST:
+			if not _carve_allowed(mat_id, vox, allow_chip):
+				return
+			ignite_alchemy_catalyst(vox)
 			ctx["handled"] = true
 		PlayerVoxelKind.FRACTAL:
 			if not _carve_allowed(mat_id, vox, allow_chip):
@@ -6461,7 +6666,11 @@ func _apply_agent_hit(
 	if kind == "ped":
 		var crowd: CrowdDirector = hit["crowd"]
 		var agent: PedAgent = hit["agent"]
-		ok = crowd.kill_agent(agent, point, direction)
+		## One pedestrian in the city does not fold when shot at.
+		if crowd.is_wanted(agent):
+			ok = promote_wanted_ped(crowd, agent)
+		else:
+			ok = crowd.kill_agent(agent, point, direction)
 	elif kind == "vehicle":
 		var vehicles: VehicleDirector = hit["vehicles"]
 		var v_agent: VehicleAgent = hit["agent"]

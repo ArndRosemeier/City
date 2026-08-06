@@ -21,6 +21,9 @@ var _painting: InteriorRoom = null
 var _painting_plan: FloorPlan = null
 ## District of the storey being subdivided or furnished.
 var _hit_coord: Vector2i = Vector2i.ZERO
+## Lot cell of that storey, and whether the district calls that lot its alchemy lab.
+var _hit_cell: Vector2i = Vector2i.ZERO
+var _hit_lab: bool = false
 ## Door-open probe: while set, `tick` uses this voxel instead of the walker's feet so
 ## partitions (and the room beyond the door) can finish while the player is still outside.
 var _prime_vox: Vector3i = Vector3i.ZERO
@@ -70,6 +73,7 @@ func tick(foot_world: Vector3, districts: Array) -> bool:
 			continue
 		hit_room = room
 		_hit_coord = entry.coord as Vector2i
+		_hit_lab = _hit_cell == _lab_cell_of(entry)
 		break
 
 	if hit_room == null:
@@ -112,7 +116,17 @@ func _building_at(entry: Variant, buildings: Dictionary, foot: Vector3i) -> Buil
 		int(floor(float(foot.x - origin.x) / float(cell_size))),
 		int(floor(float(foot.z - origin.z) / float(cell_size)))
 	)
+	_hit_cell = cell
 	return buildings.get(cell) as BuildingInterior
+
+
+## The district's alchemy lot, or a cell no building can be at. Read off the entry rather
+## than recomputed here so headless tests can hand in a plain stub with no lab at all.
+func _lab_cell_of(entry: Variant) -> Vector2i:
+	var cell: Variant = (entry as Object).get("alchemy_lab_cell")
+	if cell == null:
+		return AlchemyLabSite.NO_CELL
+	return cell as Vector2i
 
 
 # ------------------------------------------------------------------ subdivision
@@ -175,7 +189,34 @@ func _sub_rooms_from(plan: FloorPlan, storey: InteriorRoom) -> Array[InteriorRoo
 		out.append(_sub_room(storey, r.rect, r.purpose))
 	for c in plan.corridors:
 		out.append(_sub_room(storey, c, RoomDecorator.Purpose.CORRIDOR))
+	_claim_lab_room(storey, out)
 	return out
+
+
+## On the tile's apothecary lot, one ground-floor room becomes the lab. The biggest one, so
+## the vat has floor to stand on and the player has room to back away from what they started.
+##
+## A small lot may partition into nothing at all, and the shopfront outside was already painted
+## by then — so the storey itself becomes the lab rather than leaving the tile advertising a
+## vat that was never stamped.
+func _claim_lab_room(storey: InteriorRoom, rooms: Array[InteriorRoom]) -> void:
+	if not _hit_lab or storey.storey != 0:
+		return
+	var best: InteriorRoom = null
+	for room in rooms:
+		if room.purpose == RoomDecorator.Purpose.CORRIDOR:
+			continue
+		if best == null or _room_rank(room) > _room_rank(best):
+			best = room
+	if best == null:
+		best = storey
+	best.purpose = RoomDecorator.Purpose.ALCHEMY_LAB
+	_note("interior: LAB claimed rect=%s in cell %s" % [best.rect, _hit_cell])
+
+
+## Area, tie-broken by position so a re-stream picks the same room.
+func _room_rank(room: InteriorRoom) -> int:
+	return room.rect.size.x * room.rect.size.y * 4096 - room.rect.position.x - room.rect.position.y
 
 
 func _sub_room(storey: InteriorRoom, rect: Rect2i, purpose: int) -> InteriorRoom:
@@ -297,6 +338,7 @@ func _decorate(room: InteriorRoom) -> int:
 		"air_h": room.air_h,
 		"purpose": int(room.purpose),
 		"seed": int(_rng_for(room).seed),
+		"catalyst_vox": dec.last_catalyst_vox,
 	}
 	return placed
 

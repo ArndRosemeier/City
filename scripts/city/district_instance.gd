@@ -24,6 +24,9 @@ const ChessArenaScript := preload("res://scripts/city/chess_arena.gd")
 const CryptSpawnerScript := preload("res://scripts/city/crypt_spawner.gd")
 const FactionPadSpawnerScript := preload("res://scripts/city/faction_pad_spawner.gd")
 const SpawnTowerScript := preload("res://scripts/city/spawn_tower.gd")
+const AlchemyLabSiteScript := preload("res://scripts/city/alchemy_lab_site.gd")
+const WantedPosterScript := preload("res://scripts/city/wanted_poster.gd")
+const WantedSuspectScript := preload("res://scripts/city/wanted_suspect.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -85,6 +88,16 @@ var dungeon_summoners: Array[Node3D] = []
 var crypt_spawn_tower: Node3D
 ## Spires standing over the dungeon pads. Index-matched to `dungeon_summoners`.
 var dungeon_spawn_towers: Array[Node3D] = []
+## The apothecary this tile hides, with its street tells painted. Null on tiles without one
+## (most of them) and on every non-vanilla theme.
+var alchemy_lab: AlchemyLabSite
+## Lot cell of that apothecary, read by the interior decorator when it subdivides a storey.
+## Kept separate from `alchemy_lab` because the decorator asks for it before the exterior
+## node is a child of anything.
+var alchemy_lab_cell: Vector2i = AlchemyLabSite.NO_CELL
+## Street posters naming this tile's wanted killer, on the avenue walls. Empty when no killer
+## was rolled here, which is most tiles.
+var wanted_posters: Array[WantedPoster] = []
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -342,6 +355,8 @@ func begin_upgrade(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) -> 
 	_clear_siege_controller()
 	_clear_crypt_spawner()
 	_clear_dungeon_summoners()
+	_clear_alchemy_lab()
+	_clear_wanted_posters()
 	cave_cage_stand_world = Vector3.INF
 	_topology = null
 	generator = null
@@ -409,6 +424,8 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	_clear_siege_controller()
 	_clear_crypt_spawner()
 	_clear_dungeon_summoners()
+	_clear_alchemy_lab()
+	_clear_wanted_posters()
 	cave_cage_stand_world = Vector3.INF
 	if building_lod != null and is_instance_valid(building_lod):
 		building_lod.clear()
@@ -683,10 +700,23 @@ func _stamp_detail_async(epoch: int) -> void:
 	CityProfiler.end("stream_castle_doors")
 	await get_tree().process_frame
 
+	## Street tells before anything asks about the interior: the sick panes and the shingle
+	## are what let a player decide to walk in, so they have to exist the moment the tile does.
+	CityProfiler.begin("stream_alchemy_lab")
+	_spawn_alchemy_lab()
+	CityProfiler.end("stream_alchemy_lab")
+	await get_tree().process_frame
+
+	CityProfiler.begin("stream_wanted_poster")
+	await _spawn_wanted_posters()
+	CityProfiler.end("stream_wanted_poster")
+	await get_tree().process_frame
+
 	## Recipe scrolls stand on landmarks, and two of those landmarks — the fractal deck and the
 	## arena spires — live on tiles that spawn no auto actors at all. Placed outside that block.
 	CityProfiler.begin("stream_recipes")
 	_place_recipe_pickups(generator, origin_vox)
+	_watch_recipe_pickups()
 	CityProfiler.end("stream_recipes")
 	await get_tree().process_frame
 
@@ -756,6 +786,112 @@ func _stamp_detail_async(epoch: int) -> void:
 	CityProfiler.set_counter("stream_phase", 0)
 	ready_to_play.emit(self)
 	print("DistrictInstance ready %s seed=%d" % [str(coord), _dseed])
+
+
+## Roll this tile's apothecary and paint its street tells. At most one per district, and
+## only on ordinary urban themes.
+func _spawn_alchemy_lab() -> void:
+	_clear_alchemy_lab()
+	if generator == null or generator.theme == null:
+		return
+	var cell := AlchemyLabSiteScript.lab_cell_for(
+		_dseed, generator.theme.id, interior_buildings
+	)
+	if cell == AlchemyLabSite.NO_CELL:
+		return
+	var building := interior_buildings.get(cell) as BuildingInterior
+	if building == null:
+		return
+	var site := AlchemyLabSiteScript.new() as AlchemyLabSite
+	site.name = "AlchemyLab"
+	add_child(site)
+	if not site.setup(live_brush(), cell, building, lot_doorways):
+		site.queue_free()
+		return
+	alchemy_lab = site
+	alchemy_lab_cell = cell
+	if site.has_sign() and birds != null and is_instance_valid(birds):
+		birds.add_attractor(site.sign_world(_voxel_size))
+	print(
+		"DistrictInstance alchemy lab %s cell=%s panes=%d"
+		% [str(coord), str(cell), site.panes_painted]
+	)
+
+
+## Roll this tile's wanted killer and paste the bills that name them. The suspect is the same
+## person on every tile of the world, so the face on the wall is the face in the street.
+func _spawn_wanted_posters() -> void:
+	_clear_wanted_posters()
+	if generator == null or generator.theme == null:
+		return
+	if not allows_pedestrians():
+		return
+	var sites := WantedPosterScript.pick_sites(
+		_dseed,
+		generator.theme.id,
+		interior_buildings,
+		generator.get_planner(),
+		live_brush(),
+		_voxel_size
+	)
+	if sites.is_empty():
+		return
+	## Baked before the first sheet goes up so every bill on the tile shares one texture.
+	await WantedSuspectScript.ensure_portrait(_world_seed, self)
+	var portrait := WantedSuspectScript.portrait()
+	for site: WantedPoster.Site in sites:
+		var poster := WantedPosterScript.new() as WantedPoster
+		poster.name = "WantedPoster%d" % wanted_posters.size()
+		add_child(poster)
+		if not poster.setup(live_brush(), site, _voxel_size, portrait):
+			poster.queue_free()
+			continue
+		wanted_posters.append(poster)
+		if birds != null and is_instance_valid(birds):
+			birds.add_attractor(poster.poster_world(_voxel_size))
+	if wanted_posters.is_empty():
+		return
+	## One killer per tile, hunting near the first bill.
+	if crowd != null and is_instance_valid(crowd):
+		crowd.mark_wanted(
+			wanted_posters[0].wanted_world(_voxel_size),
+			WantedSuspectScript.identity(_world_seed)
+		)
+	print(
+		"DistrictInstance wanted bills %s posted=%d boarded=%d"
+		% [str(coord), wanted_posters.size(), wanted_posters[0].panes_boarded]
+	)
+
+
+## Scrolls are worth a flock too — a knot of crows on a landmark is a reason to climb it.
+func _watch_recipe_pickups() -> void:
+	if birds == null or not is_instance_valid(birds):
+		return
+	if recipe_pickups == null or not is_instance_valid(recipe_pickups):
+		return
+	for pickup: RecipePickup in recipe_pickups.live_pickups():
+		birds.add_attractor(pickup.global_position)
+
+
+## A chest was just stood up in one of this tile's rooms (JIT, long after stream time).
+func watch_gem_chest(world: Vector3) -> void:
+	if birds == null or not is_instance_valid(birds):
+		return
+	birds.add_attractor(world)
+
+
+func _clear_alchemy_lab() -> void:
+	if alchemy_lab != null and is_instance_valid(alchemy_lab):
+		alchemy_lab.queue_free()
+	alchemy_lab = null
+	alchemy_lab_cell = AlchemyLabSite.NO_CELL
+
+
+func _clear_wanted_posters() -> void:
+	for poster: WantedPoster in wanted_posters:
+		if poster != null and is_instance_valid(poster):
+			poster.queue_free()
+	wanted_posters.clear()
 
 
 ## Stand this tile's recipe scrolls. Landmarks are offered to the placer in descending order of

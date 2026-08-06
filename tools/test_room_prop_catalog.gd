@@ -172,10 +172,22 @@ func _check_material_tables() -> void:
 			% [VoxelMaterial.LEAVES_DARK, VoxelMaterial.BRANCH_Z]
 		)
 		return
-	if VoxelMaterial.COUNT != VoxelMaterial.ORB + 1:
+	if VoxelMaterial.ALCHEMY_CATALYST != VoxelMaterial.ORB + 1:
 		_fail(
-			"FAIL COUNT=%d must be ORB=%d + 1"
-			% [VoxelMaterial.COUNT, VoxelMaterial.ORB]
+			"FAIL ALCHEMY_CATALYST=%d is not the id after ORB=%d"
+			% [VoxelMaterial.ALCHEMY_CATALYST, VoxelMaterial.ORB]
+		)
+		return
+	if VoxelMaterial.LAB_WINDOW != VoxelMaterial.ALCHEMY_CATALYST + 1:
+		_fail(
+			"FAIL LAB_WINDOW=%d is not the id after ALCHEMY_CATALYST=%d"
+			% [VoxelMaterial.LAB_WINDOW, VoxelMaterial.ALCHEMY_CATALYST]
+		)
+		return
+	if VoxelMaterial.COUNT != VoxelMaterial.LAB_WINDOW + 1:
+		_fail(
+			"FAIL COUNT=%d must be LAB_WINDOW=%d + 1"
+			% [VoxelMaterial.COUNT, VoxelMaterial.LAB_WINDOW]
 		)
 		return
 	if VoxelMaterial.is_destructible(VoxelMaterial.ARENA_SHELL):
@@ -200,6 +212,8 @@ func _check_material_tables() -> void:
 		["LEAVES_DARK", VoxelMaterial.LEAVES_DARK],
 		["CLOUDSTONE", VoxelMaterial.CLOUDSTONE],
 		["ORB", VoxelMaterial.ORB],
+		["ALCHEMY_CATALYST", VoxelMaterial.ALCHEMY_CATALYST],
+		["LAB_WINDOW", VoxelMaterial.LAB_WINDOW],
 		["COUNT", VoxelMaterial.COUNT],
 		["TIMBER", VoxelMaterial.TIMBER],
 	]:

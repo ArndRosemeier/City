@@ -81,6 +81,8 @@ const TumbleSettleScript := preload("res://scripts/city/tumble_settle.gd")
 
 var _agents: Array[PedAgent] = []
 var _near_agents: Array[PedAgent] = []
+## The ped this district's wanted poster is about, or null on the tiles that rolled none.
+var _wanted: PedAgent = null
 var _rng := RandomNumberGenerator.new()
 var _camera: Camera3D
 var _lod_accum: float = 0.0
@@ -418,6 +420,61 @@ func collect_positions_in_range(world_pos: Vector3, max_dist: float) -> PackedVe
 			continue
 		out.append(ped.global_position)
 	return out
+
+
+## Every living ped within max_dist (XZ), as agents rather than positions — the infection
+## has to convert the body it finds, not just know one is standing there.
+func collect_agents_in_range(world_pos: Vector3, max_dist: float) -> Array[PedAgent]:
+	var out: Array[PedAgent] = []
+	var max_d2 := max_dist * max_dist
+	for ped: PedAgent in _agents:
+		if ped == null or ped.dead:
+			continue
+		var d2 := Vector2(
+			ped.global_position.x - world_pos.x, ped.global_position.z - world_pos.z
+		).length_squared()
+		if d2 <= max_d2:
+			out.append(ped)
+	return out
+
+
+## Put the wanted killer in this crowd: the ped nearest `world_pos` becomes the suspect the
+## bills are about, so a player who reads a poster and then looks around has someone to find.
+## Nothing else about them changes — they walk their route until they are attacked.
+##
+## `suspect` is the world's one killer identity (`WantedSuspect.identity`), the same outfit the
+## mugshot was baked from. Their sex comes with it: the body has to match the face on the wall.
+func mark_wanted(world_pos: Vector3, suspect: PedOutfit) -> PedAgent:
+	if world_pos == Vector3.INF:
+		return null
+	if suspect == null:
+		push_error("CrowdDirector.mark_wanted: no suspect identity to dress the killer in")
+		return null
+	var hit := find_nearest_agent(world_pos, 1.0e9)
+	if hit.is_empty():
+		return null
+	var ped := hit["agent"] as PedAgent
+	ped.female = suspect.female
+	ped.outfit = suspect
+	_wanted = ped
+	return ped
+
+
+## Whether this is the ped the poster is about. Guards against a stale reference: the
+## district's killer is gone the moment their body is.
+func is_wanted(ped: PedAgent) -> bool:
+	if _wanted == null or not is_instance_valid(_wanted) or _wanted.dead:
+		return false
+	return ped == _wanted
+
+
+func wanted_agent() -> PedAgent:
+	return _wanted if is_wanted(_wanted) else null
+
+
+## The killer stopped being a pedestrian (promoted into a combat unit, or died).
+func clear_wanted() -> void:
+	_wanted = null
 
 
 ## Remove a ped with no corpse (undead conversion). Returns former world position.

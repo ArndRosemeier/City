@@ -1139,6 +1139,39 @@
       "damage_mult": 1.0,
       "armor_mult": 1.0,
       "notes": "Crypt / castle-dungeon summoning tower. Authored undead, but the station overrides the faction at spawn so a castle pad's rolled side owns its own spire. Convert orb is the whole kit."
+    },
+    {
+      "id": "city/mad_citizen",
+      "faction": "horde",
+      "templates": [
+        "minion"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "melee"
+      ],
+      "hp_mult": 0.62,
+      "damage_mult": 0.8,
+      "armor_mult": 0.8,
+      "aggro_range_m": 22.0,
+      "notes": "A passer-by who walked through lab infection. Melee only and fragile — the pressure is that there are several, not that any one of them is a fight."
+    },
+    {
+      "id": "city/wanted_killer",
+      "faction": "horde",
+      "templates": [
+        "brute"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "melee",
+        "stomp"
+      ],
+      "hp_mult": 2.1,
+      "damage_mult": 1.5,
+      "armor_mult": 1.25,
+      "aggro_range_m": 30.0,
+      "notes": "The face on the wanted poster. Only ever spawned by the crowd promoting the marked ped the player chose to attack, which is why it is not spawn_ready."
     }
   ],
   "items": {

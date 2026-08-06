@@ -192,6 +192,27 @@ func _spawn_structure(
 	return unit
 
 
+## A city body the street promoted: a passer-by the lab infection took, or the ped on the
+## wanted poster once the player swung at them.
+##
+## Separate from `spawn_by_id` because these bodies are deliberately out of the spawn tables
+## — they have no catalogue slot, so a role roll can never produce one, and the only way to
+## meet them is to cause them.
+func spawn_city_hostile(
+	body_id: String, world_pos: Vector3, body_seed: int = -1
+) -> UndeadUnit:
+	if body_id.is_empty():
+		push_error("MonsterRoster.spawn_city_hostile: empty body id")
+		assert(false, "MonsterRoster: empty city hostile id")
+		return null
+	if CreatureCatalogScript.by_id(body_id) == null:
+		return null
+	_prune_units()
+	if count_alive_walkers() >= MAX_ALIVE_UNITS:
+		return null
+	return spawn_role(UndeadUnit.Role.MINION, world_pos, body_seed, body_id)
+
+
 func spawn_by_id(
 	body_id: String,
 	world_pos: Vector3,

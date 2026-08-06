@@ -48,6 +48,14 @@ const ARRIVE_M := 1.4
 ## Seats within this of each other are the same tree as far as the flock is concerned.
 const PERCH_SPACING_M := 3.0
 
+## Which of `BirdActor.build_species_coats` is the crow, how big a crow is next to a wren,
+## and how much of a flock turns black once the tile has something worth watching.
+const CROW_COAT_INDEX := 2
+const CROW_SIZE := 1.5
+const CROW_SHARE := 0.35
+## How near an attractor a bird has to sit to be watching it.
+const ATTRACTOR_WATCH_M := 18.0
+
 var _birds: Array[BirdActor] = []
 ## World points where feet can stand. Tree canopies first, then the few ground seats.
 var _perches: PackedVector3Array = PackedVector3Array()
@@ -72,6 +80,9 @@ var _accum: float = 0.0
 var _any_drawn: bool = true
 ## Species this flock draws from, shared by every bird wearing one.
 var _coats: Array[BirdActor.Coat] = []
+## Places on this tile worth watching, and the part of the flock that watches them.
+var _attractors: PackedVector3Array = PackedVector3Array()
+var _crows: Array[BirdActor] = []
 
 
 func clear_birds() -> void:
@@ -79,6 +90,8 @@ func clear_birds() -> void:
 		if is_instance_valid(bird):
 			bird.queue_free()
 	_birds.clear()
+	_crows.clear()
+	_attractors = PackedVector3Array()
 	_perches = PackedVector3Array()
 	_tree_perch_count = 0
 
@@ -415,20 +428,102 @@ func _send_somewhere(bird: BirdActor) -> void:
 		bird.fly_to(_wander_point(), Vector3.INF)
 		bird.decide_in = 0.0
 		return
-	var seat := _pick_perch(bird.global_position)
+	var seat := _pick_perch(bird.global_position, bird)
 	## Approach from above: the last leg of the flight ends over the branch, not through it.
 	bird.fly_to(seat + Vector3(0.0, 0.35, 0.0), seat)
 	bird.decide_in = 0.0
 
 
-## Prefer trees, and prefer somewhere that is not where the bird already is.
-func _pick_perch(from: Vector3) -> Vector3:
+## Prefer trees, and prefer somewhere that is not where the bird already is. Crows ignore
+## both preferences: they sit over whatever the tile is hiding.
+func _pick_perch(from: Vector3, bird: BirdActor = null) -> Vector3:
+	if bird != null and _crows.has(bird) and not _attractors.is_empty():
+		var watched := _perch_near_attractor()
+		if watched != Vector3.INF:
+			return watched
 	var pool := _tree_perch_count if _tree_perch_count > 0 else _perches.size()
 	for _try in range(4):
 		var seat := _perches[_rng.randi_range(0, pool - 1)]
 		if seat.distance_squared_to(from) > 36.0:
 			return seat
 	return _perches[_rng.randi_range(0, pool - 1)]
+
+
+# ---------------------------------------------------------------------------
+# Crow scouts
+# ---------------------------------------------------------------------------
+
+## Somewhere on this tile worth standing over: an apothecary shingle, a wanted bill, a chest,
+## a recipe scroll. Registering one turns part of the flock black and sends it there, which
+## is the whole tell — a knot of crows on a roof means the street below has something on it.
+func add_attractor(world: Vector3) -> void:
+	if world == Vector3.INF:
+		return
+	_attractors.append(world)
+	_promote_crows()
+
+
+func attractor_count() -> int:
+	return _attractors.size()
+
+
+func crow_count() -> int:
+	return _crows.size()
+
+
+func is_crow(bird: BirdActor) -> bool:
+	return _crows.has(bird)
+
+
+## Birds sitting close enough to a registered attractor to read as watching it.
+func birds_watching_attractors(radius_m: float = ATTRACTOR_WATCH_M) -> int:
+	var r2 := radius_m * radius_m
+	var n := 0
+	for bird: BirdActor in _birds:
+		for at: Vector3 in _attractors:
+			if bird.global_position.distance_squared_to(at) <= r2:
+				n += 1
+				break
+	return n
+
+
+## Re-dress part of the flock as crows. Idempotent: a tile with a lab and a poster has the
+## same crows as a tile with just a lab, only more places for them to sit.
+func _promote_crows() -> void:
+	if _birds.is_empty():
+		return
+	_ensure_species()
+	var want := maxi(1, int(ceil(float(_birds.size()) * CROW_SHARE)))
+	if _crows.size() >= want:
+		return
+	var coat := _coats[CROW_COAT_INDEX]
+	for bird: BirdActor in _birds:
+		if _crows.size() >= want:
+			break
+		if _crows.has(bird):
+			continue
+		bird.build(coat.body, coat.accent, coat.beak, CROW_SIZE)
+		bird.cruise_speed = 8.5
+		bird.flee_speed = bird.cruise_speed * 1.7
+		_crows.append(bird)
+		## Send it to its new post rather than waiting out the idle it was already on.
+		bird.decide_in = 0.0
+
+
+## A seat near a randomly chosen attractor, or `Vector3.INF` when the flock's perches are all
+## somewhere else — a crow with nothing in reach flies like any other bird.
+func _perch_near_attractor() -> Vector3:
+	if _perches.is_empty():
+		return Vector3.INF
+	var target: Vector3 = _attractors[_rng.randi_range(0, _attractors.size() - 1)]
+	var best := Vector3.INF
+	var best_d2 := ATTRACTOR_WATCH_M * ATTRACTOR_WATCH_M
+	for seat: Vector3 in _perches:
+		var d2 := seat.distance_squared_to(target)
+		if d2 < best_d2:
+			best_d2 = d2
+			best = seat
+	return best
 
 
 func _wander_point() -> Vector3:

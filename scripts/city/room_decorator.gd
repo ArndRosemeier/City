@@ -33,6 +33,9 @@ enum Purpose {
 	ARENA_PIT,
 	## Arena pit labyrinth: fractal walls, big carved rooms (destructible).
 	ARENA,
+	## Back room of a city apothecary: workbenches, crates, and one glowing vat the player
+	## may shoot. Appended so no stored purpose value shifts.
+	ALCHEMY_LAB,
 }
 
 ## Placement role for one plan step.
@@ -66,8 +69,15 @@ const ARENA_QUARTER_BANDS: Array[int] = [0, 4, 8, 12]
 ## is judged against the passage it opens onto instead of against a wall that is not there.
 const GUARD_RING := 1
 
+## Voxels of vat stamped in an alchemy lab, and the sentinel for "this room has none".
+const CATALYST_H := 2
+const NO_CATALYST := Vector3i(0x40000000, 0x40000000, 0x40000000)
+
 var brush: CityBrush
 var rng: RandomNumberGenerator
+## Base voxel of the vat this decorator stamped, for the caller that has to know where the
+## ignition point ended up. Stays `NO_CATALYST` for every purpose but `ALCHEMY_LAB`.
+var last_catalyst_vox: Vector3i = NO_CATALYST
 ## When true (arena default), random chambers punch the maze down to ~15% wall cover.
 ## Gaming sets this false and clears its own installment rectangles afterward.
 var arena_punch_rooms: bool = true
@@ -120,6 +130,8 @@ func decorate(volume: RoomVolume, purpose: Purpose) -> int:
 	var placed := 0
 	for step in _plan_for(purpose, volume):
 		placed += _apply_step(volume, step, blocked, occupied)
+	if purpose == Purpose.ALCHEMY_LAB and _stamp_catalyst(volume, blocked, occupied):
+		placed += 1
 	brush.end_edit()
 	return placed
 
@@ -170,6 +182,8 @@ static func purpose_name(purpose: Purpose) -> String:
 			return "arena_pit"
 		Purpose.ARENA:
 			return "arena"
+		Purpose.ALCHEMY_LAB:
+			return "alchemy_lab"
 	return "unknown"
 
 
@@ -217,6 +231,8 @@ static func purpose_from_name(name: String) -> Purpose:
 			return Purpose.ARENA_PIT
 		"arena", "arena_labyrinth", "labyrinth":
 			return Purpose.ARENA
+		"alchemy_lab", "alchemy", "apothecary":
+			return Purpose.ALCHEMY_LAB
 		_:
 			return Purpose.GENERIC
 
@@ -666,6 +682,17 @@ func _plan_for(purpose: Purpose, volume: RoomVolume) -> Array[Dictionary]:
 				_step(Role.CORNER, ["urnRound", "crate", "barrel"], corner_n),
 				_step(Role.CENTER, ["table", "benchStone"], 1 if area >= 200 else 0),
 			])
+		Purpose.ALCHEMY_LAB:
+			## Reads as a working back room: benches along the walls, stock in the corners,
+			## and floor left open around the vat the catalyst pass stamps afterwards.
+			return _steps([
+				_step(Role.WALL, ["desk", "table", "sideTable"], maxi(2, wall_n)),
+				_step(Role.WALL, ["bookcaseClosedDoors", "bookcaseOpen", "kitchenCabinet"], wall_n),
+				_step(Role.WALL, ["kitchenSink", "kitchenStove"], 1),
+				_step(Role.SCATTER, ["barrel", "crate"], scatter_n),
+				_step(Role.CORNER, ["urnRound", "barrel", "cardboardBoxOpen"], corner_n),
+				_step(Role.CEILING, ["lampSquareCeiling"], 1),
+			])
 		Purpose.ARENA:
 			## Voxel labyrinth — handled in `_decorate_arena_labyrinth`, not furniture steps.
 			return [] as Array[Dictionary]
@@ -777,6 +804,56 @@ func _apply_step(
 			_guard_take()
 		placed += 1
 	return placed
+
+
+## Stand the vat in an alchemy lab: a short column of `ALCHEMY_CATALYST` on open floor.
+##
+## Raw voxels rather than a prop stem, because this is the one furnishing the player is
+## meant to shoot, and the carve path recognises it by material id. It goes in after the
+## furniture so it lands in floor the kit left open, and it answers to the same walkability
+## guard — a vat that seals off the back of its own room would make the lab unenterable.
+func _stamp_catalyst(volume: RoomVolume, blocked: Dictionary, occupied: Dictionary) -> bool:
+	var height := mini(CATALYST_H, volume.air_h - 1)
+	if height <= 0:
+		return false
+	var reserved := _merged(blocked, occupied)
+	var slots := _center_slots(volume, reserved)
+	slots.append_array(_scatter_slots(volume, reserved, 12))
+	var y := volume.prop_y()
+	for slot in slots:
+		if not _column_is_air(slot, y, height):
+			continue
+		if _strands_floor_columns(slot):
+			continue
+		for i in range(height):
+			brush.set_vox(Vector3i(slot.x, y + i, slot.y), VoxelMaterial.ALCHEMY_CATALYST)
+		_mark_footprint(occupied, slot, Vector3i(1, height, 1))
+		_guard_take()
+		last_catalyst_vox = Vector3i(slot.x, y, slot.y)
+		return true
+	return false
+
+
+func _column_is_air(cell: Vector2i, y: int, height: int) -> bool:
+	for i in range(height):
+		if brush.get_vox(Vector3i(cell.x, y + i, cell.y)) != VoxelMaterial.AIR:
+			return false
+	return true
+
+
+## Guard check for a single blocked column (a raw voxel stamp, not a catalog prop).
+func _strands_floor_columns(cell: Vector2i) -> bool:
+	if not _guard_rect.has_point(cell):
+		return true
+	_guard_pending = PackedInt32Array([_guard_index(cell)])
+	_guard_pending_islands = _guard_islands
+	_guard_solid[_guard_index(cell)] = 1
+	if _guard_touches_walkable():
+		_guard_pending_islands = _guard_count_islands()
+	if _guard_pending_islands > _guard_islands:
+		_guard_drop()
+		return true
+	return false
 
 
 # ---------------------------------------------------------------------------

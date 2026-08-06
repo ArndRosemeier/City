@@ -81,7 +81,7 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			## cull_back dropped every face (windows read as air holes). Opaque cube
 			## + glass shader = solid pane that sorts with brick.
 			return _make_glass_cube(id)
-		VoxelMaterial.GLASS_LIT:
+		VoxelMaterial.GLASS_LIT, VoxelMaterial.LAB_WINDOW:
 			return _make_glass_cube(id)
 		VoxelMaterial.ZOO_FENCE_GLASS, VoxelMaterial.CAVE_CAGE_GLASS:
 			return _make_glass_cube(id)
@@ -826,6 +826,7 @@ static var _fractal_glow_mat: ShaderMaterial = null
 static var _fractal_band_mat_cache: Dictionary = {}  # band id → ShaderMaterial
 static var _fractal_interior_mat: ShaderMaterial = null
 static var _orb_mat: ShaderMaterial = null
+static var _alchemy_catalyst_mat: ShaderMaterial = null
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
 static var _zoo_fence_line_mat: ShaderMaterial = null
@@ -851,6 +852,8 @@ static func block_material_for(id: int) -> Material:
 		return fractal_band_material(id)
 	if id == VoxelMaterial.ORB:
 		return orb_material()
+	if id == VoxelMaterial.ALCHEMY_CATALYST:
+		return alchemy_catalyst_material()
 	if id == VoxelMaterial.ZOO_FENCE_LINE or id == VoxelMaterial.CAVE_CAGE_LINE:
 		return zoo_fence_line_material()
 	if VoxelMaterial.is_zoo_turf(id):
@@ -880,6 +883,8 @@ static func debris_material_for(id: int) -> Material:
 		return fractal_band_material(id)
 	if id == VoxelMaterial.ORB:
 		return orb_material()
+	if id == VoxelMaterial.ALCHEMY_CATALYST:
+		return alchemy_catalyst_material()
 	if id == VoxelMaterial.ZOO_FENCE_LINE or id == VoxelMaterial.CAVE_CAGE_LINE:
 		return zoo_fence_line_material()
 	if VoxelMaterial.is_zoo_turf(id):
@@ -1078,6 +1083,26 @@ static func orb_material() -> ShaderMaterial:
 	return mat
 
 
+## Alchemy vat — acid green with a slow, uneasy churn. Deliberately the only glowing thing
+## in a furnished room so the eye lands on it and the player decides whether to shoot it.
+static func alchemy_catalyst_material() -> ShaderMaterial:
+	if _alchemy_catalyst_mat != null:
+		return _alchemy_catalyst_mat
+	var shader: Shader = load("res://assets/city/shaders/voxel_gem.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", VoxelMaterial.color(VoxelMaterial.ALCHEMY_CATALYST))
+	mat.set_shader_parameter("emission_color", Color(0.45, 1.0, 0.35))
+	mat.set_shader_parameter("emission_base", 1.5)
+	mat.set_shader_parameter("emission_peak", 4.0)
+	mat.set_shader_parameter("pulse_hz", 0.55)
+	mat.set_shader_parameter("sparkle_scale", 3.0)
+	mat.set_shader_parameter("metallic_base", 0.15)
+	mat.set_shader_parameter("roughness_base", 0.25)
+	_alchemy_catalyst_mat = mat
+	return mat
+
+
 ## Zoo containment line — the same emissive cube shader the fractal deck uses, pushed
 ## hard into red. Slow pulse: this is a standing hazard, not a landmark that sparkles.
 static func zoo_fence_line_material() -> ShaderMaterial:
@@ -1265,7 +1290,7 @@ static func infection_material(is_lead: bool) -> ShaderMaterial:
 ## Drive emissive punched windows with day/night (shared GLASS_LIT materials).
 static func set_glass_lit_night_factor(night_factor: float) -> void:
 	var n := clampf(night_factor, 0.0, 1.0)
-	for id in [VoxelMaterial.GLASS, VoxelMaterial.GLASS_LIT]:
+	for id in [VoxelMaterial.GLASS, VoxelMaterial.GLASS_LIT, VoxelMaterial.LAB_WINDOW]:
 		surface_material(id, false).set_shader_parameter("night_factor", n)
 		surface_material(id, true).set_shader_parameter("night_factor", n)
 

@@ -195,6 +195,34 @@ static func _build() -> Array[Entry]:
 		)
 	)
 
+	## City hostiles — the Ninja mesh under two combat identities. Both are people the street
+	## turned on the player rather than monsters that walked in, so they wear the one humanoid
+	## silhouette in the set. Out of the spawn tables on purpose: the crowd promotes them.
+	out.append(
+		_alias_quaternius(
+			"city/mad_citizen",
+			"big",
+			"Ninja",
+			3.021,
+			Family.QUATERNIUS_BIG,
+			PackedInt32Array(),
+			NavProfileScript.Id.MONSTER,
+			"lab infection convert — spawned by the infestation only"
+		)
+	)
+	out.append(
+		_alias_quaternius(
+			"city/wanted_killer",
+			"big",
+			"Ninja",
+			3.021,
+			Family.QUATERNIUS_BIG,
+			PackedInt32Array(),
+			NavProfileScript.Id.MONSTER,
+			"wanted hunt — spawned when the marked ped is attacked"
+		)
+	)
+
 	## Quaternius Blob: a four-bone rig (Body/Head/Head2/Head3) that shares nothing with the
 	## Big one, 9 clips, 1.0-4.9k triangles. Cheap enough to spawn in packs.
 	##

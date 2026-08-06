@@ -1137,6 +1137,72 @@
       ],
       "auras": []
     },
+    "city/mad_citizen": {
+      "hp_mult": 0.62,
+      "damage_mult": 0.8,
+      "speed_mult": 1.0,
+      "aggro_range_m": 22.0,
+      "leash_m": 70.0,
+      "preferred_range_m": 2.0,
+      "armor_mult": 0.8,
+      "score_mult": 1.0,
+      "behaviour": [
+        "chase",
+        "wander_hunt"
+      ],
+      "attacks": [
+        "melee"
+      ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 9.6,
+          "vs_mob": 9.6
+        }
+      },
+      "tags": [
+        "fodder",
+        "pack"
+      ],
+      "crowd_roles": [
+        "convert_minion",
+        "wave_hunter"
+      ],
+      "auras": []
+    },
+    "city/wanted_killer": {
+      "hp_mult": 2.1,
+      "damage_mult": 1.5,
+      "speed_mult": 0.9,
+      "aggro_range_m": 30.0,
+      "leash_m": 55.0,
+      "preferred_range_m": 2.5,
+      "armor_mult": 1.25,
+      "score_mult": 1.5,
+      "behaviour": [
+        "chase"
+      ],
+      "attacks": [
+        "melee",
+        "stomp"
+      ],
+      "attack_damage": {
+        "melee": {
+          "vs_player": 18.0,
+          "vs_mob": 18.0
+        },
+        "stomp": {
+          "vs_player": 75.0,
+          "vs_mob": 75.0
+        }
+      },
+      "tags": [
+        "tank"
+      ],
+      "crowd_roles": [
+        "wave_hunter"
+      ],
+      "auras": []
+    },
     "flying/Alpaking": {
       "hp_mult": 4.7078,
       "damage_mult": 2.55,
