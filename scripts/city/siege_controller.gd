@@ -1173,6 +1173,39 @@ func pick_repair_target(
 	return best
 
 
+## True when the aim ray hits a living tower that is already at full HP (same range / LOS as
+## repair). Used so LMB on an undamaged tower toasts and does not fall through to the blaster.
+func aim_hits_undamaged_tower(
+	from: Vector3, dir: Vector3, max_range_m: float = -1.0
+) -> bool:
+	if not is_running():
+		return false
+	var aim := dir.normalized()
+	if aim.length_squared() < 0.0001:
+		return false
+	var max_m := max_range_m if max_range_m > 0.0 else _repair_range_m
+	var best_t := INF
+	var hit := false
+	for unit: UndeadUnit in _towers:
+		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
+			continue
+		if unit.health() < unit.health_max() - 0.01:
+			continue
+		var hit_r := maxf(unit.hit_radius(), 0.6)
+		var t := _ray_tower_shaft_t(from, aim, unit, hit_r, max_m)
+		if t >= best_t:
+			continue
+		if not _repair_has_los(from, from + aim * t):
+			continue
+		best_t = t
+		hit = true
+	return hit
+
+
+func toast_undamaged() -> void:
+	_toast_message("undamaged.")
+
+
 ## Apply `amount` HP to a pick_repair_target result. Returns healed points.
 func apply_repair(target: Dictionary, amount: float) -> float:
 	if target.is_empty() or amount <= 0.0:
@@ -1605,13 +1638,17 @@ func _on_pad_pressed(pad_index: int) -> void:
 
 
 func _toast_too_far_to_operate() -> void:
+	_toast_message("too far to operate")
+
+
+func _toast_message(text: String) -> void:
 	if _city == null or not is_instance_valid(_city) or not _city.has_method("get_loot_toast"):
 		return
 	var toast := _city.call("get_loot_toast") as Object
 	if toast == null or not is_instance_valid(toast):
 		return
 	if toast.has_method("show_message"):
-		toast.call("show_message", "too far to operate")
+		toast.call("show_message", text)
 
 
 func _close_build_picker() -> void:

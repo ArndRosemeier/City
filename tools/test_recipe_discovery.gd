@@ -121,13 +121,23 @@ func _check_mode_starting_books() -> void:
 		_fail("FAIL expected discoverable build stamps in the cookbook")
 	if adv.knows_recipe("hot_tub") or adv.is_unlocked("hot_tub"):
 		_fail("FAIL adventure must not start with the hot tub recipe")
-	if not adv.is_unlocked("cottage"):
-		_fail("FAIL cottage must stay a free starter stamp")
-	if adv.slot_at(0) != "cottage":
-		_fail("FAIL adventure F1 should be cottage, not a discovery stamp")
-	for i in range(1, 6):
+	if adv.knows_recipe("cottage") or adv.is_unlocked("cottage"):
+		_fail("FAIL adventure must not start with the cottage recipe")
+	if adv.is_unlocked(AbilityRegistry.ID_USE_TRAP):
+		_fail("FAIL adventure must not assign Throw trap before the craft is known")
+	if adv.is_unlocked(AbilityRegistry.ID_USE_BOOST_SPEED):
+		_fail("FAIL adventure must not assign Speed boost before the craft is known")
+	if adv.is_unlocked("arch") or adv.is_unlocked("cloudstone"):
+		_fail("FAIL adventure must not assign free-looking builds without recipes")
+	for i in range(6):
 		if not adv.slot_at(i).is_empty():
-			_fail("FAIL adventure F%d should be empty after discovery migration" % (i + 1))
+			_fail("FAIL adventure F%d should be empty; builds are discovery stamps" % (i + 1))
+	if not adv.learn_recipe(InventoryCatalog.RECIPE_TRAP):
+		_fail("FAIL learning the trap craft should report a new recipe")
+	if not adv.is_unlocked(AbilityRegistry.ID_USE_TRAP):
+		_fail("FAIL knowing the trap craft must unlock Throw trap on the tray")
+	if adv.is_unlocked(AbilityRegistry.ID_USE_BOOST_REGEN):
+		_fail("FAIL learning trap must not unlock other consumables")
 
 	var sand: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 	sand.reset_sandbox()
@@ -139,8 +149,29 @@ func _check_mode_starting_books() -> void:
 		_fail("FAIL sandbox must know every schematic")
 	if not sand.knows_recipe("hot_tub") or not sand.is_unlocked("hot_tub"):
 		_fail("FAIL sandbox must know every build discovery recipe")
+	if not sand.is_unlocked(AbilityRegistry.ID_USE_TRAP):
+		_fail("FAIL sandbox must unlock consumables with the full cookbook")
+	if not sand.is_unlocked("cloudstone"):
+		_fail("FAIL sandbox must unlock cloudstone via its craft recipe")
 	if not sand.missing_recipe_ids().is_empty():
 		_fail("FAIL sandbox must be missing nothing")
+	## Cheat "Fill recipes" is learn_every_recipe — must pick up discovery builds without a
+	## hardcoded list, or new stamps silently stay locked after the cheat.
+	var adv_fill: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
+	adv_fill.reset_adventure()
+	var missing_before := adv_fill.missing_recipe_ids().size()
+	if missing_before != InventoryCatalog.all_recipe_ids().size() - starters:
+		_fail("FAIL adventure missing count before fill")
+	adv_fill.learn_every_recipe()
+	if not adv_fill.missing_recipe_ids().is_empty():
+		_fail("FAIL learn_every_recipe left gaps")
+	if not adv_fill.knows_recipe("pool") or not adv_fill.is_unlocked("elephant"):
+		_fail("FAIL learn_every_recipe skipped discovery builds")
+	if adv_fill.known_recipes.size() != InventoryCatalog.all_recipe_ids().size():
+		_fail(
+			"FAIL cookbook size %d != catalog %d"
+			% [adv_fill.known_recipes.size(), InventoryCatalog.all_recipe_ids().size()]
+		)
 	print("OK adventure starts empty, sandbox starts complete")
 
 

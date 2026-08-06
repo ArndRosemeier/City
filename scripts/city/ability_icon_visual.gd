@@ -137,6 +137,12 @@ static func _shape_for(ability_id: String) -> Mesh:
 				_box(Vector3(0.28, 0.10, 0.28), Vector3(0.0, 0.02, 0.0)),
 				_spike(0.15, 0.20, Vector3(0.0, 0.17, 0.0), Basis.IDENTITY),
 			])
+	## Discovery stamps share one plaque badge — the name carries which build it is.
+	if BuildCatalog.has_id(ability_id):
+		return _combine([
+			_box(Vector3(0.42, 0.08, 0.42), Vector3(0.0, -0.18, 0.0)),
+			_box(Vector3(0.28, 0.28, 0.28), Vector3(0.0, 0.05, 0.0)),
+		])
 	return null
 
 
@@ -194,6 +200,8 @@ static func _colour_for(ability_id: String) -> Color:
 			return HARD_PLATE
 		AbilityRegistry.ID_HARDNESS_EXOTIC:
 			return HARD_EXOTIC
+	if BuildCatalog.has_id(ability_id):
+		return STEEL
 	push_error("AbilityIconVisual: '%s' has a badge but no colour" % ability_id)
 	return Color.MAGENTA
 

@@ -995,7 +995,7 @@ func _maybe_place_pad_gem(x0: int, z0: int) -> bool:
 	var above := Vector3i(gx, top + 1, gz)
 	if brush.get_vox(above) != VoxelMaterial.AIR:
 		return false
-	brush.set_vox(above, VoxelMaterial.pick_gem(rng))
+	brush.set_vox(above, VoxelMaterial.random_gem(rng))
 	return true
 
 

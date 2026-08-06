@@ -213,6 +213,10 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_paint_hell_gates()
 	_paint_barricades()
 	_paint_pads()
+	## Barricades paint *after* the planning flood. Without this, a plaza whose only exit is not
+	## one of the road breaches ends up sealed — mouths and stones stand, but nothing can walk to
+	## the Lodestone. Re-flood on the baked shell and carve corridors until the horde graph joins.
+	_ensure_horde_reachability()
 
 	if not layout.is_valid():
 		push_error(
@@ -398,15 +402,231 @@ func _nearest_walk_sample(at: Vector2i) -> Vector2i:
 ## against courtyards tens of metres across.
 func _walk_reaches_objective(x: int, z: int) -> bool:
 	if _walk_region.is_empty():
-		## The fill failed and said so. Refusing every site after that would bury one loud error
-		## under thirteen more.
-		return true
+		## Empty flood means the objective has no walkable ground — nothing reaches it.
+		return false
 	var home := _snap_walk(Vector2i(x, z))
 	for dz: int in [0, WALK_STEP]:
 		for dx: int in [0, WALK_STEP]:
 			if _walk_region.has(home + Vector2i(dx, dz)):
 				return true
 	return false
+
+
+## True when any sample on the chew ring around a stone joins the objective flood.
+func _ring_reaches_objective(centre: Vector2i, radius: int) -> bool:
+	for a in range(16):
+		var ang := TAU * float(a) / 16.0
+		var p := Vector2i(
+			centre.x + int(round(cos(ang) * float(radius))),
+			centre.y + int(round(sin(ang) * float(radius)))
+		)
+		if _walk_reaches_objective(p.x, p.y):
+			return true
+	return false
+
+
+## After the barricade is up: every outer stone and every hell-gate apron must still walk to the
+## Lodestone. Punch corridors through the sealed shell until they do, or fail the bake loudly.
+func _ensure_horde_reachability() -> void:
+	_flood_walk_region()
+	var missing := _unreachable_horde_sites()
+	var tries := 0
+	const MAX_TRIES := 32
+	while not missing.is_empty() and tries < MAX_TRIES:
+		tries += 1
+		var goal: Vector2i = missing[0]
+		## Prefer opening only the rubble wall we painted; fall back to carving city fabric.
+		if not _open_walk_path_to(goal, false):
+			if not _open_walk_path_to(goal, true):
+				push_error(
+					"SiegeComposer: cannot open a horde path from the Lodestone to %s"
+					% goal
+				)
+				assert(false, "SiegeComposer: Lodestone unreachable from a horde site")
+				return
+		_flood_walk_region()
+		missing = _unreachable_horde_sites()
+	if not missing.is_empty():
+		push_error(
+			"SiegeComposer: Lodestone still cut off from %d horde site(s) after %d punches — first %s"
+			% [missing.size(), tries, missing[0]]
+		)
+		assert(false, "SiegeComposer: Lodestone unreachable by the horde")
+		return
+	if tries > 0:
+		print(
+			"SiegeComposer: opened %d corridor(s) so the horde can reach the Lodestone"
+			% tries
+		)
+
+
+## Outer-stone chew rings and hell-gate aprons that the post-barricade flood does not join.
+func _unreachable_horde_sites() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for stone: SiegeLayout.Stone in layout.outer_stones:
+		var ring_r := stone.radius_vox + 3
+		if not _ring_reaches_objective(stone.xz, ring_r):
+			out.append(_approach_point(stone.xz, ring_r))
+	for gate: SiegeLayout.HellGate in layout.hell_gates:
+		var apron := Vector2i(
+			gate.mouth.x - gate.outward.x * HELL_GATE_APRON,
+			gate.mouth.z - gate.outward.y * HELL_GATE_APRON
+		)
+		if not _walk_reaches_objective(apron.x, apron.y):
+			out.append(apron)
+	return out
+
+
+## Point on the ring around `centre` facing the Lodestone — where a body stands to chew.
+func _approach_point(centre: Vector2i, radius: int) -> Vector2i:
+	var c := layout.lodestone_xz
+	var v := Vector2(float(centre.x - c.x), float(centre.y - c.y))
+	if v.length_squared() < 0.01:
+		return centre + Vector2i(radius, 0)
+	v = v.normalized() * float(radius)
+	return Vector2i(centre.x - int(round(v.x)), centre.y - int(round(v.y)))
+
+
+## Shortest lattice path from the Lodestone to `goal`, clearing blockers along it. When
+## `carve_city` is false only siege barricade rubble is removed; when true, ordinary walls too.
+func _open_walk_path_to(goal: Vector2i, carve_city: bool) -> bool:
+	var start := _nearest_walk_sample(layout.lodestone_xz)
+	if start.x < 0:
+		return false
+	var came_from: Dictionary[Vector2i, Vector2i] = {}
+	var seen: Dictionary[Vector2i, bool] = {}
+	var frontier: Array[Vector2i] = [start]
+	seen[start] = true
+	var found := Vector2i(-1, -1)
+	var head := 0
+	while head < frontier.size():
+		var at: Vector2i = frontier[head]
+		head += 1
+		if _lattice_covers(at, goal):
+			found = at
+			break
+		for d: Vector2i in _WALK_DIRS:
+			var next := at + d * WALK_STEP
+			if seen.has(next):
+				continue
+			if not _inside_tile(next.x, next.y, 1):
+				continue
+			if not _path_step_openable(at, d, carve_city):
+				continue
+			seen[next] = true
+			came_from[next] = at
+			frontier.append(next)
+	if found.x < 0:
+		return false
+	var cur := found
+	while cur != start:
+		var prev: Vector2i = came_from[cur]
+		_clear_walk_segment(prev, cur)
+		cur = prev
+	## Widen the mouth so a body (and the WALK_STEP lattice) fits through the punch.
+	_clear_walk_disk(found, 1)
+	_clear_walk_disk(start, 1)
+	return true
+
+
+func _lattice_covers(at: Vector2i, site: Vector2i) -> bool:
+	var home := _snap_walk(site)
+	for dz: int in [0, WALK_STEP]:
+		for dx: int in [0, WALK_STEP]:
+			if at == home + Vector2i(dx, dz):
+				return true
+	return false
+
+
+## Every voxel between two lattice samples can be walked or carved open.
+func _path_step_openable(from: Vector2i, dir: Vector2i, carve_city: bool) -> bool:
+	for step in range(1, WALK_STEP + 1):
+		var x := from.x + dir.x * step
+		var z := from.y + dir.y * step
+		if _is_walk_cell(x, z):
+			continue
+		if _column_openable(x, z, carve_city):
+			continue
+		return false
+	return true
+
+
+func _column_openable(x: int, z: int, carve_city: bool) -> bool:
+	if not VoxelMaterial.is_solid(brush.get_vox(Vector3i(x, ground_y, z))):
+		return false
+	if _is_monument_column(x, z):
+		return false
+	for y in range(ground_y + 1, ground_y + 1 + WALK_CLEAR):
+		var id := brush.get_vox(Vector3i(x, y, z))
+		if id == VoxelMaterial.AIR:
+			continue
+		## Hell-gate veil / frame — never tunnel through a mouth.
+		if id == VoxelMaterial.LOS_VEIL or id == VoxelMaterial.ZOO_FENCE_LINE:
+			return false
+		if _is_barricade_mat(id):
+			continue
+		if carve_city:
+			continue
+		return false
+	return true
+
+
+func _is_barricade_mat(id: int) -> bool:
+	return id == VoxelMaterial.STONE or id == VoxelMaterial.CONCRETE
+
+
+## Lodestone crystal / outer-stone mass — never punch the objective the path is trying to reach.
+func _is_monument_column(x: int, z: int) -> bool:
+	var lx := layout.lodestone_xz
+	var lr := layout.lodestone_radius_vox + 1
+	if absi(x - lx.x) <= lr and absi(z - lx.y) <= lr:
+		if Vector2(float(x - lx.x), float(z - lx.y)).length() <= float(lr) + 0.1:
+			return true
+	for stone: SiegeLayout.Stone in layout.outer_stones:
+		var r := stone.radius_vox + 1
+		if absi(x - stone.xz.x) <= r and absi(z - stone.xz.y) <= r:
+			if (
+				Vector2(float(x - stone.xz.x), float(z - stone.xz.y)).length()
+				<= float(r) + 0.1
+			):
+				return true
+	return false
+
+
+func _clear_walk_segment(from: Vector2i, to: Vector2i) -> void:
+	var delta := to - from
+	var steps := maxi(absi(delta.x), absi(delta.y))
+	if steps <= 0:
+		_clear_walk_disk(from, 1)
+		return
+	var step_v := Vector2i(signi(delta.x), signi(delta.y))
+	for i in range(steps + 1):
+		_clear_walk_disk(from + step_v * i, 1)
+
+
+func _clear_walk_disk(centre: Vector2i, radius: int) -> void:
+	for dz in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			if dx * dx + dz * dz > radius * radius + 1:
+				continue
+			_clear_walk_column(centre.x + dx, centre.y + dz)
+
+
+func _clear_walk_column(x: int, z: int) -> void:
+	if not _inside_tile(x, z, 0):
+		return
+	if _is_monument_column(x, z):
+		return
+	if not VoxelMaterial.is_solid(brush.get_vox(Vector3i(x, ground_y, z))):
+		return
+	var top := ground_y + 1 + maxi(WALK_CLEAR, BARRICADE_H)
+	for y in range(ground_y + 1, top):
+		var id := brush.get_vox(Vector3i(x, y, z))
+		if id == VoxelMaterial.AIR:
+			continue
+		if id == VoxelMaterial.LOS_VEIL or id == VoxelMaterial.ZOO_FENCE_LINE:
+			continue
+		brush.set_vox(Vector3i(x, y, z), VoxelMaterial.AIR)
 
 
 ## Two hell gates flanking each outer stone, standing `GATE_STANDOFF` beyond it along the line out

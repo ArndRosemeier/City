@@ -43,3 +43,7 @@ Expect `RESULT: OK`. Do not call the change done while these fail.
 If another script types a variable as the new class (`var x: MyNewClass`), headless/editor may fail with `Could not find type "MyNewClass"` until the class cache refreshes. Prefer preload + `RefCounted`/`Node` typing for brand-new types, or run `test_scripts_compile` immediately after adding them.
 
 After **git pull** that brings new/renamed classes: refresh cache with `--import` (see `godot-class-cache-pull.mdc`).
+
+## Seeding gems
+
+World gem **type** always comes from `VoxelMaterial.random_gem(rng)` (or `random_gem_from` when the pool is restricted). Weights live in `assets/gamedata.json` → `district_gems.rarity_weights`. Theme totals only set **how many** gems a district owes (`DistrictEconomy.roll_budgets`); each entry is typed by `random_gem`. Do not `randi` a `GEM_*` id at a seed site. Native duplicates of the curve (e.g. `hill_paint::random_gem`) must stay in lockstep with gamedata.

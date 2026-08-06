@@ -189,7 +189,7 @@ func _build_ui() -> void:
 	body.add_child(_button_box)
 
 	_add_action_button("Fill gems", "Top every gem type to 99", fill_gems_requested)
-	_add_action_button("Fill recipes", "Learn every craft and power schematic", fill_recipes_requested)
+	_add_action_button("Fill recipes", "Learn every recipe in the cookbook", fill_recipes_requested)
 	_add_action_button(
 		"Teleport to recipe",
 		"Jump near the closest landmark recipe scroll (not chests)",

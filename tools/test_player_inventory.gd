@@ -483,6 +483,9 @@ func _check_locked_recipes_stay_nameless() -> void:
 			continue
 		if shown.contains(def.display_name):
 			_fail("FAIL undiscovered power '%s' is named in the column" % def.display_name)
+	for recipe in InventoryCatalog.build_discovery_recipes():
+		if shown.contains(recipe.display_name):
+			_fail("FAIL undiscovered build '%s' is named in the column" % recipe.display_name)
 	if not shown.contains("(locked)"):
 		_fail("FAIL nothing in the column says a recipe is missing")
 

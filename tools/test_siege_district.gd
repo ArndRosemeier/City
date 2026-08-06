@@ -713,7 +713,18 @@ func _check_other_seeds() -> bool:
 		if not layout.is_valid():
 			_fail("FAIL seed %d %s is not runnable: %s" % [s, coord, layout.describe()])
 			return false
-	print("seeds: %s each stood five stones and eight mouths" % str(OTHER_SEEDS))
+		## Same post-barricade walk the composer must guarantee — seed 42 alone used to miss
+		## tiles where the plaza's only exit was sealed by the rubble ring.
+		var blocks: Dictionary = res["blocks"]
+		var deck := int(res["ground_thickness"])
+		var planner: DistrictPlanner = gen.get_planner()
+		if planner == null:
+			_fail("FAIL seed %d bake has no planner" % s)
+			return false
+		if not _check_horde_can_walk(layout, blocks, deck, planner):
+			_fail("FAIL seed %d %s: horde cannot walk to the Lodestone" % [s, coord])
+			return false
+	print("seeds: %s each stood five stones, eight mouths, and an open horde graph" % str(OTHER_SEEDS))
 	return true
 
 

@@ -88,7 +88,7 @@ func interact_at_world(_world_pos: Vector3) -> bool:
 	for _i in range(wanted):
 		var gem: int
 		if hill_chest:
-			gem = VoxelMaterial.pick_gem(_rng)
+			gem = VoxelMaterial.random_gem(_rng)
 			if city.grant_district_gem(district_coord, gem, false):
 				paid += 1
 			continue

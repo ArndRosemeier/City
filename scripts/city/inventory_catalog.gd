@@ -230,6 +230,17 @@ static func schematic_id_for_ability(ability_id: String) -> String:
 	return SCHEMATIC_PREFIX + ability_id
 
 
+## First craft recipe that outputs `item_id`, or "" when none exists.
+static func craft_recipe_id_for_output(item_id: String) -> String:
+	if item_id.is_empty():
+		return ""
+	ensure_loaded()
+	for recipe in craft_recipes():
+		if recipe.output_id == item_id:
+			return recipe.id
+	return ""
+
+
 static func display_name(item_id: String) -> String:
 	var def := item(item_id)
 	if def == null:

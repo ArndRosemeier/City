@@ -103,11 +103,33 @@ func _check_roll_is_deterministic() -> void:
 		_fail("FAIL an old town owes %d gems, want %d" % [total, want])
 		return
 
-	## The split follows the city-wide rarity curve, so the commonest gem must not be the rarest.
+	## The split follows `VoxelMaterial.random_gem`, so the commonest gem must not be the rarest.
 	var quartz := int(first[VoxelMaterial.GEM_QUARTZ])
 	var diamond := int(first[VoxelMaterial.GEM_DIAMOND])
 	if quartz <= diamond:
 		_fail("FAIL a rolled budget holds %d quartz and %d diamond" % [quartz, diamond])
+		return
+	## Direct API: a long sample must stay on the authored curve (no hand-rolled GEM_* ids).
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 424242
+	var hits: Dictionary[int, int] = {}
+	for mat in VoxelMaterial.GEM_IDS:
+		hits[mat] = 0
+	const SAMPLE := 10000
+	for _i in range(SAMPLE):
+		var gem := VoxelMaterial.random_gem(rng)
+		if not VoxelMaterial.is_gem(gem):
+			_fail("FAIL random_gem returned non-gem %d" % gem)
+			return
+		hits[gem] = int(hits[gem]) + 1
+	if int(hits[VoxelMaterial.GEM_QUARTZ]) < int(hits[VoxelMaterial.GEM_DIAMOND]) * 10:
+		_fail(
+			"FAIL random_gem sample quartz %d vs diamond %d (weights 48 vs 2)"
+			% [int(hits[VoxelMaterial.GEM_QUARTZ]), int(hits[VoxelMaterial.GEM_DIAMOND])]
+		)
+		return
+	if VoxelMaterial.random_gem_from(rng, [] as Array[int]) != VoxelMaterial.AIR:
+		_fail("FAIL random_gem_from([]) must be AIR")
 		return
 
 	## A different tile is a different budget — one roll shared by the whole city would make the

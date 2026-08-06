@@ -4065,7 +4065,8 @@ func _stop_blaster(cancel_in_flight: bool) -> void:
 
 
 ## Siege Quarter: LMB on a damaged tower / outer stone / Lodestone channels mend instead of
-## the blaster. Range + LOS live on SiegeController; energy and pose live here.
+## the blaster. Aiming a full-HP tower toasts "undamaged." and still swallows the shot.
+## Range + LOS live on SiegeController; energy and pose live here.
 func _try_begin_repair() -> bool:
 	if _camera == null or _game_over_locked:
 		return false
@@ -4077,6 +4078,10 @@ func _try_begin_repair() -> bool:
 	var dir: Vector3 = aim["cam_dir"] as Vector3
 	var target: Dictionary = siege.pick_repair_target(from, dir)
 	if target.is_empty():
+		if siege.aim_hits_undamaged_tower(from, dir):
+			siege.toast_undamaged()
+			_mouse_hold_ability = ""
+			return true
 		return false
 	_stop_blaster(false)
 	_repair_holding = true

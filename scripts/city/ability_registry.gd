@@ -1,8 +1,8 @@
 ## Every assignable tray entry: weapons, powers, consumable uses, and free builds.
 ##
-## "Unlocked" means may be assigned. Sandbox treats every non-build combat/power id as unlocked;
-## Adventure starts with `blaster` and spends gems for the rest. Free builds assign immediately;
-## `requires_recipe` stamps wait on cookbook discovery (see PlayerLoadout.knows_build_recipe).
+## "Unlocked" means may be assigned. Sandbox treats every gated combat/power id as unlocked;
+## Adventure starts with `blaster` and spends gems for the rest. Builds and consumables wait on
+## cookbook recipes (see PlayerLoadout.knows_build_recipe / knows_consumable_recipe).
 ##
 ## Authored ability rows + balance constants live in `assets/gamedata.json` via GameData.
 ## Build tray entries are still registered from BuildCatalog (also GameData-backed).
@@ -47,9 +47,7 @@ static var GROW_SHRINK_DURATION_SEC: float = 25.0
 static var SHIELD_DRAIN_PER_SEC: float = 8.0
 static var MINION_MAX: int = 1
 static var MINION_DURATION_SEC: float = 60.0
-static var _default_sandbox_builds: Array[String] = [
-	"cottage",
-]
+static var _default_sandbox_builds: Array[String] = []
 
 
 class AbilityDef:
@@ -182,6 +180,19 @@ static func unlockable_defs() -> Array[AbilityDef]:
 	return out
 
 
+## Craft recipe that teaches a consumable tray verb. Empty when `ability_id` is not a consumable.
+static func craft_recipe_for_consumable(ability_id: String) -> String:
+	match ability_id:
+		ID_USE_TRAP:
+			return InventoryCatalog.RECIPE_TRAP
+		ID_USE_BOOST_SPEED:
+			return InventoryCatalog.RECIPE_BOOST_SPEED
+		ID_USE_BOOST_REGEN:
+			return InventoryCatalog.RECIPE_BOOST_REGEN
+		_:
+			return ""
+
+
 static func default_sandbox_tray() -> Array[String]:
 	ensure_loaded()
 	var slots: Array[String] = []
@@ -202,7 +213,7 @@ static func default_adventure_tray() -> Array[String]:
 	slots.resize(SLOT_COUNT)
 	for i in range(SLOT_COUNT):
 		slots[i] = ""
-	## Starter free builds on F-keys (cottage); discovery stamps stay off until learned.
+	## Optional free starter stamps on F-keys; discovery builds stay off until learned.
 	for i in range(mini(6, _default_sandbox_builds.size())):
 		slots[i] = _default_sandbox_builds[i]
 	slots[SLOT_MOUSE_LMB] = ID_BLASTER

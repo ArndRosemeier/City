@@ -327,9 +327,7 @@ def _abilities() -> tuple[dict, dict]:
         "shield_drain_per_sec": 8.0,
         "minion_max": 1,
         "minion_duration_sec": 60.0,
-        "default_sandbox_builds": [
-            "cottage",
-        ],
+        "default_sandbox_builds": [],
     }
     return abilities, constants
 

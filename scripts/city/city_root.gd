@@ -6891,14 +6891,18 @@ func _on_cheat_fill_recipes() -> void:
 		push_error("CityRoot: cheat fill recipes needs a loadout")
 		return
 	var before := _loadout.missing_recipe_ids().size()
+	## Catalog-driven: crafts, schematics, and discovery builds all live in all_recipe_ids().
 	_loadout.learn_every_recipe()
 	if _inventory_panel != null and _inventory_panel.has_method("rebuild_recipe_lists"):
 		_inventory_panel.call("rebuild_recipe_lists")
+	if _ability_tray != null:
+		_ability_tray.refresh()
 	var after := _loadout.missing_recipe_ids().size()
 	var learned := before - after
+	var total := InventoryCatalog.all_recipe_ids().size()
 	var msg := (
-		"Cookbook already full." if learned <= 0
-		else "Learned %d recipe(s); %d still missing (should be 0)." % [learned, after]
+		"Cookbook already full (%d)." % total if learned <= 0
+		else "Learned %d recipe(s); cookbook is %d / %d." % [learned, total - after, total]
 	)
 	_cheat_log(msg)
 	print("CityRoot: cheat — %s" % msg)

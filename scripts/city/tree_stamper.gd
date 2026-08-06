@@ -263,5 +263,5 @@ func _maybe_hide_gem(cx: int, cy: int, cz: int, rxz: int, ry: int) -> void:
 		)
 		if n > 1.0 or n < CANOPY_GEM_SHELL_MIN:
 			continue
-		brush.set_vox(Vector3i(cx + dx, cy + dy, cz + dz), VoxelMaterial.pick_gem(rng))
+		brush.set_vox(Vector3i(cx + dx, cy + dy, cz + dz), VoxelMaterial.random_gem(rng))
 		return

@@ -1634,11 +1634,12 @@
           1,
           11
         ]
-      ]
+      ],
+      "requires_recipe": true
     },
     "cat": {
       "display_name": "Cat Statue",
-      "hint": "Sitting stone feline",
+      "hint": "Sitting stone feline - 1 Quartz to place",
       "voxels": [
         [
           -1,
@@ -2163,7 +2164,7 @@
     },
     "cottage": {
       "display_name": "Cottage",
-      "hint": "Walk-in plaster house with a clay roof",
+      "hint": "Walk-in plaster house with a clay roof - 1 Emerald to place",
       "voxels": [
         [
           -7,
@@ -11777,11 +11778,14 @@
           3,
           5
         ]
-      ]
+      ],
+      "requires_recipe": true,
+      "consume_item": "gem_emerald",
+      "consume_count": 1
     },
     "dog": {
       "display_name": "Dog Statue",
-      "hint": "Loyal stone pup",
+      "hint": "Loyal stone pup - 1 Quartz to place",
       "voxels": [
         [
           -1,
@@ -12252,7 +12256,7 @@
     },
     "duck": {
       "display_name": "Duck Statue",
-      "hint": "Chunky park duck",
+      "hint": "Chunky park duck - 1 Quartz to place",
       "voxels": [
         [
           -2,
@@ -12807,7 +12811,7 @@
     },
     "elephant": {
       "display_name": "Elephant Statue",
-      "hint": "Stocky stone elephant",
+      "hint": "Stocky stone elephant - 1 Quartz to place",
       "voxels": [
         [
           -2,
@@ -14520,7 +14524,7 @@
     },
     "hot_tub": {
       "display_name": "Hot Tub",
-      "hint": "Round stone tub with warm water",
+      "hint": "Round stone tub with warm water - 1 Amber to place",
       "voxels": [
         [
           0,
@@ -14967,11 +14971,13 @@
           25
         ]
       ],
-      "requires_recipe": true
+      "requires_recipe": true,
+      "consume_item": "gem_amber",
+      "consume_count": 1
     },
     "pool": {
       "display_name": "Swimming Pool",
-      "hint": "Large stone-rimmed pool, 4 voxels deep",
+      "hint": "Large stone-rimmed pool, 4 voxels deep - 1 Sapphire to place",
       "voxels": [
         [
           0,
@@ -36192,7 +36198,8 @@
           0,
           27
         ]
-      ]
+      ],
+      "requires_recipe": true
     },
     "totem": {
       "display_name": "Totem",
@@ -37536,7 +37543,8 @@
           0,
           25
         ]
-      ]
+      ],
+      "requires_recipe": true
     },
     "cloudstone": {
       "display_name": "Cloudstone",
@@ -37749,9 +37757,7 @@
       "hardness_reinforced",
       "hardness_exotic"
     ],
-    "default_sandbox_builds": [
-      "cottage"
-    ]
+    "default_sandbox_builds": []
   },
   "chest_loot": {
     "gems_min": 1,

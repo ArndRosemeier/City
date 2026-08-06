@@ -67,13 +67,20 @@ const ROOF_CLAY_SLOPE_POS_X := 45
 const ROOF_CLAY_SLOPE_NEG_X := 46
 const ROOF_CLAY_SLOPE_POS_Z := 47
 const ROOF_CLAY_SLOPE_NEG_Z := 48
-## Hill ore — fantasy gems, common → legendary. See rarity weights in pick_gem().
+## Collectible ore — fantasy gems, common → legendary.
+## Rarity curve: `assets/gamedata.json` → `district_gems.rarity_weights`.
+## Every world seed of a gem type (district budgets, canopy nuggets, chests, zoo pads, …)
+## must go through `random_gem` / `random_gem_from` — never a hand-rolled mat id.
 const GEM_QUARTZ := 49
 const GEM_AMBER := 50
 const GEM_TOPAZ := 51
 const GEM_SAPPHIRE := 52
 const GEM_EMERALD := 53
 const GEM_DIAMOND := 54
+## Stable order for budget arrays and weighted rolls (matches DistrictEconomy.GEM_IDS).
+const GEM_IDS: Array[int] = [
+	GEM_QUARTZ, GEM_AMBER, GEM_TOPAZ, GEM_SAPPHIRE, GEM_EMERALD, GEM_DIAMOND
+]
 ## Castle kit: dressed ashlar for the plinth, curtain wall, towers and gatehouse, plus a
 ## weathered variant. Both destructible and cascading like ordinary built stone — blasting
 ## a breach into the curtain is meant to work.
@@ -484,24 +491,45 @@ static func gem_rarity_weight(id: int) -> int:
 	return GameDataScript.gem_rarity_weight(item_id)
 
 
-## Weighted roll across the fantasy gem chart (weights sum to 100).
-static func pick_gem(rng: RandomNumberGenerator) -> int:
-	var mats: Array[int] = [
-		GEM_QUARTZ, GEM_AMBER, GEM_TOPAZ, GEM_SAPPHIRE, GEM_EMERALD, GEM_DIAMOND
-	]
+## Canonical rarity roll for seeding gems in the world.
+##
+## Weights come from `district_gems.rarity_weights` in gamedata (today: quartz 48, amber 24,
+## topaz 14, sapphire 8, emerald 4, diamond 2 — sum 100). District theme totals only decide
+## *how many* gems a tile owes; each one is typed by this function (see
+## `DistrictEconomy.roll_budgets`). Do not pick `GEM_*` ids with `randi` at seed sites.
+static func random_gem(rng: RandomNumberGenerator) -> int:
+	return random_gem_from(rng, GEM_IDS)
+
+
+## Same rarity curve, restricted to `mats` (e.g. only types a district still owes).
+## Empty `mats` → AIR. Unknown / zero-weight ids are skipped.
+static func random_gem_from(rng: RandomNumberGenerator, mats: Array[int]) -> int:
+	if rng == null:
+		push_error("VoxelMaterial.random_gem_from: rng is null")
+		assert(false, "VoxelMaterial: null rng")
+		return GEM_QUARTZ
 	var total := 0
 	for mat in mats:
 		total += gem_rarity_weight(mat)
 	if total <= 0:
-		push_error("VoxelMaterial.pick_gem: rarity weights sum to 0")
-		return GEM_QUARTZ
+		if not mats.is_empty():
+			push_error("VoxelMaterial.random_gem_from: rarity weights sum to 0")
+		return AIR
 	var roll := rng.randi_range(1, total)
 	for mat in mats:
 		var w := gem_rarity_weight(mat)
+		if w <= 0:
+			continue
 		if roll <= w:
 			return mat
 		roll -= w
-	return GEM_DIAMOND
+	push_error("VoxelMaterial.random_gem_from: weights did not resolve")
+	return mats[mats.size() - 1]
+
+
+## Deprecated name — call `random_gem`. Kept so older call sites keep compiling.
+static func pick_gem(rng: RandomNumberGenerator) -> int:
+	return random_gem(rng)
 
 
 static func is_infectable(id: int) -> bool:

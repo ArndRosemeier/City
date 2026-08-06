@@ -45,9 +45,11 @@ class RecipeRow:
 	var button: Button
 	var label: Label
 	var preview: IconPreview
-	## Recipe id for a craft row, ability id for an unlock row, empty on a locked placeholder.
+	## Recipe id for a craft/build row, ability id for an unlock row, empty on a locked placeholder.
 	var id: String = ""
 	var is_unlock: bool = false
+	## Learn-only build stamp: listed once known, assigned from the tray (no craft click).
+	var is_build: bool = false
 
 
 func _ready() -> void:
@@ -415,13 +417,26 @@ func rebuild_recipe_lists() -> void:
 		urow.is_unlock = true
 		urow.button.pressed.connect(_on_unlock_pressed.bind(def.id))
 
-	## Discovery builds: nameless blanks while missing; once learned they live on the tray assign
-	## menu (nothing to craft or buy here), so they never get a named Construct row.
+	var known_builds: Array[InventoryCatalog.Recipe] = []
 	for recipe in InventoryCatalog.build_discovery_recipes():
-		if not _knows_recipe(recipe.id):
+		if _knows_recipe(recipe.id):
+			known_builds.append(recipe)
+		else:
 			locked_count += 1
+	if not known_builds.is_empty():
+		var builds_title := Label.new()
+		builds_title.text = "Builds"
+		builds_title.add_theme_font_size_override("font_size", 16)
+		_recipe_list_box.add_child(builds_title)
+	for recipe in known_builds:
+		var brow := _add_recipe_row(
+			AbilityIconVisual.make_mesh(recipe.id), _build_recipe_button_text(recipe)
+		)
+		brow.id = recipe.id
+		brow.is_build = true
+		brow.button.disabled = true
 
-	if known_crafts.is_empty() and known_unlocks.is_empty():
+	if known_crafts.is_empty() and known_unlocks.is_empty() and known_builds.is_empty():
 		var empty := Label.new()
 		empty.text = "No recipes yet — explore"
 		empty.modulate = Color(0.6, 0.64, 0.72)
@@ -549,6 +564,19 @@ func _recipe_button_text(recipe: InventoryCatalog.Recipe) -> String:
 	return "%s\n(%s)" % [recipe.display_name, ", ".join(parts)]
 
 
+func _build_recipe_button_text(recipe: InventoryCatalog.Recipe) -> String:
+	var build := BuildCatalog.by_id(recipe.id)
+	if build == null:
+		return recipe.display_name
+	if build.consume_item.is_empty():
+		return "%s\nassign from tray" % recipe.display_name
+	return "%s\n%d %s - assign from tray" % [
+		recipe.display_name,
+		build.consume_count,
+		InventoryCatalog.display_name(build.consume_item),
+	]
+
+
 func _on_dim_input(event: InputEvent) -> void:
 	var mb := event as InputEventMouseButton
 	if mb != null and mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
@@ -610,6 +638,15 @@ func _refresh_recipe_rows() -> void:
 				"%s\nbuilt" % def.display_name if built else _unlock_button_text(def)
 			)
 			_dim_row(row, can_unlock)
+			continue
+		if row.is_build:
+			var build_recipe := InventoryCatalog.recipe(row.id)
+			if build_recipe == null:
+				push_error("PlayerInventoryPanel: build row for unknown recipe '%s'" % row.id)
+				continue
+			row.button.disabled = true
+			row.label.text = _build_recipe_button_text(build_recipe)
+			_dim_row(row, true)
 			continue
 		var recipe := InventoryCatalog.recipe(row.id)
 		if recipe == null:

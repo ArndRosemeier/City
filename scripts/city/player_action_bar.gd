@@ -6,9 +6,7 @@ const BuildCatalogScript := preload("res://scripts/city/build_catalog.gd")
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 
 const SLOT_COUNT := 6
-const DEFAULT_BINDS: Array[String] = [
-	"cottage",
-]
+const DEFAULT_BINDS: Array[String] = []
 
 signal build_requested(recipe_id: String)
 

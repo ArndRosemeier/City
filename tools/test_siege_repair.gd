@@ -25,6 +25,7 @@ func _ready() -> void:
 	_check_gamedata()
 	_check_stone_heal_and_pick()
 	_check_tower_heal_and_pick()
+	_check_undamaged_tower_blocks_blaster()
 	_check_full_hp_ignored()
 	if _failed:
 		print("RESULT: FAILED")
@@ -199,6 +200,42 @@ func _check_tower_heal_and_pick() -> void:
 		if not is_equal_approx(applied, 3.0):
 			_fail("FAIL apply_repair on tower healed %f, want 3" % applied)
 	print("towers: apply_heal + tip-height ray pick")
+	ctrl.shutdown()
+	ctrl.queue_free()
+	tower.queue_free()
+	(boot["city"] as Node).queue_free()
+
+
+## Full-HP towers must still catch the aim ray so LMB can toast instead of blasting the stamp.
+func _check_undamaged_tower_blocks_blaster() -> void:
+	var boot := _boot_ctrl()
+	if boot.is_empty():
+		return
+	var ctrl: SiegeController = boot["ctrl"] as SiegeController
+	var tower := UndeadUnit.new()
+	tower.name = "FullTower"
+	add_child(tower)
+	tower.global_position = Vector3(20.0, 1.0, 0.0)
+	tower.set("_alive", true)
+	tower.set("_health", 100.0)
+	tower.set("_health_max", 100.0)
+	tower.set("_siege_tower", true)
+	tower.set("_structure_hit_radius_m", 2.0)
+	tower.set("_muzzle_height_m", 3.0)
+	ctrl._towers.append(tower)
+
+	var tip := tower.muzzle_world()
+	var from := tip + Vector3(0.0, 0.0, 10.0)
+	var dir := (tip - from).normalized()
+	if not ctrl.pick_repair_target(from, dir).is_empty():
+		_fail("FAIL pick_repair_target offered a full-HP tower as mendable")
+	if not ctrl.aim_hits_undamaged_tower(from, dir):
+		_fail("FAIL aim_hits_undamaged_tower missed a full-HP tower")
+	## Damaged towers must not count as undamaged.
+	tower.set("_health", 40.0)
+	if ctrl.aim_hits_undamaged_tower(from, dir):
+		_fail("FAIL aim_hits_undamaged_tower true for a damaged tower")
+	print("towers: undamaged aim swallows LMB, damaged does not")
 	ctrl.shutdown()
 	ctrl.queue_free()
 	tower.queue_free()

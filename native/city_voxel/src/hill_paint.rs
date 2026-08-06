@@ -9,11 +9,16 @@ const GEM_VOXELS_PER_CLUSTER: i32 = 250;
 const GEM_CLUSTER_CAP: i32 = 880;
 const GEM_SURFACE_MARGIN: i32 = 3;
 
+/// Must match `assets/gamedata.json` → `district_gems.rarity_weights` and
+/// `VoxelMaterial.random_gem` in GDScript. Native hill code cannot read gamedata;
+/// keep these in lockstep when the curve changes.
 const GEM_WEIGHT_QUARTZ: i32 = 48;
 const GEM_WEIGHT_AMBER: i32 = 24;
 const GEM_WEIGHT_TOPAZ: i32 = 14;
 const GEM_WEIGHT_SAPPHIRE: i32 = 8;
 const GEM_WEIGHT_EMERALD: i32 = 4;
+const GEM_WEIGHT_DIAMOND: i32 = 2;
+const GEM_WEIGHT_TOTAL: i32 = 100;
 
 pub struct PaintStats {
     pub columns: i32,
@@ -261,7 +266,7 @@ pub fn scatter_gems(
         if !is_gem_host(host) {
             continue;
         }
-        let gem = pick_gem(&mut rng);
+        let gem = random_gem(&mut rng);
         let cluster = 1 + rng.gen_mod(4);
         place_gem_cluster(vol, &mut rng, &mut positions, &mut mats, wx, y, wz, gem, cluster);
         placed += 1;
@@ -314,8 +319,18 @@ fn is_gem_host(id: i32) -> bool {
     )
 }
 
-fn pick_gem(rng: &mut Rng) -> i32 {
-    let mut roll = rng.gen_range_i32(1, 100);
+/// Weighted rarity roll — GDScript twin is `VoxelMaterial.random_gem`.
+fn random_gem(rng: &mut Rng) -> i32 {
+    debug_assert_eq!(
+        GEM_WEIGHT_QUARTZ
+            + GEM_WEIGHT_AMBER
+            + GEM_WEIGHT_TOPAZ
+            + GEM_WEIGHT_SAPPHIRE
+            + GEM_WEIGHT_EMERALD
+            + GEM_WEIGHT_DIAMOND,
+        GEM_WEIGHT_TOTAL
+    );
+    let mut roll = rng.gen_range_i32(1, GEM_WEIGHT_TOTAL);
     if roll <= GEM_WEIGHT_QUARTZ {
         return materials::GEM_QUARTZ;
     }

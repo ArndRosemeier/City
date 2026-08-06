@@ -13,6 +13,7 @@ class_name DistrictEconomy
 extends RefCounted
 
 ## Every gem type a district can owe, rarest last. Order is the save order too.
+## Same sequence as `VoxelMaterial.GEM_IDS` — keep the two lists identical.
 const GEM_IDS: Array[int] = [
 	VoxelMaterial.GEM_QUARTZ,
 	VoxelMaterial.GEM_AMBER,
@@ -60,7 +61,7 @@ static func gem_slot(gem_mat: int) -> int:
 # Rolling a first-create budget
 # ---------------------------------------------------------------------------
 
-## Theme totals from GameData, split across types by the global rarity curve, seeded by the
+## Theme totals from GameData, split across types by `VoxelMaterial.random_gem`, seeded by the
 ## district so the same coord in the same world always owes the same gems.
 static func roll_budgets(theme_id: int, district_seed: int) -> Dictionary[int, int]:
 	var out := _empty_budget()
@@ -72,7 +73,7 @@ static func roll_budgets(theme_id: int, district_seed: int) -> Dictionary[int, i
 	var rng := RandomNumberGenerator.new()
 	rng.seed = district_seed
 	for _i in range(total):
-		var gem := VoxelMaterial.pick_gem(rng)
+		var gem := VoxelMaterial.random_gem(rng)
 		out[gem] = out[gem] + 1
 	return out
 
@@ -252,27 +253,17 @@ func try_take_any(coord: Vector2i) -> bool:
 	return false
 
 
-## A gem type this tile can still pay, drawn off the rarity curve across only what is left.
-## `VoxelMaterial.AIR` when the tile owes nothing at all.
+## A gem type this tile can still pay, drawn off `VoxelMaterial.random_gem_from` across only
+## what is left. `VoxelMaterial.AIR` when the tile owes nothing at all.
 ##
 ## Rolling a type first and then asking whether it is in stock would make a chest in a
 ## quartz-only district mostly pay nothing, which reads as a bug rather than as scarcity.
 func pick_available(coord: Vector2i, rng: RandomNumberGenerator) -> int:
-	var total := 0
+	var available: Array[int] = []
 	for gem in GEM_IDS:
 		if remaining(coord, gem) > 0:
-			total += VoxelMaterial.gem_rarity_weight(gem)
-	if total <= 0:
-		return VoxelMaterial.AIR
-	var roll := rng.randi_range(1, total)
-	for gem in GEM_IDS:
-		if remaining(coord, gem) <= 0:
-			continue
-		roll -= VoxelMaterial.gem_rarity_weight(gem)
-		if roll <= 0:
-			return gem
-	push_error("DistrictEconomy.pick_available: the weights did not add up for %s" % str(coord))
-	return VoxelMaterial.AIR
+			available.append(gem)
+	return VoxelMaterial.random_gem_from(rng, available)
 
 
 func is_explored(coord: Vector2i) -> bool:

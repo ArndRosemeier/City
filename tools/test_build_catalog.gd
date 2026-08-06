@@ -40,17 +40,20 @@ func _ready() -> void:
 	if by == null or by.id != "cottage":
 		push_error("FAIL by_id(cottage)")
 		failed = true
-	if by != null and by.requires_recipe:
-		push_error("FAIL cottage must remain a free starter stamp")
-		failed = true
 
 	var discovery := BuildCatalogScript.discovery_recipes()
-	if discovery.size() < 6:
-		push_error("FAIL expected pool/hot_tub/statues as discovery recipes, got %d" % discovery.size())
+	if discovery.size() < 10:
+		push_error(
+			"FAIL expected cottage/pool/hot_tub/statues/arch/pyramid/totem as discovery, got %d"
+			% discovery.size()
+		)
 		failed = true
 	else:
 		print("OK %d discovery build recipes" % discovery.size())
-	for id in ["pool", "hot_tub", "dog", "cat", "duck", "elephant"]:
+	for id in [
+		"cottage", "pool", "hot_tub", "dog", "cat", "duck", "elephant",
+		"arch", "pyramid", "totem"
+	]:
 		var stamp := BuildCatalogScript.by_id(id)
 		if stamp == null or not stamp.requires_recipe:
 			push_error("FAIL '%s' should require recipe discovery" % id)
@@ -69,8 +72,16 @@ func _ready() -> void:
 		push_error("FAIL pool should cost 1 sapphire to place")
 		failed = true
 	var tub := BuildCatalogScript.by_id("hot_tub")
-	if tub != null and not tub.consume_item.is_empty():
-		push_error("FAIL hot tub should not spend gems on place")
+	if tub == null or tub.consume_item != "gem_amber" or tub.consume_count != 1:
+		push_error("FAIL hot tub should cost 1 amber to place")
+		failed = true
+	var cottage := BuildCatalogScript.by_id("cottage")
+	if (
+		cottage == null
+		or cottage.consume_item != "gem_emerald"
+		or cottage.consume_count != 1
+	):
+		push_error("FAIL cottage should cost 1 emerald to place")
 		failed = true
 
 	print("RESULT: %s" % ("OK" if not failed else "FAIL"))
