@@ -314,9 +314,8 @@ func _test_growing_refits_the_bar() -> void:
 # ---------------------------------------------------------------------------
 
 ## A siege tower is a health pool with no body: the voxel stamp is the visual, and the combat host
-## stands inside it at pad level. Under the soles — where every creature's bar goes — is therefore
-## inside the pillar, and that is exactly how it was first reported: bars half buried in their own
-## towers. The strip has to clear the stamp, and the muzzle height is what says where that is.
+## stands inside it at pad level. The bar is a half-size horizontal strip centred one voxel under
+## the host — the foundation cell under the tower — not over the cap and not a vertical strip.
 func _test_a_tower_hangs_its_bar_over_its_stamp() -> void:
 	var defs: Array = SiegeTowerCatalog.all()
 	if defs.is_empty():
@@ -339,42 +338,45 @@ func _test_a_tower_hangs_its_bar_over_its_stamp() -> void:
 	if bar == null:
 		_fail("FAIL a %s stands with no health bar" % def.id)
 		return
-	var want := tower.hit_radius() * MonsterHealthBar.WIDTH_PER_HIT_RADIUS
-	if absf(bar.width_m() - want) > EPS:
-		_fail("FAIL %s wears a %.3f m bar, want %.3f m" % [def.id, bar.width_m(), want])
+	if bar.is_vertical():
+		_fail("FAIL %s wears a vertical bar — towers are horizontal at the base" % def.id)
 		return
-	var want_y := (
-		muzzle_h
-		+ want * MonsterHealthBar.HEIGHT_FRACTION * 0.5
-		+ want * MonsterHealthBar.FOOT_CLEARANCE_FRACTION
+	var want := (
+		tower.hit_radius()
+		* MonsterHealthBar.WIDTH_PER_HIT_RADIUS
+		* MonsterHealthBar.STRUCTURE_SIZE_SCALE
 	)
-	if absf(bar.position.y - want_y) > EPS:
+	if absf(bar.width_m() - want) > EPS:
+		_fail("FAIL %s wears a %.3f m bar, want half-size %.3f m" % [def.id, bar.width_m(), want])
+		return
+	var want_thick := want * MonsterHealthBar.HEIGHT_FRACTION
+	if absf(bar.scale.y - want_thick) > EPS:
 		_fail(
-			"FAIL %s draws its bar at %.3f m, want %.3f m over the cap"
-			% [def.id, bar.position.y, want_y]
+			"FAIL %s bar thickness is %.3f m, want %.3f m"
+			% [def.id, bar.scale.y, want_thick]
 		)
 		return
-	## The whole strip, not just its centre, has to be above the mass — half of it under the cap
-	## line is the buried bar this case exists for.
-	var bottom := bar.position.y - bar.scale.y * 0.5
-	if bottom <= muzzle_h:
+	if absf(bar.position.y + VOXEL_SIZE) > EPS:
 		_fail(
-			"FAIL the bottom of a %s's bar sits at %.3f m, inside a stamp reaching %.3f m"
-			% [def.id, bottom, muzzle_h]
+			"FAIL %s draws its bar at %.3f m, want one voxel under the host (%.3f)"
+			% [def.id, bar.position.y, -VOXEL_SIZE]
 		)
 		return
 	if bar.visibility_range_end <= 0.0:
 		_fail("FAIL %s draws its bar to infinity" % def.id)
 		return
-	if bar.camera_pull_m() <= tower.hit_radius():
+	if bar.camera_pull_m() != 0.0:
 		_fail(
-			"FAIL %s pulls its bar %.3f m over a %.3f m footprint"
-			% [def.id, bar.camera_pull_m(), tower.hit_radius()]
+			"FAIL %s pulls its bar %.3f m toward the camera — that detaches it at an angle"
+			% [def.id, bar.camera_pull_m()]
 		)
 		return
+	if bar.material_override != MonsterHealthBar.shared_structure_material():
+		_fail("FAIL %s is not on the depth-test-off structure material" % def.id)
+		return
 	print(
-		"tower: %s hangs a %.2f m bar at %.2f m, clear of a stamp reaching %.2f m"
-		% [def.id, bar.width_m(), bar.position.y, muzzle_h]
+		"tower: %s wears a %.2f m horizontal bar at y=%.2f (half-size, base, xray)"
+		% [def.id, bar.width_m(), bar.position.y]
 	)
 	await get_tree().process_frame
 	if is_instance_valid(tower):

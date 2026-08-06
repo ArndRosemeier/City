@@ -59,8 +59,10 @@ static func has_bespoke_shader(id: int) -> bool:
 		return true
 	if VoxelMaterial.is_zoo_turf(id):
 		return true
+	if VoxelMaterial.is_fractal_display(id):
+		return true
 	match id:
-		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE, VoxelMaterial.CAVE_CAGE_LINE:
+		VoxelMaterial.INFECTION, VoxelMaterial.INFECTION_LEAD, VoxelMaterial.METEOR_ROCK, VoxelMaterial.GAMEBOY, VoxelMaterial.ZOO_FENCE_LINE, VoxelMaterial.CAVE_CAGE_LINE, VoxelMaterial.ORB:
 			return true
 		_:
 			return false

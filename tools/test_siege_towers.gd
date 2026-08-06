@@ -68,13 +68,28 @@ func _check_catalog() -> void:
 			cost_total += int(cost[k])
 		if cost_total != 1 or cost.size() != 1:
 			_fail("FAIL %s cost should be exactly one gem, got %s" % [id, str(cost)])
-		## No collectible gem mats in the stamp.
+		## Fractal shaft + ORB tip — never collectible gem ore, never brick fabric.
 		var n: int = voxels.size() / 4
+		var saw_orb := false
+		var top_oy := -1
+		var top_mat := -1
 		for i in range(n):
+			var oy: int = voxels[i * 4 + 1]
 			var mat: int = voxels[i * 4 + 3]
 			if VoxelMaterial.is_gem(mat):
 				_fail("FAIL %s stamp uses gem mat %d" % [id, mat])
-	print("catalog: %d towers, one gem each" % ids.size())
+			if mat == VoxelMaterial.ORB:
+				saw_orb = true
+			elif not VoxelMaterial.is_fractal_display(mat):
+				_fail("FAIL %s shaft mat %d is not fractal-display" % [id, mat])
+			if oy >= top_oy:
+				top_oy = oy
+				top_mat = mat
+		if not saw_orb:
+			_fail("FAIL %s stamp has no ORB tip" % id)
+		if top_mat != VoxelMaterial.ORB:
+			_fail("FAIL %s tip mat is %d, want ORB" % [id, top_mat])
+	print("catalog: %d fractal spires with ORB tips" % ids.size())
 
 
 func _check_combat_rows() -> void:
@@ -177,6 +192,7 @@ func _check_afford_and_spend() -> void:
 			break
 	## Empty bag of tower gems: the "+" still opens, the list just has nothing to sell.
 	var empty_plate := ctrl.get_node_or_null("SiegePadPanel_0") as Ui3D
+	city.player_pos = empty_plate.global_position
 	empty_plate.button_pressed.emit(&"plus", Vector2.ZERO)
 	if not city.picker.is_open():
 		_fail("FAIL the + plate did not open the build picker on an empty bag")
@@ -209,8 +225,10 @@ func _check_pad_plates(ctrl: SiegeController, layout: SiegeLayout, city: _FakeCi
 		if plate.button_at_uv(Vector2(0.5, 0.5)) != &"plus":
 			_fail("FAIL pad plate %d has no + button in the middle of the face" % i)
 			return
-	_check_plate_lod(ctrl, layout)
+	_check_plate_lod(ctrl, layout, city)
 	var first := ctrl.get_node_or_null("SiegePadPanel_0") as Ui3D
+	## Operate range is 10 m — stand on the plate before pressing.
+	city.player_pos = first.global_position
 	first.button_pressed.emit(&"plus", Vector2.ZERO)
 	if not city.picker.is_open():
 		_fail("FAIL the + plate did not open the build picker")
@@ -229,14 +247,15 @@ func _check_pad_plates(ctrl: SiegeController, layout: SiegeLayout, city: _FakeCi
 	city.picker.close_panel()
 	if city.picker.is_open():
 		_fail("FAIL picker stayed open after close")
+	_check_plate_too_far(ctrl, city, first)
 	print("pads: %d plates live, picker lists only affordable recipes" % layout.pad_count())
 
 
 ## A quarter carries hundreds of plates, which only works because each one draws at short range and
-## carries no collider until the player is on top of it. Both are easy to lose in a refactor and
-## neither shows up as a failure — the district just gets slow, and shots aimed low stop firing
-## because `CityWalker._try_world_interact` swallows them on the first invisible plate it rays.
-func _check_plate_lod(ctrl: SiegeController, layout: SiegeLayout) -> void:
+## carries no collider until the player is within view distance. Both are easy to lose in a refactor
+## and neither shows up as a failure — the district just gets slow, and shots aimed low stop firing
+## because `CityWalker._try_world_interact` swallows them on the first plate it rays.
+func _check_plate_lod(ctrl: SiegeController, layout: SiegeLayout, city: _FakeCity) -> void:
 	for i in range(layout.pad_count()):
 		var plate := ctrl.get_node_or_null("SiegePadPanel_%d" % i) as Ui3D
 		if plate.is_collision_enabled():
@@ -261,10 +280,37 @@ func _check_plate_lod(ctrl: SiegeController, layout: SiegeLayout) -> void:
 		if surface.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
 			_fail("FAIL pad plate %d casts shadows" % i)
 			return
+	## Inside view distance the collider goes live so a distant aim can toast instead of fire;
+	## past view distance it stays deaf.
+	var plate0 := ctrl.get_node_or_null("SiegePadPanel_0") as Ui3D
+	city.player_pos = plate0.global_position + Vector3(20.0, 0.0, 0.0)
+	ctrl._tick_plate_proximity(SiegeControllerScript.PLATE_PROXIMITY_INTERVAL_SEC)
+	if not plate0.is_collision_enabled():
+		_fail("FAIL pad plate 0 stayed deaf at 20 m (inside view distance)")
+	city.player_pos = plate0.global_position + Vector3(40.0, 0.0, 0.0)
+	ctrl._tick_plate_proximity(SiegeControllerScript.PLATE_PROXIMITY_INTERVAL_SEC)
+	if plate0.is_collision_enabled():
+		_fail("FAIL pad plate 0 kept a collider at 40 m (past view distance)")
 	print(
-		"plates: %.0f m view cutoff, shadowless, colliders handed out by proximity"
-		% (ctrl.get_node("SiegePadPanel_0") as Ui3D).view_distance_m
+		"plates: %.0f m view cutoff, operate ≤ %.0f m, colliders to view range"
+		% [plate0.view_distance_m, SiegeControllerScript.PLATE_TOUCH_M]
 	)
+
+
+## Aiming a plate past operate range must not open the picker — toast and swallow the shot.
+func _check_plate_too_far(ctrl: SiegeController, city: _FakeCity, plate: Ui3D) -> void:
+	city.picker.close_panel()
+	city.toast.last_message = ""
+	city.player_pos = plate.global_position + Vector3(15.0, 0.0, 0.0)
+	plate.button_pressed.emit(&"plus", Vector2.ZERO)
+	if city.picker.is_open():
+		_fail("FAIL pad press at 15 m opened the picker — operate range is 10 m")
+		city.picker.close_panel()
+	if city.toast.last_message != "too far to operate":
+		_fail(
+			"FAIL far pad press toasted '%s', want 'too far to operate'"
+			% city.toast.last_message
+		)
 
 
 ## Spawn a real tower body. A tower is a meshless `UndeadUnit` with no CreatureCatalog entry,
@@ -402,16 +448,18 @@ func _check_melee_reaches_tower_wall(
 ## nothing is ever acquired, and a whole field of towers holds fire without one line in the log.
 func _check_tower_muzzle(tower: UndeadUnit, def: RefCounted, host_pos: Vector3) -> void:
 	var pad_y := host_pos.y - SiegeControllerScript.TOWER_HOST_LIFT_M
+	## ORB tip is a full solid cell for LOS even though the mesh is a sphere — the eye must
+	## clear that cell's top face, not sit in the mesh crown inside it.
 	var cells := SiegeTowerCatalogScript.STAMP_BASE_CELLS + int(def.get("stamp_top_oy")) + 1
 	var mass_top := pad_y + float(cells) * VOXEL_SIZE
 	var muzzle := tower.muzzle_world()
 	if muzzle.y <= mass_top:
 		_fail(
-			"FAIL tower muzzle y %.2f sits in its own stamp (mass top %.2f)"
+			"FAIL tower muzzle y %.2f sits in its own tip cell (mass top %.2f)"
 			% [muzzle.y, mass_top]
 		)
 		return
-	print("muzzle: eye at %.2f m clears the stamp top at %.2f m" % [muzzle.y, mass_top])
+	print("muzzle: eye at %.2f m clears the ORB cell top at %.2f m" % [muzzle.y, mass_top])
 
 
 ## A tower must keep looking for targets however far it is from the player. Walkers past the LOD
@@ -519,12 +567,22 @@ func _bake_tile(nav: NavService) -> NativeNavBake:
 	return bake
 
 
+class _ToastStub:
+	extends RefCounted
+	var last_message: String = ""
+
+	func show_message(text: String) -> void:
+		last_message = text
+
+
 class _FakeCity:
 	extends Node
 	var inventory: PlayerInventory = null
 	## The real picker, so the affordable-list rule is checked through the surface the player
 	## presses rather than a stub that could drift from it.
 	var picker: SiegeBuildPicker = null
+	var toast: _ToastStub = _ToastStub.new()
+	var player_pos: Vector3 = Vector3.ZERO
 	var _faction: int = int(MonsterFactionScript.Id.HUMAN)
 	## CityRoot owns this in the real game; a run registers a beacon per stone in it.
 	var beacons: BeaconRegistry = BeaconRegistryScript.new() as BeaconRegistry
@@ -542,7 +600,10 @@ class _FakeCity:
 
 	## Plate colliders follow the player, so the controller needs this every proximity tick.
 	func get_player_position() -> Vector3:
-		return Vector3.ZERO
+		return player_pos
+
+	func get_loot_toast() -> _ToastStub:
+		return toast
 
 	func open_siege_build_picker(pad_index: int, controller: Node) -> void:
 		picker.open_for_pad(pad_index, controller, Vector2.ZERO)

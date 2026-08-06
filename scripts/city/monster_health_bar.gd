@@ -1,15 +1,13 @@
-## How much of a monster is left, drawn as a strip just under its feet — or, for a siege tower, just
-## over its cap (`fit_over_structure`).
+## How much of a monster is left, drawn as a horizontal strip. Creatures wear it under the feet;
+## siege towers wear a half-size strip at the base (`fit_over_structure`).
 ##
 ## Only monsters carry one. Pedestrians and vehicles have no health pool at all — one hit removes
 ## them — so a bar under a ped would be a bar that can only ever read full.
 ##
-## Cost is the whole shape of this. Forty bodies can be alive at once, so a bar is a single
-## MeshInstance3D wearing the one QuadMesh and the one ShaderMaterial the entire army shares, and
-## the two numbers that differ per body ride on the instance instead of on a material of its own.
-## Nothing here is polled: the strip is written when the pool moves and when the body changes size,
-## and the engine draws it from there. Turning it to face the camera is the vertex shader's job, so
-## a city full of bars costs no script time at all between hits.
+## These are real world `MeshInstance3D` quads (not a screen overlay). Forty bodies can be alive at
+## once, so a bar wears the one QuadMesh and the one ShaderMaterial the entire army shares, and the
+## numbers that differ per body ride on the instance. The vertex shader billboards toward the
+## camera and pulls the quad forward so the body does not swallow it — no per-frame script aim.
 ##
 ## Size comes off the body rather than out of a table. `hit_radius` already carries the
 ## catalogue's measurement of whichever creature the unit is wearing and whatever it has grown to,
@@ -19,31 +17,34 @@ class_name MonsterHealthBar
 extends MeshInstance3D
 
 const SHADER: Shader = preload("res://assets/city/shaders/monster_health_bar.gdshader")
+const STRUCTURE_SHADER: Shader = preload(
+	"res://assets/city/shaders/monster_health_bar_structure.gdshader"
+)
 
-## Bar width, as a multiple of the body's hit radius.
+## Bar length along its fill axis, as a multiple of the body's hit radius (creatures).
 const WIDTH_PER_HIT_RADIUS := 2.0
-## Height as a fraction of the width, so the strip keeps its proportions on every body.
+## Short axis (thickness) as a fraction of the long axis.
 const HEIGHT_FRACTION := 0.16
-## Gap between the body and the near edge of the strip, as a fraction of the width — small enough
-## that the bar reads as belonging to the thing it hangs off, not floating beside it. Under the soles
-## for a creature, over the cap for a structure.
+## Gap between the body and the near edge of the strip, as a fraction of the long axis.
 const FOOT_CLEARANCE_FRACTION := 0.06
-## How far past the body's own silhouette the quad is pulled, as a fraction of the width, so a
-## bar is never read flush against the thing it is drawn over.
+## How far past the body's own silhouette the quad is pulled, as a fraction of the long axis.
 const CAMERA_PULL_MARGIN_FRACTION := 0.25
-## Frame thickness, as a fraction of the bar's height.
+## Frame thickness, as a fraction of the bar's short axis.
 const FRAME_FRACTION := 0.16
-## Past this many of its own widths the strip is a pixel nobody can read, so the engine stops
-## drawing it. Counted in widths rather than metres: a giant's bar is legible from much further
-## out than a skeleton's, and hiding both at the same distance would throw one of them away.
+## Past this many of its own long-axis lengths the strip is a pixel nobody can read.
 const SIGHT_RANGE_PER_WIDTH := 55.0
+## Towers: half the creature strip's width and thickness for the same hit radius.
+const STRUCTURE_SIZE_SCALE := 0.5
 
 static var _shared_mesh: QuadMesh = null
 static var _shared_material: ShaderMaterial = null
+static var _shared_structure_material: ShaderMaterial = null
 
 var _fraction: float = 1.0
-var _width: float = 0.0
+## Length along the fill axis (metres).
+var _long_m: float = 0.0
 var _pull: float = 0.0
+var _vertical: bool = false
 
 
 func _init() -> void:
@@ -53,6 +54,7 @@ func _init() -> void:
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	set_instance_shader_parameter("fill", _fraction)
+	set_instance_shader_parameter("vertical", 0.0)
 
 
 ## Size and place the bar off the body wearing it. `body_reach_m` is how far that body is drawn
@@ -64,51 +66,58 @@ func fit_to_body(hit_radius_m: float, body_reach_m: float) -> void:
 	if hit_radius_m <= 0.0:
 		push_error("MonsterHealthBar: %f is not a hit radius to size a bar off" % hit_radius_m)
 		return
+	_vertical = false
+	material_override = shared_material()
+	set_instance_shader_parameter("vertical", 0.0)
 	## The hit capsule is inside the drawn body by construction, so it is the floor on reach.
-	_size(hit_radius_m, maxf(body_reach_m, hit_radius_m))
+	_size_horizontal(hit_radius_m, maxf(body_reach_m, hit_radius_m), 1.0, true)
 	## Quad is centred on the node, so the centre sits half a bar plus the sole gap below y=0.
-	_place(-(_height() * 0.5 + _width * FOOT_CLEARANCE_FRACTION))
+	_place(-(_short_m() * 0.5 + _long_m * FOOT_CLEARANCE_FRACTION))
 
 
-## Hang the strip over a structure rather than under a body. `top_m` is how far the structure's mass
-## reaches above this node's origin; `hit_radius_m` still sizes the bar.
+## Horizontal strip at the base of a siege tower: centred on the pad cell under the host
+## (`voxel_size_m` down from the combat host), half as wide and thick as a creature bar.
+## `top_m` is the muzzle height — kept so callers still pass the stamp they sized the host with.
 ##
-## A siege tower is its voxel stamp: there are no meshes to measure, and its combat host stands
-## *inside* that stamp at pad level, so the under-the-soles placement every creature gets draws the
-## bar in the middle of the pillar it belongs to — half of it buried in stone. Over the cap it is in
-## open air, where the only thing that can hide it is another building.
-func fit_over_structure(hit_radius_m: float, top_m: float) -> void:
+## No `camera_pull` (that detaches the strip at an angle). The foundation cell is inside the stamp,
+## so the structure material skips depth test instead — the bar stays planted and still draws.
+func fit_over_structure(hit_radius_m: float, top_m: float, voxel_size_m: float = 0.5) -> void:
 	if hit_radius_m <= 0.0:
 		push_error("MonsterHealthBar: %f is not a hit radius to size a bar off" % hit_radius_m)
 		return
 	if top_m <= 0.0:
-		push_error("MonsterHealthBar: %f is not a height to hang a bar over" % top_m)
+		push_error("MonsterHealthBar: %f is not a tower height" % top_m)
 		return
-	## Nothing is drawn around the axis above the cap, so the strip only needs clearing off its own
-	## footprint — the radius is the whole reach.
-	_size(hit_radius_m, hit_radius_m)
-	_place(top_m + _height() * 0.5 + _width * FOOT_CLEARANCE_FRACTION)
+	if voxel_size_m <= 0.0:
+		push_error("MonsterHealthBar: %f is not a voxel size" % voxel_size_m)
+		return
+	_vertical = false
+	material_override = shared_structure_material()
+	set_instance_shader_parameter("vertical", 0.0)
+	_size_horizontal(hit_radius_m, hit_radius_m, STRUCTURE_SIZE_SCALE, false)
+	## One voxel straight down from the host — the foundation cell under the tower centre.
+	_place(-voxel_size_m)
 
 
-## Width, height and how far the quad rides toward the camera. `reach_m` is how far the thing wearing
-## the bar is drawn from its own axis.
-func _size(hit_radius_m: float, reach_m: float) -> void:
-	_width = hit_radius_m * WIDTH_PER_HIT_RADIUS
-	_pull = reach_m + _width * CAMERA_PULL_MARGIN_FRACTION
-	scale = Vector3(_width, _height(), _width)
-	visibility_range_end = _width * SIGHT_RANGE_PER_WIDTH
+func _size_horizontal(
+	hit_radius_m: float, reach_m: float, size_scale: float, use_camera_pull: bool
+) -> void:
+	_long_m = hit_radius_m * WIDTH_PER_HIT_RADIUS * size_scale
+	_pull = (reach_m + _long_m * CAMERA_PULL_MARGIN_FRACTION) if use_camera_pull else 0.0
+	scale = Vector3(_long_m, _short_m(), _long_m)
+	visibility_range_end = _long_m * SIGHT_RANGE_PER_WIDTH
 	set_instance_shader_parameter("camera_pull", _pull)
 
 
-## Centre of the quad on the wearer's own axis. Runs after `_size`: the cull box is built out of the
-## width and the pull.
+## Centre of the quad on the wearer's own axis. Runs after sizing: the cull box is built out of
+## the long axis and the pull.
 func _place(centre_y: float) -> void:
 	position = Vector3(0.0, centre_y, 0.0)
 	custom_aabb = _sweep_aabb()
 
 
-func _height() -> float:
-	return _width * HEIGHT_FRACTION
+func _short_m() -> float:
+	return _long_m * HEIGHT_FRACTION
 
 
 ## How much of the track is filled, 0..1. The instance is only written when the number moved, so
@@ -125,12 +134,16 @@ func fraction() -> float:
 	return _fraction
 
 
-## Bar width in metres, 0 until `fit_to_body`.
+func is_vertical() -> bool:
+	return _vertical
+
+
+## Length along the fill axis in metres, 0 until fitted (the strip's width).
 func width_m() -> float:
-	return _width
+	return _long_m
 
 
-## How far in front of its body the bar is drawn, in metres. 0 until `fit_to_body`.
+## How far in front of its body the bar is drawn, in metres. 0 until fitted.
 func camera_pull_m() -> float:
 	return _pull
 
@@ -165,6 +178,18 @@ static func shared_material() -> ShaderMaterial:
 	return _shared_material
 
 
+## Same look as `shared_material`, but depth-test off so a base strip inside stamp voxels still shows.
+static func shared_structure_material() -> ShaderMaterial:
+	if _shared_structure_material == null:
+		_shared_structure_material = ShaderMaterial.new()
+		_shared_structure_material.shader = STRUCTURE_SHADER
+		_shared_structure_material.resource_name = "MonsterHealthBarStructure"
+		_shared_structure_material.set_shader_parameter("bar_aspect", 1.0 / HEIGHT_FRACTION)
+		_shared_structure_material.set_shader_parameter("frame_fraction", FRAME_FRACTION)
+		_shared_structure_material.render_priority = 1
+	return _shared_structure_material
+
+
 ## `to_root` maps `node`'s own space into the space of the model `body_reach` was handed, so the
 ## model's own transform is deliberately not part of it: the answer is in authored units and the
 ## caller multiplies by whatever build and growth the body is wearing.
@@ -189,6 +214,12 @@ static func _reach_of(node: Node, to_root: Transform3D) -> float:
 ## its own stale outline pops out at the edge of the screen — so the box is the whole sphere the
 ## quad can turn and be pulled into, in the local units the node's scale is applied to.
 func _sweep_aabb() -> AABB:
-	var reach := 0.5 * _width * sqrt(1.0 + HEIGHT_FRACTION * HEIGHT_FRACTION) + _pull
-	var half := Vector3(reach / _width, reach / (_width * HEIGHT_FRACTION), reach / _width)
-	return AABB(-half, half * 2.0)
+	if _long_m <= 0.0:
+		return AABB()
+	var short_m := _short_m()
+	var reach := 0.5 * sqrt(_long_m * _long_m + short_m * short_m) + _pull
+	if _vertical:
+		var half := Vector3(reach / short_m, reach / _long_m, reach / short_m)
+		return AABB(-half, half * 2.0)
+	var half_h := Vector3(reach / _long_m, reach / short_m, reach / _long_m)
+	return AABB(-half_h, half_h * 2.0)

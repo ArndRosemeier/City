@@ -49,7 +49,7 @@ todos:
     status: completed
   - id: repair
     content: Energy-channel repair for towers and any stone, outer ones included
-    status: pending
+    status: completed
   - id: balance-sim
     content: tools/simulate_siege_waves.py — economy + scaling tuning
     status: pending

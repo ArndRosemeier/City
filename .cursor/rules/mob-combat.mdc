@@ -1,0 +1,29 @@
+---
+description: Mob/monster combat architecture — kits, hunt/aggro, siege towers. Read before changing combat code.
+globs: scripts/city/monster_combat.gd,scripts/city/undead_unit.gd,scripts/city/undead_goal_provider.gd,scripts/city/monster_faction.gd,scripts/city/combat_table.gd,scripts/city/damage_source.gd,scripts/city/monster_roster.gd,scripts/city/siege_controller.gd,scripts/city/siege_tower_catalog.gd,tools/test_monster_combat.gd,tools/test_undead_nav.gd,tools/test_siege_*.gd,tools/combat_resolve.py,assets/gamedata.json
+alwaysApply: false
+---
+
+# Mob combat
+
+Full reference: [docs/mob-combat.md](docs/mob-combat.md). Read it before changing hunt, aggro, kits, or siege tower combat. Siege repair: LMB on damaged tower/stone overrides blaster (`SiegeController.pick_repair_target` / `apply_repair`, `RepairBeamVfx`).
+
+## Ownership
+
+- `MonsterCombat` — attack choice, reach, windup, GCD, damage dealt
+- `UndeadGoalProvider` — who to fight, stand-off vs engage, aggro queue, push beacons
+- `UndeadUnit` — body, nav, health, `apply_damage_scaled` / `promote_attacker`
+- `MonsterFaction` — `is_hostile` (may damage) vs `can_acquire` (fresh prey). Siege defenders are hostile to attackers but **not** fresh prey
+
+## Hard invariants
+
+1. Melee / hunt use **surface gap**: `flat_dist − prey.hit_radius` (tower stamp volume lives on `hit_radius`).
+2. Hunt corridor aims at `standoff + prey_r` — never inside a solid stamp.
+3. Engage-in-place is a **`null` goal**, never `go_to(self)`. Immobile idle is also `null`, not wander.
+4. Aggro queue: append later hitters; do not steal the head. Drop on free/dead/leash, or corridor fail **only if** outside `engage + hit_r`.
+5. `is_instance_valid` **before** casting aggro / sticky nodes to `UndeadUnit`.
+6. FAR-tier **towers** still run the prey query; mobile FAR may skip it.
+7. `strike_structure` is theatre — stones die from contact DPS in `SiegeController`, not swings.
+8. Tower muzzle must clear the tip **cell** (ORB is solid for LOS, not just the mesh); ward holds stamp cells until death.
+9. Body hard `attacks` replaces behaviour-derived pools (siege towers).
+10. Keep `CombatTable` merge rules in sync with `tools/combat_resolve.py`.

@@ -34,6 +34,7 @@ const BodyProportionsScript := preload("res://scripts/humans/body_proportions.gd
 const EyeLaserVfxScript := preload("res://scripts/city/eye_laser_vfx.gd")
 const BlasterBoltVfxScript := preload("res://scripts/city/blaster_bolt_vfx.gd")
 const ChargedBlastVfxScript := preload("res://scripts/city/charged_blast_vfx.gd")
+const RepairBeamVfxScript := preload("res://scripts/city/repair_beam_vfx.gd")
 const BoostAuraVfxScript := preload("res://scripts/city/boost_aura_vfx.gd")
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const VoxelBodyMotionScript := preload("res://scripts/city/voxel_body_motion.gd")
@@ -322,6 +323,9 @@ var _blast_charging: bool = false
 var _blaster_holding: bool = false
 var _blaster_accum: float = 0.0
 var _live_blaster_bolts: Array[Node] = []
+## True while LMB is channelling siege repair (overrides blaster when aimed at a damaged structure).
+var _repair_holding: bool = false
+var _repair_beam: Node3D = null
 var _energy: float = 100.0
 var _health := PlayerHealthScript.new()
 ## Whose side the player is on. Mobs hunt every faction but their own, so this is the one
@@ -1787,7 +1791,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					_release_mouse_ability("fire")
 					get_viewport().set_input_as_handled()
 					return
-			if _blaster_holding and str(ctl.get_binding("beam").get("device", "")) == "key":
+			if (
+				(_blaster_holding or _repair_holding)
+				and str(ctl.get_binding("beam").get("device", "")) == "key"
+			):
 				var beam_code := int(ctl.get_binding("beam").get("code", -1)) as Key
 				if ek.keycode == beam_code:
 					_release_mouse_ability("beam")
@@ -2133,6 +2140,7 @@ func _physics_process(delta: float) -> void:
 	_update_locomotion_anim(speed, sprinting)
 	_update_footstep_sfx(delta, speed)
 	_update_blast_charge(delta, _blast_charging)
+	_update_repair(delta)
 	_update_blaster(delta)
 
 	if (
@@ -3924,16 +3932,25 @@ func _press_mouse_ability(action: String) -> void:
 		AbilityRegistry.ID_BLASTER:
 			_blast_charging = false
 			_blast_charge = 0.0
+			## Pad plates / hung doors swallow the press entirely — no repair, no bolts.
+			if _try_world_interact():
+				_mouse_hold_ability = ""
+				return
+			if _try_begin_repair():
+				return
 			_begin_blaster_hold()
 		AbilityRegistry.ID_LASER:
+			_stop_repair()
 			_stop_blaster(false)
 			_blast_charging = false
 			_blast_charge = 0.0
 			_start_laser_eyes_at_cursor()
 		AbilityRegistry.ID_CHARGED_BLAST:
+			_stop_repair()
 			_stop_blaster(false)
 			_begin_charged_blast_hold()
 		AbilityRegistry.ID_SHIELD:
+			_stop_repair()
 			_stop_blaster(false)
 			_blast_charging = false
 			## Toggle on press; release is ignored so the ward stays up until the next press.
@@ -3949,6 +3966,7 @@ func _release_mouse_ability(action: String) -> void:
 		ability_id = _ability_for_mouse(action)
 	match ability_id:
 		AbilityRegistry.ID_BLASTER:
+			_stop_repair()
 			_stop_blaster(false)
 		AbilityRegistry.ID_CHARGED_BLAST:
 			if _blast_charging:
@@ -4014,6 +4032,7 @@ func _start_laser_eyes_at_cursor() -> void:
 func _begin_blaster_hold() -> void:
 	if _camera == null or _game_over_locked:
 		return
+	_stop_repair()
 	_blast_charging = false
 	_blast_charge = 0.0
 	var audio := _city_audio()
@@ -4030,8 +4049,11 @@ func _stop_blaster(cancel_in_flight: bool) -> void:
 	_blaster_holding = false
 	_blaster_accum = 0.0
 	if (
-		_action_anim == charged_blast_idle_anim
-		or _action_anim == charged_blast_shoot_anim
+		not _repair_holding
+		and (
+			_action_anim == charged_blast_idle_anim
+			or _action_anim == charged_blast_shoot_anim
+		)
 	):
 		cancel_action()
 	if not cancel_in_flight:
@@ -4040,6 +4062,88 @@ func _stop_blaster(cancel_in_flight: bool) -> void:
 		if bolt != null and is_instance_valid(bolt) and bolt.has_method("cancel"):
 			bolt.call("cancel")
 	_live_blaster_bolts.clear()
+
+
+## Siege Quarter: LMB on a damaged tower / outer stone / Lodestone channels mend instead of
+## the blaster. Range + LOS live on SiegeController; energy and pose live here.
+func _try_begin_repair() -> bool:
+	if _camera == null or _game_over_locked:
+		return false
+	var siege := _active_siege()
+	if siege == null:
+		return false
+	var aim := _aim_ray_at_cursor(false)
+	var from: Vector3 = aim["cam_from"] as Vector3
+	var dir: Vector3 = aim["cam_dir"] as Vector3
+	var target: Dictionary = siege.pick_repair_target(from, dir)
+	if target.is_empty():
+		return false
+	_stop_blaster(false)
+	_repair_holding = true
+	_ensure_spell_charge_pose()
+	_ensure_repair_beam()
+	var hand := _spell_hand_origin()
+	_repair_beam.call("start", hand, target["point"] as Vector3)
+	return true
+
+
+func _stop_repair() -> void:
+	var was := _repair_holding
+	_repair_holding = false
+	if _repair_beam != null and is_instance_valid(_repair_beam) and _repair_beam.has_method("stop"):
+		_repair_beam.call("stop")
+	if (
+		was
+		and not _blaster_holding
+		and (
+			_action_anim == charged_blast_idle_anim
+			or _action_anim == charged_blast_shoot_anim
+		)
+	):
+		cancel_action()
+
+
+func _ensure_repair_beam() -> void:
+	if _repair_beam != null and is_instance_valid(_repair_beam):
+		return
+	_repair_beam = RepairBeamVfxScript.new() as Node3D
+	_repair_beam.name = "RepairBeam"
+	add_child(_repair_beam)
+
+
+func _update_repair(delta: float) -> void:
+	if not _repair_holding:
+		return
+	if _game_over_locked or not _is_beam_held():
+		_stop_repair()
+		return
+	var siege := _active_siege()
+	if siege == null:
+		_stop_repair()
+		return
+	var aim := _aim_ray_at_cursor(false)
+	var from: Vector3 = aim["cam_from"] as Vector3
+	var dir: Vector3 = aim["cam_dir"] as Vector3
+	var target: Dictionary = siege.pick_repair_target(from, dir)
+	if target.is_empty():
+		_stop_repair()
+		return
+	var energy_rate: float = float(siege.call("repair_energy_per_sec"))
+	if not try_spend_energy(energy_rate * delta):
+		_stop_repair()
+		return
+	var hp_rate: float = float(siege.call("repair_hp_per_sec"))
+	siege.apply_repair(target, hp_rate * delta)
+	_ensure_spell_charge_pose()
+	_ensure_repair_beam()
+	_repair_beam.call("set_endpoints", _spell_hand_origin(), target["point"] as Vector3)
+
+
+func _active_siege() -> SiegeController:
+	var city := _city_root()
+	if city == null or not city.has_method("active_siege_run"):
+		return null
+	return city.active_siege_run()
 
 
 func _update_blaster(delta: float) -> void:

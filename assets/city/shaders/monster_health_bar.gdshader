@@ -2,10 +2,11 @@ shader_type spatial;
 render_mode unshaded, cull_back, shadows_disabled;
 
 /// The strip of health a monster has left, drawn just under its feet and turned to face the camera.
+/// Siege towers use the same strip stood on end (`vertical` instance flag): fill runs bottom→top.
 ///
 /// One material draws every bar in the city. How full a bar is, and how far in front of its own
 /// body it floats, are instance uniforms rather than material ones, so forty living monsters
-/// cost eighty floats instead of forty materials — the same reason `creature_palette.gdshader`
+/// cost a handful of floats instead of forty materials — the same reason `creature_palette.gdshader`
 /// carries its band per instance.
 ///
 /// The billboard is the construction BaseMaterial3D generates for BILLBOARD_ENABLED with
@@ -18,14 +19,16 @@ render_mode unshaded, cull_back, shadows_disabled;
 /// completely. The slide stops `MIN_VIEW_DEPTH` short of the camera, so walking up to a giant
 /// whose bar is pulled several metres forward can never push that bar behind the near plane.
 
-/// Width over height. Set from `monster_health_bar.gd`, which owns the proportion.
+/// Long axis over short axis. Set from `monster_health_bar.gd`, which owns the proportion.
 uniform float bar_aspect = 6.25;
-/// Frame thickness as a fraction of the bar's height, divided down on the long axis so the
+/// Frame thickness as a fraction of the bar's short axis, divided down on the long axis so the
 /// border is the same number of metres all the way round.
 uniform float frame_fraction : hint_range(0.0, 0.5) = 0.16;
 
 instance uniform float fill = 1.0;
 instance uniform float camera_pull = 0.0;
+/// 0 = horizontal creature strip (fill along UV.x). 1 = vertical tower strip (fill up UV.y).
+instance uniform float vertical = 0.0;
 
 const float MIN_VIEW_DEPTH = 0.6;
 const vec3 FRAME_COLOR = vec3(0.03, 0.03, 0.04);
@@ -54,12 +57,24 @@ void vertex() {
 }
 
 void fragment() {
-	float frame_x = frame_fraction / max(bar_aspect, 0.0001);
-	float inside = (
-		step(frame_x, UV.x) * step(UV.x, 1.0 - frame_x)
-		* step(frame_fraction, UV.y) * step(UV.y, 1.0 - frame_fraction)
-	);
-	float along = clamp((UV.x - frame_x) / max(1.0 - 2.0 * frame_x, 0.0001), 0.0, 1.0);
+	float long_frame = frame_fraction / max(bar_aspect, 0.0001);
+	float short_frame = frame_fraction;
+	float inside;
+	float along;
+	if (vertical > 0.5) {
+		/// QuadMesh UV.y is 1 at the bottom and 0 at the top — flip so fill grows upward.
+		inside = (
+			step(short_frame, UV.x) * step(UV.x, 1.0 - short_frame)
+			* step(long_frame, UV.y) * step(UV.y, 1.0 - long_frame)
+		);
+		along = clamp((1.0 - UV.y - long_frame) / max(1.0 - 2.0 * long_frame, 0.0001), 0.0, 1.0);
+	} else {
+		inside = (
+			step(long_frame, UV.x) * step(UV.x, 1.0 - long_frame)
+			* step(short_frame, UV.y) * step(UV.y, 1.0 - short_frame)
+		);
+		along = clamp((UV.x - long_frame) / max(1.0 - 2.0 * long_frame, 0.0001), 0.0, 1.0);
+	}
 	float left = clamp(fill, 0.0, 1.0);
 	float spent = step(along, left);
 	vec3 bar = mix(FILL_LOW, FILL_HALF, smoothstep(0.15, 0.5, left));

@@ -37796,6 +37796,9 @@
     "hp_growth_per_wave": 0.12,
     "damage_growth_per_wave": 0.08,
     "lodestone_dps_per_attacker": 8.0,
+    "repair_energy_per_sec": 2.0,
+    "repair_hp_per_sec": 5.0,
+    "repair_range_m": 18.0,
     "source_factions": [
       "undead",
       "horde",
@@ -38477,8 +38480,8 @@
       "stamp": {
         "height": 5,
         "radius": 1,
-        "mat": 25,
-        "cap_mat": 28
+        "mat": 66,
+        "cap_mat": 271
       }
     },
     "resin_vat": {
@@ -38491,10 +38494,10 @@
         "gem_amber": 1
       },
       "stamp": {
-        "height": 4,
+        "height": 5,
         "radius": 2,
-        "mat": 14,
-        "cap_mat": 14
+        "mat": 59,
+        "cap_mat": 271
       }
     },
     "arc_pylon": {
@@ -38509,8 +38512,8 @@
       "stamp": {
         "height": 7,
         "radius": 1,
-        "mat": 26,
-        "cap_mat": 26
+        "mat": 60,
+        "cap_mat": 271
       }
     },
     "frost_lance": {
@@ -38525,8 +38528,8 @@
       "stamp": {
         "height": 8,
         "radius": 1,
-        "mat": 13,
-        "cap_mat": 6
+        "mat": 68,
+        "cap_mat": 271
       }
     },
     "bloom_mortar": {
@@ -38539,10 +38542,10 @@
         "gem_emerald": 1
       },
       "stamp": {
-        "height": 5,
+        "height": 6,
         "radius": 2,
-        "mat": 5,
-        "cap_mat": 5
+        "mat": 63,
+        "cap_mat": 271
       }
     },
     "prism_spire": {
@@ -38557,8 +38560,8 @@
       "stamp": {
         "height": 9,
         "radius": 1,
-        "mat": 26,
-        "cap_mat": 28
+        "mat": 70,
+        "cap_mat": 271
       }
     }
   }

@@ -172,10 +172,10 @@ func _check_material_tables() -> void:
 			% [VoxelMaterial.LEAVES_DARK, VoxelMaterial.BRANCH_Z]
 		)
 		return
-	if VoxelMaterial.COUNT != VoxelMaterial.CLOUDSTONE + 1:
+	if VoxelMaterial.COUNT != VoxelMaterial.ORB + 1:
 		_fail(
-			"FAIL COUNT=%d must be CLOUDSTONE=%d + 1"
-			% [VoxelMaterial.COUNT, VoxelMaterial.CLOUDSTONE]
+			"FAIL COUNT=%d must be ORB=%d + 1"
+			% [VoxelMaterial.COUNT, VoxelMaterial.ORB]
 		)
 		return
 	if VoxelMaterial.is_destructible(VoxelMaterial.ARENA_SHELL):
@@ -199,6 +199,7 @@ func _check_material_tables() -> void:
 		["BRANCH_Z", VoxelMaterial.BRANCH_Z],
 		["LEAVES_DARK", VoxelMaterial.LEAVES_DARK],
 		["CLOUDSTONE", VoxelMaterial.CLOUDSTONE],
+		["ORB", VoxelMaterial.ORB],
 		["COUNT", VoxelMaterial.COUNT],
 		["TIMBER", VoxelMaterial.TIMBER],
 	]:

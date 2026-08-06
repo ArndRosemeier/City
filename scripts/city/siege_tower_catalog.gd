@@ -35,6 +35,8 @@ class Def:
 	var stamp_top_oy: int = 0
 	## Authored stamp radius in voxels (manhattan diamond). Drives `structure_hit_radius_m`.
 	var stamp_radius_vox: int = 1
+	## Tip material (always `ORB` for live towers). Used by `muzzle_height_m`.
+	var cap_mat: int = VoxelMaterial.ORB
 
 
 static var _by_id: Dictionary = {}
@@ -95,6 +97,8 @@ static func ensure_loaded() -> void:
 			assert(false, "SiegeTowerCatalog: empty stamp")
 			continue
 		d.stamp_top_oy = _stamp_top_oy(d.voxels)
+		if typeof(stamp_raw) == TYPE_DICTIONARY:
+			d.cap_mat = int((stamp_raw as Dictionary).get("cap_mat", VoxelMaterial.ORB))
 		_by_id[id] = d
 		_order.append(id)
 
@@ -124,12 +128,15 @@ static func ids() -> PackedStringArray:
 
 
 ## Height above the pad surface point (`pad_world`, as handed to `stamp_at`) at which a tower's
-## muzzle clears the mass it just painted, in metres.
+## muzzle sits, in metres.
 ##
 ## The muzzle is the eye: `UndeadGoalProvider` probes voxel line of sight from it to pick prey, and
 ## a probe that starts inside solid rock reaches nothing. A tower's combat host stands *within* its
 ## own stamp, so a muzzle derived from body span the way a creature's is would bury the eye and the
 ## tower would never acquire, never fire, and never look broken in any log.
+##
+## The tip cell is `ORB` — a sphere mesh, but a full solid voxel for LOS. The eye must sit in the
+## air above that cell's top face, not in the mesh crown inside the cell.
 static func muzzle_height_m(def: RefCounted, voxel_size: float) -> float:
 	if def == null:
 		push_error("SiegeTowerCatalog.muzzle_height_m: def required")
@@ -214,31 +221,59 @@ static func stamp_at(
 	return written
 
 
-## Compact pillar on the pad: solid footprint + a lit/coloured cap.
+## Futuristic fractal spire: tapering glowing shaft + a single ORB tip that fires.
+##
+## Body `mat` must be a fractal-display id (band / glow / interior). Cap must be `ORB` — the
+## reusable energy sphere, not a GEM_* (those are collectible ore).
 static func _stamp_voxels(stamp_v: Variant, tower_id: String) -> PackedInt32Array:
 	if typeof(stamp_v) != TYPE_DICTIONARY:
 		push_error("SiegeTowerCatalog: '%s' stamp must be an object" % tower_id)
 		return PackedInt32Array()
 	var stamp: Dictionary = stamp_v
-	var height := maxi(int(stamp.get("height", 0)), 1)
+	## Height includes the orb layer. Need at least shaft + tip.
+	var height := maxi(int(stamp.get("height", 0)), 2)
 	var radius := maxi(int(stamp.get("radius", 1)), 0)
-	var mat := int(stamp.get("mat", VoxelMaterial.STONE))
-	var cap_mat := int(stamp.get("cap_mat", VoxelMaterial.GLASS_LIT))
+	var mat := int(stamp.get("mat", VoxelMaterial.FRACTAL_GLOW))
+	var cap_mat := int(stamp.get("cap_mat", VoxelMaterial.ORB))
 	if VoxelMaterial.is_gem(mat) or VoxelMaterial.is_gem(cap_mat):
 		push_error(
 			"SiegeTowerCatalog: '%s' stamp uses a collectible gem material" % tower_id
 		)
 		assert(false, "SiegeTowerCatalog: gem stamp material")
 		return PackedInt32Array()
+	if not VoxelMaterial.is_fractal_display(mat):
+		push_error(
+			"SiegeTowerCatalog: '%s' body mat %d must be fractal-display" % [tower_id, mat]
+		)
+		assert(false, "SiegeTowerCatalog: non-fractal tower body")
+		return PackedInt32Array()
+	if cap_mat != VoxelMaterial.ORB:
+		push_error(
+			"SiegeTowerCatalog: '%s' tip must be ORB, got %d" % [tower_id, cap_mat]
+		)
+		assert(false, "SiegeTowerCatalog: non-orb tower tip")
+		return PackedInt32Array()
 	var packed := PackedInt32Array()
-	for y in range(height):
-		var use_mat := cap_mat if y == height - 1 else mat
-		for dx in range(-radius, radius + 1):
-			for dz in range(-radius, radius + 1):
-				if absi(dx) + absi(dz) > radius + 1:
+	var shaft_h := height - 1
+	for y in range(shaft_h):
+		## Taper the diamond from the authored base radius down to a single column.
+		var t := 0.0 if shaft_h <= 1 else float(y) / float(shaft_h - 1)
+		var layer_r := maxi(0, int(round(lerpf(float(radius), 0.0, t))))
+		for dx in range(-layer_r, layer_r + 1):
+			for dz in range(-layer_r, layer_r + 1):
+				var man := absi(dx) + absi(dz)
+				if man > layer_r:
+					continue
+				## Fat layers keep a plus silhouette — open corners read as a pylon, not a brick.
+				if layer_r >= 2 and dx != 0 and dz != 0 and man > 1:
 					continue
 				packed.append(dx)
 				packed.append(y)
 				packed.append(dz)
-				packed.append(use_mat)
+				packed.append(mat)
+	## Firing tip: one orb centred on the pad.
+	packed.append(0)
+	packed.append(shaft_h)
+	packed.append(0)
+	packed.append(cap_mat)
 	return packed

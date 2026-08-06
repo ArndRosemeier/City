@@ -14,8 +14,10 @@ const PANEL_W := 460.0
 const BODY := (
 	"Four outer stones shield the Lodestone. Monsters will try to destroy them — "
 	+ "the centre cannot fall while any still stand.\n\n"
-	+ "Hell gates send waves on a clock. Towers are built from pads and paid from your bag. "
-	+ "Kill loot goes into a pot.\n\n"
+	+ "Hell gates send waves on a clock. The forecast names a bearing, not a single mouth: "
+	+ "most of the wave pours from that arc, but neighbouring gates still spit harassment. "
+	+ "Build for a wide front, not one doorway.\n\n"
+	+ "Towers are built from pads and paid from your bag. Kill loot goes into a pot.\n\n"
 	+ "Bank the pot at the Lodestone when the ground around it is clear. Wait too long and "
 	+ "you may not clear it again."
 )

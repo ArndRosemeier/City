@@ -147,12 +147,15 @@ const CAVE_CAGE_LINE := 268
 const CAVE_CAGE_GLASS := 269
 ## Crafted cloud block — soft gravity pad; billowy shader, not ore.
 const CLOUDSTONE := 270
+## Glowing energy sphere — siege tower tips, landmarks, props. Not a GEM_* and not a
+## fractal-display cell (hitting it must not start the Mandelbrot cascade).
+const ORB := 271
 ## Legacy aliases (first kit) — prefer RoomPropCatalog.id_for_stem.
 const PROP_CRATE := PROP_FIRST
 const PROP_BARREL := PROP_FIRST + 1
 const PROP_CHAIR := PROP_FIRST + 2
 ## Live palette size (type channel + nav tables are full 16-bit — raise freely with new ids).
-const COUNT := 271
+const COUNT := 272
 const FRACTAL_BAND_COUNT := 16
 const FRACTAL_BAND_FIRST := FRACTAL_BAND_0
 const FRACTAL_BAND_LAST := FRACTAL_BAND_15
@@ -240,7 +243,7 @@ static func is_diggable_substrate(id: int) -> bool:
 ## collapsing column. Stone and cave fabric cascade like built structure.
 static func is_self_supporting_terrain(id: int) -> bool:
 	match id:
-		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, ZOO_PLATE_RIM, CLOUDSTONE:
+		DIRT, GRAVEL, PARK, GRAVE_SOIL, GRAVE_PATH, FRACTAL_GLOW, FRACTAL_INTERIOR, ZOO_PLATE_RIM, CLOUDSTONE, ORB:
 			return true
 		_:
 			return is_fractal_band(id) or is_zoo_turf(id)
@@ -324,6 +327,7 @@ static func hardness(id: int) -> Hardness:
 	if (
 		id == METEOR_ROCK or id == INFECTION or id == INFECTION_LEAD
 		or id == FRACTAL_GLOW or id == FRACTAL_INTERIOR or is_fractal_band(id)
+		or id == ORB
 	):
 		return Hardness.EXOTIC
 	if (
@@ -643,6 +647,9 @@ static func color(id: int) -> Color:
 			return Color(0.16, 0.15, 0.18)
 		CLOUDSTONE:
 			return Color(0.86, 0.92, 1.0, 0.92)
+		ORB:
+			## Hot white core — reads as an energy node on any coloured fractal shaft.
+			return Color(0.92, 0.96, 1.0)
 		_:
 			if is_room_prop(id):
 				return Color(0.55, 0.4, 0.26)

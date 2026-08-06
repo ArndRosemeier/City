@@ -67,6 +67,15 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 				false,
 				AABB(Vector3(0.12, 0.0, 0.12), Vector3(0.76, 0.62, 0.76))
 			)
+		VoxelMaterial.ORB:
+			## Energy sphere tip / prop. Culls off so a shaft under it keeps its top face.
+			return _mesh_model(
+				id,
+				_mesh_orb(),
+				true,
+				false,
+				AABB(Vector3(0.12, 0.12, 0.12), Vector3(0.76, 0.76, 0.76))
+			)
 		VoxelMaterial.GLASS:
 			## Engine cube geometry — custom full-cell meshes were wound such that
 			## cull_back dropped every face (windows read as air holes). Opaque cube
@@ -641,6 +650,15 @@ static func _mesh_cloudstone() -> ArrayMesh:
 	return st.commit()
 
 
+## Single energy sphere filling most of the cell — siege tower tip and reusable prop.
+static func _mesh_orb() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_emit_uv_sphere(st, Vector3(0.5, 0.5, 0.5), 0.42, 14, 10)
+	st.index()
+	return st.commit()
+
+
 static func _emit_uv_sphere(
 	st: SurfaceTool, center: Vector3, radius: float, segments: int, rings: int
 ) -> void:
@@ -807,6 +825,7 @@ static var _gem_mat_cache: Dictionary = {}  # gem id → ShaderMaterial
 static var _fractal_glow_mat: ShaderMaterial = null
 static var _fractal_band_mat_cache: Dictionary = {}  # band id → ShaderMaterial
 static var _fractal_interior_mat: ShaderMaterial = null
+static var _orb_mat: ShaderMaterial = null
 static var _meteor_rock_mat: ShaderMaterial = null
 static var _gameboy_mat: ShaderMaterial = null
 static var _zoo_fence_line_mat: ShaderMaterial = null
@@ -830,6 +849,8 @@ static func block_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
+	if id == VoxelMaterial.ORB:
+		return orb_material()
 	if id == VoxelMaterial.ZOO_FENCE_LINE or id == VoxelMaterial.CAVE_CAGE_LINE:
 		return zoo_fence_line_material()
 	if VoxelMaterial.is_zoo_turf(id):
@@ -857,6 +878,8 @@ static func debris_material_for(id: int) -> Material:
 		return fractal_interior_material()
 	if VoxelMaterial.is_fractal_band(id):
 		return fractal_band_material(id)
+	if id == VoxelMaterial.ORB:
+		return orb_material()
 	if id == VoxelMaterial.ZOO_FENCE_LINE or id == VoxelMaterial.CAVE_CAGE_LINE:
 		return zoo_fence_line_material()
 	if VoxelMaterial.is_zoo_turf(id):
@@ -1033,6 +1056,25 @@ static func fractal_glow_material() -> ShaderMaterial:
 	mat.set_shader_parameter("metallic_base", 0.2)
 	mat.set_shader_parameter("roughness_base", 0.18)
 	_fractal_glow_mat = mat
+	return mat
+
+
+## Hot white energy node — brighter and faster pulse than ore so it reads as a firing tip.
+static func orb_material() -> ShaderMaterial:
+	if _orb_mat != null:
+		return _orb_mat
+	var shader: Shader = load("res://assets/city/shaders/voxel_gem.gdshader") as Shader
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("base_color", VoxelMaterial.color(VoxelMaterial.ORB))
+	mat.set_shader_parameter("emission_color", Color(0.85, 0.95, 1.0))
+	mat.set_shader_parameter("emission_base", 2.4)
+	mat.set_shader_parameter("emission_peak", 7.5)
+	mat.set_shader_parameter("pulse_hz", 1.6)
+	mat.set_shader_parameter("sparkle_scale", 5.5)
+	mat.set_shader_parameter("metallic_base", 0.05)
+	mat.set_shader_parameter("roughness_base", 0.12)
+	_orb_mat = mat
 	return mat
 
 

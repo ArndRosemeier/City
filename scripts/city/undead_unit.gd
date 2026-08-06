@@ -707,6 +707,29 @@ func apply_damage_scaled(
 	return false
 
 
+## Restore up to `amount` HP. Returns how much was actually applied (0 at full / dead).
+## Used by the Siege Quarter repair channel — towers have no passive regen.
+func apply_heal(amount: float) -> float:
+	if not _alive:
+		return 0.0
+	if amount <= 0.0:
+		push_error(
+			"UndeadUnit %s: apply_heal got non-positive amount %f" % [name, amount]
+		)
+		assert(false, "UndeadUnit: bad heal amount")
+		return 0.0
+	if _health_max <= 0.0:
+		return 0.0
+	var room := _health_max - _health
+	if room <= 0.0:
+		return 0.0
+	var add := minf(amount, room)
+	_health += add
+	health_changed.emit(_health, _health_max)
+	_update_health_bar()
+	return add
+
+
 func _promote_attacker_after_hit(source: DamageSource.Id, attacker: Node) -> void:
 	if _provider == null:
 		return
@@ -1036,10 +1059,12 @@ func _update_health_bar() -> void:
 	if _health_bar == null:
 		return
 	if _siege_tower:
-		## There is no model to measure and the host stands inside its own stamp at pad level, so
-		## the strip hangs over the mass instead of under feet that are buried in it. The muzzle is
-		## the one height a tower knows about itself, and it already clears the cap.
-		_health_bar.fit_over_structure(hit_radius(), _muzzle_height_m)
+		## Half-size horizontal strip on the foundation cell under the host.
+		var vox := 0.5
+		var nav := NavService.instance()
+		if nav != null and nav.is_configured():
+			vox = nav.voxel_size()
+		_health_bar.fit_over_structure(hit_radius(), _muzzle_height_m, vox)
 	else:
 		_health_bar.fit_to_body(hit_radius(), body_reach_m())
 	_health_bar.set_fraction(health_fraction())

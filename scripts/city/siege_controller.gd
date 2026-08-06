@@ -66,11 +66,11 @@ const TOWER_HOST_LIFT_M := 0.6
 ## Plates built per frame. A quarter carries hundreds of build sites and each plate is eight
 ## nodes, so standing them all up in the frame the run starts is a visible hitch.
 const PLATES_PER_FRAME := 8
-## How close the player must be for a plate's collider to go live, and how often that is
-## re-evaluated. The colliders cannot simply stay on: `CityWalker._try_world_interact` raycasts
-## 100 m and a `Ui3D` hit swallows the shot before it fires, so a field of live plates would eat
-## every shot aimed low. View culling (`Ui3D.set_view_distance_m`) is separate and much longer.
-const PLATE_TOUCH_M := 5.0
+## How close the player must be to *operate* a pad (open the build picker). Colliders go live
+## farther out — out to the plate's view distance — so aiming a distant "+" swallows the shot
+## and toasts "too far" instead of carving the street. A field of always-on colliders would still
+## eat every low aim across the quarter, so detection is still proximity-gated.
+const PLATE_TOUCH_M := 10.0
 const PLATE_PROXIMITY_INTERVAL_SEC := 0.2
 ## A wave always shows up, even when the soft target is already met by bodies chewing a stone
 ## somewhere the player abandoned. Zero-body waves would switch the siege off by inaction.
@@ -175,6 +175,9 @@ var _spawn_interval_sec: float = 0.55
 var _hp_growth: float = 0.12
 var _damage_growth: float = 0.08
 var _lodestone_dps_per_attacker: float = 8.0
+var _repair_energy_per_sec: float = 2.0
+var _repair_hp_per_sec: float = 5.0
+var _repair_range_m: float = 18.0
 var _source_factions: PackedStringArray = PackedStringArray()
 var _roster: PackedStringArray = PackedStringArray()
 var _roster_weights: PackedFloat32Array = PackedFloat32Array()
@@ -327,6 +330,18 @@ func lodestone_world_pos() -> Vector3:
 		float(w.y) * voxel_size,
 		(float(w.z) + 0.5) * voxel_size
 	)
+
+
+func repair_energy_per_sec() -> float:
+	return _repair_energy_per_sec
+
+
+func repair_hp_per_sec() -> float:
+	return _repair_hp_per_sec
+
+
+func repair_range_m() -> float:
+	return _repair_range_m
 
 
 ## Compact stats for SiegeHud. `active` is false outside DEPLOY/RUNNING.
@@ -1094,6 +1109,168 @@ func _clear_shield_arcs() -> void:
 		stone.arc = null
 
 
+# --- Repair channel ---------------------------------------------------------
+
+## Best damaged tower / stone along the aim ray within repair range. Empty when nothing
+## needs mending or the aim misses. `point` is the beam attach (mid-mass), not the pad foot.
+##
+## Keys: `kind` ("tower"|"stone"), `unit` / `stone`, `point`, `t` (metres along the ray).
+##
+## LOS is tested to the near-side contact on the aim volume — never to the mass centre. Centres
+## sit inside solid stamp / crystal voxels, and `has_voxel_line_of_sight` treats that as blocked,
+## which used to make every tower aim fall through to the blaster.
+func pick_repair_target(
+	from: Vector3, dir: Vector3, max_range_m: float = -1.0
+) -> Dictionary:
+	if not is_running():
+		return {}
+	var aim := dir.normalized()
+	if aim.length_squared() < 0.0001:
+		return {}
+	var max_m := max_range_m if max_range_m > 0.0 else _repair_range_m
+	var best_t := INF
+	var best: Dictionary = {}
+	for stone: StoneState in _stones:
+		if not stone.alive or stone.hp >= stone.hp_max - 0.01:
+			continue
+		var centre := _stone_repair_point(stone)
+		var hit_r := _stone_repair_aim_radius_m(stone)
+		var t := _ray_sphere_t(from, aim, centre, hit_r, max_m)
+		if t >= best_t:
+			continue
+		if not _repair_has_los(from, from + aim * t):
+			continue
+		best_t = t
+		best = {
+			"kind": "stone",
+			"stone": stone,
+			"unit": null,
+			"point": centre,
+			"t": t,
+		}
+	for unit: UndeadUnit in _towers:
+		if unit == null or not is_instance_valid(unit) or not unit.is_alive():
+			continue
+		if unit.health() >= unit.health_max() - 0.01:
+			continue
+		var attach := _tower_repair_point(unit)
+		var hit_r := maxf(unit.hit_radius(), 0.6)
+		## Towers are tall thin stamps; a single sphere at host height misses any aim at the shaft
+		## or ORB tip. March spheres from foot to muzzle so the whole spire is aimable.
+		var t := _ray_tower_shaft_t(from, aim, unit, hit_r, max_m)
+		if t >= best_t:
+			continue
+		if not _repair_has_los(from, from + aim * t):
+			continue
+		best_t = t
+		best = {
+			"kind": "tower",
+			"stone": null,
+			"unit": unit,
+			"point": attach,
+			"t": t,
+		}
+	return best
+
+
+## Apply `amount` HP to a pick_repair_target result. Returns healed points.
+func apply_repair(target: Dictionary, amount: float) -> float:
+	if target.is_empty() or amount <= 0.0:
+		return 0.0
+	var kind := str(target.get("kind", ""))
+	if kind == "stone":
+		return heal_stone(target.get("stone") as StoneState, amount)
+	if kind == "tower":
+		var unit := target.get("unit") as UndeadUnit
+		if unit == null or not is_instance_valid(unit):
+			return 0.0
+		return unit.apply_heal(amount)
+	push_error("SiegeController.apply_repair: unknown kind '%s'" % kind)
+	return 0.0
+
+
+func heal_stone(stone: StoneState, amount: float) -> float:
+	if stone == null or not stone.alive:
+		return 0.0
+	if amount <= 0.0:
+		push_error("SiegeController.heal_stone: non-positive amount %f" % amount)
+		assert(false, "SiegeController: bad heal amount")
+		return 0.0
+	var room := stone.hp_max - stone.hp
+	if room <= 0.0:
+		return 0.0
+	var add := minf(amount, room)
+	stone.hp += add
+	return add
+
+
+func _stone_repair_point(stone: StoneState) -> Vector3:
+	return stone.pos + Vector3(0.0, stone.apex_m * 0.45, 0.0)
+
+
+func _tower_repair_point(unit: UndeadUnit) -> Vector3:
+	## Mid-shaft attach so the green beam meets the stamp, not the buried host capsule.
+	var tip := unit.muzzle_world()
+	return (unit.global_position + tip) * 0.5
+
+
+## Crystal shell, not the full chewer ring — aiming the vuln radius would soft-lock repair
+## from half a street away.
+func _stone_repair_aim_radius_m(stone: StoneState) -> float:
+	return maxf(stone.vuln_radius_m - LODESTONE_RADIUS_SLACK_M, 1.2)
+
+
+## LOS to the near face of the aim volume. Pull back a half-voxel so the probe ends in air
+## just outside the stamp / crystal rather than in the first solid cell of the shell.
+func _repair_has_los(from: Vector3, contact: Vector3) -> bool:
+	if _city == null or not is_instance_valid(_city):
+		return true
+	if not _city.has_method("has_voxel_line_of_sight"):
+		return true
+	var delta := contact - from
+	var dist := delta.length()
+	if dist < 0.05:
+		return true
+	var pull := minf(voxel_size * 0.55, dist * 0.5)
+	var to := from + delta * ((dist - pull) / dist)
+	return bool(_city.call("has_voxel_line_of_sight", from, to))
+
+
+## Closest intersection of ray `from + t*dir` with a sphere. INF when none in [0, max_m].
+func _ray_sphere_t(
+	from: Vector3, dir: Vector3, centre: Vector3, radius: float, max_m: float
+) -> float:
+	var to_c := from - centre
+	var b := to_c.dot(dir)
+	var c := to_c.dot(to_c) - radius * radius
+	var disc := b * b - c
+	if disc < 0.0:
+		return INF
+	var s := sqrt(disc)
+	var t0 := -b - s
+	var t1 := -b + s
+	var t := t0 if t0 >= 0.0 else t1
+	if t < 0.0 or t > max_m:
+		return INF
+	return t
+
+
+## Foot→muzzle shaft as stacked spheres (same radius as the stamp hit volume).
+func _ray_tower_shaft_t(
+	from: Vector3, dir: Vector3, unit: UndeadUnit, radius: float, max_m: float
+) -> float:
+	var foot := unit.global_position
+	var tip := unit.muzzle_world()
+	var best := INF
+	const SAMPLES := 5
+	for i in range(SAMPLES):
+		var p := foot.lerp(tip, float(i) / float(SAMPLES - 1))
+		var t := _ray_sphere_t(from, dir, p, radius, max_m)
+		if t < best:
+			best = t
+	return best
+
+
 # --- Stone damage -----------------------------------------------------------
 
 ## Contact damage on every living stone. The centre is skipped while any outer stone stands: bodies
@@ -1134,8 +1311,9 @@ func _chewers_within(aim: Vector3, radius_m: float) -> int:
 	return n
 
 
-## An outer stone is gone for the rest of the run. There is no repair and no rebuild: the four are
-## the run's clock, and the last one falling is what puts the Lodestone in reach.
+## An outer stone is gone for the rest of the run. Repair only works while it still stands —
+## once it falls there is no rebuild. The four are the run's clock; the last one falling is what
+## puts the Lodestone in reach.
 func _on_stone_destroyed(stone: StoneState) -> void:
 	if stone.is_centre:
 		_on_lodestone_destroyed()
@@ -1233,6 +1411,9 @@ func _read_constants() -> void:
 	_hp_growth = GameData.siege_float("hp_growth_per_wave")
 	_damage_growth = GameData.siege_float("damage_growth_per_wave")
 	_lodestone_dps_per_attacker = GameData.siege_float("lodestone_dps_per_attacker")
+	_repair_energy_per_sec = GameData.siege_float("repair_energy_per_sec")
+	_repair_hp_per_sec = GameData.siege_float("repair_hp_per_sec")
+	_repair_range_m = GameData.siege_float("repair_range_m")
 	var raw: Variant = GameData.siege().get("source_factions", [])
 	_source_factions = PackedStringArray()
 	if typeof(raw) == TYPE_ARRAY:
@@ -1330,7 +1511,7 @@ func _build_pad_panel(pad_index: int) -> void:
 	_pad_panels[pad_index] = panel
 
 
-## Colliders follow the player, meshes do not — the plate's own view distance handles drawing.
+## Colliders follow the player out to draw range; operating still needs PLATE_TOUCH_M.
 func _tick_plate_proximity(delta: float) -> void:
 	_plate_prox_acc += delta
 	if _plate_prox_acc < PLATE_PROXIMITY_INTERVAL_SEC:
@@ -1339,12 +1520,13 @@ func _tick_plate_proximity(delta: float) -> void:
 	if _pad_panels.is_empty():
 		return
 	var player := _player_position()
-	var reach2 := PLATE_TOUCH_M * PLATE_TOUCH_M
+	var detect_m: float = float(SiegePadPanelScript.VIEW_DISTANCE_M)
+	var detect2 := detect_m * detect_m
 	for key: Variant in _pad_panels.keys():
 		var panel := _pad_panels[key] as Node3D
 		if panel == null or not is_instance_valid(panel) or not panel.visible:
 			continue
-		var near := panel.global_position.distance_squared_to(player) <= reach2
+		var near := panel.global_position.distance_squared_to(player) <= detect2
 		if bool(panel.call("is_collision_enabled")) != near:
 			panel.call("set_collision_enabled", near)
 
@@ -1403,6 +1585,7 @@ func _refresh_pad_panels() -> void:
 
 
 ## The "+" plate was pressed: hand the pad to the screen-space picker at the mouse.
+## Hits beyond operate range still swallow the shot (collider is live) but only toast.
 func _on_pad_pressed(pad_index: int) -> void:
 	if not is_running():
 		return
@@ -1412,7 +1595,23 @@ func _on_pad_pressed(pad_index: int) -> void:
 		push_error("SiegeController._on_pad_pressed: no city")
 		assert(false, "SiegeController: pad press without a city")
 		return
+	var panel := _pad_panels.get(pad_index, null) as Node3D
+	if panel != null and is_instance_valid(panel):
+		var dist := panel.global_position.distance_to(_player_position())
+		if dist > PLATE_TOUCH_M:
+			_toast_too_far_to_operate()
+			return
 	_city.call("open_siege_build_picker", pad_index, self)
+
+
+func _toast_too_far_to_operate() -> void:
+	if _city == null or not is_instance_valid(_city) or not _city.has_method("get_loot_toast"):
+		return
+	var toast := _city.call("get_loot_toast") as Object
+	if toast == null or not is_instance_valid(toast):
+		return
+	if toast.has_method("show_message"):
+		toast.call("show_message", "too far to operate")
 
 
 func _close_build_picker() -> void:
