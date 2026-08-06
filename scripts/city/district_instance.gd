@@ -23,6 +23,7 @@ const TetrisPedNpcScript := preload("res://scripts/city/tetris_ped_npc.gd")
 const ChessArenaScript := preload("res://scripts/city/chess_arena.gd")
 const CryptSpawnerScript := preload("res://scripts/city/crypt_spawner.gd")
 const FactionPadSpawnerScript := preload("res://scripts/city/faction_pad_spawner.gd")
+const SpawnTowerScript := preload("res://scripts/city/spawn_tower.gd")
 const BuildingImpostorLodScript := preload("res://scripts/city/building_impostor_lod.gd")
 
 signal ready_to_play(instance: DistrictInstance)
@@ -79,6 +80,11 @@ var chess_arena: Node3D
 var crypt_spawner: CryptSpawner
 ## Two opposing forever-war pads inside a Castle dungeon. Empty outside Castle districts.
 var dungeon_summoners: Array[Node3D] = []
+## Destructible spire standing over the crypt station. Null outside Graveyard districts. Typed as
+## Node3D so this file parses before SpawnTower reaches the class cache.
+var crypt_spawn_tower: Node3D
+## Spires standing over the dungeon pads. Index-matched to `dungeon_summoners`.
+var dungeon_spawn_towers: Array[Node3D] = []
 var building_lod: BuildingImpostorLod
 var _anchor: VoxelViewer
 var _proxy_floor: StaticBody3D
@@ -1216,7 +1222,8 @@ func _clear_siege_controller() -> void:
 	siege_controller = null
 
 
-## Undead forever-war pad in the crypt hub under the chapel — no gazebo, just the station.
+## Undead forever-war station in the crypt hub under the chapel, with the spawn spire that keeps
+## it running. The station summons beside the spire so fresh bodies do not stand in its mass.
 func _spawn_crypt_spawner(gen: DistrictGenerator, p_origin_vox: Vector3i) -> void:
 	if gen == null:
 		return
@@ -1232,11 +1239,14 @@ func _spawn_crypt_spawner(gen: DistrictGenerator, p_origin_vox: Vector3i) -> voi
 	crypt_spawner = CryptSpawnerScript.new() as CryptSpawner
 	add_child(crypt_spawner)
 	crypt_spawner.setup(
-		world,
+		SpawnTowerScript.summon_world(world, _voxel_size),
 		_dseed,
 		Callable(city, "spawn_monster_at"),
 		Callable(city, "alive_undead_units"),
 		Callable(city, "despawn_undead_unit")
+	)
+	crypt_spawn_tower = _raise_spawn_tower(
+		city, world, MonsterFaction.Id.UNDEAD, crypt_spawner, "CryptSpire"
 	)
 
 
@@ -1248,10 +1258,34 @@ func _clear_castle_doors() -> void:
 
 
 func _clear_crypt_spawner() -> void:
+	_clear_spawn_tower(crypt_spawn_tower)
+	crypt_spawn_tower = null
 	if crypt_spawner != null and is_instance_valid(crypt_spawner):
 		crypt_spawner.shutdown()
 		crypt_spawner.queue_free()
 	crypt_spawner = null
+
+
+## Stand a spire over one summoning station and hand it the station to close when it falls.
+## `faction_id` is a `MonsterFaction.Id` — the side both the tower and its bodies belong to.
+## Null when the tile could not place it; the station still runs, it just cannot be switched off.
+func _raise_spawn_tower(
+	city: CityRoot, pad_world: Vector3, faction_id: int, station: Node3D, node_name: String
+) -> Node3D:
+	var tower: Node3D = SpawnTowerScript.new() as Node3D
+	tower.name = node_name
+	add_child(tower)
+	if not bool(tower.call("raise", city, _voxel_size, pad_world, faction_id, station)):
+		tower.queue_free()
+		return null
+	return tower
+
+
+func _clear_spawn_tower(tower: Node3D) -> void:
+	if tower == null or not is_instance_valid(tower):
+		return
+	tower.call("clear")
+	tower.queue_free()
 
 
 ## Two opposing forever-war pads inside the castle dungeon vaults.
@@ -1283,7 +1317,7 @@ func _spawn_dungeon_summoners(gen: DistrictGenerator, p_origin_vox: Vector3i) ->
 		add_child(spawner)
 		spawner.call(
 			"setup",
-			world,
+			SpawnTowerScript.summon_world(world, _voxel_size),
 			_dseed,
 			Callable(city, "spawn_monster_at"),
 			Callable(city, "alive_undead_units"),
@@ -1294,9 +1328,21 @@ func _spawn_dungeon_summoners(gen: DistrictGenerator, p_origin_vox: Vector3i) ->
 			"DungeonSummoner_%s" % faction
 		)
 		dungeon_summoners.append(spawner)
+		dungeon_spawn_towers.append(
+			_raise_spawn_tower(
+				city,
+				world,
+				MonsterFaction.from_name(faction),
+				spawner,
+				"DungeonSpire_%d" % i
+			)
+		)
 
 
 func _clear_dungeon_summoners() -> void:
+	for tower: Node3D in dungeon_spawn_towers:
+		_clear_spawn_tower(tower)
+	dungeon_spawn_towers.clear()
 	for spawner: Node3D in dungeon_summoners:
 		if spawner != null and is_instance_valid(spawner):
 			spawner.call("shutdown")

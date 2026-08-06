@@ -219,7 +219,7 @@ Leash: `leash_m` if set; else `aggro_range_m × 1.25`; else mage pursue default 
 `UndeadUnit.apply_damage_scaled`:
 
 1. Reject non-CREATURE sources.
-2. Reject player-vs-creature on siege towers (own pads).
+2. Reject player-vs-creature on `SIEGE_DEFENDER` structures (the player's own pads). A structure on any other side — a spawn spire — takes player fire like any body.
 3. Apply scaled damage / armor.
 4. On survive → hit react + `_promote_attacker_after_hit` (player node if attacker omitted on a player source).
 
@@ -265,11 +265,21 @@ Stand at `vuln_radius − PUSH_RING_INSET_M` (0.75 m). Inside vuln → `null` (�
 ### Towers (living, meshless)
 
 1. Stamp voxels (`SiegeTowerCatalog.stamp_at`) — fractal shaft + `ORB` tip.
-2. Spawn `UndeadUnit.setup_siege_tower` — faction forced to `SIEGE_DEFENDER`, authored HP, explicit muzzle height, structure hit radius.
+2. Spawn `UndeadUnit.setup_siege_tower` — explicit faction (`SIEGE_DEFENDER` for a bought pad), authored HP, explicit muzzle height, structure hit radius.
 3. Host sits inside the stamp (`TOWER_HOST_LIFT_M`); muzzle must clear the tip or voxel LOS never acquires.
 4. `hit_radius()` returns the stamp footprint (`structure_hit_radius_m`), not the invisible host capsule — hunt engage and melee gap use that volume the way stones use `vuln_radius_m`.
 5. `VoxelWard.claim` while alive; release + demolish on death. HP is the only way the tower comes down.
 6. Immobile (`speed_mult == 0`): engage-in-place, no wander on idle, FAR tier still acquires.
+
+### Spawn spires (same structure, other side)
+
+Crypt and castle-dungeon summoning stations stand under a `SpawnTower` (`scripts/city/spawn_tower.gd`): the same meshless structure stack on a **monster** faction, row `spawn/fractal_spire`, catalogue row `spawn_spire` with `buildable: false` (never listed on a siege pad). `MonsterRoster.spawn_faction_tower` marks it a spawn tower, which changes three things:
+
+- the player may damage it (the friendly-fire gate is `SIEGE_DEFENDER`-only);
+- a player kill calls `CityRoot.grant_spawn_tower_kill` — a **guaranteed** missing recipe instead of the gem haul (no-op with a full cookbook);
+- death calls `stop_spawning()` on its station: no new waves, and **nothing already summoned is despawned**. Only district unload clears the room.
+
+The station summons `SpawnTower.summon_world` (two cells aside) so bodies do not arrive inside the mass, and the anchor cell is probed downward from the pad because the crypt names its first air cell where a castle vault names the slab.
 
 ### Stones (not combat entities)
 
@@ -307,6 +317,8 @@ When holding on an objective with no living prey: play melee cadence / SFX, **de
 14. **Ward while alive** — stamp cells are uncarvable; demolish only on death/withdraw.
 15. **Hard body `attacks`** — replaces behaviour-derived pool (siege towers rely on this).
 16. **No building prey table** — hostility is faction-only; area attacks may still carve fabric.
+17. **Friendly fire is a faction rule, not a structure rule** — only `SIEGE_DEFENDER` towers refuse player damage; a hostile spire that cannot be shot is an unkillable spawn tap.
+18. **A dead spire keeps its summons** — killing the tower stops new waves only; the room does not empty.
 
 ---
 
@@ -320,4 +332,6 @@ When holding on an objective with no living prey: play melee cadence / SFX, **de
 | `tools/test_siege_horde.gd` | Live wave chews stone; tower voxels stay warded |
 | `tools/test_siege_repair.gd` | Repair channel pick/heal on stones and towers; gamedata rates |
 | `tools/test_siege_faction.gd` | Vulnerability radius vs stand ring, defender rules |
+| `tools/test_spawn_tower.gd` | Spire catalogue / kit, player damage, guaranteed recipe, summons outlive it |
+| `tools/test_spawn_tower_live.gd` | Spire stamped and warded in a streamed crypt / dungeon (`--spawn-theme=graveyard\|castle`) |
 | `tools/test_combat_table_sync.gd` | GDScript ↔ Python merge parity |

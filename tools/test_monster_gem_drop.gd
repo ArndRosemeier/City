@@ -53,6 +53,7 @@ func _fail(msg: String) -> void:
 func _ready() -> void:
 	_city = TestCity.new()
 	_check_score()
+	_check_recipe_drop_chance()
 	_check_partition()
 	_check_roll_values()
 	_check_tier_mats()
@@ -91,6 +92,47 @@ func _check_score() -> void:
 			return
 	print("OK score_for_max_hp")
 	_check_siege_floor()
+
+
+func _check_recipe_drop_chance() -> void:
+	var cases: Array = [
+		[0.0, 0.0],
+		[30.0, 1.0],
+		[60.0, 2.0],
+		[300.0, 10.0],
+		[3000.0, 100.0],
+		[9000.0, 100.0],
+	]
+	for entry: Variant in cases:
+		var pair: Array = entry
+		var hp := float(pair[0])
+		var want := float(pair[1])
+		var got := MonsterGemDropScript.recipe_drop_chance_pct(hp)
+		if not is_equal_approx(got, want):
+			_fail("FAIL recipe_drop_chance_pct(%s) = %s, want %s" % [hp, got, want])
+			return
+	## Deterministic: chance 0 never fires; chance 100 always fires.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1
+	if MonsterGemDropScript.rolls_recipe_drop(0.0, rng):
+		_fail("FAIL rolls_recipe_drop(0) must be false")
+		return
+	var hits := 0
+	const TRIALS := 400
+	rng.seed = 2
+	for _i in range(TRIALS):
+		if MonsterGemDropScript.rolls_recipe_drop(30.0, rng):
+			hits += 1
+	## 1% of 400 ≈ 4; allow a wide band so the harness is not flaky.
+	if hits < 1 or hits > 20:
+		_fail("FAIL rolls_recipe_drop(30) hit %d / %d (want ~4)" % [hits, TRIALS])
+		return
+	rng.seed = 3
+	for _i in range(20):
+		if not MonsterGemDropScript.rolls_recipe_drop(3000.0, rng):
+			_fail("FAIL rolls_recipe_drop at 100%% missed")
+			return
+	print("OK recipe drop chance (max_hp/30)%%")
 
 
 ## Siege waves are KayKit fodder (~34 HP). The global score floor pays those nothing, so a live

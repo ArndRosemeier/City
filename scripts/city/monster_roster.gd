@@ -5,6 +5,7 @@ extends Node3D
 
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
+const MonsterFactionScript := preload("res://scripts/city/monster_faction.gd")
 
 ## Soft cap on *walking* units, shared by every summon path (N-key, arena, invasion, siege, zoo).
 ## A frame-rate safety net rather than a balance number: districts pace themselves with their own
@@ -109,12 +110,58 @@ func spawn_siege_tower(
 	structure_hit_radius_m: float,
 	body_seed: int = -1
 ) -> UndeadUnit:
+	return _spawn_structure(
+		combat_id,
+		world_pos,
+		authored_hp,
+		muzzle_height_m,
+		structure_hit_radius_m,
+		int(MonsterFactionScript.Id.SIEGE_DEFENDER),
+		false,
+		body_seed
+	)
+
+
+## Hostile summoning spire (crypt / castle dungeon). Same meshless structure as a siege pad,
+## but it stands for `faction_id` — the side its station summons for — so the player may shoot
+## it and the horde it feeds will not.
+func spawn_faction_tower(
+	combat_id: String,
+	world_pos: Vector3,
+	authored_hp: float,
+	muzzle_height_m: float,
+	structure_hit_radius_m: float,
+	faction_id: int,
+	body_seed: int = -1
+) -> UndeadUnit:
+	return _spawn_structure(
+		combat_id,
+		world_pos,
+		authored_hp,
+		muzzle_height_m,
+		structure_hit_radius_m,
+		faction_id,
+		true,
+		body_seed
+	)
+
+
+func _spawn_structure(
+	combat_id: String,
+	world_pos: Vector3,
+	authored_hp: float,
+	muzzle_height_m: float,
+	structure_hit_radius_m: float,
+	faction_id: int,
+	spawn_tower: bool,
+	body_seed: int
+) -> UndeadUnit:
 	if combat_id.is_empty():
-		push_error("MonsterRoster.spawn_siege_tower: empty combat id")
+		push_error("MonsterRoster._spawn_structure: empty combat id")
 		assert(false, "MonsterRoster: empty tower combat id")
 		return null
 	if not CombatTableScript.has_monster(combat_id):
-		push_error("MonsterRoster.spawn_siege_tower: unknown combat id '%s'" % combat_id)
+		push_error("MonsterRoster._spawn_structure: unknown combat id '%s'" % combat_id)
 		assert(false, "MonsterRoster: unknown tower combat id")
 		return null
 	_prune_units()
@@ -122,7 +169,7 @@ func spawn_siege_tower(
 		## Soft cap: a pot big enough to plate the whole quarter is expected pressure, not a fault.
 		return null
 	var unit := UndeadUnit.new()
-	unit.name = "SiegeTower_%d" % _next_id
+	unit.name = "%s_%d" % ["SpawnTower" if spawn_tower else "SiegeTower", _next_id]
 	_next_id += 1
 	add_child(unit)
 	unit.setup_siege_tower(
@@ -135,7 +182,9 @@ func spawn_siege_tower(
 		authored_hp,
 		muzzle_height_m,
 		structure_hit_radius_m,
-		body_seed if body_seed >= 0 else randi()
+		body_seed if body_seed >= 0 else randi(),
+		faction_id,
+		spawn_tower
 	)
 	unit.died.connect(_on_unit_died)
 	unit.tree_exiting.connect(_on_unit_tree_exiting.bind(unit))

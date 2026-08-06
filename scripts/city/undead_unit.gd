@@ -163,6 +163,10 @@ var _combat_prey: Vector3 = Vector3.INF
 var _footstep_accum: float = 0.0
 ## True for meshless Siege Quarter foundation towers (voxel stamp is the visual).
 var _siege_tower: bool = false
+## Structure towers that summon for a monster faction (crypt / castle dungeon). Same body as a
+## siege pad, opposite side of the fight: the player is meant to shoot these down, and doing so
+## always pays a recipe.
+var _spawn_tower: bool = false
 ## Authored max HP for siege towers (CreatureHealth is meaningless for a building).
 var _authored_hp: float = 0.0
 ## Flat structure volume for siege towers (stamp face + slack). Zero for creatures — they keep the
@@ -217,9 +221,12 @@ func setup(
 	CityProfiler.end("undead_setup")
 
 
-## Meshless foundation turret for the Siege Quarter. Combat comes from a `siege/…` table row;
-## the voxel stamp is the visual. Not added to the `undead` group so player aim does not treat
-## it as a free target (friendly-fire is also rejected in `apply_damage_scaled`).
+## Meshless foundation turret. Combat comes from a table row (`siege/…` for a bought pad,
+## `spawn/…` for a district's summoning spire); the voxel stamp is the visual.
+##
+## `faction_id` decides which side owns it, and with it who may shoot it: a `SIEGE_DEFENDER`
+## tower is the player's own pad and rejects their fire, any other side is a target. Not added
+## to the `undead` group — hunt and aim reach a structure through the roster, not the group.
 func setup_siege_tower(
 	roster: MonsterRoster,
 	city: CityRoot,
@@ -230,7 +237,9 @@ func setup_siege_tower(
 	authored_hp: float,
 	muzzle_height_m: float,
 	structure_hit_radius_m: float,
-	p_seed: int
+	p_seed: int,
+	faction_id: int,
+	p_spawn_tower: bool
 ) -> void:
 	if combat_id.is_empty():
 		push_error("UndeadUnit.setup_siege_tower: empty combat_id")
@@ -255,6 +264,7 @@ func setup_siege_tower(
 		return
 	role = Role.MINION
 	_siege_tower = true
+	_spawn_tower = p_spawn_tower
 	_authored_hp = authored_hp
 	_muzzle_height_m = muzzle_height_m
 	_structure_hit_radius_m = structure_hit_radius_m
@@ -270,11 +280,13 @@ func setup_siege_tower(
 	_alive = true
 	collision_layer = 2
 	collision_mask = 1
-	name = "SiegeTower_%s" % combat_id.get_file()
+	name = "%s_%s" % [
+		"SpawnTower" if p_spawn_tower else "SiegeTower", combat_id.get_file()
+	]
 	CityProfiler.begin("undead_setup")
 	_build_body()
 	_bind_combat_for_id(combat_id)
-	set_faction(int(MonsterFactionScript.Id.SIEGE_DEFENDER))
+	set_faction(faction_id)
 	_reset_health()
 	_apply_scale()
 	_build_health_bar()
@@ -285,6 +297,11 @@ func setup_siege_tower(
 
 func is_siege_tower() -> bool:
 	return _siege_tower
+
+
+## A hostile summoning spire rather than a pad the player paid for.
+func is_spawn_tower() -> bool:
+	return _spawn_tower
 
 
 func is_alive() -> bool:
@@ -667,9 +684,11 @@ func apply_damage_scaled(
 		)
 		return false
 	## Own towers are unshootable — the player is SIEGE_DEFENDER during a run, and splash
-	## from player weapons must not chew the pads they just spent the pot on.
+	## from player weapons must not chew the pads they just spent the pot on. A structure on
+	## any other side is an ordinary target: that is the whole point of a spawn spire.
 	if (
 		_siege_tower
+		and _faction == int(MonsterFactionScript.Id.SIEGE_DEFENDER)
 		and DamageSourceScript.is_player_vs_creature(source)
 	):
 		return false
@@ -744,7 +763,8 @@ func _promote_attacker_after_hit(source: DamageSource.Id, attacker: Node) -> voi
 
 ## Death: navigation disposed, the death clip played, `died` emitted, the body freed 1.6 s later.
 ## Called by the hit that empties the pool. Gem haul for player kills, and for siege-tower
-## kills during a run (those feed the pot the same way).
+## kills during a run (those feed the pot the same way). A spawn spire pays a recipe instead of
+## stones — it is a landmark the player went underground to break, not another body in a wave.
 func kill_from_player(player_kill: bool = false, killer: Node = null) -> void:
 	if not _alive:
 		return
@@ -758,13 +778,12 @@ func kill_from_player(player_kill: bool = false, killer: Node = null) -> void:
 	if not credit and killer != null and is_instance_valid(killer) and killer.has_method("faction"):
 		if int(killer.call("faction")) == int(MonsterFactionScript.Id.SIEGE_DEFENDER):
 			credit = true
-	if (
-		credit
-		and not _siege_tower
-		and _city != null
-		and _city.has_method("grant_monster_kill_haul")
-	):
-		_city.call("grant_monster_kill_haul", global_position, _health_max)
+	if credit and _city != null:
+		if _spawn_tower:
+			if _city.has_method("grant_spawn_tower_kill"):
+				_city.call("grant_spawn_tower_kill", global_position)
+		elif not _siege_tower and _city.has_method("grant_monster_kill_haul"):
+			_city.call("grant_monster_kill_haul", global_position, _health_max)
 	died.emit(self, is_giant())
 	var tree := get_tree()
 	if tree != null:

@@ -2,6 +2,10 @@
 ##
 ## Rows live in `assets/gamedata.json` (`siege_towers`). Combat behaviour is a normal
 ## `CombatTable` monster row (`siege/…`); the visual is the stamp, not a creature mesh.
+##
+## A row with `buildable: false` is the same kind of structure with no gem price and no pad
+## listing — the world stamps it (crypt / castle-dungeon spawn spires) and only its hit points
+## take it down.
 class_name SiegeTowerCatalog
 extends RefCounted
 
@@ -26,7 +30,10 @@ class Def:
 	var gem: String = ""
 	var hint: String = ""
 	var hp: float = 0.0
-	## item_id → count, spent from the player's inventory.
+	## False for towers the world places (crypt / dungeon spawn spires): no gem cost, never
+	## offered on a siege pad.
+	var buildable: bool = true
+	## item_id → count, spent from the player's inventory. Empty on a world-placed tower.
 	var cost: Dictionary = {}
 	## Packed as [ox, oy, oz, material_id] relative to the pad surface centre.
 	var voxels: PackedInt32Array = PackedInt32Array()
@@ -70,6 +77,7 @@ static func ensure_loaded() -> void:
 		d.gem = str(row.get("gem", ""))
 		d.hint = str(row.get("hint", ""))
 		d.hp = float(row.get("hp", 0.0))
+		d.buildable = bool(row.get("buildable", true))
 		if d.combat_id.is_empty():
 			push_error("SiegeTowerCatalog: '%s' missing combat_id" % id)
 			assert(false, "SiegeTowerCatalog: missing combat_id")
@@ -84,9 +92,13 @@ static func ensure_loaded() -> void:
 			assert(false, "SiegeTowerCatalog: bad cost")
 			continue
 		d.cost = (cost_raw as Dictionary).duplicate()
-		if d.cost.is_empty():
+		if d.buildable and d.cost.is_empty():
 			push_error("SiegeTowerCatalog: '%s' has empty cost" % id)
 			assert(false, "SiegeTowerCatalog: empty cost")
+			continue
+		if not d.buildable and not d.cost.is_empty():
+			push_error("SiegeTowerCatalog: world-placed '%s' must not carry a gem cost" % id)
+			assert(false, "SiegeTowerCatalog: cost on a world tower")
 			continue
 		var stamp_raw: Variant = row.get("stamp", {})
 		if typeof(stamp_raw) == TYPE_DICTIONARY:
@@ -108,6 +120,16 @@ static func all() -> Array[Def]:
 	var out: Array[Def] = []
 	for id in _order:
 		out.append(_by_id[id] as Def)
+	return out
+
+
+## The rows a siege pad may offer. World-placed towers are stamped by their district and never
+## sold, so they are not part of the pot economy at all.
+static func buildable() -> Array[Def]:
+	var out: Array[Def] = []
+	for def: Def in all():
+		if def.buildable:
+			out.append(def)
 	return out
 
 

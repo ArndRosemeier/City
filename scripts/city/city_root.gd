@@ -1347,6 +1347,30 @@ func spawn_siege_tower_at(
 	)
 
 
+## Meshless summoning spire owned by a monster faction (crypt / castle dungeon vault).
+func spawn_faction_tower_at(
+	combat_id: String,
+	world_pos: Vector3,
+	authored_hp: float,
+	muzzle_height_m: float,
+	structure_hit_radius_m: float,
+	faction_id: int
+) -> UndeadUnit:
+	_ensure_monster_roster()
+	if _monsters == null:
+		push_error("CityRoot.spawn_faction_tower_at: no MonsterRoster")
+		assert(false, "CityRoot: no MonsterRoster")
+		return null
+	return _monsters.spawn_faction_tower(
+		combat_id,
+		world_pos,
+		authored_hp,
+		muzzle_height_m,
+		structure_hit_radius_m,
+		faction_id
+	)
+
+
 ## Spawn a catalogue body at an explicit world point (Arena lifts, tests).
 ## Returns null when nav / caps refuse. When `snap_nav` is false the body stays at
 ## `world_pos` (lift undercroft delivery). Does not involve the invasion director.
@@ -2414,18 +2438,37 @@ func collect_recipe_pickup(site_id: String, world_pos: Vector3) -> bool:
 	## run — reloading an autosave taken a step earlier cannot re-roll it into a better one.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(site_id) ^ int(city_seed)
+	var recipe_id := learn_random_missing_recipe(world_pos, rng)
+	if recipe_id.is_empty():
+		push_error("CityRoot: scroll at %s failed to teach a missing recipe" % site_id)
+		return false
+	print("CityRoot: learned recipe '%s' at %s" % [recipe_id, site_id])
+	return true
+
+
+## Teach one missing cookbook entry and toast it. Returns the recipe id, or "" when nothing was left.
+func learn_random_missing_recipe(world_pos: Vector3, rng: RandomNumberGenerator) -> String:
+	if _loadout == null:
+		push_error("CityRoot.learn_random_missing_recipe: no loadout")
+		return ""
+	if rng == null:
+		push_error("CityRoot.learn_random_missing_recipe: rng is null")
+		assert(false, "CityRoot: null rng")
+		return ""
+	var missing := _loadout.missing_recipe_ids()
+	if missing.is_empty():
+		return ""
 	var recipe_id := missing[rng.randi_range(0, missing.size() - 1)]
 	if not _loadout.learn_recipe(recipe_id):
 		push_error("CityRoot: recipe '%s' was already known" % recipe_id)
-		return false
+		return ""
 	var recipe := InventoryCatalog.recipe(recipe_id)
 	var label := recipe_id if recipe == null else recipe.display_name
 	if _audio != null:
 		_audio.play_chest_open(world_pos)
 		_audio.play_treasure_bling()
 	if _loot_toast != null:
-		## A chest can pay stones and a scroll in the same click. Resetting the card there would
-		## throw away the gems that were just put on it, so an open card is only renamed.
+		## A chest / kill can already have stones on the card. Rename rather than reset.
 		if _loot_toast.is_showing():
 			_loot_toast.set_headline("Recipe learned — %s" % label)
 		else:
@@ -2434,8 +2477,7 @@ func collect_recipe_pickup(site_id: String, world_pos: Vector3) -> bool:
 		_inventory_panel.call("rebuild_recipe_lists")
 	if _ability_tray != null:
 		_ability_tray.refresh()
-	print("CityRoot: learned recipe '%s' at %s" % [recipe_id, site_id])
-	return true
+	return recipe_id
 
 
 ## The cookbook is full, so the scroll pays a stone instead. Off-budget like a hill chest: the
@@ -2521,13 +2563,15 @@ func try_collect_gem_at(vox: Vector3i) -> bool:
 
 
 ## Off-budget gem haul when the player kills a monster. Score is floor(max_hp / 40), paid as
-## tiered stones (see MonsterGemDrop). District ledger is not charged.
+## tiered stones (see MonsterGemDrop). District ledger is not charged. Separately, max_hp/30 %
+## chance to teach a missing recipe — runs even when the gem score is zero.
 ##
 ## During a Siege run the haul feeds the pot instead of the inventory — skin in the game, and
 ## the unbounded wave faucet never touches the progression economy until the player withdraws.
 func grant_monster_kill_haul(world_pos: Vector3, max_hp: float) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
+	var taught := _try_monster_recipe_drop(world_pos, max_hp, rng)
 	var siege := active_siege_run()
 	## Siege waves are mostly KayKit fodder under the global score floor (floor(hp/40) = 0).
 	## Without a one-stone floor the pot never refills after the stake and the run starves.
@@ -2548,7 +2592,9 @@ func grant_monster_kill_haul(world_pos: Vector3, max_hp: float) -> void:
 				_loot_toast.add_gem(gem, 1)
 		report_gem_haul(world_pos, pot_paid, haul[0])
 		if _loot_toast != null:
-			_loot_toast.set_headline("Siege pot")
+			_loot_toast.set_headline(
+				"Siege pot — recipe" if not taught.is_empty() else "Siege pot"
+			)
 		return
 	var vox := Vector3i.ZERO
 	if _terrain != null:
@@ -2566,8 +2612,48 @@ func grant_monster_kill_haul(world_pos: Vector3, max_hp: float) -> void:
 		return
 	report_gem_haul(world_pos, paid, pitch_mat)
 	## report_gem_haul names a generic find — kill hauls get their own card title after.
+	## Keep a recipe line when the same kill also taught one.
 	if _loot_toast != null:
-		_loot_toast.set_headline("Monster slain")
+		_loot_toast.set_headline(
+			"Monster slain — recipe" if not taught.is_empty() else "Monster slain"
+		)
+
+
+## Breaking a spawn spire always teaches a recipe. Monster kills roll for one; a spire is a
+## fixed landmark the player had to find, walk down to and out-shoot, so it pays every time —
+## the one reliable way to earn an entry rather than farm for it. Nothing is left to pay once
+## the cookbook is full.
+func grant_spawn_tower_kill(world_pos: Vector3) -> void:
+	if _loadout == null:
+		push_error("CityRoot.grant_spawn_tower_kill: no loadout to learn into")
+		return
+	if _loadout.missing_recipe_ids().is_empty():
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var recipe_id := learn_random_missing_recipe(world_pos, rng)
+	if recipe_id.is_empty():
+		push_error("CityRoot: a spawn tower kill failed to teach a missing recipe")
+		return
+	print("CityRoot: spawn tower kill taught recipe '%s'" % recipe_id)
+
+
+## (max_hp / 30)% chance to teach one missing recipe. No-op when the cookbook is full.
+## Returns the recipe id taught, or "".
+func _try_monster_recipe_drop(
+	world_pos: Vector3, max_hp: float, rng: RandomNumberGenerator
+) -> String:
+	if _loadout == null:
+		return ""
+	if _loadout.missing_recipe_ids().is_empty():
+		return ""
+	if not MonsterGemDropScript.rolls_recipe_drop(max_hp, rng):
+		return ""
+	var recipe_id := learn_random_missing_recipe(world_pos, rng)
+	if recipe_id.is_empty():
+		return ""
+	print("CityRoot: monster kill taught recipe '%s'" % recipe_id)
+	return recipe_id
 
 
 ## Same flourish as a chest haul: one card headline and one bling for every stone already stacked

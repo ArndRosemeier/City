@@ -25,5 +25,6 @@ Full reference: [docs/mob-combat.md](docs/mob-combat.md). Read it before changin
 6. FAR-tier **towers** still run the prey query; mobile FAR may skip it.
 7. `strike_structure` is theatre — stones die from contact DPS in `SiegeController`, not swings.
 8. Tower muzzle must clear the tip **cell** (ORB is solid for LOS, not just the mesh); ward holds stamp cells until death.
+8b. Friendly fire is gated on **faction** (`SIEGE_DEFENDER`), not "is a structure" — crypt / dungeon spawn spires are the same body on a monster side and must be shootable. A player kill on one always teaches a recipe and stops its station without despawning what it summoned.
 9. Body hard `attacks` replaces behaviour-derived pools (siege towers).
 10. Keep `CombatTable` merge rules in sync with `tools/combat_resolve.py`.

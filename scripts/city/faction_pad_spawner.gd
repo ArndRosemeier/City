@@ -76,6 +76,13 @@ func shutdown() -> void:
 	_despawn_owned()
 
 
+## The spire above this pad came down. New bodies stop; the ones already loose in the dungeon
+## keep fighting — breaking the tower is a lasting win, not an undo of the fight so far.
+func stop_spawning() -> void:
+	set_process(false)
+	print("FactionPadSpawner: %s spire down, station closed" % faction)
+
+
 func _exit_tree() -> void:
 	_despawn_owned()
 

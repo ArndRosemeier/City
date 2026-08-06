@@ -53,6 +53,11 @@ MERGE_SCALARS_USE_MAX = resolve_mod.MERGE_SCALARS_USE_MAX
 # coming back means someone is re-authoring target priority as data.
 FORBIDDEN_PREY_KEYS = frozenset({"prey", "prey_extra", "prey_weights"})
 
+# Combat rows whose body is a voxel stamp rather than a creature mesh: bought siege pads
+# (`siege/…`) and the world's summoning spires (`spawn/…`). They have no CreatureCatalog entry
+# and never should — the 1:1 rule is for anything that walks.
+STRUCTURE_ID_PREFIXES = ("siege/", "spawn/")
+
 ALLOWED_BEHAVIOUR = frozenset({"skirmish", "chase", "guard", "wander_hunt", "ambient"})
 ALLOWED_CROWD_ROLES = frozenset(
     {
@@ -645,8 +650,8 @@ def validate_combat_table_document(
     for mid, count in sorted(seen.items()):
         if count != 1:
             fail(f"monster id '{mid}' appears {count} times (want exactly once)", errors)
-        ## Siege towers are combat rows without a creature mesh — skip the 1:1 catalog rule.
-        if mid.startswith("siege/"):
+        ## Structures are combat rows without a creature mesh — skip the 1:1 catalog rule.
+        if any(mid.startswith(prefix) for prefix in STRUCTURE_ID_PREFIXES):
             continue
         if catalog_set and mid not in catalog_set:
             fail(f"monster id '{mid}' is not in CreatureCatalog", errors)

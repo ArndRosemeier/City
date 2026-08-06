@@ -49,8 +49,15 @@ func _ready() -> void:
 
 func _check_catalog() -> void:
 	var ids := SiegeTowerCatalogScript.ids()
-	if ids.size() != 6:
-		_fail("FAIL expected 6 towers, got %d" % ids.size())
+	var buildable := SiegeTowerCatalogScript.buildable()
+	if buildable.size() != 6:
+		_fail("FAIL expected 6 buildable towers, got %d" % buildable.size())
+		return
+	if ids.size() != buildable.size() + 1:
+		_fail(
+			"FAIL expected the six pad recipes plus one world-placed spire, got %d rows"
+			% ids.size()
+		)
 		return
 	for id: String in ids:
 		var def: RefCounted = SiegeTowerCatalogScript.by_id(id) as RefCounted
@@ -61,8 +68,14 @@ func _check_catalog() -> void:
 		var cost: Dictionary = def.get("cost") as Dictionary
 		if voxels.is_empty() or voxels.size() % 4 != 0:
 			_fail("FAIL bad voxels for %s" % id)
-		if cost.is_empty() or float(def.get("hp")) <= 0.0:
-			_fail("FAIL bad cost/hp for %s" % id)
+		if float(def.get("hp")) <= 0.0:
+			_fail("FAIL bad hp for %s" % id)
+		## A world-placed spire is never sold, so a price on it would be a pad listing waiting
+		## to happen. Everything the player can buy costs exactly one gem.
+		if not bool(def.get("buildable")):
+			if not cost.is_empty():
+				_fail("FAIL world-placed %s carries a cost %s" % [id, str(cost)])
+			continue
 		var cost_total := 0
 		for k: Variant in cost.keys():
 			cost_total += int(cost[k])
@@ -89,7 +102,10 @@ func _check_catalog() -> void:
 			_fail("FAIL %s stamp has no ORB tip" % id)
 		if top_mat != VoxelMaterial.ORB:
 			_fail("FAIL %s tip mat is %d, want ORB" % [id, top_mat])
-	print("catalog: %d fractal spires with ORB tips" % ids.size())
+	print(
+		"catalog: %d fractal spires with ORB tips (%d for sale)"
+		% [ids.size(), buildable.size()]
+	)
 
 
 func _check_combat_rows() -> void:
@@ -99,7 +115,9 @@ func _check_combat_rows() -> void:
 		if not CombatTableScript.has_monster(combat_id):
 			_fail("FAIL missing combat row %s" % combat_id)
 			continue
-		if CombatTableScript.faction_for(combat_id) != "siege_defender":
+		## Pad recipes defend; a world-placed spire is authored on a monster side and has its
+		## faction set again at spawn, so only the bought ones are checked here.
+		if bool(def.get("buildable")) and CombatTableScript.faction_for(combat_id) != "siege_defender":
 			_fail("FAIL %s faction is not siege_defender" % combat_id)
 		var stats := CombatTableScript.resolve(combat_id)
 		if stats == null:

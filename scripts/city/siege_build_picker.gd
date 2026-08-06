@@ -156,7 +156,7 @@ func _rebuild_rows() -> void:
 		_rows.remove_child(child)
 		child.queue_free()
 	var listed := 0
-	for def_v: Variant in SiegeTowerCatalogScript.all():
+	for def_v: Variant in SiegeTowerCatalogScript.buildable():
 		var def: RefCounted = def_v as RefCounted
 		var cost: Dictionary = def.get("cost") as Dictionary
 		if not bool(_controller.call("can_afford", cost)):
@@ -207,7 +207,7 @@ func _gem_label(item_id: String) -> String:
 
 func _bake_gem_icons() -> void:
 	var gems := PackedStringArray()
-	for def_v: Variant in SiegeTowerCatalogScript.all():
+	for def_v: Variant in SiegeTowerCatalogScript.buildable():
 		var gem := str((def_v as RefCounted).get("gem"))
 		if not gem.is_empty() and not gems.has(gem):
 			gems.append(gem)

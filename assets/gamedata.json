@@ -1123,6 +1123,22 @@
       "preferred_range_m": 28.0,
       "damage_mult": 1.8,
       "armor_mult": 1.2
+    },
+    {
+      "id": "spawn/fractal_spire",
+      "faction": "undead",
+      "templates": [
+        "siege_tower"
+      ],
+      "spawn_ready": false,
+      "attacks": [
+        "orb_convert"
+      ],
+      "aggro_range_m": 30.0,
+      "preferred_range_m": 24.0,
+      "damage_mult": 1.0,
+      "armor_mult": 1.0,
+      "notes": "Crypt / castle-dungeon summoning tower. Authored undead, but the station overrides the faction at spawn so a castle pad's rolled side owns its own spire. Convert orb is the whole kit."
     }
   ],
   "items": {
@@ -38579,6 +38595,21 @@
         "height": 9,
         "radius": 1,
         "mat": 70,
+        "cap_mat": 271
+      }
+    },
+    "spawn_spire": {
+      "display_name": "Spawn Spire",
+      "combat_id": "spawn/fractal_spire",
+      "gem": "",
+      "hint": "Dark fractal summoning spire — stands in crypts and dungeon vaults",
+      "hp": 140.0,
+      "buildable": false,
+      "cost": {},
+      "stamp": {
+        "height": 3,
+        "radius": 1,
+        "mat": 74,
         "cap_mat": 271
       }
     }

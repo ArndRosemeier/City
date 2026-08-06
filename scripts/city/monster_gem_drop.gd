@@ -1,17 +1,23 @@
-## Gem haul for a monster the player killed: score from max HP, paid as tiered stones.
+## Kill loot for a monster the player downed: gem haul from max HP, plus a chance to teach a
+## missing cookbook recipe.
 ##
-## Score is `floor(max_hp / 40)`. Below 1 means nothing drops — KayKit fodder (~34 HP) pays
+## Gem score is `floor(max_hp / 40)`. Below 1 means no stones — KayKit fodder (~34 HP) pays
 ## zero; a Quaternius Big (~110) pays 2; grown giants and Unique bosses scale up with HP.
 ##
 ## The score is spent as a random partition into values 1 / 2 / 3. Each value maps to a gem
 ## tier with two stones; which of the two is rolled independently. Inventory + loot toast get
 ## the haul — there is no world pickup.
+##
+## Recipe chance is `(max_hp / 30)` percent (capped at 100). A 30 HP body is 1%; 300 HP is 10%.
+## When the cookbook is already full the roll is skipped — kills do not pay the scroll fallback gem.
 class_name MonsterGemDrop
 extends RefCounted
 
 const VoxelMaterialScript := preload("res://scripts/city/voxel_material.gd")
 
 const HP_PER_SCORE := 40.0
+## Percent chance per this many max HP (30 HP → 1%).
+const HP_PER_RECIPE_PCT := 30.0
 const TIER_MAX_VALUE := 3
 
 ## Tier value → the two VoxelMaterial gem ids that pay that value.
@@ -28,6 +34,27 @@ static func score_for_max_hp(max_hp: float) -> int:
 		assert(false, "MonsterGemDrop: bad max_hp")
 		return 0
 	return int(floor(max_hp / HP_PER_SCORE))
+
+
+## Recipe drop chance in percent: max_hp / 30, clamped to 100.
+static func recipe_drop_chance_pct(max_hp: float) -> float:
+	if max_hp < 0.0:
+		push_error("MonsterGemDrop.recipe_drop_chance_pct: negative max_hp %f" % max_hp)
+		assert(false, "MonsterGemDrop: bad max_hp")
+		return 0.0
+	return minf(100.0, max_hp / HP_PER_RECIPE_PCT)
+
+
+## True when this kill should teach a missing recipe (caller still checks the cookbook).
+static func rolls_recipe_drop(max_hp: float, rng: RandomNumberGenerator) -> bool:
+	if rng == null:
+		push_error("MonsterGemDrop.rolls_recipe_drop: rng is null")
+		assert(false, "MonsterGemDrop: null rng")
+		return false
+	var pct := recipe_drop_chance_pct(max_hp)
+	if pct <= 0.0:
+		return false
+	return rng.randf() * 100.0 < pct
 
 
 ## Value (1..3) of one gem material, or 0 if it is not a kill-drop stone.

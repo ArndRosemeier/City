@@ -52,6 +52,13 @@ func shutdown() -> void:
 	_despawn_owned()
 
 
+## The spire above this station came down. New bodies stop; the ones already walking the crypt
+## keep walking it — breaking the tower is a lasting win, not an undo of the fight so far.
+func stop_spawning() -> void:
+	set_process(false)
+	print("CryptSpawner: spire down, station closed at %s" % spawn_world)
+
+
 func _exit_tree() -> void:
 	_despawn_owned()
 

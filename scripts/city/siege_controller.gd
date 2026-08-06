@@ -575,6 +575,10 @@ func build_tower(pad_index: int, tower_id: String) -> bool:
 	var def: RefCounted = SiegeTowerCatalogScript.by_id(tower_id) as RefCounted
 	if def == null:
 		return false
+	if not bool(def.get("buildable")):
+		push_error("SiegeController.build_tower: '%s' is world-placed, not for sale" % tower_id)
+		assert(false, "SiegeController: world tower on a pad")
+		return false
 	var cost: Dictionary = def.get("cost") as Dictionary
 	## A short bag is a legal player miss, not a fault — the picker only lists what they can pay.
 	## Everything below this line is a genuine error if it fails.

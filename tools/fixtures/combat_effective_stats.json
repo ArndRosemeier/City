@@ -2066,6 +2066,34 @@
       ],
       "crowd_roles": [],
       "auras": []
+    },
+    "spawn/fractal_spire": {
+      "hp_mult": 1.0,
+      "damage_mult": 1.0,
+      "speed_mult": 0.0,
+      "aggro_range_m": 30.0,
+      "leash_m": 0.0,
+      "preferred_range_m": 24.0,
+      "armor_mult": 1.0,
+      "score_mult": 0.0,
+      "behaviour": [
+        "skirmish"
+      ],
+      "attacks": [
+        "orb_convert"
+      ],
+      "attack_damage": {
+        "orb_convert": {
+          "vs_player": 70.0,
+          "vs_mob": 0.0
+        }
+      },
+      "tags": [
+        "immobile",
+        "siege_tower"
+      ],
+      "crowd_roles": [],
+      "auras": []
     }
   }
 }
