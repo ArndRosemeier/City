@@ -16,6 +16,8 @@ var ground_y: int = 6
 var planner: DistrictPlanner
 var cell_size: int = 28
 var voxel_size: float = 0.5
+## Exact remaining gems for the maze scatter (district constant, or that minus harvested).
+var gem_mats_to_place: PackedInt32Array = PackedInt32Array()
 
 var layout: GamingLayout = null
 var _garden: GamingGarden = null
@@ -104,6 +106,7 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_district_wall_gates()
 	## Maze reserves the attraction enclosure; then zoo ring, then venues.
 	_paint_outer_maze()
+	_scatter_maze_gems()
 	_build_fence()
 	_build_gates()
 	_garden_for().decorate(layout, min_v, max_v)
@@ -131,6 +134,8 @@ func compose_far_sparse(min_v: Vector3i, max_v: Vector3i) -> void:
 	_build_district_wall()
 	_build_district_wall_gates()
 	_paint_outer_maze()
+	## Far bakes leave gem_mats_to_place empty — no ore until the full stream bake.
+	_scatter_maze_gems()
 	_build_fence()
 	_build_gates()
 	_garden_for().decorate_far(layout, min_v, max_v)
@@ -396,6 +401,51 @@ func _paint_outer_maze() -> void:
 	var walls := dec.decorate(vol, RoomDecoratorScript.Purpose.ARENA)
 	if walls <= 0:
 		push_error("GamingComposer: maze band left no wall columns in %s" % rect)
+
+
+## Sit exactly `gem_mats_to_place` on labyrinth passage floors — air above the meadow deck,
+## never replacing a wall column. Same remaining-list contract as the hill quota scatter.
+func _scatter_maze_gems() -> void:
+	var quota := gem_mats_to_place.size()
+	if quota <= 0 or layout == null:
+		return
+	var rect := layout.wall_rect.grow(-WALL_THICK)
+	if rect.size.x < 16 or rect.size.y < 16:
+		push_error("GamingComposer: maze gem scatter skipped — court %s too small" % rect)
+		return
+	var floor_y := ground_y + 1
+	var hosts: Array[Vector3i] = []
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if layout.fence_rect.has_point(Vector2i(x, z)):
+				continue
+			## Passage only: wall columns keep fractal ore out of the walking surface.
+			if VoxelMaterial.is_fractal_band(brush.get_vox(Vector3i(x, floor_y, z))):
+				continue
+			var cursor := Vector3i(x, floor_y, z)
+			if brush.get_vox(cursor) != VoxelMaterial.AIR:
+				continue
+			hosts.append(cursor)
+	if hosts.is_empty():
+		push_error("GamingComposer: no maze floor hosts for %d budgeted gems" % quota)
+		return
+	for i in range(hosts.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp := hosts[i]
+		hosts[i] = hosts[j]
+		hosts[j] = tmp
+	var placed := 0
+	brush.begin_edit()
+	while placed < quota and placed < hosts.size():
+		brush.set_vox(hosts[placed], int(gem_mats_to_place[placed]))
+		placed += 1
+	brush.end_edit()
+	if placed < quota:
+		push_error(
+			"GamingComposer: only placed %d of %d budgeted maze gems (hosts %d)"
+			% [placed, quota, hosts.size()]
+		)
+	print("GamingComposer: maze floor gems=%d (quota %d)" % [placed, quota])
 
 
 ## Uneven fairground curtain: waving height, mixed colours, lit pillars, corner towers.

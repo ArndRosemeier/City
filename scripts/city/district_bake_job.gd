@@ -39,13 +39,19 @@ static func bake(params: Dictionary) -> Dictionary:
 	gen.max_building_height_vox = int(params.get("max_building_height_vox", 200))
 	gen.voxel_size = float(params.get("voxel_size", 0.5))
 	gen.theme = theme
-	## Hills paint exactly this many gems (district constant, or that minus harvested).
+	## Hills / gaming maze paint exactly this many gems (district constant, or that minus harvested).
 	if (
 		quality != QUALITY_FAR
 		and theme.id == DistrictTheme.HILL
 		and params.has("hill_gem_mats_to_place")
 	):
 		gen.hill_gem_mats_to_place = params["hill_gem_mats_to_place"] as PackedInt32Array
+	if (
+		quality != QUALITY_FAR
+		and theme.id == DistrictTheme.GAMING
+		and params.has("gaming_gem_mats_to_place")
+	):
+		gen.gaming_gem_mats_to_place = params["gaming_gem_mats_to_place"] as PackedInt32Array
 	gen.begin_generate_offline(dseed, origin, coord)
 
 	gen.paint_district_ground_slab()

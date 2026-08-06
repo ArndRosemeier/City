@@ -17,6 +17,8 @@ class Recipe:
 	## When set, placing spends this many inventory charges (empty = free POC stamp).
 	var consume_item: String = ""
 	var consume_count: int = 0
+	## Adventure must find this as a scroll recipe before it can be assigned. Sandbox knows all.
+	var requires_recipe: bool = false
 
 
 static var _by_id: Dictionary = {}
@@ -49,6 +51,7 @@ static func ensure_loaded() -> void:
 		r.hint = str(row.get("hint", ""))
 		r.consume_item = str(row.get("consume_item", ""))
 		r.consume_count = int(row.get("consume_count", 0))
+		r.requires_recipe = bool(row.get("requires_recipe", false))
 		if not r.consume_item.is_empty() and r.consume_count <= 0:
 			push_error("BuildCatalog: '%s' consume_item set without consume_count" % id)
 			assert(false, "BuildCatalog: bad consume_count")
@@ -92,3 +95,19 @@ static func by_id(recipe_id: String) -> Recipe:
 		push_error("BuildCatalog.by_id: unknown recipe '%s'" % recipe_id)
 		return null
 	return _by_id[recipe_id] as Recipe
+
+
+static func has_id(recipe_id: String) -> bool:
+	ensure_loaded()
+	return _by_id.has(recipe_id)
+
+
+## Stamps that Adventure must learn from a scroll before they show up on the tray assign menu.
+static func discovery_recipes() -> Array[Recipe]:
+	ensure_loaded()
+	var out: Array[Recipe] = []
+	for id in _order:
+		var r := _by_id[id] as Recipe
+		if r.requires_recipe:
+			out.append(r)
+	return out

@@ -2156,7 +2156,10 @@
           1,
           25
         ]
-      ]
+      ],
+      "requires_recipe": true,
+      "consume_item": "gem_quartz",
+      "consume_count": 1
     },
     "cottage": {
       "display_name": "Cottage",
@@ -12242,7 +12245,10 @@
           3,
           25
         ]
-      ]
+      ],
+      "requires_recipe": true,
+      "consume_item": "gem_quartz",
+      "consume_count": 1
     },
     "duck": {
       "display_name": "Duck Statue",
@@ -12794,7 +12800,10 @@
           0,
           27
         ]
-      ]
+      ],
+      "requires_recipe": true,
+      "consume_item": "gem_quartz",
+      "consume_count": 1
     },
     "elephant": {
       "display_name": "Elephant Statue",
@@ -14504,7 +14513,10 @@
           -6,
           4
         ]
-      ]
+      ],
+      "requires_recipe": true,
+      "consume_item": "gem_quartz",
+      "consume_count": 1
     },
     "hot_tub": {
       "display_name": "Hot Tub",
@@ -14954,7 +14966,8 @@
           3,
           25
         ]
-      ]
+      ],
+      "requires_recipe": true
     },
     "pool": {
       "display_name": "Swimming Pool",
@@ -33440,7 +33453,10 @@
           17,
           11
         ]
-      ]
+      ],
+      "requires_recipe": true,
+      "consume_item": "gem_sapphire",
+      "consume_count": 1
     },
     "pyramid": {
       "display_name": "Pyramid",
@@ -37709,7 +37725,7 @@
       "fractal": 20,
       "arena": 15,
       "zoo": 12,
-      "gaming": 14,
+      "gaming": 40,
       "siege": 30
     },
     "rarity_weights": {
@@ -37734,12 +37750,7 @@
       "hardness_exotic"
     ],
     "default_sandbox_builds": [
-      "cottage",
-      "pool",
-      "hot_tub",
-      "dog",
-      "cat",
-      "duck"
+      "cottage"
     ]
   },
   "chest_loot": {
@@ -37759,6 +37770,7 @@
       "arena-tower": 100,
       "gazebo": 100,
       "zoo-gazebo": 50,
+      "tetris-cabinet": 50,
       "island": 45,
       "fractal-peak": 100,
       "crypt": 25,

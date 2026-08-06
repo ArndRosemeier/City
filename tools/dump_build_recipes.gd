@@ -12,11 +12,17 @@ func _init() -> void:
 		while i + 3 < packed.size():
 			voxels.append([packed[i], packed[i + 1], packed[i + 2], packed[i + 3]])
 			i += 4
-		out[recipe.id] = {
+		var row: Dictionary = {
 			"display_name": recipe.display_name,
 			"hint": recipe.hint,
 			"voxels": voxels,
 		}
+		if not recipe.consume_item.is_empty():
+			row["consume_item"] = recipe.consume_item
+			row["consume_count"] = recipe.consume_count
+		if recipe.requires_recipe:
+			row["requires_recipe"] = true
+		out[recipe.id] = row
 	print("BUILD_RECIPES_JSON_BEGIN")
 	print(JSON.stringify(out))
 	print("BUILD_RECIPES_JSON_END")

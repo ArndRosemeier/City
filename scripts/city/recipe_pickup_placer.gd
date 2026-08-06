@@ -22,6 +22,8 @@ const SITE_ROOFTOP := 7
 const SITE_CHEST := 8
 ## One of the Monster Zoo gazebo roofs (summon stations + battlefield bandstands).
 const SITE_ZOO_GAZEBO := 9
+## Top of a Gaming-district Tetris cabinet (one roll per bay).
+const SITE_TETRIS_CABINET := 10
 
 const GameDataScript := preload("res://scripts/city/game_data.gd")
 
@@ -54,6 +56,8 @@ static func site_kind_name(kind: int) -> String:
 			return "chest"
 		SITE_ZOO_GAZEBO:
 			return "zoo-gazebo"
+		SITE_TETRIS_CABINET:
+			return "tetris-cabinet"
 		_:
 			push_error("RecipePickupPlacer.site_kind_name: unknown kind %d" % kind)
 			return "unknown"

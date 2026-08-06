@@ -117,6 +117,17 @@ func _check_mode_starting_books() -> void:
 		_fail("FAIL adventure must not know the trap recipe")
 	if adv.knows_recipe(InventoryCatalog.RECIPE_CLOUDSTONE):
 		_fail("FAIL adventure must not know the cloudstone craft")
+	if InventoryCatalog.build_discovery_recipes().is_empty():
+		_fail("FAIL expected discoverable build stamps in the cookbook")
+	if adv.knows_recipe("hot_tub") or adv.is_unlocked("hot_tub"):
+		_fail("FAIL adventure must not start with the hot tub recipe")
+	if not adv.is_unlocked("cottage"):
+		_fail("FAIL cottage must stay a free starter stamp")
+	if adv.slot_at(0) != "cottage":
+		_fail("FAIL adventure F1 should be cottage, not a discovery stamp")
+	for i in range(1, 6):
+		if not adv.slot_at(i).is_empty():
+			_fail("FAIL adventure F%d should be empty after discovery migration" % (i + 1))
 
 	var sand: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 	sand.reset_sandbox()
@@ -126,6 +137,8 @@ func _check_mode_starting_books() -> void:
 		_fail("FAIL sandbox must know the cloudstone craft")
 	if not sand.knows_ability_schematic(AbilityRegistry.ID_MINION):
 		_fail("FAIL sandbox must know every schematic")
+	if not sand.knows_recipe("hot_tub") or not sand.is_unlocked("hot_tub"):
+		_fail("FAIL sandbox must know every build discovery recipe")
 	if not sand.missing_recipe_ids().is_empty():
 		_fail("FAIL sandbox must be missing nothing")
 	print("OK adventure starts empty, sandbox starts complete")
@@ -158,6 +171,12 @@ func _check_learn_and_craft_gate() -> void:
 	city._inventory.add(InventoryCatalog.ID_EMERALD, 5)
 	if not city.try_unlock_ability(AbilityRegistry.ID_STOMP):
 		_fail("FAIL a known and funded power must unlock")
+	if adv.is_unlocked("pool"):
+		_fail("FAIL pool stamp must stay locked until its recipe is learned")
+	if not adv.learn_recipe("pool"):
+		_fail("FAIL learning the pool recipe should report a new recipe")
+	if not adv.is_unlocked("pool"):
+		_fail("FAIL learning the pool recipe must unlock the stamp")
 	city.queue_free()
 	print("OK schematic gates the unlock, and only its own power")
 
@@ -295,6 +314,13 @@ func _check_site_ids_and_chances() -> void:
 		)
 	if RecipePickupPlacer.site_kind_name(RecipePickupPlacer.SITE_ZOO_GAZEBO) != "zoo-gazebo":
 		_fail("FAIL SITE_ZOO_GAZEBO name is wrong")
+	if RecipePickupPlacer.chance_pct(RecipePickupPlacer.SITE_TETRIS_CABINET) != 50:
+		_fail(
+			"FAIL tetris-cabinet chance is %d, want 50"
+			% RecipePickupPlacer.chance_pct(RecipePickupPlacer.SITE_TETRIS_CABINET)
+		)
+	if RecipePickupPlacer.site_kind_name(RecipePickupPlacer.SITE_TETRIS_CABINET) != "tetris-cabinet":
+		_fail("FAIL SITE_TETRIS_CABINET name is wrong")
 	var hits := 0
 	for seed_i in range(200):
 		if RecipePickupPlacer.should_place(RecipePickupPlacer.SITE_ROOFTOP, seed_i * 7919):
@@ -307,6 +333,12 @@ func _check_site_ids_and_chances() -> void:
 			zoo_hits += 1
 	if zoo_hits < 60 or zoo_hits > 140:
 		_fail("FAIL zoo-gazebo roll landed %d/200 times (want ~50%%)" % zoo_hits)
+	var tetris_hits := 0
+	for seed_i in range(200):
+		if RecipePickupPlacer.should_place(RecipePickupPlacer.SITE_TETRIS_CABINET, seed_i * 7919):
+			tetris_hits += 1
+	if tetris_hits < 60 or tetris_hits > 140:
+		_fail("FAIL tetris-cabinet roll landed %d/200 times (want ~50%%)" % tetris_hits)
 	print("OK site ids are stable and unique, chances behave")
 
 

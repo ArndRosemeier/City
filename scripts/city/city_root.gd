@@ -1826,7 +1826,10 @@ func activate_ability(ability_id: String) -> void:
 		push_error("CityRoot.activate_ability: unknown '%s'" % ability_id)
 		return
 	if not can_use_ability(ability_id):
-		print("CityRoot: '%s' is locked — unlock it with gems" % def.display_name)
+		if def.kind == AbilityRegistry.KIND_BUILD:
+			print("CityRoot: '%s' is locked — find its recipe first" % def.display_name)
+		else:
+			print("CityRoot: '%s' is locked — unlock it with gems" % def.display_name)
 		return
 	match ability_id:
 		AbilityRegistry.ID_BLASTER:
@@ -2179,6 +2182,28 @@ func hill_gem_paint_list(coord: Vector2i) -> PackedInt32Array:
 			% [str(coord), paint.size(), harvested, want]
 		)
 	return paint
+
+
+## Gems a gaming maze bake should paint: theme total, or that minus already harvested.
+func gaming_gem_paint_list(coord: Vector2i) -> PackedInt32Array:
+	var dseed := DistrictCoord.district_seed(city_seed, coord)
+	var theme := DistrictTheme.for_district(city_seed, coord)
+	assert(
+		theme.id == DistrictTheme.GAMING,
+		"gaming_gem_paint_list called for non-gaming %s (%s)" % [str(coord), theme.display_name]
+	)
+	if _loadout == null or not _loadout.uses_gem_budgets():
+		return DistrictEconomy.flat_gem_list(
+			DistrictEconomy.roll_budgets(DistrictTheme.GAMING, dseed)
+		)
+	if not _economy.has_row(coord):
+		var budgets := DistrictEconomy.roll_budgets(DistrictTheme.GAMING, dseed)
+		_economy.ensure_row(coord, budgets, DistrictTheme.GAMING)
+		print(
+			"CityRoot: district %s (Gaming) owes %d gems"
+			% [str(coord), _economy.remaining_total(coord)]
+		)
+	return _economy.remaining_flat_list(coord)
 
 
 ## Spend one gem of `mat_id` from the district that holds `world_vox`.

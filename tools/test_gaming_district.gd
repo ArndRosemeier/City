@@ -6,6 +6,7 @@ extends Node
 const DistrictBakeJobScript := preload("res://scripts/city/district_bake_job.gd")
 const DistrictPlannerScript := preload("res://scripts/city/district_planner.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+const GameDataScript := preload("res://scripts/city/game_data.gd")
 
 const WORLD_SEED := 42
 const MAX_RING := 10
@@ -22,6 +23,13 @@ func _ready() -> void:
 	CityVoxelNativeScript.require_loaded()
 	if DistrictTheme.parse_theme_id("gaming") != DistrictTheme.GAMING:
 		_fail("FAIL parse_theme_id gaming")
+		_quit()
+		return
+	if GameDataScript.theme_gem_total(DistrictTheme.GAMING) != 40:
+		_fail(
+			"FAIL gaming district_gems budget is %d, want 40"
+			% GameDataScript.theme_gem_total(DistrictTheme.GAMING)
+		)
 		_quit()
 		return
 	var coord := DistrictTheme.find_coord_for_theme(WORLD_SEED, DistrictTheme.GAMING, MAX_RING)
@@ -60,10 +68,14 @@ func _ready() -> void:
 		_quit()
 		return
 
+	var gem_quota := DistrictEconomy.flat_gem_list(
+		DistrictEconomy.roll_budgets(DistrictTheme.GAMING, dseed)
+	)
 	var t0 := Time.get_ticks_msec()
 	var res: Dictionary = DistrictBakeJobScript.bake({
 		"coord": coord,
 		"world_seed": WORLD_SEED,
+		"gaming_gem_mats_to_place": gem_quota,
 	})
 	var bake_ms := Time.get_ticks_msec() - t0
 	if not bool(res.get("ok", false)):
@@ -196,6 +208,24 @@ func _ready() -> void:
 		% [wall, layout.wall_gate_rects.size(), fence, layout.gate_rects.size()]
 	)
 
+	## Maze passages hold the district gem budget on the floor (air above the deck).
+	var gem_total := _count_gems_on_maze_floor(blocks, layout, deck)
+	if gem_total != gem_quota.size():
+		_fail(
+			"FAIL maze floor holds %d gem voxels, budgeted %d" % [gem_total, gem_quota.size()]
+		)
+		_quit()
+		return
+	print("maze floor gems=%d (quota %d)" % [gem_total, gem_quota.size()])
+
+	if layout.arcade_cabinets.size() != GamingArcade.CABINETS:
+		_fail(
+			"FAIL arcade cabinets %d, want %d"
+			% [layout.arcade_cabinets.size(), GamingArcade.CABINETS]
+		)
+		_quit()
+		return
+
 	if _failed:
 		_quit()
 		return
@@ -206,6 +236,21 @@ func _ready() -> void:
 const BLOCK := 16
 ## Offset along a fence face that stays clear of the mid-edge gate opening.
 const GATE_PROBE_OFF := 18
+
+
+## Count gem voxels on labyrinth passage floors (deck+1, outside the attraction fence).
+func _count_gems_on_maze_floor(blocks: Dictionary, layout: GamingLayout, deck: int) -> int:
+	var wall := layout.wall_rect.grow(-GamingComposer.WALL_THICK)
+	var fence := layout.fence_rect
+	var floor_y := deck + 1
+	var n := 0
+	for z in range(wall.position.y, wall.end.y):
+		for x in range(wall.position.x, wall.end.x):
+			if fence.has_point(Vector2i(x, z)):
+				continue
+			if VoxelMaterial.is_gem(_probe(blocks, x, floor_y, z)):
+				n += 1
+	return n
 
 
 func _probe(blocks: Dictionary, x: int, y: int, z: int) -> int:

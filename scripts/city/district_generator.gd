@@ -104,6 +104,8 @@ var _hill_gem_positions: PackedVector3Array = PackedVector3Array()
 var _hill_gem_mats: PackedInt32Array = PackedInt32Array()
 ## Exact remaining gems for the next hill compose (constant or constant − harvested).
 var hill_gem_mats_to_place: PackedInt32Array = PackedInt32Array()
+## Exact remaining gems for the gaming maze scatter (same contract as the hill list).
+var gaming_gem_mats_to_place: PackedInt32Array = PackedInt32Array()
 ## Daylight cave mouths (district-local XZ) + summit for outside-the-entrance spawn.
 var _hill_cave_mouths: PackedVector2Array = PackedVector2Array()
 var _hill_cave_summit: Vector2i = Vector2i(-1, -1)
@@ -384,6 +386,7 @@ func _setup_composers() -> void:
 	_gaming.planner = _planner
 	_gaming.cell_size = cell_size
 	_gaming.voxel_size = voxel_size
+	_gaming.gem_mats_to_place = gaming_gem_mats_to_place
 	_gaming_layout = null
 
 	_siege = SiegeComposerScript.new()

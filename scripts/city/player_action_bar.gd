@@ -8,11 +8,6 @@ const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 const SLOT_COUNT := 6
 const DEFAULT_BINDS: Array[String] = [
 	"cottage",
-	"pool",
-	"hot_tub",
-	"dog",
-	"cat",
-	"duck",
 ]
 
 signal build_requested(recipe_id: String)

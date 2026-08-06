@@ -415,6 +415,12 @@ func rebuild_recipe_lists() -> void:
 		urow.is_unlock = true
 		urow.button.pressed.connect(_on_unlock_pressed.bind(def.id))
 
+	## Discovery builds: nameless blanks while missing; once learned they live on the tray assign
+	## menu (nothing to craft or buy here), so they never get a named Construct row.
+	for recipe in InventoryCatalog.build_discovery_recipes():
+		if not _knows_recipe(recipe.id):
+			locked_count += 1
+
 	if known_crafts.is_empty() and known_unlocks.is_empty():
 		var empty := Label.new()
 		empty.text = "No recipes yet — explore"

@@ -138,11 +138,26 @@ func is_unlocked(ability_id: String) -> bool:
 	var def := AbilityRegistry.get_def(ability_id)
 	if def == null:
 		return false
+	## Discovery-gated builds stay off the assign menu until a scroll teaches them.
+	if def.kind == AbilityRegistry.KIND_BUILD:
+		return knows_build_recipe(ability_id)
 	if not def.gated:
 		return true
 	if is_sandbox():
 		return true
 	return bool(unlocks.get(ability_id, false))
+
+
+## Free stamps are always known; `requires_recipe` builds need the matching cookbook entry.
+func knows_build_recipe(ability_id: String) -> bool:
+	if not BuildCatalog.has_id(ability_id):
+		return false
+	var build := BuildCatalog.by_id(ability_id)
+	if build == null:
+		return false
+	if not build.requires_recipe:
+		return true
+	return knows_recipe(ability_id)
 
 
 func mark_unlocked(ability_id: String) -> void:

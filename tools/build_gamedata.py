@@ -329,11 +329,6 @@ def _abilities() -> tuple[dict, dict]:
         "minion_duration_sec": 60.0,
         "default_sandbox_builds": [
             "cottage",
-            "pool",
-            "hot_tub",
-            "dog",
-            "cat",
-            "duck",
         ],
     }
     return abilities, constants

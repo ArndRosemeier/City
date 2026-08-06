@@ -768,6 +768,7 @@ func _place_recipe_pickups(gen: DistrictGenerator, origin_vox: Vector3i) -> void
 	_place_hill_summit_recipe(gen, origin_vox)
 	_place_gazebo_recipe(gen, origin_vox)
 	_place_zoo_gazebo_recipe(gen, origin_vox)
+	_place_tetris_cabinet_recipes(gen, origin_vox)
 	## Fractal recipes come from lock-on Create → peak (MandelbrotArena), not stream-time.
 	_place_lake_island_recipe(gen, origin_vox)
 	_place_crypt_recipe(gen, origin_vox)
@@ -854,6 +855,31 @@ func _place_zoo_gazebo_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> v
 		_landmark_world(Vector2i(roof.x, roof.z), roof.y + 1, origin_vox),
 		site_seed
 	)
+
+
+## Gaming arcade: each Tetris bay rolls on its own. Anchors are bake-time, so the scroll can
+## stand before the live cabinet stamps its shell. Height matches TetrisMachine.FRAME_H.
+func _place_tetris_cabinet_recipes(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var layout := gen.get_gaming_layout()
+	if layout == null or layout.arcade_cabinets.is_empty():
+		return
+	for i in range(layout.arcade_cabinets.size()):
+		if recipe_pickups.at_capacity():
+			return
+		var cell: Vector3i = layout.arcade_cabinets[i]
+		## Same XZ as `_stand_world`; Y is the cabinet crown plus a half-metre float.
+		var top := Vector3(
+			(float(origin_vox.x + cell.x) + 0.5) * _voxel_size,
+			float(origin_vox.y + cell.y + 1) * _voxel_size + TetrisMachine.FRAME_H + 0.5,
+			(float(origin_vox.z + cell.z) + 0.5) * _voxel_size
+		)
+		recipe_pickups.try_place(
+			RecipePickupPlacer.SITE_TETRIS_CABINET,
+			coord,
+			i,
+			top,
+			(_dseed ^ 0x7E7C15) + i * 7919
+		)
 
 
 ## The tallest island only. A lake can hold three, and a scroll on each would turn a rare find
@@ -1340,6 +1366,16 @@ func _bake_on_worker() -> Dictionary:
 			params["hill_gem_mats_to_place"] = DistrictEconomy.flat_gem_list(
 				DistrictEconomy.roll_budgets(
 					DistrictTheme.HILL, DistrictCoord.district_seed(_world_seed, coord)
+				)
+			)
+	if bake_quality != "far" and theme.id == DistrictTheme.GAMING:
+		var city_g := _find_city_root()
+		if city_g != null and city_g.has_method("gaming_gem_paint_list"):
+			params["gaming_gem_mats_to_place"] = city_g.call("gaming_gem_paint_list", coord)
+		else:
+			params["gaming_gem_mats_to_place"] = DistrictEconomy.flat_gem_list(
+				DistrictEconomy.roll_budgets(
+					DistrictTheme.GAMING, DistrictCoord.district_seed(_world_seed, coord)
 				)
 			)
 	var mutex := Mutex.new()

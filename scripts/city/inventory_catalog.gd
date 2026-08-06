@@ -28,6 +28,8 @@ const RECIPE_CLOUDSTONE := "cloudstone_from_amber"
 
 const RECIPE_KIND_CRAFT := "craft"
 const RECIPE_KIND_SCHEMATIC := "schematic"
+## Learn-only: unlocks a BuildCatalog stamp for tray assign. No craft inputs, no gem spend.
+const RECIPE_KIND_BUILD := "build"
 const SCHEMATIC_PREFIX := "schematic_"
 
 
@@ -110,6 +112,7 @@ static func ensure_loaded() -> void:
 			recipe.inputs = (inputs_raw as Dictionary).duplicate()
 		_recipes[id] = recipe
 	_register_schematics()
+	_register_build_discoveries()
 
 
 ## One schematic per gem-priced ability, derived from the registry so a new power cannot ship
@@ -121,6 +124,24 @@ static func _register_schematics() -> void:
 		recipe.display_name = def.display_name
 		recipe.kind = RECIPE_KIND_SCHEMATIC
 		recipe.unlocks_ability = def.id
+		_recipes[recipe.id] = recipe
+
+
+## Build stamps marked `requires_recipe` enter the scroll cookbook under their build id.
+static func _register_build_discoveries() -> void:
+	for build in BuildCatalog.discovery_recipes():
+		if _recipes.has(build.id):
+			push_error(
+				"InventoryCatalog: build discovery id '%s' collides with an existing recipe"
+				% build.id
+			)
+			assert(false, "InventoryCatalog: build discovery id collision")
+			continue
+		var recipe := Recipe.new()
+		recipe.id = build.id
+		recipe.display_name = build.display_name
+		recipe.kind = RECIPE_KIND_BUILD
+		recipe.unlocks_ability = build.id
 		_recipes[recipe.id] = recipe
 
 
@@ -183,6 +204,15 @@ static func schematic_recipes() -> Array[Recipe]:
 	var out: Array[Recipe] = []
 	for r in all_recipes():
 		if r.kind == RECIPE_KIND_SCHEMATIC:
+			out.append(r)
+	return out
+
+
+## Learn-only build stamps — scroll discovery gates tray assign, nothing to craft or buy.
+static func build_discovery_recipes() -> Array[Recipe]:
+	var out: Array[Recipe] = []
+	for r in all_recipes():
+		if r.kind == RECIPE_KIND_BUILD:
 			out.append(r)
 	return out
 

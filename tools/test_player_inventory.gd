@@ -457,7 +457,11 @@ func _check_locked_recipes_stay_nameless() -> void:
 	for _i in range(SETTLE_FRAMES):
 		await get_tree().process_frame
 
-	var total := InventoryCatalog.craft_recipes().size() + AbilityRegistry.unlockable_defs().size()
+	var total := (
+		InventoryCatalog.craft_recipes().size()
+		+ AbilityRegistry.unlockable_defs().size()
+		+ InventoryCatalog.build_discovery_recipes().size()
+	)
 	var rows := panel.recipe_rows()
 	var locked := panel.locked_box_count()
 	if rows.size() != 2:

@@ -1,7 +1,8 @@
 ## Every assignable tray entry: weapons, powers, consumable uses, and free builds.
 ##
 ## "Unlocked" means may be assigned. Sandbox treats every non-build combat/power id as unlocked;
-## Adventure starts with `blaster` and spends gems for the rest. Builds are never gated.
+## Adventure starts with `blaster` and spends gems for the rest. Free builds assign immediately;
+## `requires_recipe` stamps wait on cookbook discovery (see PlayerLoadout.knows_build_recipe).
 ##
 ## Authored ability rows + balance constants live in `assets/gamedata.json` via GameData.
 ## Build tray entries are still registered from BuildCatalog (also GameData-backed).
@@ -47,7 +48,7 @@ static var SHIELD_DRAIN_PER_SEC: float = 8.0
 static var MINION_MAX: int = 1
 static var MINION_DURATION_SEC: float = 60.0
 static var _default_sandbox_builds: Array[String] = [
-	"cottage", "pool", "hot_tub", "dog", "cat", "duck"
+	"cottage",
 ]
 
 
@@ -201,7 +202,7 @@ static func default_adventure_tray() -> Array[String]:
 	slots.resize(SLOT_COUNT)
 	for i in range(SLOT_COUNT):
 		slots[i] = ""
-	## Free builds on F-keys so the bar is not blank; combat starts as blaster only.
+	## Starter free builds on F-keys (cottage); discovery stamps stay off until learned.
 	for i in range(mini(6, _default_sandbox_builds.size())):
 		slots[i] = _default_sandbox_builds[i]
 	slots[SLOT_MOUSE_LMB] = ID_BLASTER

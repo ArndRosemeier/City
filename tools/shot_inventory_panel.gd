@@ -216,7 +216,11 @@ func _shoot_undiscovered_column(city: CityRoot, panel: PlayerInventoryPanel) -> 
 	await _frames(6)
 	var rows := panel.recipe_rows()
 	var locked := panel.locked_box_count()
-	var total := InventoryCatalog.craft_recipes().size() + AbilityRegistry.unlockable_defs().size()
+	var total := (
+		InventoryCatalog.craft_recipes().size()
+		+ AbilityRegistry.unlockable_defs().size()
+		+ InventoryCatalog.build_discovery_recipes().size()
+	)
 	if not rows.is_empty():
 		push_error("FAIL an empty cookbook still listed %d recipes by name" % rows.size())
 		return false
