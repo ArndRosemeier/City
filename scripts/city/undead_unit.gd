@@ -1212,6 +1212,9 @@ func _on_trapped(_world_pos: Vector3, _escape: NavLadder.Escape) -> void:
 ## A `can_break` body is entombed, and breaking out is what the profile promised. The pocket
 ## is carved through CityBrush — the one live write funnel — so `voxels_changed` fires and
 ## the nav field rebuilds over the hole instead of the body standing in a stale one.
+##
+## Containment fabric (hill cave cage, zoo fence) and NEVER cells are left alone — those are
+## player-gated. A CageDemon on `MONSTER_BREAKER` used to vaporise its own cage on dig-out.
 func _on_dig_out_requested(world_pos: Vector3) -> void:
 	if _terrain == null:
 		push_error("UndeadUnit %s: entombed with no terrain to dig out of" % name)
@@ -1229,11 +1232,17 @@ func _on_dig_out_requested(world_pos: Vector3) -> void:
 	## From the feet up: the voxel below stays, so the pocket has a floor to be a span on.
 	var floor_y := floori(local.y)
 	var r := profile.radius_cells + DIG_OUT_MARGIN_CELLS
-	brush.fill_box(
-		Vector3i(cx - r, floor_y, cz - r),
-		Vector3i(cx + r + 1, floor_y + profile.height_cells + DIG_OUT_MARGIN_CELLS, cz + r + 1),
-		VoxelMaterial.AIR
-	)
+	var y1 := floor_y + profile.height_cells + DIG_OUT_MARGIN_CELLS
+	brush.begin_edit()
+	for z in range(cz - r, cz + r + 1):
+		for x in range(cx - r, cx + r + 1):
+			for y in range(floor_y, y1):
+				var vox := Vector3i(x, y, z)
+				var mat := brush.get_vox(vox)
+				if VoxelMaterial.resists_monster_dig_out(mat):
+					continue
+				brush.set_vox(vox, VoxelMaterial.AIR)
+	brush.end_edit()
 	CityProfiler.add_counter("undead_dig_out")
 
 

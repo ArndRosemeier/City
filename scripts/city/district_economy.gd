@@ -34,9 +34,6 @@ const OWED_KEY := "owed"
 
 const GameDataScript := preload("res://scripts/city/game_data.gd")
 
-## Score for walking into a tile for the first time. Read from GameData (district_gems).
-static var EXPLORE_SCORE: int = 50
-
 ## coord key → {q,a,t,s,e,d: int, explored: bool}
 var _rows: Dictionary[String, Dictionary] = {}
 
@@ -65,7 +62,6 @@ static func gem_slot(gem_mat: int) -> int:
 ## district so the same coord in the same world always owes the same gems.
 static func roll_budgets(theme_id: int, district_seed: int) -> Dictionary[int, int]:
 	var out := _empty_budget()
-	EXPLORE_SCORE = GameDataScript.explore_score()
 	var total := GameDataScript.theme_gem_total(theme_id)
 	if total <= 0:
 		push_error("DistrictEconomy.roll_budgets: theme %d has no gem total" % theme_id)
@@ -271,7 +267,7 @@ func is_explored(coord: Vector2i) -> bool:
 	return bool(row.get(EXPLORED_KEY, false))
 
 
-## Flag a tile explored. True only the first time, which is what the score pays on.
+## Flag a tile explored. True only the first time — discovery drops a gem once per tile.
 func mark_explored(coord: Vector2i) -> bool:
 	var key := coord_key(coord)
 	if not _rows.has(key):

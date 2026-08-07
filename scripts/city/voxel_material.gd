@@ -411,6 +411,16 @@ static func is_cave_cage(id: int) -> bool:
 	return id == CAVE_CAGE_FRAME or id == CAVE_CAGE_LINE or id == CAVE_CAGE_GLASS
 
 
+## Monster dig-out / crumble must not open player-gated containment (cage, zoo fence) or
+## immortal cells. Dig-out used to `fills_box` AIR and the caged hill boss walked free.
+static func resists_monster_dig_out(id: int) -> bool:
+	if id == AIR or id == WATER:
+		return true
+	if is_cave_cage(id) or is_zoo_fence(id):
+		return true
+	return hardness(id) == Hardness.NEVER
+
+
 ## Player damage on this cell runs a dissolve cascade (see `dissolves_with`).
 static func is_dissolve(id: int) -> bool:
 	return is_cave_cage(id)

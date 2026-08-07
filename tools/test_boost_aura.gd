@@ -181,8 +181,8 @@ func _check_hud_chips() -> void:
 		walker.queue_free()
 		hud.queue_free()
 		return
-	if not buff_area.position.is_equal_approx(Vector2(16.0, 38.0)):
-		_fail("FAIL BuffArea should sit below the FPS line, got %s" % buff_area.position)
+	if not buff_area.position.is_equal_approx(Vector2(16.0, 48.0)):
+		_fail("FAIL BuffArea should sit below the place chrome, got %s" % buff_area.position)
 
 	walker.begin_speed_boost(12.0)
 	hud.call("_refresh")

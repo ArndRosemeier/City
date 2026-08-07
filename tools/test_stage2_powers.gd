@@ -36,7 +36,7 @@ func _ready() -> void:
 	_check_hardness_tiers()
 	_check_stomp_unbound()
 	await _check_save_loadout_round_trip()
-	await _check_trap_holds_ped_and_scores()
+	await _check_trap_holds_ped()
 	_wipe_scratch()
 	GameSaveScript.use_default_directory()
 	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
@@ -77,8 +77,8 @@ func _check_modes_and_unlocks() -> void:
 	sand.reset_sandbox()
 	if not sand.is_sandbox() or not sand.is_unlocked(AbilityRegistry.ID_LASER):
 		_fail("FAIL sandbox must unlock laser")
-	if sand.uses_gem_budgets() or sand.scores():
-		_fail("FAIL sandbox must skip budgets and score")
+	if sand.uses_gem_budgets():
+		_fail("FAIL sandbox must skip gem budgets")
 
 	var adv: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 	adv.reset_adventure()
@@ -90,8 +90,8 @@ func _check_modes_and_unlocks() -> void:
 		_fail("FAIL adventure laser starts locked")
 	if adv.is_unlocked(AbilityRegistry.ID_STOMP):
 		_fail("FAIL adventure stomp starts locked")
-	if not adv.uses_gem_budgets() or not adv.scores():
-		_fail("FAIL adventure must use budgets and score")
+	if not adv.uses_gem_budgets():
+		_fail("FAIL adventure must use gem budgets")
 
 	var city := TestCity.new()
 	add_child(city)
@@ -241,7 +241,7 @@ func _check_save_loadout_round_trip() -> void:
 	loadout.mark_unlocked(AbilityRegistry.ID_HARDNESS_REINFORCED)
 	loadout.set_slot(AbilityRegistry.SLOT_MOUSE_CTRL, AbilityRegistry.ID_LASER)
 	var data := GameSaveScript.capture(
-		WORLD_SEED, walker, inventory, "Stage2", null, 75, loadout
+		WORLD_SEED, walker, inventory, "Stage2", null, loadout
 	)
 	if data.is_empty():
 		_fail("FAIL capture empty")
@@ -251,8 +251,8 @@ func _check_save_loadout_round_trip() -> void:
 		_fail("FAIL save version want %d" % GameSaveScript.VERSION)
 	if str(data.get("mode", "")) != PlayerLoadout.MODE_ADVENTURE:
 		_fail("FAIL save mode missing")
-	if GameSaveScript.saved_score(data) != 75:
-		_fail("FAIL save score")
+	if data.has("score"):
+		_fail("FAIL new saves must not carry a score field")
 	var restored: PlayerLoadout = PlayerLoadoutScript.new() as PlayerLoadout
 	GameSaveScript.apply_loadout(restored, data)
 	if not restored.is_adventure():
@@ -267,13 +267,7 @@ func _check_save_loadout_round_trip() -> void:
 	print("OK GameSave v%d loadout round-trip" % GameSaveScript.VERSION)
 
 
-func _check_trap_holds_ped_and_scores() -> void:
-	var city := TestCity.new()
-	add_child(city)
-	city._loadout = PlayerLoadoutScript.new() as PlayerLoadout
-	city._loadout.reset_adventure()
-	city._player_score = 0
-
+func _check_trap_holds_ped() -> void:
 	var ped: PedAgent = PedAgentScript.new() as PedAgent
 	ped.name = "TrapPed"
 	add_child(ped)
@@ -281,28 +275,5 @@ func _check_trap_holds_ped_and_scores() -> void:
 	ped.begin_trap_hold(ArmedTrap.HOLD_SEC)
 	if not ped.is_trap_held():
 		_fail("FAIL ped should be trap-held")
-
-	var undead := CharacterBody3D.new()
-	undead.name = "FakeUndead"
-	undead.add_to_group("undead")
-	add_child(undead)
-	city._on_trap_triggered(undead)
-	if city.get_player_score() != AbilityRegistry.TRAP_HOSTILE_SCORE:
-		_fail(
-			"FAIL adventure hostile trap score want %d got %d"
-			% [AbilityRegistry.TRAP_HOSTILE_SCORE, city.get_player_score()]
-		)
-	city._on_trap_triggered(ped)
-	if city.get_player_score() != AbilityRegistry.TRAP_HOSTILE_SCORE:
-		_fail("FAIL trapping a ped must not add score")
-
-	city._loadout.reset_sandbox()
-	city._player_score = 10
-	city._on_trap_triggered(undead)
-	if city.get_player_score() != 10:
-		_fail("FAIL sandbox must not write trap score")
-
 	ped.queue_free()
-	undead.queue_free()
-	city.queue_free()
-	print("OK trap hold + hostile score gating")
+	print("OK trap hold still freezes a pedestrian")

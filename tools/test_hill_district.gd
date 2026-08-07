@@ -223,6 +223,31 @@ func _ready() -> void:
 		"spawn=(%.1f, %.1f, %.1f) yaw=%.2f"
 		% [spawn.x, spawn.y, spawn.z, float(gen.last_spawn_yaw)]
 	)
+	var gates := gen.get_hill_cave_gate_towers()
+	print("cave gate towers=%d" % gates.size())
+	if gates.size() != 2:
+		_fail("FAIL expected 2 cave-gate spiral towers, got %d" % gates.size())
+		_quit()
+		return
+	var g0 := Vector2i(int(round(gates[0].x)), int(round(gates[0].z)))
+	var g1 := Vector2i(int(round(gates[1].x)), int(round(gates[1].z)))
+	if g0 == g1:
+		_fail("FAIL both cave-gate towers share the same centre %s" % g0)
+		_quit()
+		return
+	var sep := g0.distance_to(g1)
+	print(
+		"cave gate sep=%.1f crowns=%s %s"
+		% [sep, Vector3i(g0.x, int(round(gates[0].y)), g0.y), Vector3i(g1.x, int(round(gates[1].y)), g1.y)]
+	)
+	if sep < 16.0:
+		_fail("FAIL cave-gate towers too close (sep=%.1f), expected a clear left/right pair" % sep)
+		_quit()
+		return
+	if not _gate_towers_are_shell_shafts(gen, gates):
+		_fail("FAIL cave-gate towers missing tall ARENA_SHELL shafts")
+		_quit()
+		return
 
 	## Determinism: two bakes match theme + hill rect.
 	var res2: Dictionary = DistrictBakeJobScript.bake(_bake_params(coord, dseed))
@@ -318,6 +343,34 @@ func _count_daylight_mouths(gen: DistrictGenerator, mouths: PackedVector2Array) 
 		if ok:
 			lit += 1
 	return lit
+
+
+## Each gate centre should hold a solid ARENA_SHELL shaft from the deck through mid-rise.
+func _gate_towers_are_shell_shafts(
+	gen: DistrictGenerator, gates: PackedVector3Array
+) -> bool:
+	var vol: NativeOfflineVoxelVolume = gen.get_offline_volume()
+	if vol == null:
+		_fail("FAIL offline volume missing for gate-tower check")
+		return false
+	var deck := gen.ground_thickness
+	## Sample mid-shaft: foot is deck, rise is SpiralSpire.RISE (48).
+	var sample_y := deck + 24
+	for gi in range(gates.size()):
+		var g: Vector3 = gates[gi]
+		var x := int(round(g.x))
+		var z := int(round(g.z))
+		var crown_y := int(round(g.y))
+		if crown_y <= sample_y:
+			print("gate %d crown_y=%d is not above mid-shaft" % [gi, crown_y])
+			return false
+		if int(vol.get_vox(Vector3i(x, deck, z))) != VoxelMaterial.ARENA_SHELL:
+			print("gate %d plinth at (%d,%d) is not ARENA_SHELL" % [gi, x, z])
+			return false
+		if int(vol.get_vox(Vector3i(x, sample_y, z))) != VoxelMaterial.ARENA_SHELL:
+			print("gate %d shaft at (%d,%d,y=%d) is not ARENA_SHELL" % [gi, x, z, sample_y])
+			return false
+	return true
 
 
 ## Cardinal offsets from a daylit column, ordered nearest-first, reaching well past the shell.

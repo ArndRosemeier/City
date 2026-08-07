@@ -299,7 +299,7 @@ func _check_games_section() -> void:
 	})
 
 	var data := GameSaveScript.capture(
-		WORLD_SEED, walker, inventory, "Match", null, 0, null, games
+		WORLD_SEED, walker, inventory, "Match", null, null, games
 	)
 	if data.is_empty():
 		_fail("FAIL capture produced nothing with a match in progress")

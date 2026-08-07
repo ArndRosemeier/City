@@ -8,6 +8,7 @@ class_name ArenaComposer
 extends RefCounted
 
 const ForestComposerScript := preload("res://scripts/city/forest_composer.gd")
+const SpiralSpireScript := preload("res://scripts/city/spiral_spire.gd")
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
@@ -54,24 +55,6 @@ const LEFTOVER_FOREST_MIN_M := 10.0
 const LEFTOVER_FOREST_MAX_M := 20.0
 ## ForestComposer needs roughly this much clear XZ to plant at all.
 const LEFTOVER_PLOT_MIN := 40
-
-## Spindly corner spires. The colosseum used to top out at the seating deck, which left the
-## whole tile reading as a low disc; four thin towers give it a silhouette and somewhere to
-## climb to. Slender on purpose — a wide tower here would read as a second building.
-const SPIRE_HALF := 2
-## Voxels the shaft rises above the seating deck: 24 m of tower over a 5 m stand.
-const SPIRE_RISE := 48
-## Crown platform half-width and its parapet height.
-const SPIRE_CROWN_HALF := 4
-const SPIRE_PARAPET_H := 2
-## The climb: blocks winding round the shaft, one every `SPIRE_STEP_RISE` voxels. Half a metre
-## per step is a walk-up rather than a jump puzzle, which is the point — the puzzle is finding
-## the foot of the helix, not clearing each block.
-const SPIRE_STEP_RISE := 1
-const SPIRE_STEPS_PER_TURN := 16
-const SPIRE_STEP_HALF := 1
-## How far the step centres orbit from the shaft centre.
-const SPIRE_STEP_RADIUS := 4
 
 
 func compose(min_v: Vector3i, max_v: Vector3i) -> void:
@@ -341,7 +324,7 @@ func _finish_seating_deck() -> void:
 
 
 ## Four thin towers on the filleted corners of the outer mass, each wrapped in a helix of
-## stepping blocks so the crown is reachable on foot.
+## stepping blocks so the crown is reachable on foot. Shared stamp with the hill cave gate.
 func _build_corner_spires() -> void:
 	layout.corner_spires.clear()
 	var r := layout.outer_rect
@@ -353,61 +336,14 @@ func _build_corner_spires() -> void:
 		Vector2i(r.end.x - 1 - inset, r.end.y - 1 - inset),
 	]
 	var foot_y := layout.seating_y
-	var shaft_top := foot_y + SPIRE_RISE
 	for centre: Vector2i in centres:
-		_build_one_spire(centre, foot_y, shaft_top)
-		layout.corner_spires.append(
-			Vector3i(centre.x, shaft_top + 1 + SPIRE_PARAPET_H, centre.y)
+		var crown_y := SpiralSpireScript.stamp(
+			brush, centre, foot_y, VoxelMaterial.ARENA_SHELL, SpiralSpireScript.RISE
 		)
-
-
-func _build_one_spire(centre: Vector2i, foot_y: int, shaft_top: int) -> void:
-	brush.fill_box(
-		Vector3i(centre.x - SPIRE_HALF, foot_y + 1, centre.y - SPIRE_HALF),
-		Vector3i(centre.x + SPIRE_HALF + 1, shaft_top + 1, centre.y + SPIRE_HALF + 1),
-		VoxelMaterial.ARENA_SHELL
-	)
-	_build_spire_helix(centre, foot_y, shaft_top)
-	## Crown deck one voxel proud of the shaft, then a parapet ring so standing up here does not
-	## mean walking straight off a 24 m tower.
-	var deck_y := shaft_top + 1
-	brush.fill_box(
-		Vector3i(centre.x - SPIRE_CROWN_HALF, deck_y, centre.y - SPIRE_CROWN_HALF),
-		Vector3i(centre.x + SPIRE_CROWN_HALF + 1, deck_y + 1, centre.y + SPIRE_CROWN_HALF + 1),
-		VoxelMaterial.ARENA_SHELL
-	)
-	var ring_top := deck_y + SPIRE_PARAPET_H
-	for z in range(centre.y - SPIRE_CROWN_HALF, centre.y + SPIRE_CROWN_HALF + 1):
-		for x in range(centre.x - SPIRE_CROWN_HALF, centre.x + SPIRE_CROWN_HALF + 1):
-			var edge := (
-				x == centre.x - SPIRE_CROWN_HALF or x == centre.x + SPIRE_CROWN_HALF
-				or z == centre.y - SPIRE_CROWN_HALF or z == centre.y + SPIRE_CROWN_HALF
-			)
-			if not edge:
-				continue
-			brush.fill_box(
-				Vector3i(x, deck_y + 1, z),
-				Vector3i(x + 1, ring_top + 1, z + 1),
-				VoxelMaterial.ARENA_SHELL
-			)
-
-
-## The stepping helix. Each block is laid one voxel thick with the whole column beneath it left
-## alone, so the tower keeps its spindly outline instead of thickening into a cone.
-func _build_spire_helix(centre: Vector2i, foot_y: int, shaft_top: int) -> void:
-	var step := 0
-	var y := foot_y + 1
-	while y <= shaft_top:
-		var angle := TAU * float(step) / float(SPIRE_STEPS_PER_TURN)
-		var sx := centre.x + int(round(cos(angle) * float(SPIRE_STEP_RADIUS)))
-		var sz := centre.y + int(round(sin(angle) * float(SPIRE_STEP_RADIUS)))
-		brush.fill_box(
-			Vector3i(sx - SPIRE_STEP_HALF, y, sz - SPIRE_STEP_HALF),
-			Vector3i(sx + SPIRE_STEP_HALF + 1, y + 1, sz + SPIRE_STEP_HALF + 1),
-			VoxelMaterial.ARENA_SHELL
-		)
-		step += 1
-		y += SPIRE_STEP_RISE
+		if crown_y < 0:
+			push_error("ArenaComposer: corner spire stamp failed at %s" % centre)
+			continue
+		layout.corner_spires.append(Vector3i(centre.x, crown_y, centre.y))
 
 
 func _build_board_walls() -> void:

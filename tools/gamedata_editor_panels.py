@@ -718,9 +718,7 @@ ABILITY_FIELDS = (
     FieldSpec("hint", "hint", "str", required=True),
 )
 
-DISTRICT_SCALARS = (
-    FieldSpec("explore_score", "explore_score", "int", required=True, default=50),
-)
+DISTRICT_SCALARS: tuple[FieldSpec, ...] = ()
 DISTRICT_JSON = (
     FieldSpec("theme_totals", "theme_totals (JSON object)", "json", required=True, default={}, height=14),
     FieldSpec(
@@ -729,7 +727,6 @@ DISTRICT_JSON = (
 )
 
 CONSTANTS_SCALARS = (
-    FieldSpec("trap_hostile_score", "trap_hostile_score", "int", required=True),
     FieldSpec("boost_duration_sec", "boost_duration_sec", "float", required=True),
     FieldSpec("grow_shrink_duration_sec", "grow_shrink_duration_sec", "float", required=True),
     FieldSpec("shield_drain_per_sec", "shield_drain_per_sec", "float", required=True),

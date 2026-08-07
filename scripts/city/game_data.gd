@@ -179,10 +179,6 @@ static func district_gems() -> Dictionary:
 	return _section("district_gems")
 
 
-static func explore_score() -> int:
-	return int(district_gems().get("explore_score", 0))
-
-
 static func theme_gem_total(theme_id: int) -> int:
 	var totals: Dictionary = district_gems().get("theme_totals", {}) as Dictionary
 	for name: Variant in THEME_NAME_TO_ID.keys():

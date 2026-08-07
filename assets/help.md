@@ -87,7 +87,8 @@ and quits when nothing is.
 
 The city is a grid of tiles, each one a district with its own type. Five are ordinary urban
 quarters. The rest replace most of the street grid with one big spectacle, and only carry
-roads along their edges. The city is truely infinite in all directions.
+roads along their edges. The city is truely infinite in all directions. The first time you
+walk into a district, a gem appears about thirty metres in — look for the glow.
 
 ## Core High-Rise
 

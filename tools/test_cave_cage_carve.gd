@@ -71,6 +71,20 @@ func _ready() -> void:
 	if VoxelMaterial.is_dissolve(VoxelMaterial.STONE):
 		push_error("FAIL STONE wrongly dissolve")
 		failed = true
+	## Dig-out must spare the cage (CageDemon is MONSTER_BREAKER and will ask to dig).
+	for id in [
+		VoxelMaterial.CAVE_CAGE_FRAME,
+		VoxelMaterial.CAVE_CAGE_LINE,
+		VoxelMaterial.CAVE_CAGE_GLASS,
+		VoxelMaterial.ZOO_FENCE_GLASS,
+		VoxelMaterial.BEDROCK,
+	]:
+		if not VoxelMaterial.resists_monster_dig_out(id):
+			push_error("FAIL %d should resist monster dig-out" % id)
+			failed = true
+	if VoxelMaterial.resists_monster_dig_out(VoxelMaterial.BRICK):
+		push_error("FAIL BRICK wrongly resists monster dig-out")
+		failed = true
 	if VoxelMaterial.COUNT <= VoxelMaterial.CAVE_CAGE_GLASS:
 		push_error(
 			"FAIL COUNT %d <= CAVE_CAGE_GLASS %d"

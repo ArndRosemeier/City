@@ -680,6 +680,9 @@ func _test_giant_digs_out_through_the_brush() -> void:
 	_city.brush.fill_box(
 		centre + Vector3i(-16, -1, -16), centre + Vector3i(17, 12, 17), VoxelMaterial.BRICK
 	)
+	## Plant a cage pane inside the future pocket — dig-out must not vaporise containment.
+	var cage_cell := centre + Vector3i(2, 3, 0)
+	_city.brush.set_vox(cage_cell, VoxelMaterial.CAVE_CAGE_GLASS)
 	## Somebody real to want, out on the deck, so the query fails on the start rather than
 	## the goal — and far enough out that the stand-off point is clear of the brick too.
 	_city.prey_at = _w(Vector3i(110, 1, 60))
@@ -720,6 +723,9 @@ func _test_giant_digs_out_through_the_brush() -> void:
 		return
 	if _city.brush.get_vox(centre + Vector3i(0, -1, 0)) != VoxelMaterial.BRICK:
 		_fail("FAIL the dig-out removed the floor the giant has to stand on")
+		return
+	if _city.brush.get_vox(cage_cell) != VoxelMaterial.CAVE_CAGE_GLASS:
+		_fail("FAIL dig-out destroyed cave-cage glass (CageDemon would free itself)")
 		return
 	print(
 		"giant: entombed off the field, dug a %d cell pocket through CityBrush in %d ticks"

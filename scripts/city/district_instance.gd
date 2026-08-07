@@ -1001,6 +1001,7 @@ func _place_recipe_pickups(gen: DistrictGenerator, origin_vox: Vector3i) -> void
 	_place_castle_tower_recipe(gen, origin_vox)
 	_place_arena_tower_recipe(gen, origin_vox)
 	_place_hill_summit_recipe(gen, origin_vox)
+	_place_hill_gate_tower_recipes(gen, origin_vox)
 	_place_gazebo_recipe(gen, origin_vox)
 	_place_zoo_gazebo_recipe(gen, origin_vox)
 	_place_tetris_cabinet_recipes(gen, origin_vox)
@@ -1055,6 +1056,23 @@ func _place_hill_summit_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> 
 		),
 		_dseed ^ 0x51117
 	)
+
+
+## Each cave-gate spiral rolls on its own (gamedata `hill-gate-tower`); index separates the pair.
+func _place_hill_gate_tower_recipes(gen: DistrictGenerator, origin_vox: Vector3i) -> void:
+	var towers := gen.get_hill_cave_gate_towers()
+	for i in range(towers.size()):
+		if recipe_pickups.at_capacity():
+			return
+		var spire: Vector3 = towers[i]
+		var crown := Vector3i(int(round(spire.x)), int(round(spire.y)), int(round(spire.z)))
+		recipe_pickups.try_place(
+			RecipePickupPlacer.SITE_HILL_GATE_TOWER,
+			coord,
+			i,
+			_landmark_world(Vector2i(crown.x, crown.z), crown.y + 1, origin_vox),
+			(_dseed ^ 0x6A7E1) + i * 7919
+		)
 
 
 func _place_gazebo_recipe(gen: DistrictGenerator, origin_vox: Vector3i) -> void:

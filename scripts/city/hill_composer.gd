@@ -8,6 +8,7 @@ class_name HillComposer
 extends RefCounted
 
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+const SpiralSpireScript := preload("res://scripts/city/spiral_spire.gd")
 
 var brush: CityBrush
 var rng: RandomNumberGenerator
@@ -91,14 +92,26 @@ const CAVE_HOLLOW_TARGET := 0.30
 ## Keep gems off the meadow skin and the outer CAVE_SHELL band.
 const GEM_SURFACE_MARGIN := 3
 
-## Dissolving red cage for the Unique cave boss. Interior fits a Big Demon (~3.1 u).
-const CAGE_INNER_HALF := 2
+## Dissolving red cage for the Unique cave boss. Sized for MONSTER nav (radius 2, height 7):
+## a tighter pen left the CageDemon "entombed", and dig-out used to erase the cage walls.
+const CAGE_INNER_HALF := 3
 const CAGE_WALL := 1
-const CAGE_INNER_H := 6
+const CAGE_INNER_H := 8
 const CAGE_POST_PITCH := 3
-const CAGE_LINE_OFFSETS: Array[int] = [2, 5]
+const CAGE_LINE_OFFSETS: Array[int] = [2, 5, 7]
 ## Prefer sites at least this far (voxels) from a daylight mouth.
 const CAGE_MOUTH_CLEAR_M := 18.0
+
+## Spiral towers flanking the primary daylight mouth — same stamp as Arena corners.
+## Foot on the deck (`ground_y`); pads sit on the hillside face and replace rock.
+## ARENA_SHELL on purpose: hillside strata already use STONE, so a stone tower vanishes.
+const GATE_TOWER_MAT := VoxelMaterial.ARENA_SHELL
+## Lateral offset from the entrance centreline to each tower axis (voxels).
+const GATE_HALF_SEP := 12
+## How far downhill from the portal along the outward axis (frames the mouth, not the vale).
+const GATE_STAND_OFF := 3
+## Plinth half-width under each tower.
+const GATE_PLINTH_HALF := 5
 
 ## Region bounds (local district voxel coords) and the per-column fields.
 var _ox: int = 0
@@ -123,10 +136,12 @@ var gem_positions: PackedVector3Array = PackedVector3Array()
 var gem_mats: PackedInt32Array = PackedInt32Array()
 ## Exact gems to paint this bake: district constant, or constant minus harvested. Empty = none.
 var gem_mats_to_place: PackedInt32Array = PackedInt32Array()
-## Daylight cave mouths in *district-local* XZ (for spawn at an entrance).
+## Daylight cave mouths in world voxel XZ (for spawn at an entrance).
 var cave_mouths: PackedVector2Array = PackedVector2Array()
-## Summit the mouths were bored from (district-local XZ); used to stand outside.
+## Summit the mouths were bored from (world voxel XZ); used to stand outside.
 var cave_summit: Vector2i = Vector2i(-1, -1)
+## Gate towers flanking the primary mouth: world X, crown-top Y, world Z (empty if none).
+var cave_gate_towers: PackedVector3Array = PackedVector3Array()
 ## Highest column of the massif: district-local X and Z in `x`/`z`, terrain height above the
 ## deck in `y`. `x` is -1 when the tile grew no hill at all. This is the true peak of the
 ## finished heightfield rather than a summit seed, so something standing on it is on the top.
@@ -189,6 +204,9 @@ func compose(min_v: Vector3i, max_v: Vector3i) -> void:
 	## in cave walls and unopened rock — never deleted by a later cheese pass.
 	_carve_caves(summits)
 	_place_cave_cage()
+	## Before ore so the gate footprint is not a gem host, and the stamp cannot delete
+	## already-registered gems. Before trees so the plinth keeps canopy off the pads.
+	_place_cave_gate_towers()
 	_scatter_gems_from_quota()
 	_scatter_boulders()
 	_plant_trees(1.0)
@@ -257,6 +275,7 @@ func _begin(min_v: Vector3i, max_v: Vector3i, need_brush: bool = true) -> bool:
 	gem_mats = PackedInt32Array()
 	cave_mouths = PackedVector2Array()
 	cave_summit = Vector2i(-1, -1)
+	cave_gate_towers = PackedVector3Array()
 	summit_top = Vector3i(-1, 0, -1)
 	cave_cage_stand = Vector3i(-1, -1, -1)
 	_shell_guard = true
@@ -1732,6 +1751,78 @@ func _scatter_boulders() -> void:
 			Vector3i(_ox + x, ground_y + h + ry - 1, _oz + z), Vector3i(rx, ry, rz), mat
 		)
 		made += 1
+
+
+## Frame the primary daylight mouth with two Arena-style spiral towers.
+## Fixed left/right of the portal on the hillside face — not walked out onto the meadow.
+func _place_cave_gate_towers() -> void:
+	cave_gate_towers = PackedVector3Array()
+	if cave_mouths.is_empty() or cave_summit.x < 0:
+		return
+	var mouth := Vector2i(int(cave_mouths[0].x), int(cave_mouths[0].y))
+	var outward := Vector2(float(mouth.x - cave_summit.x), float(mouth.y - cave_summit.y))
+	if outward.length_squared() < 1.0:
+		outward = Vector2(0.0, 1.0)
+	else:
+		outward = outward.normalized()
+	var lateral := Vector2(-outward.y, outward.x)
+	var left := _gate_tower_pad(mouth, outward, lateral, -1)
+	var right := _gate_tower_pad(mouth, outward, lateral, 1)
+	if left.x < 0 or right.x < 0:
+		push_error(
+			"HillComposer: cave gate pads failed (left=%s right=%s) at mouth %s"
+			% [left, right, mouth]
+		)
+		return
+	if left == right:
+		push_error(
+			"HillComposer: both cave gate towers collapsed to %s at mouth %s" % [left, mouth]
+		)
+		return
+	for centre: Vector2i in [left, right]:
+		_stamp_gate_plinth(centre)
+		var crown_y := SpiralSpireScript.stamp(
+			brush, centre, ground_y, GATE_TOWER_MAT, SpiralSpireScript.RISE
+		)
+		if crown_y < 0:
+			push_error("HillComposer: cave gate spire stamp failed at %s" % centre)
+			continue
+		cave_gate_towers.append(Vector3(float(centre.x), float(crown_y), float(centre.y)))
+
+
+## Axis-aligned offset from the portal: stand-off downhill, then ± half-separation.
+## Hillside columns are allowed — the stamp replaces rock. Only bounds/roads reject a pad.
+func _gate_tower_pad(
+	mouth: Vector2i, outward: Vector2, lateral: Vector2, side: int
+) -> Vector2i:
+	## Prefer full separation; if that cell is unusable, step the stand-off, not the side,
+	## so left and right never converge on the same column.
+	for dist in range(GATE_STAND_OFF, GATE_STAND_OFF + 8):
+		var wx := int(round(
+			float(mouth.x) + outward.x * float(dist) + lateral.x * float(GATE_HALF_SEP * side)
+		))
+		var wz := int(round(
+			float(mouth.y) + outward.y * float(dist) + lateral.y * float(GATE_HALF_SEP * side)
+		))
+		var lx := wx - _ox
+		var lz := wz - _oz
+		if lx < GATE_PLINTH_HALF + 2 or lz < GATE_PLINTH_HALF + 2:
+			continue
+		if lx >= _w - GATE_PLINTH_HALF - 2 or lz >= _d - GATE_PLINTH_HALF - 2:
+			continue
+		if _is_road_cell(lx, lz):
+			continue
+		return Vector2i(wx, wz)
+	return Vector2i(-1, -1)
+
+
+func _stamp_gate_plinth(centre: Vector2i) -> void:
+	var h := GATE_PLINTH_HALF
+	brush.fill_box(
+		Vector3i(centre.x - h, ground_y, centre.y - h),
+		Vector3i(centre.x + h + 1, ground_y + 1, centre.y + h + 1),
+		GATE_TOWER_MAT
+	)
 
 
 func _plant_trees(density: float) -> void:

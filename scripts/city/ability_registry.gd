@@ -41,7 +41,6 @@ const KIND_META := "meta"
 
 ## Filled from GameData.ability_constants on ensure_loaded.
 static var STARTER_UNLOCKS: Array[String] = [ID_BLASTER]
-static var TRAP_HOSTILE_SCORE: int = 25
 static var BOOST_DURATION_SEC: float = 20.0
 static var GROW_SHRINK_DURATION_SEC: float = 25.0
 static var SHIELD_DRAIN_PER_SEC: float = 8.0
@@ -80,7 +79,6 @@ static func ensure_loaded() -> void:
 	if typeof(starters) == TYPE_ARRAY:
 		for s: Variant in starters:
 			STARTER_UNLOCKS.append(str(s))
-	TRAP_HOSTILE_SCORE = int(constants.get("trap_hostile_score", 25))
 	BOOST_DURATION_SEC = float(constants.get("boost_duration_sec", 20.0))
 	GROW_SHRINK_DURATION_SEC = float(constants.get("grow_shrink_duration_sec", 25.0))
 	SHIELD_DRAIN_PER_SEC = float(constants.get("shield_drain_per_sec", 8.0))

@@ -71,6 +71,8 @@ func _ready() -> void:
 	_check_take_depletes_and_then_refuses()
 	_check_revisit_keeps_the_ledger()
 	_check_explore_pays_once()
+	_check_discovery_gem_stream_varies()
+	await _check_discovery_gem_drop()
 	_check_chest_chance_is_stable()
 	await _check_furnished_room_hands_over_a_spot()
 	await _check_chest_pays_until_the_tile_is_empty()
@@ -309,12 +311,126 @@ func _check_explore_pays_once() -> void:
 	## Unload and re-create: the flag lives in the ledger, not on the district node.
 	eco.ensure_row(COORD, DistrictEconomy.roll_budgets(DistrictTheme.CIVIC_QUARTER, 7))
 	if eco.mark_explored(COORD):
-		_fail("FAIL a re-streamed tile paid its explore score again")
+		_fail("FAIL a re-streamed tile was marked explored again")
 		return
 	if eco.explored_count() != 1:
 		_fail("FAIL %d tiles read as explored" % eco.explored_count())
 		return
-	print("OK exploring a tile pays once, re-streaming included")
+	print("OK exploring a tile marks once, re-streaming included")
+
+
+## Discovery gems must follow the rarity curve across tiles — a stuck stream that always pays
+## topaz (the first roll of an unseeded RandomNumberGenerator) is the failure this catches.
+func _check_discovery_gem_stream_varies() -> void:
+	var counts: Dictionary = {}
+	var seen_types := 0
+	for y in range(-4, 5):
+		for x in range(-4, 5):
+			var coord := Vector2i(x, y)
+			var rng := RandomNumberGenerator.new()
+			rng.seed = DistrictCoord.feature_seed(
+				DistrictCoord.district_seed(WORLD_SEED, coord), CityRoot.DISCOVERY_GEM_FEATURE
+			)
+			var gem := VoxelMaterial.random_gem(rng)
+			if not VoxelMaterial.is_gem(gem):
+				_fail("FAIL discovery stream returned non-gem %d at %s" % [gem, str(coord)])
+				return
+			var prev := int(counts.get(gem, 0))
+			if prev == 0:
+				seen_types += 1
+			counts[gem] = prev + 1
+	if seen_types < 3:
+		_fail("FAIL discovery stream only produced %d gem types across 81 tiles" % seen_types)
+		return
+	var quartz_n := int(counts.get(VoxelMaterial.GEM_QUARTZ, 0))
+	var topaz_n := int(counts.get(VoxelMaterial.GEM_TOPAZ, 0))
+	if quartz_n <= topaz_n:
+		_fail(
+			"FAIL discovery stream has quartz=%d <= topaz=%d — rarity curve is inverted or stuck"
+			% [quartz_n, topaz_n]
+		)
+		return
+	## Same tile must always roll the same gem — wall-clock randomize would fail this.
+	var again := RandomNumberGenerator.new()
+	again.seed = DistrictCoord.feature_seed(
+		DistrictCoord.district_seed(WORLD_SEED, COORD), CityRoot.DISCOVERY_GEM_FEATURE
+	)
+	var first := VoxelMaterial.random_gem(again)
+	again.seed = DistrictCoord.feature_seed(
+		DistrictCoord.district_seed(WORLD_SEED, COORD), CityRoot.DISCOVERY_GEM_FEATURE
+	)
+	var second := VoxelMaterial.random_gem(again)
+	if first != second:
+		_fail("FAIL discovery stream is not stable for a given district")
+		return
+	print(
+		"OK discovery stream varies (%d types, quartz %d > topaz %d) and is district-stable"
+		% [seen_types, quartz_n, topaz_n]
+	)
+
+
+## First discovery places one rarity-weighted gem ~30 m into the tile on the highest solid.
+func _check_discovery_gem_drop() -> void:
+	var city := TestCity.new()
+	city.name = "DiscoveryCity"
+	add_child(city)
+	city.set_process(false)
+	city.set_physics_process(false)
+	await get_tree().process_frame
+	var brush: CityBrush = CityBrushScript.new() as CityBrush
+	brush.use_offline_volume()
+	city.bind_test_brush(brush)
+	city.city_seed = WORLD_SEED
+	city._economy = DistrictEconomyScript.new() as DistrictEconomy
+	city._economy.ensure_row(
+		COORD, DistrictEconomy.roll_budgets(DistrictTheme.CIVIC_QUARTER, 11)
+	)
+	var walker := CityWalkerScript.new() as CityWalker
+	walker.name = "DiscoveryWalker"
+	add_child(walker)
+	walker.set_physics_process(false)
+	walker.set_process(false)
+	await get_tree().process_frame
+	city._walker = walker
+	var centre := DistrictCoord.center_world(COORD, CityRoot.VOXEL_SIZE)
+	walker.global_position = centre
+	var cx := int(floor(centre.x / CityRoot.VOXEL_SIZE))
+	var cz := int(floor(centre.z / CityRoot.VOXEL_SIZE))
+	var r := int(ceil(40.0 / CityRoot.VOXEL_SIZE)) + 2
+	for z in range(cz - r, cz + r + 1):
+		for x in range(cx - r, cx + r + 1):
+			brush.set_vox(Vector3i(x, 5, z), VoxelMaterial.STONE)
+	city._drop_discovery_gem(COORD)
+	var found := Vector3i(2147483647, 2147483647, 2147483647)
+	for z in range(cz - r, cz + r + 1):
+		for x in range(cx - r, cx + r + 1):
+			var cell := Vector3i(x, 6, z)
+			if VoxelMaterial.is_gem(brush.get_vox(cell)):
+				found = cell
+				break
+		if found.x != 2147483647:
+			break
+	walker.queue_free()
+	city.queue_free()
+	if found.x == 2147483647:
+		_fail("FAIL discovery placed no gem on the deck")
+		return
+	var gem_world := Vector3(
+		(float(found.x) + 0.5) * CityRoot.VOXEL_SIZE,
+		0.0,
+		(float(found.z) + 0.5) * CityRoot.VOXEL_SIZE
+	)
+	if DistrictCoord.from_world(gem_world, CityRoot.VOXEL_SIZE) != COORD:
+		_fail("FAIL discovery gem landed outside the district at %s" % str(found))
+		return
+	var dist := Vector2(gem_world.x - centre.x, gem_world.z - centre.z).length()
+	if dist < 25.0 or dist > 35.0:
+		_fail("FAIL discovery gem is %.1f m away, want ~30" % dist)
+		return
+	if brush.get_vox(Vector3i(found.x, 5, found.z)) != VoxelMaterial.STONE:
+		_fail("FAIL discovery gem is not sitting on the painted deck")
+		return
+	print("OK discovery drops a gem %.1f m into the district at %s" % [dist, str(found)])
 
 
 # ---------------------------------------------------------------------------
@@ -606,12 +722,9 @@ func _check_save_round_trip() -> void:
 	eco.try_take(COORD, VoxelMaterial.GEM_QUARTZ)
 	eco.mark_explored(COORD)
 	var want_castle := eco.remaining(COORD, VoxelMaterial.GEM_QUARTZ)
-	var score := DistrictEconomy.EXPLORE_SCORE * 3
 
 	var inventory := PlayerInventoryScript.new() as PlayerInventory
-	var data := GameSaveScript.capture(
-		WORLD_SEED, walker, inventory, "Gems", eco, score
-	)
+	var data := GameSaveScript.capture(WORLD_SEED, walker, inventory, "Gems", eco)
 	walker.queue_free()
 	if data.is_empty():
 		_fail("FAIL capture produced nothing")
@@ -623,8 +736,8 @@ func _check_save_round_trip() -> void:
 	if read.is_empty():
 		_fail("FAIL the v%d quicksave read back empty" % GameSaveScript.VERSION)
 		return
-	if GameSaveScript.saved_score(read) != score:
-		_fail("FAIL the score came back as %d, not %d" % [GameSaveScript.saved_score(read), score])
+	if read.has("score"):
+		_fail("FAIL new saves must not carry a score field")
 		return
 
 	var loaded: DistrictEconomy = DistrictEconomyScript.new() as DistrictEconomy
@@ -650,7 +763,7 @@ func _check_save_round_trip() -> void:
 	if loaded.is_explored(OTHER_COORD):
 		_fail("FAIL an unexplored tile came back explored")
 		return
-	print("OK the save carries %d district rows and a score of %d" % [loaded.row_count(), score])
+	print("OK the save carries %d district rows (explored flag intact)" % loaded.row_count())
 
 
 func _wipe_scratch() -> void:

@@ -24,6 +24,8 @@ const SITE_CHEST := 8
 const SITE_ZOO_GAZEBO := 9
 ## Top of a Gaming-district Tetris cabinet (one roll per bay).
 const SITE_TETRIS_CABINET := 10
+## Spiral tower flanking a hill cave mouth (each of the pair rolls on its own).
+const SITE_HILL_GATE_TOWER := 11
 
 const GameDataScript := preload("res://scripts/city/game_data.gd")
 
@@ -58,6 +60,8 @@ static func site_kind_name(kind: int) -> String:
 			return "zoo-gazebo"
 		SITE_TETRIS_CABINET:
 			return "tetris-cabinet"
+		SITE_HILL_GATE_TOWER:
+			return "hill-gate-tower"
 		_:
 			push_error("RecipePickupPlacer.site_kind_name: unknown kind %d" % kind)
 			return "unknown"

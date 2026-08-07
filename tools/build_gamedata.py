@@ -158,7 +158,6 @@ def _craft_recipes() -> dict:
 
 def _district_gems() -> dict:
     return {
-        "explore_score": 50,
         "theme_totals": {
             "hill": 800,
             "castle": 40,
@@ -321,7 +320,6 @@ def _abilities() -> tuple[dict, dict]:
             "hardness_reinforced",
             "hardness_exotic",
         ],
-        "trap_hostile_score": 25,
         "boost_duration_sec": 20.0,
         "grow_shrink_duration_sec": 25.0,
         "shield_drain_per_sec": 8.0,
@@ -352,6 +350,9 @@ def _recipe_sites() -> dict:
             "castle-tower": 100,
             "arena-tower": 100,
             "gazebo": 100,
+            "zoo-gazebo": 50,
+            "tetris-cabinet": 50,
+            "hill-gate-tower": 20,
             "island": 45,
             "fractal-peak": 100,
             "crypt": 25,

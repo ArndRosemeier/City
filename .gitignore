@@ -115,3 +115,6 @@ tools/_prop_src/
 
 # Audio generation scratch HTML (not shipped)
 assets/audio/tmp/
+
+# Local capture scratch (OBS / phone dumps). District stills live under screenshots/.
+videos/

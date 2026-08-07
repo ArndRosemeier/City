@@ -352,6 +352,13 @@ func _check_site_ids_and_chances() -> void:
 		)
 	if RecipePickupPlacer.site_kind_name(RecipePickupPlacer.SITE_TETRIS_CABINET) != "tetris-cabinet":
 		_fail("FAIL SITE_TETRIS_CABINET name is wrong")
+	if RecipePickupPlacer.chance_pct(RecipePickupPlacer.SITE_HILL_GATE_TOWER) != 20:
+		_fail(
+			"FAIL hill-gate-tower chance is %d, want 20"
+			% RecipePickupPlacer.chance_pct(RecipePickupPlacer.SITE_HILL_GATE_TOWER)
+		)
+	if RecipePickupPlacer.site_kind_name(RecipePickupPlacer.SITE_HILL_GATE_TOWER) != "hill-gate-tower":
+		_fail("FAIL SITE_HILL_GATE_TOWER name is wrong")
 	var hits := 0
 	for seed_i in range(200):
 		if RecipePickupPlacer.should_place(RecipePickupPlacer.SITE_ROOFTOP, seed_i * 7919):
@@ -398,7 +405,7 @@ func _check_save_round_trip() -> void:
 	loadout.mark_recipe_site_looted(site)
 
 	var data := GameSaveScript.capture(
-		WORLD_SEED, walker, inventory, "Recipes", null, 0, loadout
+		WORLD_SEED, walker, inventory, "Recipes", null, loadout
 	)
 	if data.is_empty():
 		_fail("FAIL capture empty")

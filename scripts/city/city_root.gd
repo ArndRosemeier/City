@@ -14,6 +14,7 @@ const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd"
 const PlayerEnergyHudScript := preload("res://scripts/city/player_energy_hud.gd")
 const PlayerHealthHudScript := preload("res://scripts/city/player_health_hud.gd")
 const PlayerBoostHudScript := preload("res://scripts/city/player_boost_hud.gd")
+const PlaceHudScript := preload("res://scripts/city/place_hud.gd")
 const PlayerCompassHudScript := preload("res://scripts/city/player_compass_hud.gd")
 const ZooCloakHudScript := preload("res://scripts/city/zoo_cloak_hud.gd")
 const SiegeHudScript := preload("res://scripts/city/siege_hud.gd")
@@ -111,7 +112,10 @@ var _interior_decorator: InteriorDecorator
 var _warm_scenes: Array[PackedScene] = []
 var _streamer: CityStreamer
 var _walker: CityWalker
-var _hud: Label
+## District name + analog clock + foldable FPS (and future non-vital stats).
+var _place_hud: PlaceHud
+## Last coord painted on `_place_hud`, so we only rewrite the string on a tile change.
+var _district_hud_coord: Vector2i = Vector2i(2147483647, 2147483647)
 var _hud_layer: CanvasLayer
 ## Pooled floor selector, rebound to whichever elevator cabin the player is standing in.
 var _elevator_panel: ElevatorPanel
@@ -179,8 +183,6 @@ var _undead_invasion_enabled: bool = false
 var _monsters: MonsterRoster
 ## Optional invasion scenario on top of `_monsters` (waves / giant / convert).
 var _undead: UndeadInvasionDirector
-## Run score. Explore-once payouts only for now; combat deeds arrive with the scenarios.
-var _player_score: int = 0
 ## Per-district gem budgets + explored flags. The only thing the save knows about the world.
 var _economy: DistrictEconomy = DistrictEconomyScript.new() as DistrictEconomy
 var _economy_accum: float = 0.0
@@ -227,6 +229,12 @@ const GEM_CLUSTER_MAX := 24
 ## Seconds between district budget / explore sweeps. Only fires when a tile finishes baking or
 ## the player crosses a tile line, so it can be lazy.
 const ECONOMY_TICK_SEC := 0.5
+## First walk into a district drops one rarity-weighted gem this far into the tile.
+const DISCOVERY_GEM_DISTANCE_M := 30.0
+## Column scan for the discovery drop: high enough for towers, low enough to finish quickly.
+const DISCOVERY_GEM_SCAN_TOP_Y := 96
+## Feature salt for the discovery gem stream — kept clear of budget / chest / spawn salts.
+const DISCOVERY_GEM_FEATURE := 0xD15C07
 ## How close to a giant's fresh facade strip is close enough to be under it.
 const GIANT_DEBRIS_HURT_RADIUS_M := 6.0
 ## Wall-clock seconds between autosaves once the world is playable.
@@ -694,12 +702,10 @@ func _build_hud() -> void:
 	cross.offset_bottom = 14
 	_hud_layer.add_child(cross)
 
-	_hud = Label.new()
-	_hud.add_theme_font_size_override("font_size", 18)
-	_hud.add_theme_color_override("font_color", Color(0.95, 0.95, 0.95, 0.9))
-	_hud.position = Vector2(16, 12)
-	_hud.text = "—"
-	_hud_layer.add_child(_hud)
+	_place_hud = PlaceHudScript.new() as PlaceHud
+	_place_hud.name = "PlaceHud"
+	_hud_layer.add_child(_place_hud)
+	_place_hud.bottom_changed.connect(_on_place_hud_bottom_changed)
 
 	_energy_hud = PlayerEnergyHudScript.new()
 	_energy_hud.name = "PlayerEnergyHud"
@@ -712,6 +718,8 @@ func _build_hud() -> void:
 	_boost_hud = PlayerBoostHudScript.new() as CanvasLayer
 	_boost_hud.name = "PlayerBuffHud"
 	add_child(_boost_hud)
+	## First layout pass — keep buff chips under the place chrome.
+	call_deferred("_sync_buff_hud_to_place_chrome")
 
 	_compass_hud = PlayerCompassHudScript.new() as PlayerCompassHud
 	_compass_hud.name = "PlayerCompassHud"
@@ -1670,21 +1678,44 @@ func _process(delta: float) -> void:
 	if _fps_accum < 0.25:
 		return
 	_fps_accum = 0.0
-	if _hud != null:
-		var clock := ""
-		if _day_night != null and _day_night.has_method("get_hour"):
-			var h := float(_day_night.call("get_hour"))
-			var hh := int(floor(h)) % 24
-			var mm := int(floor(fposmod(h, 1.0) * 60.0))
-			clock = "  %02d:%02d" % [hh, mm]
-		if _loadout != null and _loadout.scores():
-			_hud.text = "%d FPS%s  Score: %d" % [
-				Engine.get_frames_per_second(), clock, _player_score
-			]
-		else:
-			_hud.text = "%d FPS%s  Sandbox" % [
-				Engine.get_frames_per_second(), clock
-			]
+	_refresh_place_hud()
+
+
+## District name, analog day clock, and the folded FPS line. Name only rewrites on a tile change.
+func _refresh_place_hud() -> void:
+	if _place_hud == null:
+		return
+	if _day_night != null:
+		_place_hud.set_hour(float(_day_night.get_hour()))
+	var fold := "%d FPS" % Engine.get_frames_per_second()
+	if _loadout != null and _loadout.is_sandbox():
+		fold += "  Sandbox"
+	_place_hud.set_fold_line(fold)
+	if _walker == null or not is_instance_valid(_walker) or _booting:
+		if _district_hud_coord.x != 2147483647:
+			_district_hud_coord = Vector2i(2147483647, 2147483647)
+			_place_hud.set_district_name("—")
+		return
+	var here := DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE)
+	if here == _district_hud_coord:
+		return
+	_district_hud_coord = here
+	_place_hud.set_district_name(DistrictName.for_district(city_seed, here))
+
+
+func _on_place_hud_bottom_changed(bottom_y: float) -> void:
+	_set_buff_hud_top(bottom_y + 6.0)
+
+
+func _sync_buff_hud_to_place_chrome() -> void:
+	if _place_hud == null:
+		return
+	_set_buff_hud_top(_place_hud.bottom_y() + 6.0)
+
+
+func _set_buff_hud_top(top_y: float) -> void:
+	if _boost_hud != null and _boost_hud.has_method("set_buff_area_top"):
+		_boost_hud.call("set_buff_area_top", top_y)
 
 
 func _create_terrain() -> void:
@@ -1825,10 +1856,6 @@ func get_economy() -> DistrictEconomy:
 ## this through the `city_root` group whenever it is rebuilt.
 func world_games() -> WorldGames:
 	return _games
-
-
-func get_player_score() -> int:
-	return _player_score
 
 
 func get_loadout() -> PlayerLoadout:
@@ -2059,7 +2086,6 @@ func _throw_trap() -> void:
 	add_child(proj)
 	proj.global_position = origin
 	proj.linear_velocity = _trap_throw_velocity(origin, target)
-	proj.landed.connect(_on_trap_landed)
 
 
 ## Ballistic lob that lands near `target` under TrapProjectile's gravity_scale.
@@ -2081,27 +2107,6 @@ func _trap_throw_velocity(origin: Vector3, target: Vector3) -> Vector3:
 	)
 
 
-func _on_trap_landed(trap: ArmedTrap) -> void:
-	if trap == null:
-		return
-	trap.triggered.connect(_on_trap_triggered)
-
-
-func _on_trap_triggered(victim: Node3D) -> void:
-	if victim == null or not _loadout.scores():
-		return
-	## Hostile = undead unit. Peds and the player do not pay.
-	var is_hostile := victim.is_in_group("undead")
-	if not is_hostile and victim.get_script() != null:
-		is_hostile = String(victim.get_script().resource_path).ends_with("undead_unit.gd")
-	if is_hostile:
-		_player_score += AbilityRegistry.TRAP_HOSTILE_SCORE
-		print(
-			"CityRoot: trapped a hostile (+%d, score %d)"
-			% [AbilityRegistry.TRAP_HOSTILE_SCORE, _player_score]
-		)
-
-
 func _drink_boost(item_id: String) -> void:
 	if _inventory.count_of(item_id) <= 0:
 		print("CityRoot: no %s in inventory" % item_id)
@@ -2114,8 +2119,8 @@ func _drink_boost(item_id: String) -> void:
 		_walker.begin_regen_boost(AbilityRegistry.BOOST_DURATION_SEC)
 
 
-## Roll a budget for every tile the run has just reached, and pay exploration for the tile the
-## player is standing in. Both happen once per coord, ever, and both are cheap enough to sweep.
+## Roll a budget for every tile the run has just reached, and drop a discovery gem the first
+## time the player stands in a tile. Both happen once per coord, ever.
 func _tick_district_economy() -> void:
 	if _streamer == null or _booting:
 		return
@@ -2134,30 +2139,111 @@ func _tick_district_economy() -> void:
 			_streamer.reload_district(coord)
 	if _game_over or _walker == null or not is_instance_valid(_walker):
 		return
-	if not _loadout.scores():
+	## Discovery is an Adventure beat: Sandbox has no ledger rows to mark.
+	if not _loadout.uses_gem_budgets():
 		return
 	var here := DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE)
 	if not _economy.has_row(here):
-		## Sandbox skipped rows; Adventure always ensures above. Still explore-mark if a row exists.
-		if _loadout.uses_gem_budgets():
-			return
-		## Adventure-less path shouldn't score; already returned.
 		return
 	if _economy.mark_explored(here):
-		var explore := preload("res://scripts/city/game_data.gd").explore_score()
-		DistrictEconomy.EXPLORE_SCORE = explore
-		_player_score += explore
-		var place := DistrictName.for_district(city_seed, here)
-		## Same beat as a chest: say what happened and play the haul flourish so the score
-		## bump is not only a number ticking in the status line.
-		if _loot_toast != null:
-			_loot_toast.show_message("%s — +%d explore" % [place, explore])
-		if _audio != null:
-			_audio.play_treasure_bling()
-		print(
-			"CityRoot: explored %s (+%d, score %d)"
-			% [str(here), explore, _player_score]
+		_drop_discovery_gem(here)
+
+
+## One rarity-weighted gem on the highest voxel about 30 m into the newly discovered district.
+## The plane pick is random; whatever stands there (roof, street, water lip) is fine — the gem
+## sits on top. A missing column or a full cell above the surface is loud rather than silent.
+##
+## Seeded from the district, not the wall clock: `RandomNumberGenerator.new()` starts on a fixed
+## stream whose first `randi_range(1, 100)` is topaz, and a time-based `randomize()` is the wrong
+## tool for world loot here (every other gem roll is district-stable). One feature salt per tile
+## so neighbouring districts do not share a stream with the budget roll.
+func _drop_discovery_gem(coord: Vector2i) -> void:
+	if _brush == null and _tool == null:
+		push_error("CityRoot._drop_discovery_gem: no brush to place with")
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = DistrictCoord.feature_seed(
+		DistrictCoord.district_seed(city_seed, coord), DISCOVERY_GEM_FEATURE
+	)
+	var gem := VoxelMaterial.random_gem(rng)
+	if not VoxelMaterial.is_gem(gem):
+		push_error("CityRoot._drop_discovery_gem: rarity roll returned %d" % gem)
+		return
+	var world_xz := _discovery_gem_world_xz(coord, rng)
+	var vx := int(floor(world_xz.x / VOXEL_SIZE))
+	var vz := int(floor(world_xz.y / VOXEL_SIZE))
+	var top_y := _highest_solid_y_at(vx, vz)
+	if top_y < 0:
+		push_error(
+			"CityRoot._drop_discovery_gem: no solid column at %d,%d in %s"
+			% [vx, vz, str(coord)]
 		)
+		return
+	var above := Vector3i(vx, top_y + 1, vz)
+	if _brush != null:
+		_brush.begin_edit()
+		_brush.set_vox(above, gem)
+		_brush.end_edit()
+	else:
+		_tool.channel = VoxelBuffer.CHANNEL_TYPE
+		_tool.set_voxel(above, gem)
+	var place := DistrictName.for_district(city_seed, coord)
+	var item_id := InventoryCatalog.item_id_for_gem(gem)
+	var gem_name := InventoryCatalog.display_name(item_id) if item_id != "" else "gem"
+	if _loot_toast != null:
+		_loot_toast.show_message("%s — %s nearby" % [place, gem_name])
+	if _audio != null:
+		_audio.play_treasure_bling()
+	print(
+		"CityRoot: discovered %s — placed %s at %s"
+		% [str(coord), gem_name, str(above)]
+	)
+
+
+## Random point on a ~30 m ring around the player, constrained to `coord`. Falls back to a
+## point 30 m toward the district centre when the ring never lands inside the tile.
+func _discovery_gem_world_xz(coord: Vector2i, rng: RandomNumberGenerator) -> Vector2:
+	var player := _walker.global_position
+	for _i in range(24):
+		var angle := rng.randf() * TAU
+		var candidate := Vector2(
+			player.x + cos(angle) * DISCOVERY_GEM_DISTANCE_M,
+			player.z + sin(angle) * DISCOVERY_GEM_DISTANCE_M
+		)
+		var at := DistrictCoord.from_world(
+			Vector3(candidate.x, player.y, candidate.y), VOXEL_SIZE
+		)
+		if at == coord:
+			return candidate
+	var centre := DistrictCoord.center_world(coord, VOXEL_SIZE)
+	var away := Vector2(centre.x - player.x, centre.z - player.z)
+	if away.length_squared() < 0.01:
+		away = Vector2(DISCOVERY_GEM_DISTANCE_M, 0.0)
+	else:
+		away = away.normalized() * DISCOVERY_GEM_DISTANCE_M
+	var fallback := Vector2(player.x + away.x, player.z + away.y)
+	return _clamp_world_xz_to_district(fallback, coord)
+
+
+func _clamp_world_xz_to_district(xz: Vector2, coord: Vector2i) -> Vector2:
+	var origin := DistrictCoord.origin_world(coord, VOXEL_SIZE)
+	var margin := VOXEL_SIZE * 2.0
+	var min_x := origin.x + margin
+	var min_z := origin.z + margin
+	var max_x := origin.x + float(DistrictCoord.SIZE_X_VOX) * VOXEL_SIZE - margin
+	var max_z := origin.z + float(DistrictCoord.SIZE_Z_VOX) * VOXEL_SIZE - margin
+	return Vector2(clampf(xz.x, min_x, max_x), clampf(xz.y, min_z, max_z))
+
+
+## Highest solid (non-air, non-water) voxel Y in the column, or -1 when the column is empty.
+func _highest_solid_y_at(vx: int, vz: int) -> int:
+	for y in range(DISCOVERY_GEM_SCAN_TOP_Y, -1, -1):
+		var mat := _gem_id_at(Vector3i(vx, y, vz))
+		if mat == VoxelMaterial.AIR or mat == VoxelMaterial.WATER:
+			continue
+		if VoxelMaterial.is_solid(mat):
+			return y
+	return -1
 
 
 ## Hill tiles whose ledger was repaired while already stamped — re-bake so ore matches.
@@ -3746,6 +3832,10 @@ func _regenerate() -> void:
 	_game_over = false
 	_hide_game_over_overlay()
 	_set_hud_enabled(false)
+	## Seed / spawn may change under the same coord — force the chip to re-read the place name.
+	_district_hud_coord = Vector2i(2147483647, 2147483647)
+	if _place_hud != null:
+		_place_hud.set_district_name("—")
 	## Splash while the spawn district bakes — no type picker at boot.
 	if _loading_splash != null:
 		_loading_splash.call("show_splash", "Loading EccentriCity…")
@@ -3799,7 +3889,6 @@ func _regenerate() -> void:
 	if _undead != null and is_instance_valid(_undead):
 		_undead.queue_free()
 		_undead = null
-	_player_score = 0
 	_inventory.clear()
 	## Every district row and every open match belongs to the world being torn down. District
 	## rows refill once the walker stands (`_restore_pending_character`). Match paperwork is
@@ -4235,9 +4324,6 @@ func _restore_pending_character() -> void:
 	## streamed yet, then asks any already-built tables to sit down at the saved matches.
 	GameSaveScript.apply_games(_games, _pending_restore)
 	_resume_loaded_game_tables()
-	_player_score = GameSaveScript.saved_score(_pending_restore)
-	if not _loadout.scores():
-		_player_score = 0
 	if _ability_tray != null:
 		_ability_tray.bind_loadout(_loadout)
 		_ability_tray.refresh()
@@ -4302,7 +4388,7 @@ func write_quicksave(label: String = "Autosave") -> bool:
 	if not can_save_game():
 		return false
 	var data := GameSaveScript.capture(
-		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout, _games
+		city_seed, _walker, _inventory, label, _economy, _loadout, _games
 	)
 	if data.is_empty():
 		return false
@@ -4317,7 +4403,7 @@ func write_named_save(raw_name: String) -> bool:
 		return false
 	var label := raw_name.strip_edges()
 	var data := GameSaveScript.capture(
-		city_seed, _walker, _inventory, label, _economy, _player_score, _loadout, _games
+		city_seed, _walker, _inventory, label, _economy, _loadout, _games
 	)
 	if data.is_empty():
 		return false
@@ -4366,7 +4452,6 @@ func start_new_game(mode: String = PlayerLoadout.MODE_SANDBOX) -> void:
 	else:
 		_loadout.reset_sandbox()
 		_pending_spawn_theme_id = -1
-	_player_score = 0
 	_inventory.clear()
 	_economy.clear()
 	_games.clear()

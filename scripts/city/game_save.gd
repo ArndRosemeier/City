@@ -8,7 +8,7 @@
 ## filled in is resolved by `first_free_footing` instead of by remembering the hole.
 ##
 ## What *is* saved per district is six gem counts and an explored flag (see `DistrictEconomy`).
-## That is enough for a stripped tile to stay stripped and for exploration to pay once, without
+## That is enough for a stripped tile to stay stripped and for discovery to fire once, without
 ## a voxel edit stream anywhere in the format.
 ##
 ## The other thing the world remembers is any match still in progress (see `WorldGames`): a Go
@@ -28,7 +28,8 @@ const SAVES_DIR := "user://saves"
 const QUICKSAVE_NAME := "quicksave"
 const FILE_SUFFIX := ".json"
 ## Bump when the payload changes shape in a way an older file cannot satisfy.
-## 2 added `districts` (per-tile gem budgets + explored) and `score`.
+## 2 added `districts` (per-tile gem budgets + explored) and `score` (score later dropped;
+##   older files may still carry a ignored `score` key).
 ## 3 added `mode`, `unlocks`, `tray`, `hardness_tier` (Stage 2 loadout).
 ## 4 added `recipes` and `recipe_sites`: a v3 Adventure save has no cookbook, and silently
 ##   handing it an empty one would strip crafts the player had already earned.
@@ -240,7 +241,6 @@ static func capture(
 	inventory: PlayerInventory,
 	display_name: String,
 	economy: DistrictEconomy = null,
-	score: int = 0,
 	loadout: PlayerLoadout = null,
 	games: WorldGames = null
 ) -> Dictionary:
@@ -282,7 +282,6 @@ static func capture(
 		"health": walker.get_health(),
 		"energy": walker.get_energy(),
 		"inventory": inventory.slots_snapshot(),
-		"score": score,
 		"districts": {} if economy == null else economy.to_save_dict(),
 		"mode": str(loadout_data.get("mode", PlayerLoadout.MODE_SANDBOX)),
 		"unlocks": loadout_data.get("unlocks", []),
@@ -296,10 +295,6 @@ static func capture(
 
 static func saved_seed(data: Dictionary) -> int:
 	return int(data.get("city_seed", 0))
-
-
-static func saved_score(data: Dictionary) -> int:
-	return int(data.get("score", 0))
 
 
 static func apply_loadout(loadout: PlayerLoadout, data: Dictionary) -> void:

@@ -72,10 +72,6 @@ func is_adventure() -> bool:
 	return mode == MODE_ADVENTURE
 
 
-func scores() -> bool:
-	return is_adventure()
-
-
 func uses_gem_budgets() -> bool:
 	return is_adventure()
 

@@ -1,4 +1,4 @@
-## HUD buff area — active status effects just below the FPS / score line.
+## HUD buff area — active status effects just below the FPS line.
 ##
 ## No panel chrome: icons sit on the world. Same-buff stacks (cloudstone) half-overlap;
 ## different buff types sit in a loose row beside each other. Visible icons run a small
@@ -14,8 +14,9 @@ const REGEN_COLOR := InventoryItemVisualScript.TONIC_REGEN_COLOR
 const GROW_COLOR := AbilityIconVisualScript.GROW_GREEN
 const SHRINK_COLOR := AbilityIconVisualScript.SHRINK_VIOLET
 const CLOUD_ICON_MAX := 10
-## Matches CityRoot FPS label at (16, 12) with font 18 — one line below.
-const BUFF_AREA_POS := Vector2(16.0, 38.0)
+## Default under the place chrome (district + clock). CityRoot may push this down when the
+## stats fold opens via `set_buff_area_top`.
+const BUFF_AREA_POS := Vector2(16.0, 48.0)
 const CHIP_PULSE_HZ := 0.55
 const CHIP_PULSE_SCALE := 0.045
 const CHIP_PULSE_ALPHA := 0.12
@@ -138,6 +139,13 @@ func _ready() -> void:
 	_shrink_chip = _make_chip("ShrinkChip", SHRINK_COLOR)
 	_shrink_label = _shrink_chip.get_node("Label") as Label
 	_row.add_child(_shrink_chip)
+
+
+## Keep the chip row clear of the place chrome / open stats fold above it.
+func set_buff_area_top(top_y: float) -> void:
+	if _buff_area == null:
+		return
+	_buff_area.position = Vector2(BUFF_AREA_POS.x, top_y)
 
 
 func bind_walker(walker: Node) -> void:
