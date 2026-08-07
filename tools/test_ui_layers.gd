@@ -25,6 +25,7 @@ const SURFACES: Array[Dictionary] = [
 	{"path": "res://scripts/city/monster_summon_panel.gd", "layer": UiLayers.MODAL_MONSTER_SUMMON},
 	{"path": "res://scripts/city/siege_build_picker.gd", "layer": UiLayers.MODAL_SIEGE_BUILD},
 	{"path": "res://scripts/city/siege_details_modal.gd", "layer": UiLayers.MODAL_SIEGE_DETAILS},
+	{"path": "res://scripts/city/helper_modal.gd", "layer": UiLayers.MODAL_HELPER},
 	{"path": "res://scripts/city/game_menu_panel.gd", "layer": UiLayers.MODAL_GAME},
 	{"path": "res://scripts/city/cheat_panel.gd", "layer": UiLayers.MODAL_CHEAT},
 	{"path": "res://scripts/city/loading_splash.gd", "layer": UiLayers.LOADING_SPLASH},
@@ -40,6 +41,11 @@ const TOP_CENTRE: Array[Dictionary] = [
 	{"path": "res://scripts/city/siege_hud.gd", "panel": "Root/SiegeStrip"},
 	{"path": "res://scripts/city/zoo_cloak_hud.gd", "panel": "Root/CloakStrip"},
 ]
+
+## The always-visible top-right bar, in order. Help / Game / Settings all ride the settings
+## panel's layer so the button stays reachable over its own dim; a fourth one added without
+## widening the bar would be laid out off the right edge, which is what the width check catches.
+const TOP_BAR_BUTTONS: Array[String] = ["Help", "Game", "Settings"]
 
 ## Autoload → the layer it must sit on. Both outrank every panel, so a hitch report or an error
 ## can never end up hidden behind one.
@@ -70,6 +76,7 @@ const MODALS: Array[int] = [
 	UiLayers.MODAL_MONSTER_SUMMON,
 	UiLayers.MODAL_SIEGE_BUILD,
 	UiLayers.MODAL_SIEGE_DETAILS,
+	UiLayers.MODAL_HELPER,
 	UiLayers.MODAL_GAME,
 	UiLayers.MODAL_CHEAT,
 ]
@@ -99,6 +106,7 @@ func _ready() -> void:
 	_check_unique()
 	_check_surfaces()
 	_check_compass_band()
+	_check_top_bar()
 	_check_autoloads()
 	print("RESULT: %s" % ("OK" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
@@ -195,6 +203,42 @@ func _check_compass_band() -> void:
 			)
 			continue
 		print("OK %s opens at y=%.0f, clear of the compass" % [path.get_file(), top])
+
+
+## The top bar carries every button that opens a panel from anywhere in the game, so a missing
+## or clipped one is a feature with no way in. Checked here rather than in a screenshot because
+## it costs nothing headless.
+func _check_top_bar() -> void:
+	var script: GDScript = load("res://scripts/city/city_settings_panel.gd") as GDScript
+	var settings: CanvasLayer = script.new() as CanvasLayer
+	add_child(settings)
+	var bar := settings.get_node_or_null("TopBar") as HBoxContainer
+	## Every number is read out before the free: a reference to a freed node reads as null, which
+	## would turn "the bar is too narrow" into "there is no bar".
+	var found := bar != null
+	var labels: Array[String] = []
+	var bar_width := 0.0
+	var room := 0.0
+	if found:
+		for child in bar.get_children():
+			var btn := child as Button
+			if btn != null:
+				labels.append(btn.text)
+				bar_width += btn.custom_minimum_size.x
+		bar_width += bar.get_theme_constant("separation") * maxf(labels.size() - 1, 0)
+		room = absf(bar.offset_left) - absf(bar.offset_right)
+	remove_child(settings)
+	settings.free()
+	if not found:
+		_fail("FAIL the settings panel has no TopBar")
+		return
+	if labels != TOP_BAR_BUTTONS:
+		_fail("FAIL top bar reads %s, expected %s" % [str(labels), str(TOP_BAR_BUTTONS)])
+		return
+	if bar_width > room:
+		_fail("FAIL top bar needs %.0f px, but is only %.0f px wide" % [bar_width, room])
+		return
+	print("OK top bar: %s in %.0f px of %.0f" % [str(labels), bar_width, room])
 
 
 func _check_autoloads() -> void:

@@ -3,7 +3,8 @@
 
 Edits every authored section: combat (attacks / behaviours / templates / monsters),
 items, craft/build recipes, district gems, abilities + constants, chest loot,
-recipe sites, Monster Zoo / crypt spawn tuning, and Mandelbrot spots.
+recipe sites, Monster Zoo / crypt spawn tuning, and Mandelbrot spots. The Help tab
+edits assets/help.md (the in-game Help sheet) and saves it alongside the JSON.
 
 Combat validation uses tools/validate_combat_tables.py. Non-combat tabs use light
 schema checks in this module. The Monsters tab shows live EFFECTIVE STATS from
@@ -43,6 +44,9 @@ BEHAVIOURS_PATH = GAMEDATA_PATH
 TABLE_PATH = GAMEDATA_PATH
 HTML_PATH = TOOLS / "combat_tables.html"
 RENDER_SCRIPT = TOOLS / "render_combat_tables.py"
+## The in-game Help sheet. Markdown beside gamedata.json rather than a string inside it:
+## HelperModal renders it, and prose in JSON is prose nobody wants to edit.
+HELP_MD_PATH = ROOT / "assets" / "help.md"
 
 SCALAR_KEYS = validate_mod.SCALAR_KEYS
 LIST_KEYS = validate_mod.LIST_KEYS  # behaviour, attacks, tags, crowd_roles
@@ -325,6 +329,7 @@ class GameDataEditor(tk.Tk):
         self._crypt_panel: panels.NestedJsonPanel | None = None
         self._dungeon_summoner_panel: panels.NestedJsonPanel | None = None
         self._spots_panel: panels.SpotsPanel | None = None
+        self._help_text: tk.Text | None = None
 
         self._build_chrome()
         self._build_notebook()
@@ -363,6 +368,7 @@ class GameDataEditor(tk.Tk):
         self._tab_discovery = ttk.Frame(nb)
         self._tab_world = ttk.Frame(nb)
         self._tab_spots = ttk.Frame(nb)
+        self._tab_help = ttk.Frame(nb)
         nb.add(self._tab_attacks, text="Attacks")
         nb.add(self._tab_behaviours, text="Behaviours")
         nb.add(self._tab_templates, text="Templates")
@@ -376,6 +382,7 @@ class GameDataEditor(tk.Tk):
         nb.add(self._tab_discovery, text="Discovery")
         nb.add(self._tab_world, text="World")
         nb.add(self._tab_spots, text="Spots")
+        nb.add(self._tab_help, text="Help")
         self._build_attacks_tab()
         self._build_behaviours_tab()
         self._build_templates_tab()
@@ -496,6 +503,60 @@ class GameDataEditor(tk.Tk):
         )
 
         self._spots_panel = panels.SpotsPanel(self._tab_spots, on_dirty=self._mark_dirty)
+        self._build_help_tab()
+
+    def _build_help_tab(self) -> None:
+        """Plain Markdown editor for assets/help.md — the in-game Help sheet's whole text."""
+        hint = ttk.Label(
+            self._tab_help,
+            text=(
+                "assets/help.md — rendered by the in-game Help sheet (top-bar Help button).\n"
+                "Markdown subset: # / ## / ### headings, blank-line paragraphs, - bullets, "
+                "**bold**, *italic*, `code`. Saved with the rest of gamedata."
+            ),
+            justify="left",
+        )
+        hint.pack(side="top", anchor="w", padx=6, pady=(6, 2))
+
+        wrap = ttk.Frame(self._tab_help)
+        wrap.pack(side="top", fill="both", expand=True, padx=6, pady=(0, 6))
+        scroll = ttk.Scrollbar(wrap, orient="vertical")
+        scroll.pack(side="right", fill="y")
+        self._help_text = tk.Text(
+            wrap,
+            wrap="word",
+            undo=True,
+            yscrollcommand=scroll.set,
+        )
+        self._help_text.pack(side="left", fill="both", expand=True)
+        scroll.configure(command=self._help_text.yview)
+        ## `<<Modified>>` rather than a key binding: a paste or a drag has to mark the file
+        ## dirty too, or the editor quietly throws the edit away on quit.
+        self._help_text.bind("<<Modified>>", self._on_help_modified)
+
+    def _on_help_modified(self, _event: object | None = None) -> None:
+        assert self._help_text is not None
+        if not self._help_text.edit_modified():
+            return
+        self._help_text.edit_modified(False)
+        self._mark_dirty()
+
+    def _load_help_text(self) -> None:
+        assert self._help_text is not None
+        text = HELP_MD_PATH.read_text(encoding="utf-8") if HELP_MD_PATH.is_file() else ""
+        was_loading = self._loading
+        self._loading = True
+        try:
+            self._help_text.delete("1.0", "end")
+            self._help_text.insert("1.0", text)
+            self._help_text.edit_modified(False)
+        finally:
+            self._loading = was_loading
+
+    def _help_markdown(self) -> str:
+        assert self._help_text is not None
+        ## Tk keeps a trailing newline of its own; one at the end of the file is enough.
+        return self._help_text.get("1.0", "end-1c").rstrip("\n") + "\n"
 
     def _mark_dirty(self, *_args: object) -> None:
         if self._loading:
@@ -2136,6 +2197,7 @@ class GameDataEditor(tk.Tk):
         self._refresh_template_list()
         self._refresh_monster_list()
         self._load_noncombat_panels()
+        self._load_help_text()
         self._set_clean()
 
     def _load_noncombat_panels(self) -> None:
@@ -2382,6 +2444,10 @@ class GameDataEditor(tk.Tk):
             errors.append(str(exc))
             return errors
         errors.extend(self._validate_noncombat(sections))
+        ## An empty help file is a Help button that opens a blank sheet, which the game reports
+        ## as an error at runtime. Catch it here, where someone can still type the text back in.
+        if not self._help_markdown().strip():
+            errors.append("help.md: must not be empty")
         return errors
 
     def validate_now(self) -> bool:
@@ -2507,6 +2573,7 @@ class GameDataEditor(tk.Tk):
                     root[key] = value
 
             gd.save_gamedata(root)
+            HELP_MD_PATH.write_text(self._help_markdown(), encoding="utf-8")
             self._gamedata_root = root
             self.attacks_doc = attacks_out
             self.behaviours_doc = behaviours_out
@@ -2550,8 +2617,10 @@ class GameDataEditor(tk.Tk):
             return
 
         self._dirty = False
-        self._status.set(f"Saved → {GAMEDATA_PATH.name}")
-        messagebox.showinfo("Saved", "gamedata.json saved and validated.", parent=self)
+        self._status.set(f"Saved → {GAMEDATA_PATH.name} + {HELP_MD_PATH.name}")
+        messagebox.showinfo(
+            "Saved", "gamedata.json and help.md saved and validated.", parent=self
+        )
 
     def _normalize_docs_for_save(self) -> None:
         attacks = self.attacks_doc.get("attacks", {})
@@ -2818,6 +2887,9 @@ def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
     spot_list = spots.get("spots")
     if not isinstance(spot_list, list) or len(spot_list) < 80:
         raise RuntimeError("smoke: expected >= 80 mandelbrot spots in editor")
+    help_md = app._help_markdown()
+    if "# Districts" not in help_md:
+        raise RuntimeError("smoke: Help tab did not load assets/help.md")
     errors = app._validate_docs()
     if errors:
         raise RuntimeError(

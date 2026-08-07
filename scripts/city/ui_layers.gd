@@ -56,6 +56,9 @@ const MODAL_CHEAT := 27
 const MODAL_SIEGE_BUILD := 28
 ## Siege zone helper sheet, opened from the Lodestone console's Details button.
 const MODAL_SIEGE_DETAILS := 29
+## The game-wide Help sheet, opened from the top bar. Front of the modal band: it is the one
+## panel a player reaches for while another is already up, and it explains the rest of them.
+const MODAL_HELPER := 30
 
 ## Whole-screen state changes, above any modal.
 const GAME_OVER := 40

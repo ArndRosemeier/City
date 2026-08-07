@@ -8,6 +8,8 @@ signal settings_applied(settings: Dictionary)
 signal controls_changed(controls: PlayerControls)
 ## The Game button shares this bar but belongs to CityRoot's save modal, not to this panel.
 signal game_menu_requested
+## Same again for Help: the bar is the only always-visible chrome, so the sheet hangs off it.
+signal help_requested
 
 const PlayerControlsScript := preload("res://scripts/city/player_controls.gd")
 
@@ -19,6 +21,7 @@ const CONTROLS_VERSION := 5
 
 var _btn: Button
 var _game_btn: Button
+var _help_btn: Button
 var _top_bar: HBoxContainer
 var _panel: PanelContainer
 var _dim: ColorRect
@@ -168,13 +171,22 @@ func _build_ui() -> void:
 	_top_bar.focus_mode = Control.FOCUS_NONE
 	_top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_top_bar.offset_left = -240.0
+	## Three buttons now — Help, Game, Settings. `test_ui_layers` checks they still fit.
+	_top_bar.offset_left = -360.0
 	_top_bar.offset_top = 12.0
 	_top_bar.offset_right = -16.0
 	_top_bar.offset_bottom = 44.0
 	_top_bar.add_theme_constant_override("separation", 10)
 	_top_bar.alignment = BoxContainer.ALIGNMENT_END
 	add_child(_top_bar)
+
+	_help_btn = Button.new()
+	_help_btn.name = "HelpButton"
+	_help_btn.text = "Help"
+	_help_btn.focus_mode = Control.FOCUS_NONE
+	_help_btn.custom_minimum_size = Vector2(88, 0)
+	_help_btn.pressed.connect(func() -> void: help_requested.emit())
+	_top_bar.add_child(_help_btn)
 
 	## Session lifecycle rides this bar but opens its own modal — see GameMenuPanel for why saving
 	## and loading are not a tab in here.

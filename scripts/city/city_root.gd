@@ -48,6 +48,7 @@ const ArmedTrapScript := preload("res://scripts/city/armed_trap.gd")
 const MonsterSummonPanelScript := preload("res://scripts/city/monster_summon_panel.gd")
 const SiegeBuildPickerScript := preload("res://scripts/city/siege_build_picker.gd")
 const SiegeDetailsModalScript := preload("res://scripts/city/siege_details_modal.gd")
+const HelperModalScript := preload("res://scripts/city/helper_modal.gd")
 const NavDebugOverlayScript := preload("res://scripts/city/nav_debug_overlay.gd")
 const CreatureCatalogScript := preload("res://scripts/city/creature_catalog.gd")
 const CombatTableScript := preload("res://scripts/city/combat_table.gd")
@@ -196,6 +197,8 @@ var _monster_summon_panel: MonsterSummonPanel
 var _siege_build_picker: SiegeBuildPicker
 ## Zone helper sheet, opened from the Lodestone console's Details button.
 var _siege_details: SiegeDetailsModal
+## Game-wide Help sheet, opened from the top bar. Text comes from `assets/help.md`.
+var _helper_modal: HelperModal
 var _game_menu: GameMenuPanel
 var _cheat_panel: CheatPanel
 ## Save payload waiting to be poured into the next walker. Set before a regenerate (boot resume,
@@ -549,6 +552,10 @@ func is_siege_details_open() -> bool:
 	return _siege_details != null and _siege_details.is_open()
 
 
+func is_helper_open() -> bool:
+	return _helper_modal != null and _helper_modal.is_open()
+
+
 func is_game_menu_open() -> bool:
 	return _game_menu != null and _game_menu.is_open()
 
@@ -567,6 +574,7 @@ func is_modal_open() -> bool:
 		or is_monster_summon_open()
 		or is_siege_build_picker_open()
 		or is_siege_details_open()
+		or is_helper_open()
 		or is_game_menu_open()
 		or is_cheat_open()
 	)
@@ -620,6 +628,7 @@ func _refresh_hud_visibility() -> void:
 			and not is_monster_summon_open()
 			and not is_siege_build_picker_open()
 			and not is_siege_details_open()
+			and not is_helper_open()
 			and not is_game_menu_open()
 			and not is_cheat_open()
 		)
@@ -796,6 +805,13 @@ func _build_hud() -> void:
 	add_child(_siege_details)
 	_siege_details.opened.connect(_on_siege_details_opened)
 	_siege_details.closed.connect(_on_siege_details_closed)
+
+	_helper_modal = HelperModalScript.new() as HelperModal
+	_helper_modal.name = "HelperModal"
+	add_child(_helper_modal)
+	_helper_modal.opened.connect(_on_helper_opened)
+	_helper_modal.closed.connect(_on_helper_closed)
+	_settings_panel.help_requested.connect(_on_help_requested)
 	## Apply saved / default knobs once the viewport exists.
 	call_deferred("_on_settings_applied", _settings_panel.get_settings())
 	call_deferred("_apply_saved_controls")
@@ -1079,6 +1095,30 @@ func _on_siege_details_closed() -> void:
 		_walker.release_capture()
 
 
+## The Help sheet, from the top bar's Help button.
+func _on_help_requested() -> void:
+	if _helper_modal == null or not is_instance_valid(_helper_modal):
+		push_error("CityRoot._on_help_requested: no helper modal")
+		assert(false, "CityRoot: helper modal missing")
+		return
+	_helper_modal.toggle_panel()
+
+
+func _on_helper_opened() -> void:
+	_close_other_modals_except("helper")
+	_refresh_hud_visibility()
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
+func _on_helper_closed() -> void:
+	_refresh_hud_visibility()
+	if is_modal_open():
+		return
+	if _walker != null and is_instance_valid(_walker):
+		_walker.release_capture()
+
+
 func _on_game_menu_requested() -> void:
 	if _game_menu == null:
 		return
@@ -1241,6 +1281,8 @@ func _close_other_modals_except(keep: String) -> void:
 		_siege_build_picker.close_panel()
 	if keep != "siege_details" and is_siege_details_open():
 		_siege_details.close_panel()
+	if keep != "helper" and is_helper_open():
+		_helper_modal.close_panel()
 	if keep != "game" and is_game_menu_open():
 		_game_menu.close_panel()
 	if keep != "cheat" and is_cheat_open():
@@ -6999,6 +7041,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if is_siege_details_open():
 			_siege_details.close_panel()
+			get_viewport().set_input_as_handled()
+			return
+		if is_helper_open():
+			_helper_modal.close_panel()
 			get_viewport().set_input_as_handled()
 			return
 		if is_game_menu_open():

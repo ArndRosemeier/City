@@ -31,9 +31,14 @@ if str(_TOOLS) not in sys.path:
 
 import combat_resolve as resolve_mod  # noqa: E402
 import gamedata_io as gd  # noqa: E402
+import validate_combat_tables as validate_mod  # noqa: E402
 
 ROOT = _TOOLS.parent
 CATALOG_PATH = ROOT / "scripts" / "city" / "creature_catalog.gd"
+
+## Combat rows whose body is a voxel stamp rather than a creature mesh — bought siege pads and
+## the world's summoning spires. Imported rather than re-listed so the two tools cannot drift.
+STRUCTURE_ID_PREFIXES = validate_mod.STRUCTURE_ID_PREFIXES
 
 # CreatureHealth.gd
 BASE_KAYKIT = 34.0
@@ -227,6 +232,10 @@ def attack_helpers(row: dict[str, Any], attack_id: str) -> AttackRow:
     )
 
 
+def _is_structure_body(monster_id: str) -> bool:
+    return any(monster_id.startswith(prefix) for prefix in STRUCTURE_ID_PREFIXES)
+
+
 def load_fighter_defs_from_root(
     root: dict[str, Any],
 ) -> tuple[dict[str, FighterDef], dict[str, AttackRow]]:
@@ -254,6 +263,11 @@ def load_fighter_defs_from_root(
         if not isinstance(mon, dict):
             raise TypeError("monster entry must be an object")
         mid = str(mon["id"])
+        ## Emplacements are rooted structures with no mesh and speed_mult 0 — an open-field
+        ## duel between two of them is a pair of towers standing still. The catalog rule below
+        ## still holds for everything that walks, so a mistyped body id remains an error.
+        if _is_structure_body(mid):
+            continue
         if mid not in catalog:
             raise KeyError(f"monster '{mid}' missing from creature_catalog.gd parse")
         tids = list(mon["templates"])
