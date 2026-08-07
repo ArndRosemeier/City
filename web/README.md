@@ -49,6 +49,22 @@ registers the site in the Futuremagic hub (`apps.json`). Live URL:
 
 Optional flags: `-SkipClean`, `-SkipRebuild`.
 
+### Delta upload (new screenshots / clips)
+
+The gallery is driven by `gallery-data.js`, so new media only needs the new files
+plus the updated gallery list — old remote files can stay. After a successful
+clean deploy, `.deploy/manifest.json` stores SHA-256 hashes for each file.
+
+```powershell
+.\deploy-delta.ps1            # rebuild, upload only new/changed files
+.\deploy-delta.ps1 -DryRun    # print the plan, no FTP
+.\deploy-delta.ps1 -MediaOnly # only gallery-data.js + media/**
+.\deploy-delta.ps1 -SkipRebuild
+```
+
+Delta never wipes the remote. Use `deploy-clean.ps1` when the remote is unknown
+or you need a full refresh.
+
 ## GitHub Pages (optional)
 
 `.github/workflows/deploy-pages.yml` can also publish `web/` from `main`.

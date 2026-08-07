@@ -22,6 +22,14 @@ window.ECCENTRI_GALLERY = {
       "src": "media/screenshots/Meseze_Gardens_1.jpg"
     },
     {
+      "label": "Nanunu_Gaming_Plaza_1",
+      "src": "media/screenshots/Nanunu_Gaming_Plaza_1.jpg"
+    },
+    {
+      "label": "Nanunu_Gaming_Plaza_2",
+      "src": "media/screenshots/Nanunu_Gaming_Plaza_2.jpg"
+    },
+    {
       "label": "Old_Glokezi_1",
       "src": "media/screenshots/Old_Glokezi_1.jpg"
     },
@@ -32,6 +40,10 @@ window.ECCENTRI_GALLERY = {
     {
       "label": "Port_Draepind_1",
       "src": "media/screenshots/Port_Draepind_1.jpg"
+    },
+    {
+      "label": "Puze_Bulwark_1",
+      "src": "media/screenshots/Puze_Bulwark_1.jpg"
     },
     {
       "label": "Rifi_Hill_1",
@@ -78,6 +90,14 @@ window.ECCENTRI_GALLERY = {
     {
       "label": "2026-08-02 11-52-22",
       "src": "media/clips/2026-08-02_11-52-22.mp4"
+    },
+    {
+      "label": "2026-08-07 20-15-46",
+      "src": "media/clips/2026-08-07_20-15-46.mp4"
+    },
+    {
+      "label": "2026-08-07 20-18-34",
+      "src": "media/clips/2026-08-07_20-18-34.mp4"
     }
   ]
 };

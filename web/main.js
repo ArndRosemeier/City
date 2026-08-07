@@ -133,9 +133,8 @@
   /**
    * @param {HTMLElement} grid
    * @param {{label: string, src: string}[]} clips
-   * @param {string | undefined} poster
    */
-  const bindClips = (grid, clips, poster) => {
+  const bindClips = (grid, clips) => {
     grid.replaceChildren();
     for (const clip of clips) {
       const figure = document.createElement("figure");
@@ -144,11 +143,10 @@
       const video = document.createElement("video");
       video.controls = true;
       video.playsInline = true;
+      // Metadata + media fragment so each tile shows that clip's own first frame
+      // (not a shared screenshot poster, which made every tile look identical).
       video.preload = "metadata";
-      video.src = clip.src;
-      if (poster) {
-        video.poster = poster;
-      }
+      video.src = `${clip.src}#t=0.1`;
 
       const caption = document.createElement("figcaption");
       caption.className = "clip-meta";
@@ -203,8 +201,7 @@
     }
 
     bindScreenshots(image, list, data.screenshots);
-    const poster = data.screenshots[0]?.src;
-    bindClips(grid, data.clips, poster);
+    bindClips(grid, data.clips);
     reveal();
   };
 

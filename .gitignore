@@ -118,3 +118,9 @@ assets/audio/tmp/
 
 # Local capture scratch (OBS / phone dumps). District stills live under screenshots/.
 videos/
+
+# Website gallery binaries — rebuilt by web/tools/rebuild_media.py from
+# screenshots/ + videos/, then uploaded via deploy-clean / deploy-delta.
+# Keep gallery.json / gallery-data.js tracked; do not ship mp4/jpg in git.
+web/media/clips/
+web/media/screenshots/
