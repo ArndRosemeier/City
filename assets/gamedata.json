@@ -1165,13 +1165,15 @@
       "spawn_ready": false,
       "attacks": [
         "melee",
-        "stomp"
+        "stomp",
+        "eye_laser"
       ],
+      "preferred_range_m": 18.0,
       "hp_mult": 2.1,
       "damage_mult": 1.5,
       "armor_mult": 1.25,
       "aggro_range_m": 30.0,
-      "notes": "The face on the wanted poster. Only ever spawned by the crowd promoting the marked ped the player chose to attack, which is why it is not spawn_ready."
+      "notes": "The face on the wanted poster. Eye laser for the hunt, then stomp/melee when closed. Only ever spawned by the crowd promoting the marked ped the player chose to attack, which is why it is not spawn_ready."
     }
   ],
   "items": {

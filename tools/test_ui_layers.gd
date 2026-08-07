@@ -12,7 +12,6 @@ extends Node
 ## Script → the layer its _ready must claim. Only surfaces that build without a live city; the
 ## build bar and the nav counters are covered by shot_modal_layers instead.
 const SURFACES: Array[Dictionary] = [
-	{"path": "res://scripts/city/infection_tendril_hud.gd", "layer": UiLayers.HUD_TENDRILS},
 	{"path": "res://scripts/city/undead_invasion_hud.gd", "layer": UiLayers.HUD_UNDEAD},
 	{"path": "res://scripts/city/city_minimap.gd", "layer": UiLayers.HUD_MINIMAP},
 	{"path": "res://scripts/city/player_energy_hud.gd", "layer": UiLayers.HUD_ENERGY},
@@ -52,7 +51,6 @@ const AUTOLOADS: Dictionary = {
 
 const HUD: Array[int] = [
 	UiLayers.HUD_STATS,
-	UiLayers.HUD_TENDRILS,
 	UiLayers.HUD_UNDEAD,
 	UiLayers.HUD_MINIMAP,
 	UiLayers.HUD_ENERGY,

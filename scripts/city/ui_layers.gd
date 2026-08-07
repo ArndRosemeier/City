@@ -12,7 +12,7 @@ extends RefCounted
 ## band bounds have to stay tight around the HUD entries below.
 const HUD_MIN := 10
 const HUD_STATS := 10
-const HUD_TENDRILS := 11
+## Tendril value strip retired — tips read on the minimap as green dots instead.
 const HUD_UNDEAD := 12
 const HUD_MINIMAP := 13
 const HUD_ENERGY := 14

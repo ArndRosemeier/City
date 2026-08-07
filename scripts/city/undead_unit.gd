@@ -942,7 +942,7 @@ func _configure_locomotion_loops() -> void:
 func _apply_far_visibility(n: Node) -> void:
 	if n is GeometryInstance3D:
 		var g := n as GeometryInstance3D
-		## No distance fade/cull — undead must stay drawable well past the 150 m radar / 200 m+.
+		## No distance fade/cull — undead must stay drawable well past typical fight range.
 		g.visibility_range_begin = 0.0
 		g.visibility_range_begin_margin = 0.0
 		g.visibility_range_end = 0.0

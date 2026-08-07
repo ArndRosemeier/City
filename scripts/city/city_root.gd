@@ -26,7 +26,6 @@ const DayNightCycleScript := preload("res://scripts/city/day_night_cycle.gd")
 const CitySettingsPanelScript := preload("res://scripts/city/city_settings_panel.gd")
 const InfectionDirectorScript := preload("res://scripts/city/infection_director.gd")
 const InfectionMeteorScript := preload("res://scripts/city/infection_meteor.gd")
-const InfectionTendrilHudScript := preload("res://scripts/city/infection_tendril_hud.gd")
 const MonsterRosterScript := preload("res://scripts/city/monster_roster.gd")
 const UndeadInvasionDirectorScript := preload("res://scripts/city/undead_invasion_director.gd")
 const UndeadInvasionHudScript := preload("res://scripts/city/undead_invasion_hud.gd")
@@ -77,6 +76,12 @@ const SPAWN_DISTRICT_RING := 3
 const CHEAT_RECIPE_STAND_OFF_M := 2.4
 ## Stand-off beside the hill cave boss cage after the cheat hop.
 const CHEAT_CAGE_STAND_OFF_M := 3.5
+## Street stand-off for wanted posters / alchemy lab signs (tall props — keep Y grounded).
+const CHEAT_STREET_STAND_OFF_M := 4.0
+## How many rolled candidate tiles a cheat teleport will try before giving up.
+const CHEAT_FEATURE_HUNT_TRIES := 8
+## Chebyshev ring when hunting a vanilla tile that rolled a wanted bill / alchemy lab.
+const CHEAT_FEATURE_HUNT_RING := 24
 ## Birds never draw closer in than this, whatever the crowd slider says.
 const BIRD_RENDER_FLOOR_M := 90.0
 ## District layouts hang off this seed plus the district's grid coordinate. Left at
@@ -142,7 +147,6 @@ var _debris_root: Node3D
 var _cascade: NativeCascadeDebris
 var _gem_lights: GemLightDirector
 var _infection: InfectionDirector
-var _tendril_hud: InfectionTendrilHud
 var _undead_hud: UndeadInvasionHud
 var _minimap: CityMinimap
 ## Span field / portal / corridor / dynamic-block viewer, off until F8.
@@ -206,12 +210,7 @@ var _summon_aim: Variant = null
 var _game_over: bool = false
 ## True while Enter-after-death is teleporting to the zone spawn.
 var _respawning: bool = false
-var _radar_cooldown_left: float = 0.0
-var _radar_reveal_left: float = 0.0
 var _gem_pickup_accum: float = 0.0
-const RADAR_COOLDOWN_SEC := 30.0
-## How long all undead stay painted on the minimap after U.
-const RADAR_REVEAL_SEC := 12.0
 const GEM_PICKUP_INTERVAL_SEC := 0.12
 const GEM_PICKUP_REACH_M := 1.35
 ## How far from a cabinet's stand keys 1–4 still reach it. Generous, because a T-key
@@ -575,7 +574,7 @@ func is_modal_open() -> bool:
 
 ## True while the splash covers the world — boot, a hop in flight, and the J picker. It is a
 ## screen takeover rather than a modal, but gameplay input has to stop at it just the same:
-## parking the walker only stops walking, and the meteor, build and cabinet keys all kept
+## parking the walker only stops walking, and the build and cabinet keys all kept
 ## firing into the city behind the open picker.
 func is_splash_open() -> bool:
 	return _loading_splash != null and bool(_loading_splash.call("owns_screen"))
@@ -693,10 +692,6 @@ func _build_hud() -> void:
 	_hud.text = "—"
 	_hud_layer.add_child(_hud)
 
-	_tendril_hud = InfectionTendrilHudScript.new()
-	_tendril_hud.name = "InfectionTendrilHud"
-	add_child(_tendril_hud)
-
 	_energy_hud = PlayerEnergyHudScript.new()
 	_energy_hud.name = "PlayerEnergyHud"
 	add_child(_energy_hud)
@@ -767,6 +762,8 @@ func _build_hud() -> void:
 	_cheat_panel.fill_recipes_requested.connect(_on_cheat_fill_recipes)
 	_cheat_panel.teleport_nearest_recipe_requested.connect(_on_cheat_teleport_nearest_recipe)
 	_cheat_panel.teleport_cave_cage_requested.connect(_on_cheat_teleport_cave_cage)
+	_cheat_panel.teleport_murderer_requested.connect(_on_cheat_teleport_murderer)
+	_cheat_panel.teleport_alchemy_lab_requested.connect(_on_cheat_teleport_alchemy_lab)
 
 	_loot_toast = LootToastScript.new() as LootToast
 	_loot_toast.name = "LootToast"
@@ -1613,10 +1610,6 @@ func _process(delta: float) -> void:
 		CityProfiler.end("district_economy")
 	_tick_autosave(delta)
 	_tick_player_minion(delta)
-	if _radar_cooldown_left > 0.0:
-		_radar_cooldown_left = maxf(0.0, _radar_cooldown_left - delta)
-	if _radar_reveal_left > 0.0:
-		_radar_reveal_left = maxf(0.0, _radar_reveal_left - delta)
 	if _infection_stream_accum >= 0.5:
 		_infection_stream_accum = 0.0
 		CityProfiler.begin("infection_stream")
@@ -1642,20 +1635,13 @@ func _process(delta: float) -> void:
 			var hh := int(floor(h)) % 24
 			var mm := int(floor(fposmod(h, 1.0) * 60.0))
 			clock = "  %02d:%02d" % [hh, mm]
-		var radar := ""
-		if _radar_reveal_left > 0.05:
-			radar = "  Radar: LIVE %.0fs" % _radar_reveal_left
-		elif _radar_cooldown_left > 0.05:
-			radar = "  Radar: %.0fs" % _radar_cooldown_left
-		else:
-			radar = "  Radar: ready (U)"
 		if _loadout != null and _loadout.scores():
-			_hud.text = "%d FPS%s  Score: %d%s" % [
-				Engine.get_frames_per_second(), clock, _player_score, radar
+			_hud.text = "%d FPS%s  Score: %d" % [
+				Engine.get_frames_per_second(), clock, _player_score
 			]
 		else:
-			_hud.text = "%d FPS%s  Sandbox%s" % [
-				Engine.get_frames_per_second(), clock, radar
+			_hud.text = "%d FPS%s  Sandbox" % [
+				Engine.get_frames_per_second(), clock
 			]
 
 
@@ -1788,9 +1774,6 @@ func _ensure_infection_director() -> void:
 		var cb_end := Callable(self, "_on_tendril_ended")
 		if not _infection.is_connected("tendril_ended", cb_end):
 			_infection.connect("tendril_ended", cb_end)
-	if _tendril_hud != null and is_instance_valid(_tendril_hud):
-		_tendril_hud.call("bind_director", _infection)
-
 
 func get_economy() -> DistrictEconomy:
 	return _economy
@@ -2372,6 +2355,27 @@ func get_loaded_district_theme_id(coord: Vector2i) -> int:
 	return inst.generator.theme.id
 
 
+## Stream state for void-rescue diagnostics (loaded / busy / ground / ready / quality).
+func describe_district_stream_state(coord: Vector2i) -> String:
+	var inst := _district_at_coord(coord)
+	if inst == null:
+		return "district=missing"
+	return (
+		"district=loaded busy=%s ground=%s ready=%s quality=%s"
+		% [
+			str(inst.is_busy),
+			str(inst.is_ground_ready),
+			str(inst.is_ready),
+			str(inst.bake_quality),
+		]
+	)
+
+
+## Append a void-rescue line to the cheat log when the panel is open (also always push_error'd).
+func report_void_rescue(line: String) -> void:
+	_cheat_log(line)
+
+
 ## Hand the player one gem. When `from_budget` is true, spends the district ledger (town chests /
 ## canopy). Hill cave ore uses the ledger only when voxels are collected — chests pass false.
 func grant_district_gem(coord: Vector2i, mat_id: int, from_budget: bool = true) -> bool:
@@ -2905,7 +2909,6 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 			for b in inst.building_lod.get_footprints_near(origin, range_m):
 				buildings.append(b)
 	var undead: Array = []
-	var radar_on := _radar_reveal_left > 0.0
 	var range_r2 := range_m * range_m
 	if _monsters != null and is_instance_valid(_monsters):
 		for u: UndeadUnit in _monsters.get_alive_units():
@@ -2914,17 +2917,14 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 			var pos := u.global_position
 			var dx := pos.x - origin.x
 			var dz := pos.z - origin.z
-			var d2 := dx * dx + dz * dz
-			var outside := d2 > range_r2
-			## Nearby monsters always paint; beyond-range only while radar is live.
-			if outside and not radar_on:
+			if dx * dx + dz * dz > range_r2:
 				continue
 			var kind := "mage"
 			if u.is_giant():
 				kind = "giant"
 			elif u.role == UndeadUnit.Role.MINION:
 				kind = "minion"
-			undead.append({"pos": pos, "kind": kind, "edge": outside})
+			undead.append({"pos": pos, "kind": kind})
 	var meteors: Array = []
 	for c in get_children():
 		if c == null or not is_instance_valid(c):
@@ -2952,6 +2952,15 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 			if sdx * sdx + sdz * sdz > range_m * range_m:
 				continue
 			meteors.append(wp)
+	var tendrils: Array = []
+	if _infection != null and is_instance_valid(_infection):
+		for tip: Variant in _infection.active_tendril_lead_worlds():
+			var tp: Vector3 = tip as Vector3
+			var tdx := tp.x - origin.x
+			var tdz := tp.z - origin.z
+			if tdx * tdx + tdz * tdz > range_m * range_m:
+				continue
+			tendrils.append(tp)
 	return {
 		"origin": origin,
 		"yaw": yaw,
@@ -2959,7 +2968,7 @@ func get_minimap_snapshot(range_m: float = 100.0) -> Dictionary:
 		"buildings": buildings,
 		"undead": undead,
 		"meteors": meteors,
-		"radar_active": radar_on,
+		"tendrils": tendrils,
 	}
 
 
@@ -3122,19 +3131,6 @@ func _ensure_undead_director() -> void:
 	_undead.call("setup", self, _monsters)
 	if _undead_hud != null and is_instance_valid(_undead_hud) and _undead_invasion_enabled:
 		_undead_hud.call("bind_director", _undead)
-
-
-func request_undead_radar() -> bool:
-	if _game_over or _booting:
-		return false
-	if _radar_cooldown_left > 0.0:
-		return false
-	if _walker == null or not is_instance_valid(_walker):
-		return false
-	## Paint every living undead on the minimap (edge dots past 100 m). No world light pulse.
-	_radar_reveal_left = RADAR_REVEAL_SEC
-	_radar_cooldown_left = RADAR_COOLDOWN_SEC
-	return true
 
 
 ## Open the district-type picker, then hop to the nearest matching tile (J by default).
@@ -3773,14 +3769,10 @@ func _regenerate() -> void:
 		GameSaveScript.apply_games(_games, _pending_restore)
 	_gem_pickup_accum = 0.0
 	_economy_accum = 0.0
-	_radar_cooldown_left = 0.0
-	_radar_reveal_left = 0.0
 	_clear_all_meteor_sites()
 	_meteor_spawn_accum = 0.0
 	if _spawn_meteors_enabled:
 		_roll_meteor_spawn_interval()
-	if _tendril_hud != null and is_instance_valid(_tendril_hud):
-		_tendril_hud.call("clear_display")
 	if _energy_hud != null and is_instance_valid(_energy_hud):
 		_energy_hud.call("clear_display")
 	if _health_hud != null and is_instance_valid(_health_hud):
@@ -4006,7 +3998,7 @@ func _on_spawn_district_ready(inst: DistrictInstance) -> void:
 	## cabinet is gated on the walker that only exists now.
 	_stand_up_district_arcades()
 	print(
-		"CityRoot: playable — endless stream active at y=%.2f (F1–F6 = build · M = meteor · T = tetris)"
+		"CityRoot: playable — endless stream active at y=%.2f (F1–F6 = build · T = tetris)"
 		% floor_y
 	)
 	_maybe_run_summon_probe()
@@ -7309,6 +7301,164 @@ func _on_cheat_teleport_cave_cage() -> void:
 	var msg := "Stood beside cave cage at %s." % str(dest)
 	_cheat_log(msg)
 	print("CityRoot: cheat — %s" % msg)
+
+
+## Hop to a vanilla tile that posts wanted bills and stand in the street by one of them.
+func _on_cheat_teleport_murderer() -> void:
+	await _cheat_teleport_street_feature(
+		"Murderer",
+		func(inst: DistrictInstance) -> Vector3:
+			if inst == null or inst.wanted_posters.is_empty():
+				return Vector3.INF
+			var poster: WantedPoster = inst.wanted_posters[0]
+			if poster == null or not is_instance_valid(poster):
+				return Vector3.INF
+			return poster.wanted_world(VOXEL_SIZE),
+		func(coord: Vector2i) -> bool:
+			var theme := DistrictTheme.for_district(city_seed, coord)
+			var dseed := DistrictCoord.district_seed(city_seed, coord)
+			return WantedPoster.posts_bills(dseed, theme.id)
+	)
+
+
+## Hop to a vanilla tile that hid an alchemy lab and stand by its street sign (vat is inside).
+func _on_cheat_teleport_alchemy_lab() -> void:
+	await _cheat_teleport_street_feature(
+		"Alchemy lab",
+		func(inst: DistrictInstance) -> Vector3:
+			if inst == null or inst.alchemy_lab == null or not is_instance_valid(inst.alchemy_lab):
+				return Vector3.INF
+			var lab: AlchemyLabSite = inst.alchemy_lab
+			var sign := lab.sign_world(VOXEL_SIZE)
+			if sign.is_finite():
+				return sign
+			## Panes-only labs still count — stand at the lot centre on the street plane.
+			var rect := lab.lot_rect
+			if rect.size == Vector2i.ZERO:
+				return Vector3.INF
+			var mid := Vector2i(
+				rect.position.x + int(rect.size.x / 2),
+				rect.position.y + int(rect.size.y / 2)
+			)
+			return Vector3(
+				(float(inst.origin_vox.x + mid.x) + 0.5) * VOXEL_SIZE,
+				_walker.global_position.y,
+				(float(inst.origin_vox.z + mid.y) + 0.5) * VOXEL_SIZE
+			),
+		func(coord: Vector2i) -> bool:
+			var theme := DistrictTheme.for_district(city_seed, coord)
+			var dseed := DistrictCoord.district_seed(city_seed, coord)
+			return AlchemyLabSite.rolls_lab(dseed, theme.id)
+	)
+
+
+## Shared hunt for wanted bills / alchemy labs: prefer a loaded tile that already spawned the
+## feature, else spiral for a rolled candidate, hop, and retry a few times when geometry
+## refused the roll.
+func _cheat_teleport_street_feature(
+	label: String, stand_of: Callable, rolls_at: Callable
+) -> void:
+	if _walker == null or not is_instance_valid(_walker):
+		_cheat_log("%s teleport failed: no walker." % label)
+		return
+	if _streamer == null:
+		_cheat_log("%s teleport failed: world not streaming yet." % label)
+		return
+	if _district_hopping:
+		_cheat_log("%s teleport failed: already hopping." % label)
+		return
+	var tried: Dictionary = {}  ## Vector2i → true
+	if _cheat_panel != null:
+		_cheat_panel.close_panel()
+	for _attempt in CHEAT_FEATURE_HUNT_TRIES:
+		var dest := _cheat_find_feature_coord(tried, stand_of, rolls_at)
+		if dest.x == 0x40000000:
+			break
+		tried[dest] = true
+		var here := DistrictCoord.from_world(_walker.global_position, VOXEL_SIZE)
+		if dest != here:
+			_cheat_log("Hopping to %s at %s…" % [label.to_lower(), str(dest)])
+			_district_hopping = true
+			await _district_hop_to(dest, _walker.global_position)
+			if _walker == null or not is_instance_valid(_walker):
+				return
+		var inst := _district_at_coord(dest)
+		if inst == null:
+			_cheat_log("%s teleport: district instance missing at %s." % [label, str(dest)])
+			continue
+		var target: Vector3 = stand_of.call(inst)
+		if not target.is_finite():
+			_cheat_log(
+				"%s teleport: %s rolled but did not spawn — trying another tile."
+				% [label, str(dest)]
+			)
+			continue
+		_cheat_stand_near_grounded(target, CHEAT_STREET_STAND_OFF_M)
+		var msg := "Stood by %s at %s." % [label.to_lower(), str(dest)]
+		_cheat_log(msg)
+		print("CityRoot: cheat — %s" % msg)
+		return
+	_cheat_log("%s teleport failed: no matching district within ring %d." % [
+		label, CHEAT_FEATURE_HUNT_RING
+	])
+	push_error(
+		"CityRoot: cheat %s — none within ring %d (seed %d)"
+		% [label.to_lower(), CHEAT_FEATURE_HUNT_RING, city_seed]
+	)
+
+
+## Loaded tiles that already have the feature win; otherwise the nearest Chebyshev spiral
+## candidate that still rolls the feature and is not in `tried`.
+func _cheat_find_feature_coord(
+	tried: Dictionary, stand_of: Callable, rolls_at: Callable
+) -> Vector2i:
+	var sentinel := Vector2i(0x40000000, 0x40000000)
+	var best_loaded := sentinel
+	var best_dist := INF
+	var from := _walker.global_position
+	for entry in _streamer.get_loaded_districts():
+		var inst := _as_district_instance(entry)
+		if inst == null or tried.has(inst.coord):
+			continue
+		var stand: Vector3 = stand_of.call(inst)
+		if not stand.is_finite():
+			continue
+		var d := from.distance_squared_to(stand)
+		if d < best_dist:
+			best_dist = d
+			best_loaded = inst.coord
+	if best_loaded != sentinel:
+		return best_loaded
+	var origin := DistrictCoord.from_world(from, VOXEL_SIZE)
+	for ring in range(0, CHEAT_FEATURE_HUNT_RING + 1):
+		for cz in range(origin.y - ring, origin.y + ring + 1):
+			for cx in range(origin.x - ring, origin.x + ring + 1):
+				if maxi(absi(cx - origin.x), absi(cz - origin.y)) != ring:
+					continue
+				var coord := Vector2i(cx, cz)
+				if tried.has(coord):
+					continue
+				if bool(rolls_at.call(coord)):
+					return coord
+	return sentinel
+
+
+## Move beside `target` on the walker's current ground plane and face it. Tall street props
+## (wanted sheets, lab signs) must not lift the player to mid-wall height.
+func _cheat_stand_near_grounded(target: Vector3, stand_off_m: float) -> void:
+	var from := _walker.global_position
+	var flat := Vector3(target.x - from.x, 0.0, target.z - from.z)
+	if flat.length_squared() < 0.01:
+		flat = Vector3(stand_off_m, 0.0, 0.0)
+	else:
+		flat = flat.normalized() * stand_off_m
+	var stand := Vector3(target.x - flat.x, from.y, target.z - flat.z)
+	_walker.velocity = Vector3.ZERO
+	_walker.global_position = stand
+	_walker.velocity = Vector3.ZERO
+	var toward := Vector3(target.x - stand.x, 0.0, target.z - stand.z)
+	if _walker.has_method("set_yaw") and toward.length_squared() > 0.01:
+		_walker.call("set_yaw", atan2(-toward.x, -toward.z))
 
 
 func _cheat_log(line: String) -> void:

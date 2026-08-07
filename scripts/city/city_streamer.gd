@@ -521,8 +521,10 @@ func _on_district_failed(inst: DistrictInstance, reason: String) -> void:
 	_active_jobs.erase(inst.coord)
 	push_error("CityStreamer: district %s failed: %s" % [str(inst.coord), reason])
 	_districts.erase(inst.coord)
+	## Abort wipes any partial 16³ commits before the data anchor drops — otherwise the
+	## player's VoxelViewer keeps a rectangular pit until (or unless) the bubble restamps.
 	if is_instance_valid(inst):
-		inst.queue_free()
+		await inst.abort_and_clear(_tool)
 	_kick_next_job()
 
 

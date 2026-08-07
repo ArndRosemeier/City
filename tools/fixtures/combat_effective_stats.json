@@ -1175,17 +1175,22 @@
       "speed_mult": 0.9,
       "aggro_range_m": 30.0,
       "leash_m": 55.0,
-      "preferred_range_m": 2.5,
+      "preferred_range_m": 18.0,
       "armor_mult": 1.25,
       "score_mult": 1.5,
       "behaviour": [
         "chase"
       ],
       "attacks": [
+        "eye_laser",
         "melee",
         "stomp"
       ],
       "attack_damage": {
+        "eye_laser": {
+          "vs_player": 27.0,
+          "vs_mob": 27.0
+        },
         "melee": {
           "vs_player": 18.0,
           "vs_mob": 18.0

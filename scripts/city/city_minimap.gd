@@ -1,5 +1,4 @@
-## Top-down tactical minimap: buildings, undead, meteors within 100 m.
-## Radar (U) paints every undead; beyond-range contacts sit on the rim (direction only).
+## Top-down tactical minimap: buildings, undead, meteors, infection tips within 100 m.
 class_name CityMinimap
 extends CanvasLayer
 
@@ -104,12 +103,8 @@ func _refresh() -> void:
 		return
 	_snapshot = _city.call("get_minimap_snapshot", RANGE_M) as Dictionary
 	if _title != null:
-		if bool(_snapshot.get("radar_active", false)):
-			_title.text = "RADAR"
-			_title.add_theme_color_override("font_color", Color(0.45, 1.0, 0.9, 1.0))
-		else:
-			_title.text = "100 m"
-			_title.add_theme_color_override("font_color", Color(0.75, 0.9, 0.85, 0.85))
+		_title.text = "100 m"
+		_title.add_theme_color_override("font_color", Color(0.75, 0.9, 0.85, 0.85))
 	if _map != null:
 		_map.queue_redraw()
 
@@ -131,13 +126,9 @@ func _on_map_draw() -> void:
 	var right := Vector3(cos(yaw), 0.0, -sin(yaw))
 	var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
 	var origin: Vector3 = _snapshot.get("origin", Vector3.ZERO) as Vector3
-	var radar_on := bool(_snapshot.get("radar_active", false))
-	var rim_m := range_m * 0.94
 
 	## Soft ground disc.
 	_map.draw_circle(center, half - 2.0, Color(0.08, 0.1, 0.12, 0.95))
-	if radar_on:
-		_map.draw_circle(center, half - 2.0, Color(0.12, 0.28, 0.26, 0.35))
 
 	## Buildings — muted blocks; each footprint corner uses the same heading-up map as dots.
 	var buildings: Array = _snapshot.get("buildings", []) as Array
@@ -177,13 +168,24 @@ func _on_map_draw() -> void:
 		_map.draw_circle(mp, 4.5, Color(1.0, 0.55, 0.15, 1.0))
 		_map.draw_circle(mp, 2.0, Color(1.0, 0.9, 0.45, 1.0))
 
-	## Undead — mage violet, minion teal, giant red. Edge = direction-only rim dots.
+	## Infection tendril heads — glowing green.
+	var tendrils: Array = _snapshot.get("tendrils", []) as Array
+	for tip in tendrils:
+		var tp: Vector2 = _world_to_map(
+			tip as Vector3, origin, right, forward, center, scale_px, range_m, false
+		)
+		if tp.x < -999.0:
+			continue
+		_map.draw_circle(tp, 6.0, Color(0.15, 0.95, 0.28, 0.28))
+		_map.draw_circle(tp, 3.6, Color(0.35, 1.0, 0.32, 0.95))
+		_map.draw_circle(tp, 1.7, Color(0.85, 1.0, 0.55, 1.0))
+
+	## Undead — mage violet, minion teal, giant red.
 	var undead: Array = _snapshot.get("undead", []) as Array
 	for raw in undead:
 		if not (raw is Dictionary):
 			continue
 		var u: Dictionary = raw
-		var on_edge := bool(u.get("edge", false))
 		var up: Vector2 = _world_to_map(
 			u.get("pos", Vector3.ZERO) as Vector3,
 			origin,
@@ -191,8 +193,8 @@ func _on_map_draw() -> void:
 			forward,
 			center,
 			scale_px,
-			rim_m if on_edge else range_m,
-			on_edge
+			range_m,
+			false
 		)
 		if up.x < -999.0:
 			continue
@@ -205,12 +207,7 @@ func _on_map_draw() -> void:
 		elif kind == "giant":
 			col = Color(1.0, 0.3, 0.25, 1.0)
 			rad = 5.5
-		if on_edge:
-			## Rim contact: hollow ring so it reads as "bearing, not range".
-			_map.draw_arc(up, rad + 1.2, 0.0, TAU, 16, col, 2.0, true)
-			_map.draw_circle(up, rad * 0.55, col)
-		else:
-			_map.draw_circle(up, rad, col)
+		_map.draw_circle(up, rad, col)
 
 	## Player — cyan chevron facing up (heading-up map).
 	var tip := center + Vector2(0.0, -7.0)
@@ -219,8 +216,7 @@ func _on_map_draw() -> void:
 	_map.draw_colored_polygon(PackedVector2Array([tip, right_pt, left]), Color(0.35, 0.95, 1.0, 1.0))
 
 	## Range ring.
-	var ring_col := Color(0.45, 1.0, 0.9, 0.7) if radar_on else Color(0.55, 0.85, 0.78, 0.35)
-	_map.draw_arc(center, half - 3.0, 0.0, TAU, 48, ring_col, 1.25 if radar_on else 1.0, true)
+	_map.draw_arc(center, half - 3.0, 0.0, TAU, 48, Color(0.55, 0.85, 0.78, 0.35), 1.0, true)
 
 
 func _offset_to_map_axes(offset: Vector3, right: Vector3, forward: Vector3) -> Vector2:

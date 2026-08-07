@@ -123,8 +123,65 @@ static func orphan_block_keys(prev: Array[Vector3i], bake_blocks: Dictionary) ->
 	return out
 
 
+## True when a local 16³ block overlaps the district XZ footprint `[0,size_x)×[0,size_z)`.
+## Far decorate (tree canopies, stoops) can paint a few voxels past the south/west edge;
+## those blocks are not district substrate and must not trip the ground-orphan guard.
+static func block_intersects_footprint(bp: Vector3i, size_x: int, size_z: int) -> bool:
+	var x0 := bp.x * BLOCK
+	var z0 := bp.z * BLOCK
+	return x0 < size_x and x0 + BLOCK > 0 and z0 < size_z and z0 + BLOCK > 0
+
+
+## Drop sparse-export keys that lie entirely outside the district footprint so bleed is
+## never committed (and never remembered for upgrade orphan math).
+static func filter_blocks_to_footprint(
+	blocks: Dictionary, size_x: int, size_z: int
+) -> Dictionary:
+	var out: Dictionary = {}
+	for key: Variant in blocks.keys():
+		var bp: Vector3i = key as Vector3i
+		if block_intersects_footprint(bp, size_x, size_z):
+			out[bp] = blocks[key]
+	return out
+
+
+## Orphan keys on the ground band (`bp.y <= 0`) that still intersect the footprint.
+## These must never be AIR-wiped on far→full upgrade — a missing in-bounds ground key
+## is a bake bug, and wiping it opens the rectangular bedrock voids the player falls through.
+## Out-of-footprint ground orphans are edge paint bleed and belong in the wipe set.
+static func ground_orphan_keys(
+	orphans: Array[Vector3i], size_x: int = -1, size_z: int = -1
+) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	var check_footprint := size_x > 0 and size_z > 0
+	for bp in orphans:
+		if bp.y > 0:
+			continue
+		if check_footprint and not block_intersects_footprint(bp, size_x, size_z):
+			continue
+		out.append(bp)
+	return out
+
+
+## Orphan keys safe to AIR-wipe after a successful full restamp: above the ground band,
+## or entirely outside the district footprint (far edge bleed).
+static func upper_orphan_keys(
+	orphans: Array[Vector3i], size_x: int = -1, size_z: int = -1
+) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	var check_footprint := size_x > 0 and size_z > 0
+	for bp in orphans:
+		if bp.y > 0:
+			out.append(bp)
+			continue
+		if check_footprint and not block_intersects_footprint(bp, size_x, size_z):
+			out.append(bp)
+	return out
+
+
 static func commit_block(terrain: VoxelTerrain, origin_vox: Vector3i, local_bp: Vector3i, data_u16: PackedByteArray) -> bool:
 	if terrain == null:
+		push_error("OfflineVolumeCommitter.commit_block: terrain is null at local %s" % str(local_bp))
 		return false
 	var wbp := world_block_pos(origin_vox, local_bp)
 	## Live terrain bounds start at world Y=0 — skip below-ground bake leftovers.
@@ -132,6 +189,10 @@ static func commit_block(terrain: VoxelTerrain, origin_vox: Vector3i, local_bp: 
 		return true
 	var buf := make_buffer_u16(data_u16)
 	if buf == null:
+		push_error(
+			"OfflineVolumeCommitter.commit_block: buffer is null at local %s world block %s"
+			% [str(local_bp), str(wbp)]
+		)
 		return false
 	return terrain.try_set_block_data(wbp, buf)
 

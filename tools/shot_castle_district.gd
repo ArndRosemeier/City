@@ -529,7 +529,7 @@ func _stop_the_clock(city: CityRoot) -> void:
 	print("sun pinned to %.1f h" % SHOT_HOUR)
 
 
-## The HUD, the radar, the build slots and the error popup all sit in front of the camera. The
+## The HUD, the minimap, the build slots and the error popup all sit in front of the camera. The
 ## popup is the one that matters: the project is missing a few outfit textures, so it opens over
 ## every frame and an interior shot is nothing but the popup.
 func _hide_overlays(city: CityRoot) -> void:

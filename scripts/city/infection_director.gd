@@ -22,7 +22,6 @@ signal tendril_ended(tendril_id: int)
 @export var heading_reaim_max_steps: int = 100
 ## Street-deck surface voxel Y (DistrictGenerator.ground_thickness). Tips never go below this.
 @export var min_surface_vox_y: int = 6
-const TENDRIL_START_VALUE: int = 1000
 
 const _NEIGHBORS: Array[Vector3i] = [
 	Vector3i(1, 0, 0),
@@ -45,7 +44,7 @@ var _rng := RandomNumberGenerator.new()
 var _tendrils: Dictionary = {}
 ## Vector3i → tendril_id (for lead lookup)
 var _lead_at: Dictionary = {}
-## Spawn order (HUD + stable iteration).
+## Spawn order for stable iteration.
 var _rr_ids: Array[int] = []
 ## tendril_id → aura Node3D
 var _auras: Dictionary = {}
@@ -94,18 +93,19 @@ func _growing_tendril_count() -> int:
 	return n
 
 
-## Snapshot for HUD: ordered rows of {id, value} (remaining tip value).
-func get_tendril_hud_rows() -> Array:
-	var rows: Array = []
+## World positions of every growing tip — minimap paints these as green contacts.
+func active_tendril_lead_worlds() -> Array:
+	var out: Array = []
 	for tid in _rr_ids:
 		if not _tendrils.has(tid):
 			continue
 		var t: Dictionary = _tendrils[tid]
 		if bool(t.get("dying", false)):
 			continue
-		var value := int(t.get("value", 0))
-		rows.append({"id": int(tid), "value": value, "depleted": value <= 0})
-	return rows
+		var world := tendril_lead_world(int(tid))
+		if world.is_finite():
+			out.append(world)
+	return out
 
 
 ## Seed a new tendril. prev_mat is restored if the lead is killed.
@@ -161,7 +161,6 @@ func spawn_tendril_at_vox(
 		"fail_streak": 0,
 		## Per-tendril clock — staggered so tips don't lockstep, but never share budget.
 		"tick_accum": _rng.randf() * tick_interval_sec,
-		"value": TENDRIL_START_VALUE,
 	}
 	_lead_at[vox] = tid
 	_rr_ids.append(tid)
@@ -387,23 +386,7 @@ func _infect_step(tid: int, from_lead: Vector3i, target: Vector3i) -> void:
 		t["steps_until_reaim"] = left
 	_lead_at[target] = tid
 	_tendrils[tid] = t
-	_spend_tendril_value(tid)
 	_sfx_tendril_transmuted(tid, target)
-
-
-## Every voxel a tip digests costs the tendril one point of the potency its HUD row counts down.
-## Nothing is paid out for it: the infection is a proof of concept waiting to become a place-bound
-## event, and the run score does not know it exists.
-func _spend_tendril_value(tid: int) -> void:
-	if not _tendrils.has(tid):
-		return
-	var t: Dictionary = _tendrils[tid]
-	var value := int(t.get("value", 0))
-	if value <= 0:
-		## Spent tips keep converting — running dry slows nothing down.
-		return
-	t["value"] = value - 1
-	_tendrils[tid] = t
 
 
 func _move_lead(tid: int, old_lead: Vector3i, new_lead: Vector3i) -> void:
@@ -521,7 +504,6 @@ func _kill_tendril(tid: int) -> void:
 	_stop_tendril_aura(tid)
 	t["dying"] = true
 	t["alive"] = false
-	t["value"] = 0
 	t["revert_queue"] = order
 	t["tick_accum"] = 0.0
 	_tendrils[tid] = t

@@ -13,6 +13,8 @@ signal fill_gems_requested
 signal fill_recipes_requested
 signal teleport_nearest_recipe_requested
 signal teleport_cave_cage_requested
+signal teleport_murderer_requested
+signal teleport_alchemy_lab_requested
 
 const PANEL_WIDTH := 720.0
 const PANEL_HEIGHT := 480.0
@@ -199,6 +201,16 @@ func _build_ui() -> void:
 		"Teleport to cave cage",
 		"Hop to a Hill district and stand beside the Unique boss cage",
 		teleport_cave_cage_requested
+	)
+	_add_action_button(
+		"Teleport to murderer",
+		"Hop to a district with wanted bills and stand by a poster",
+		teleport_murderer_requested
+	)
+	_add_action_button(
+		"Teleport to alchemy lab",
+		"Hop to a city lab and stand by the apothecary sign",
+		teleport_alchemy_lab_requested
 	)
 
 	## Keeps the first buttons at the top when the column grows taller than its content.

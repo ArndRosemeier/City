@@ -373,10 +373,32 @@ func begin_generate(terrain: VoxelTerrain, tool: VoxelTool, camera: Camera3D) ->
 
 
 func destroy_and_clear(_tool: VoxelTool) -> void:
+	## Far unload. Partial commits drop with the data anchor when the player is outside
+	## unload radius; fail / mid-stamp abort with the player nearby uses `abort_and_clear`.
 	CityProfiler.begin("stream_unload")
-	## Invalidate every await still parked inside bake/commit before we drop the lock.
 	_stamp_epoch += 1
 	OfflineVolumeCommitterScript.release_commit(coord)
+	_teardown_after_stamp_stop()
+	## Dropping the data-only anchor unloads this tile's voxels from RAM.
+	queue_free()
+	CityProfiler.end("stream_unload")
+
+
+## Fail-path teardown: wipe any partial 16³ commits, then free. The streamer awaits this so
+## a nearby player VoxelViewer cannot keep a rectangular pit after `failed`.
+func abort_and_clear(_tool: VoxelTool) -> void:
+	CityProfiler.begin("stream_abort")
+	_stamp_epoch += 1
+	OfflineVolumeCommitterScript.release_commit(coord)
+	is_busy = false
+	if not _committed_block_keys.is_empty() and not is_ready:
+		await _wipe_committed_blocks_to_air("abort_and_clear")
+	_teardown_after_stamp_stop()
+	queue_free()
+	CityProfiler.end("stream_abort")
+
+
+func _teardown_after_stamp_stop() -> void:
 	_unregister_nav()
 	is_ready = false
 	is_busy = false
@@ -438,9 +460,69 @@ func destroy_and_clear(_tool: VoxelTool) -> void:
 	_anchor = null
 	_topology = null
 	generator = null
-	## Dropping the data-only anchor unloads this tile's voxels from RAM.
-	queue_free()
-	CityProfiler.end("stream_unload")
+
+
+## Shared stamp failure: roll back any blocks already written, then notify the streamer.
+func _fail_stamp(reason: String) -> void:
+	is_busy = false
+	if not _committed_block_keys.is_empty():
+		await _wipe_committed_blocks_to_air(reason)
+	failed.emit(self, reason)
+
+
+## AIR-stamp every block this tile wrote this stamp, then clear the list. Used when a stamp
+## aborts mid-commit so a nearby viewer cannot keep a half-written district as a hole.
+func _wipe_committed_blocks_to_air(reason: String) -> void:
+	var terrain := _terrain_ref
+	var keys: Array[Vector3i] = _committed_block_keys.duplicate()
+	_committed_block_keys.clear()
+	if terrain == null or keys.is_empty():
+		return
+	var air_sentinel := PackedByteArray([0, 0])
+	const BUDGET_MSEC := 4
+	var i := 0
+	var failed_n := 0
+	while i < keys.size():
+		if not is_instance_valid(self):
+			return
+		if not OfflineVolumeCommitterScript.try_acquire_commit(coord):
+			await get_tree().process_frame
+			continue
+		var t0 := Time.get_ticks_msec()
+		while i < keys.size() and Time.get_ticks_msec() - t0 < BUDGET_MSEC:
+			var bp: Vector3i = keys[i]
+			var ok := OfflineVolumeCommitterScript.commit_block(
+				terrain, origin_vox, bp, air_sentinel
+			)
+			var attempts := 0
+			while not ok and attempts < 90:
+				await get_tree().process_frame
+				ok = OfflineVolumeCommitterScript.commit_block(
+					terrain, origin_vox, bp, air_sentinel
+				)
+				attempts += 1
+			if not ok:
+				failed_n += 1
+				push_error(
+					"DistrictInstance rollback wipe failed at %s local block %s (%s)"
+					% [str(coord), str(bp), reason]
+				)
+			i += 1
+		OfflineVolumeCommitterScript.release_commit(coord)
+		await get_tree().process_frame
+	push_error(
+		"DistrictInstance rolled back %d committed block(s) at %s (%s; %d still stuck)"
+		% [keys.size(), str(coord), reason, failed_n]
+	)
+
+
+func _stamp_cancelled_after_commits(phase: String, epoch: int) -> void:
+	push_error(
+		"DistrictInstance %s stamp cancelled mid-%s epoch=%d commits=%d"
+		% [str(coord), phase, epoch, _committed_block_keys.size()]
+	)
+	if not _committed_block_keys.is_empty():
+		await _wipe_committed_blocks_to_air("stamp cancelled mid-%s" % phase)
 
 
 func _stamp_ground_async(epoch: int) -> void:
@@ -454,21 +536,29 @@ func _stamp_ground_async(epoch: int) -> void:
 		guard += 1
 		await get_tree().process_frame
 		if not _stamp_still_current(epoch):
+			push_error(
+				"DistrictInstance %s stamp cancelled waiting for editable area epoch=%d"
+				% [str(coord), epoch]
+			)
 			return
 	if not _stamp_still_current(epoch):
+		push_error(
+			"DistrictInstance %s stamp cancelled before ground bake epoch=%d" % [str(coord), epoch]
+		)
 		return
 	if not tool.is_area_editable(box):
-		is_busy = false
-		failed.emit(self, "area not editable")
+		await _fail_stamp("area not editable")
 		return
 
 	CityProfiler.set_counter("stream_phase", 1)  ## 1=ground bake
 	var payload := await _bake_on_worker()
 	if not _stamp_still_current(epoch):
+		push_error(
+			"DistrictInstance %s stamp cancelled after ground bake epoch=%d" % [str(coord), epoch]
+		)
 		return
 	if payload.is_empty() or not bool(payload.get("ok", false)):
-		is_busy = false
-		failed.emit(self, str(payload.get("error", "bake failed")))
+		await _fail_stamp(str(payload.get("error", "bake failed")))
 		return
 
 	var t_ingest := Time.get_ticks_usec()
@@ -485,8 +575,7 @@ func _stamp_ground_async(epoch: int) -> void:
 	generator = payload.get("generator") as DistrictGenerator
 	CityProfiler.scope_us("stream_ingest", Time.get_ticks_usec() - t_ingest)
 	if generator == null:
-		is_busy = false
-		failed.emit(self, "bake missing generator")
+		await _fail_stamp("bake missing generator")
 		return
 	## The span field was baked from the finished volume, so it describes the tile the
 	## commits below are still writing. Registering now lets agents path into a district
@@ -502,12 +591,12 @@ func _stamp_ground_async(epoch: int) -> void:
 	_bake_key_index = 0
 	CityProfiler.set_counter("stream_phase", 2)  ## 2=ground commit
 	CityProfiler.set_counter("stream_blocks_left", _bake_block_keys.size())
-	var ground_ok := await _commit_blocks_until("stream_commit_ground", epoch)
-	if not _stamp_still_current(epoch):
+	var ground_err := await _commit_blocks_until("stream_commit_ground", epoch)
+	if ground_err == "stamp cancelled":
+		await _stamp_cancelled_after_commits("ground", epoch)
 		return
-	if not ground_ok:
-		is_busy = false
-		failed.emit(self, "ground commit failed")
+	if not ground_err.is_empty():
+		await _fail_stamp(ground_err)
 		return
 
 	stamp_progress.emit(int(payload.get("cells_total", 0)) / 2)
@@ -523,8 +612,7 @@ func _stamp_detail_async(epoch: int) -> void:
 	var tool := _tool_ref
 	var camera := _camera_ref
 	if generator == null:
-		is_busy = false
-		failed.emit(self, "detail without generator")
+		await _fail_stamp("detail without generator")
 		return
 
 	_ensure_anchor()
@@ -539,26 +627,32 @@ func _stamp_detail_async(epoch: int) -> void:
 	_bake_key_index = 0
 	CityProfiler.set_counter("stream_phase", 3)  ## 3=detail commit
 	CityProfiler.set_counter("stream_blocks_left", _bake_block_keys.size())
-	var detail_ok := await _commit_blocks_until("stream_commit_detail", epoch)
-	if not _stamp_still_current(epoch):
+	var detail_err := await _commit_blocks_until("stream_commit_detail", epoch)
+	if detail_err == "stamp cancelled":
+		await _stamp_cancelled_after_commits("detail", epoch)
 		return
-	if not detail_ok:
-		is_busy = false
-		failed.emit(self, "detail commit failed")
+	if not detail_err.is_empty():
+		await _fail_stamp(detail_err)
 		return
 	if _orphan_wipe_after_stamp:
 		_orphan_wipe_after_stamp = false
 		var wipe_ok := await _wipe_orphan_committed_blocks()
 		if not _stamp_still_current(epoch):
+			await _stamp_cancelled_after_commits("orphan wipe", epoch)
 			return
 		if not wipe_ok:
-			is_busy = false
-			failed.emit(self, "upgrade orphan wipe failed")
+			await _fail_stamp("upgrade orphan wipe failed")
 			return
 	## Every block of this tile is written by now, so a reschedule can no longer be dropped
 	## over a district neighbour that had not landed yet when the block was first committed.
 	var retouch_ok := await _reschedule_meshed_commits()
 	if not retouch_ok or not _stamp_still_current(epoch):
+		push_error(
+			"DistrictInstance %s stamp aborted during mesh retouch epoch=%d retouch_ok=%s"
+			% [str(coord), epoch, str(retouch_ok)]
+		)
+		if not _stamp_still_current(epoch) and not _committed_block_keys.is_empty():
+			await _wipe_committed_blocks_to_air("stamp cancelled mid-retouch")
 		return
 	_bake_blocks.clear()
 	_bake_block_keys.clear()
@@ -600,8 +694,7 @@ func _stamp_detail_async(epoch: int) -> void:
 	_topology = generator.build_street_topology()
 	CityProfiler.end("stream_nav")
 	if _topology == null or not _topology.is_ready():
-		is_busy = false
-		failed.emit(self, "street topology failed")
+		await _fail_stamp("street topology failed")
 		return
 
 	await get_tree().process_frame
@@ -1639,6 +1732,8 @@ func _remember_committed_block(bp: Vector3i) -> void:
 
 ## After a far→full overwrite, paint far-only blocks to AIR. Shared keys were already
 ## restamped; clearing them first is what used to open bedrock voids on commit failure.
+## In-footprint ground-band orphans (`bp.y <= 0`) are never wiped — that would carve
+## rectangular pits. Edge-bleed blocks outside the district XZ footprint are wiped.
 func _wipe_orphan_committed_blocks() -> bool:
 	var terrain := _terrain_ref
 	var orphans: Array[Vector3i] = OfflineVolumeCommitterScript.orphan_block_keys(
@@ -1647,13 +1742,32 @@ func _wipe_orphan_committed_blocks() -> bool:
 	_upgrade_prev_committed.clear()
 	if terrain == null or orphans.is_empty():
 		return true
+	var size_x := DistrictCoord.SIZE_X_VOX
+	var size_z := DistrictCoord.SIZE_Z_VOX
+	if generator != null:
+		size_x = generator.size_x
+		size_z = generator.size_z
+	var ground_orphans: Array[Vector3i] = OfflineVolumeCommitterScript.ground_orphan_keys(
+		orphans, size_x, size_z
+	)
+	var upper_orphans: Array[Vector3i] = OfflineVolumeCommitterScript.upper_orphan_keys(
+		orphans, size_x, size_z
+	)
+	if not ground_orphans.is_empty():
+		## Leave far ground in place — AIR-wiping it is the rectangular bedrock void. The full
+		## bake omitted these keys; keeping the far substrate is safer than a hole, and louder
+		## than silence so the sparse-export gap can be chased.
+		push_error(
+			"DistrictInstance %s upgrade has %d ground orphan(s) — refusing AIR wipe (first %s)"
+			% [str(coord), ground_orphans.size(), str(ground_orphans[0])]
+		)
 	## Do not CityProfiler.begin/end across awaits — streamer._process nests scopes each frame.
 	var wipe_t0 := Time.get_ticks_usec()
 	## Uniform AIR block sentinel (see OfflineVolumeCommitter.make_buffer_u16).
 	var air_sentinel := PackedByteArray([0, 0])
 	const BUDGET_MSEC := 4
 	var i := 0
-	while i < orphans.size():
+	while i < upper_orphans.size():
 		if not is_instance_valid(self):
 			CityProfiler.scope_us("stream_upgrade_wipe", Time.get_ticks_usec() - wipe_t0)
 			return false
@@ -1661,8 +1775,8 @@ func _wipe_orphan_committed_blocks() -> bool:
 			await get_tree().process_frame
 			continue
 		var t0 := Time.get_ticks_msec()
-		while i < orphans.size() and Time.get_ticks_msec() - t0 < BUDGET_MSEC:
-			var bp: Vector3i = orphans[i]
+		while i < upper_orphans.size() and Time.get_ticks_msec() - t0 < BUDGET_MSEC:
+			var bp: Vector3i = upper_orphans[i]
 			var ok := OfflineVolumeCommitterScript.commit_block(
 				terrain, origin_vox, bp, air_sentinel
 			)
@@ -1687,7 +1801,7 @@ func _wipe_orphan_committed_blocks() -> bool:
 	CityProfiler.scope_us("stream_upgrade_wipe", Time.get_ticks_usec() - wipe_t0)
 	print(
 		"DistrictInstance wiped %d orphan far blocks after upgrade %s"
-		% [orphans.size(), str(coord)]
+		% [upper_orphans.size(), str(coord)]
 	)
 	return true
 
@@ -1750,8 +1864,10 @@ func _stamp_still_current(epoch: int) -> bool:
 	return is_instance_valid(self) and _stamp_epoch == epoch
 
 
-func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) -> bool:
-	## Time-budgeted commits. Keys must already be nearest-first for this phase.
+## Time-budgeted commits. Keys must already be nearest-first for this phase.
+## Returns "" on success, `"stamp cancelled"` on epoch abort, or a hard-fail reason
+## (`"commit failed"`, `"commit missing bake payload"`) for greppable logs.
+func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) -> String:
 	## Remesh backpressure: do not outrun VoxelTools — feeding more blocks while
 	## remaining_main_thread_blocks is high produces 600ms+ unaccounted gaps.
 	const BUDGET_MSEC := 3
@@ -1762,7 +1878,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) 
 	while true:
 		if not _stamp_still_current(epoch):
 			OfflineVolumeCommitterScript.release_commit(coord)
-			return false
+			return "stamp cancelled"
 		## Hard pressure: release the lock so another district is not stuck waiting,
 		## then idle until the remesher drains.
 		var pressure := CityProfiler.remesh_pressure()
@@ -1779,7 +1895,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) 
 			continue
 		if not _stamp_still_current(epoch):
 			OfflineVolumeCommitterScript.release_commit(coord)
-			return false
+			return "stamp cancelled"
 		if _bake_key_index >= _bake_block_keys.size():
 			break
 
@@ -1796,7 +1912,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) 
 					% [str(coord), str(bp)]
 				)
 				OfflineVolumeCommitterScript.release_commit(coord)
-				return false
+				return "commit missing bake payload"
 			var data: PackedByteArray = _bake_blocks[bp] as PackedByteArray
 			var ok := OfflineVolumeCommitterScript.commit_block(terrain, origin_vox, bp, data)
 			var attempts := 0
@@ -1804,14 +1920,16 @@ func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) 
 				await get_tree().process_frame
 				if not _stamp_still_current(epoch):
 					OfflineVolumeCommitterScript.release_commit(coord)
-					return false
+					return "stamp cancelled"
 				## Keep holding the commit lock while retrying this block.
 				ok = OfflineVolumeCommitterScript.commit_block(terrain, origin_vox, bp, data)
 				attempts += 1
 			if not ok:
-				push_error("DistrictInstance commit failed at %s local block %s" % [str(coord), str(bp)])
+				push_error(
+					"DistrictInstance commit failed at %s local block %s" % [str(coord), str(bp)]
+				)
 				OfflineVolumeCommitterScript.release_commit(coord)
-				return false
+				return "commit failed"
 			_remember_committed_block(bp)
 			_bake_key_index += 1
 			committed += 1
@@ -1827,7 +1945,7 @@ func _commit_blocks_until(scope_name: String = "voxel_commit", epoch: int = -1) 
 
 	OfflineVolumeCommitterScript.release_commit(coord)
 	CityProfiler.set_counter("remesh_backpressure", 0)
-	return true
+	return ""
 
 
 func reactivate_from_stream(_terrain: VoxelTerrain, _camera: Camera3D) -> void:

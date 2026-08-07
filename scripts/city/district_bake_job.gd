@@ -4,6 +4,7 @@ extends RefCounted
 
 const DistrictGeneratorScript := preload("res://scripts/city/district_generator.gd")
 const CityVoxelNativeScript := preload("res://scripts/city/city_voxel_native.gd")
+const OfflineVolumeCommitterScript := preload("res://scripts/city/offline_volume_committer.gd")
 
 ## Full voxel buildings + decorate.
 const QUALITY_FULL := "full"
@@ -80,7 +81,11 @@ static func bake(params: Dictionary) -> Dictionary:
 	if volume == null:
 		return {"ok": false, "error": "volume missing"}
 
-	var blocks: Dictionary = volume.export_blocks_u16()
+	## Far trees / stoops can paint a few voxels past the tile edge; those 16³ keys are not
+	## this district's substrate and must not be committed or remembered for upgrade orphans.
+	var blocks: Dictionary = OfflineVolumeCommitterScript.filter_blocks_to_footprint(
+		volume.export_blocks_u16(), size_x, size_z
+	)
 	var nav_bake: NativeNavBake = null
 	var nav_stats: Dictionary = {}
 	if bool(params.get("bake_nav", false)):

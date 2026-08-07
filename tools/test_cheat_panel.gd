@@ -51,7 +51,14 @@ func _check_panel() -> void:
 		var btn := child as Button
 		if btn != null:
 			labels.append(btn.text)
-	for want in ["Fill gems", "Fill recipes", "Teleport to recipe", "Teleport to cave cage"]:
+	for want in [
+		"Fill gems",
+		"Fill recipes",
+		"Teleport to recipe",
+		"Teleport to cave cage",
+		"Teleport to murderer",
+		"Teleport to alchemy lab",
+	]:
 		if not labels.has(want):
 			_fail("FAIL cheat panel missing button '%s' (have %s)" % [want, str(labels)])
 	var room := buttons.get_node_or_null("FutureButtonRoom")

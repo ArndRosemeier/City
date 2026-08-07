@@ -42,17 +42,27 @@ static func is_vanilla_theme(theme_id: int) -> bool:
 	return theme_id != DistrictTheme.SIEGE
 
 
+## Whether this tile rolls a lab at all: the theme gate and the chance, with no geometry in it.
+## Same shape as `WantedPoster.posts_bills` so cheats can hunt a candidate without baking.
+static func rolls_lab(dseed: int, theme_id: int) -> bool:
+	if not is_vanilla_theme(theme_id):
+		return false
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(dseed) ^ 0x1ABA1AB
+	return rng.randf() < LAB_CHANCE
+
+
 ## The lot this tile hides a lab in, or `NO_CELL`. Pure function of the district seed and
 ## the baked building set, so stream time and the JIT decorator never disagree.
 static func lab_cell_for(dseed: int, theme_id: int, buildings: Dictionary) -> Vector2i:
-	if not is_vanilla_theme(theme_id):
+	if not rolls_lab(dseed, theme_id):
 		return NO_CELL
 	if buildings.is_empty():
 		return NO_CELL
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(dseed) ^ 0x1ABA1AB
-	if rng.randf() >= LAB_CHANCE:
-		return NO_CELL
+	## Burn the chance roll so the lot pick stays seed-stable with older builds.
+	rng.randf()
 	## Sorted so a Dictionary's insertion order cannot decide which lot it is.
 	var cells: Array[Vector2i] = []
 	for key: Vector2i in buildings.keys():

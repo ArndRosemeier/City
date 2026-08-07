@@ -18,13 +18,13 @@ signal energy_changed(current: float, maximum: float)
 signal health_changed(current: float, maximum: float)
 ## Health hit zero; CityRoot turns this into the game-over screen.
 signal health_depleted(source: DamageSource.Id)
-## M-key: aim a voxel infection meteor at hit_point (surface normal for VFX only).
+## Aim a voxel infection meteor at hit_point (surface normal for VFX only). No default key.
 signal meteor_requested(hit_point: Vector3, hit_normal: Vector3)
 ## T-key: summon a Game Boy Tetris machine at aim hit_point.
 signal tetris_requested(hit_point: Vector3, hit_normal: Vector3)
 ## Z-key: summon a vertical aim panel for world-space click targeting.
 signal aim_panel_requested(hit_point: Vector3, hit_normal: Vector3)
-## P-key: spawn a pedestrian at aim hit_point (plays nearby Tetris if present).
+## Spawn a pedestrian at aim hit_point (plays nearby Tetris if present). No default key.
 signal pedestrian_requested(hit_point: Vector3, hit_normal: Vector3)
 
 const CharacterEditorScript := preload("res://scripts/city/character_editor.gd")
@@ -1745,10 +1745,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_sound()
 				get_viewport().set_input_as_handled()
 				return
-			if ctl.matches_key_pressed(ek, "meteor"):
-				_request_infection_meteor()
-				get_viewport().set_input_as_handled()
-				return
 			if ctl.matches_key_pressed(ek, "tetris"):
 				## Legacy T key: only fires when the ability is unlocked (and usually tray-bound).
 				_activate_ability_id(AbilityRegistry.ID_TETRIS)
@@ -1756,14 +1752,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 			if ctl.matches_key_pressed(ek, "aim_panel"):
 				_request_aim_panel()
-				get_viewport().set_input_as_handled()
-				return
-			if ctl.matches_key_pressed(ek, "pedestrian"):
-				_request_pedestrian()
-				get_viewport().set_input_as_handled()
-				return
-			if ctl.matches_key_pressed(ek, "undead_radar"):
-				_request_undead_radar()
 				get_viewport().set_input_as_handled()
 				return
 			if ctl.matches_key_pressed(ek, "district_hop"):
@@ -2836,8 +2824,10 @@ func _enforce_void_floor() -> void:
 ## Snap out of a through-floor cave fall. Prefers last solid footing; remesh rays often
 ## miss underground, so the fallback walks the live voxel column upward.
 func _rescue_from_void() -> bool:
+	var fall_pos := global_position
 	var stand := _find_void_rescue_stand()
 	if stand == Vector3.INF:
+		_report_void_rescue(fall_pos, Vector3.INF)
 		return false
 	global_position = stand
 	velocity = Vector3.ZERO
@@ -2845,7 +2835,33 @@ func _rescue_from_void() -> bool:
 	_last_solid_footing = stand
 	_has_solid_footing = true
 	_last_grounded_y = stand.y
+	_report_void_rescue(fall_pos, stand)
 	return true
+
+
+## Loud diagnostic for rare world holes: district stream state + whether the fall column is AIR.
+func _report_void_rescue(fall_pos: Vector3, stand: Vector3) -> void:
+	var coord := DistrictCoord.from_world(fall_pos, VOXEL_SIZE_M)
+	var footing_id := _voxel_id_at(fall_pos + Vector3(0.0, 0.5, 0.0))
+	var footing_label := "unknown"
+	if footing_id < 0:
+		footing_label = "no_tool"
+	elif footing_id == VoxelMaterial.AIR:
+		footing_label = "AIR"
+	else:
+		footing_label = "mat=%d" % footing_id
+	var city := _city_root()
+	var stream := "city=missing"
+	if city != null and city.has_method("describe_district_stream_state"):
+		stream = str(city.call("describe_district_stream_state", coord))
+	var stand_txt := "unresolved" if stand == Vector3.INF else str(stand)
+	var msg := (
+		"CityWalker void rescue fall=%s coord=%s footing=%s %s -> %s"
+		% [str(fall_pos), str(coord), footing_label, stream, stand_txt]
+	)
+	push_error(msg)
+	if city != null and city.has_method("report_void_rescue"):
+		city.call("report_void_rescue", msg)
 
 
 func _find_void_rescue_stand() -> Vector3:
@@ -3762,20 +3778,6 @@ func _request_aim_panel() -> void:
 func _request_pedestrian() -> void:
 	var aim := _aim_ray_at_cursor()
 	pedestrian_requested.emit(aim["point"] as Vector3, aim["normal"] as Vector3)
-
-
-func _request_undead_radar() -> void:
-	var root := _city_root()
-	if root == null:
-		push_error("CityWalker: undead radar — no CityRoot parent")
-		return
-	if root.has_method("request_undead_radar"):
-		var ok: bool = bool(root.call("request_undead_radar"))
-		if not ok:
-			## Cooldown / boot / game-over — still feedback via HUD timer when cooling.
-			pass
-	else:
-		push_error("CityWalker: CityRoot missing request_undead_radar")
 
 
 func _request_district_hop() -> void:
