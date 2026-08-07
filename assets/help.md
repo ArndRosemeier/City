@@ -2,7 +2,7 @@
 
 An endless voxel city you can carve, fight in and rebuild. Nothing is on rails: walk out of
 the door, find gems, unlock powers, and pick which kind of district you want to be standing in.
-Created by Arnd Rosemeier using Cursor (mainly Grok 4.5 high with Opus 5 acting as as specialist
+Created by Arnd Rosemeier using Cursor (mainly Grok 4.5 high with Opus 5 acting as a specialist
 for hairy cases and art direction). Contact: eccentricity@futuremagic.de
 
 ## Moving around
