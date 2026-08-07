@@ -35,6 +35,32 @@ def _format_json(value: Any) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False)
 
 
+def _merge_form_into_row(
+    previous: dict[str, Any], form: dict[str, Any], owned: set[str]
+) -> dict[str, Any]:
+    """Write a form's values back into a row without touching keys the form has no widget for.
+
+    A panel models a subset of each row: `build_recipes.arch` carries `requires_recipe`, which
+    no FieldSpec in BUILD_FIELDS covers. Replacing the row with the form's own keys deleted
+    those on every save — and since loading a section auto-selects its first id, saving from
+    any tab silently rewrote one row per section.
+
+    `owned` keys follow the form exactly, including *absence*: clearing an optional field must
+    still delete it. Everything else is passed through in its original position, so a save that
+    changes nothing produces no diff.
+    """
+    merged: dict[str, Any] = {}
+    for key, value in previous.items():
+        if key not in owned:
+            merged[key] = value
+        elif key in form:
+            merged[key] = form[key]
+    for key, value in form.items():
+        if key not in merged:
+            merged[key] = value
+    return merged
+
+
 class IdMapPanel:
     """Left id list + right form for a dict[str, dict] section."""
 
@@ -129,7 +155,9 @@ class IdMapPanel:
         if self._selected is None:
             return
         row = self._read_form(self._selected)
-        self._data[self._selected] = row
+        self._data[self._selected] = _merge_form_into_row(
+            self._data.get(self._selected, {}), row, {spec.key for spec in self._fields}
+        )
 
     def _mark_dirty(self, *_args: object) -> None:
         if self._loading:

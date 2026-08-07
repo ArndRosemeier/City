@@ -2850,6 +2850,52 @@ def _smoke_assert_duel_buttons(app: GameDataEditor) -> None:
         raise RuntimeError("smoke: duel report missing fighter id")
 
 
+def _smoke_dropped_paths(disk: Any, live: Any, path: str) -> list[str]:
+    """Paths present on disk but gone after a load/collect round trip."""
+    if isinstance(disk, dict):
+        if not isinstance(live, dict):
+            return [f"{path}: object became {type(live).__name__}"]
+        out: list[str] = []
+        for key, value in disk.items():
+            if key not in live:
+                out.append(f"{path}.{key}")
+                continue
+            out.extend(_smoke_dropped_paths(value, live[key], f"{path}.{key}"))
+        return out
+    if isinstance(disk, list):
+        if not isinstance(live, list):
+            return [f"{path}: array became {type(live).__name__}"]
+        if len(live) < len(disk):
+            return [f"{path}: {len(disk)} entries became {len(live)}"]
+        out = []
+        for i, value in enumerate(disk):
+            out.extend(_smoke_dropped_paths(value, live[i], f"{path}[{i}]"))
+        return out
+    return []
+
+
+def _smoke_assert_noncombat_roundtrip(app: GameDataEditor) -> None:
+    """Assert saving cannot delete authored keys the panels do not model.
+
+    Each panel edits a subset of its section's keys, and every save rewrites the whole section
+    from the panels. A key with no widget — `build_recipes.arch.requires_recipe`, say — must
+    survive the trip out and back, or saving an unrelated tab quietly changes the game.
+    """
+    disk_root = gd.load_gamedata()
+    live = app._collect_noncombat()
+    dropped: list[str] = []
+    for section, live_value in live.items():
+        disk_value = disk_root.get(section)
+        if disk_value is None:
+            raise RuntimeError(f"smoke: gamedata.json has no {section!r} section")
+        dropped.extend(_smoke_dropped_paths(disk_value, live_value, section))
+    if dropped:
+        raise RuntimeError(
+            "smoke: editor round trip drops authored keys:\n"
+            + "\n".join(f"  {p}" for p in dropped[:20])
+        )
+
+
 def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
     assert app._items_panel is not None
     assert app._craft_panel is not None
@@ -2890,6 +2936,7 @@ def _smoke_assert_noncombat_loaded(app: GameDataEditor) -> None:
     help_md = app._help_markdown()
     if "# Districts" not in help_md:
         raise RuntimeError("smoke: Help tab did not load assets/help.md")
+    _smoke_assert_noncombat_roundtrip(app)
     errors = app._validate_docs()
     if errors:
         raise RuntimeError(
