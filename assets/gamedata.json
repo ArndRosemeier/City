@@ -1041,13 +1041,13 @@
         "siege_tower"
       ],
       "spawn_ready": false,
-      "attacks": [
-        "blaster"
-      ],
+      "damage_mult": 0.85,
       "aggro_range_m": 26.0,
       "preferred_range_m": 20.0,
-      "damage_mult": 0.85,
-      "armor_mult": 0.9
+      "armor_mult": 0.9,
+      "attacks": [
+        "blaster"
+      ]
     },
     {
       "id": "siege/resin_vat",
@@ -1056,13 +1056,13 @@
         "siege_tower"
       ],
       "spawn_ready": false,
-      "attacks": [
-        "stomp"
-      ],
+      "damage_mult": 1.1,
       "aggro_range_m": 12.0,
       "preferred_range_m": 4.0,
-      "damage_mult": 1.1,
-      "armor_mult": 1.1
+      "armor_mult": 1.1,
+      "attacks": [
+        "stomp"
+      ]
     },
     {
       "id": "siege/arc_pylon",
@@ -1071,13 +1071,13 @@
         "siege_tower"
       ],
       "spawn_ready": false,
-      "attacks": [
-        "eye_laser"
-      ],
+      "damage_mult": 1.15,
       "aggro_range_m": 32.0,
       "preferred_range_m": 26.0,
-      "damage_mult": 1.15,
-      "armor_mult": 1.0
+      "armor_mult": 1.0,
+      "attacks": [
+        "eye_laser"
+      ]
     },
     {
       "id": "siege/frost_lance",
@@ -1086,13 +1086,13 @@
         "siege_tower"
       ],
       "spawn_ready": false,
-      "attacks": [
-        "eye_laser"
-      ],
+      "damage_mult": 1.05,
       "aggro_range_m": 48.0,
       "preferred_range_m": 40.0,
-      "damage_mult": 1.05,
-      "armor_mult": 0.95
+      "armor_mult": 0.95,
+      "attacks": [
+        "eye_laser"
+      ]
     },
     {
       "id": "siege/bloom_mortar",
@@ -1101,13 +1101,13 @@
         "siege_tower"
       ],
       "spawn_ready": false,
-      "attacks": [
-        "charged_blast"
-      ],
+      "damage_mult": 1.25,
       "aggro_range_m": 30.0,
       "preferred_range_m": 22.0,
-      "damage_mult": 1.25,
-      "armor_mult": 1.05
+      "armor_mult": 1.05,
+      "attacks": [
+        "charged_blast"
+      ]
     },
     {
       "id": "siege/prism_spire",
@@ -1116,13 +1116,13 @@
         "siege_tower"
       ],
       "spawn_ready": false,
-      "attacks": [
-        "eye_laser"
-      ],
+      "damage_mult": 1.8,
       "aggro_range_m": 36.0,
       "preferred_range_m": 28.0,
-      "damage_mult": 1.8,
-      "armor_mult": 1.2
+      "armor_mult": 1.2,
+      "attacks": [
+        "eye_laser"
+      ]
     },
     {
       "id": "spawn/fractal_spire",
@@ -1131,13 +1131,13 @@
         "siege_tower"
       ],
       "spawn_ready": false,
+      "damage_mult": 1.0,
+      "aggro_range_m": 30.0,
+      "preferred_range_m": 24.0,
+      "armor_mult": 1.0,
       "attacks": [
         "orb_convert"
       ],
-      "aggro_range_m": 30.0,
-      "preferred_range_m": 24.0,
-      "damage_mult": 1.0,
-      "armor_mult": 1.0,
       "notes": "Crypt / castle-dungeon summoning tower. Authored undead, but the station overrides the faction at spawn so a castle pad's rolled side owns its own spire. Convert orb is the whole kit."
     },
     {
@@ -1147,13 +1147,13 @@
         "minion"
       ],
       "spawn_ready": false,
+      "hp_mult": 0.62,
+      "damage_mult": 0.8,
+      "aggro_range_m": 22.0,
+      "armor_mult": 0.8,
       "attacks": [
         "melee"
       ],
-      "hp_mult": 0.62,
-      "damage_mult": 0.8,
-      "armor_mult": 0.8,
-      "aggro_range_m": 22.0,
       "notes": "A passer-by who walked through lab infection. Melee only and fragile — the pressure is that there are several, not that any one of them is a fight."
     },
     {
@@ -1163,16 +1163,16 @@
         "brute"
       ],
       "spawn_ready": false,
+      "hp_mult": 2.1,
+      "damage_mult": 1.5,
+      "aggro_range_m": 30.0,
+      "preferred_range_m": 18.0,
+      "armor_mult": 1.25,
       "attacks": [
         "melee",
         "stomp",
         "eye_laser"
       ],
-      "preferred_range_m": 18.0,
-      "hp_mult": 2.1,
-      "damage_mult": 1.5,
-      "armor_mult": 1.25,
-      "aggro_range_m": 30.0,
       "notes": "The face on the wanted poster. Eye laser for the hunt, then stomp/melee when closed. Only ever spawned by the crowd promoting the marked ped the player chose to attack, which is why it is not spawn_ready."
     }
   ],
@@ -1189,6 +1189,13 @@
       "stack_max": 99,
       "flags": [
         "boost"
+      ]
+    },
+    "cloudstone": {
+      "display_name": "Cloudstone",
+      "stack_max": 99,
+      "flags": [
+        "cloudstone"
       ]
     },
     "gem_amber": {
@@ -1245,13 +1252,6 @@
       "flags": [
         "trap"
       ]
-    },
-    "cloudstone": {
-      "display_name": "Cloudstone",
-      "stack_max": 99,
-      "flags": [
-        "cloudstone"
-      ]
     }
   },
   "craft_recipes": {
@@ -1273,20 +1273,20 @@
       "output_id": "boost_speed",
       "output_count": 1
     },
-    "trap_from_quartz": {
-      "display_name": "Trap",
-      "inputs": {
-        "gem_quartz": 5
-      },
-      "output_id": "trap",
-      "output_count": 1
-    },
     "cloudstone_from_amber": {
       "display_name": "Cloudstone",
       "inputs": {
         "gem_amber": 2
       },
       "output_id": "cloudstone",
+      "output_count": 1
+    },
+    "trap_from_quartz": {
+      "display_name": "Trap",
+      "inputs": {
+        "gem_quartz": 5
+      },
+      "output_id": "trap",
       "output_count": 1
     }
   },
@@ -2212,6 +2212,20 @@
       "requires_recipe": true,
       "consume_item": "gem_quartz",
       "consume_count": 1
+    },
+    "cloudstone": {
+      "display_name": "Cloudstone",
+      "hint": "Soft cloud block - lowers gravity while underfoot",
+      "consume_item": "cloudstone",
+      "consume_count": 1,
+      "voxels": [
+        [
+          0,
+          0,
+          0,
+          270
+        ]
+      ]
     },
     "cottage": {
       "display_name": "Cottage",
@@ -37596,20 +37610,6 @@
         ]
       ],
       "requires_recipe": true
-    },
-    "cloudstone": {
-      "display_name": "Cloudstone",
-      "hint": "Soft cloud block - lowers gravity while underfoot",
-      "consume_item": "cloudstone",
-      "consume_count": 1,
-      "voxels": [
-        [
-          0,
-          0,
-          0,
-          270
-        ]
-      ]
     }
   },
   "abilities": {
@@ -37846,34 +37846,6 @@
     "spawn_pressure_k": 0.9,
     "per_territory_cap": 2,
     "district_alive_cap": 34
-  },
-  "siege": {
-    "lodestone_hp": 400.0,
-    "outer_stone_hp": 250.0,
-    "lodestone_vulnerable_radius_m": 5.0,
-    "withdraw_clear_radius_m": 20.0,
-    "gate_primary_share": 1.0,
-    "gate_weight_floor": 0.08,
-    "gate_falloff": 1.6,
-    "deploy_sec": 45.0,
-    "wave_period_sec": 120.0,
-    "wave_drip_fraction": 0.5,
-    "alive_target_base": 10,
-    "alive_target_growth": 2,
-    "district_alive_cap": 34,
-    "spawn_interval_sec": 0.55,
-    "hp_growth_per_wave": 0.12,
-    "damage_growth_per_wave": 0.08,
-    "lodestone_dps_per_attacker": 8.0,
-    "repair_energy_per_sec": 2.0,
-    "repair_hp_per_sec": 5.0,
-    "repair_range_m": 18.0,
-    "source_factions": [
-      "undead",
-      "horde",
-      "beast",
-      "infernal"
-    ]
   },
   "crypt": {
     "spawn_lift_m": 0.2,
@@ -38524,6 +38496,34 @@
         "cy": "-1.02757314683815614842",
         "scale": "0.00000009007199254741"
       }
+    ]
+  },
+  "siege": {
+    "lodestone_hp": 400.0,
+    "outer_stone_hp": 250.0,
+    "lodestone_vulnerable_radius_m": 5.0,
+    "withdraw_clear_radius_m": 20.0,
+    "gate_primary_share": 1.0,
+    "gate_weight_floor": 0.08,
+    "gate_falloff": 1.6,
+    "deploy_sec": 45.0,
+    "wave_period_sec": 120.0,
+    "wave_drip_fraction": 0.5,
+    "alive_target_base": 10,
+    "alive_target_growth": 2,
+    "district_alive_cap": 34,
+    "spawn_interval_sec": 0.55,
+    "hp_growth_per_wave": 0.12,
+    "damage_growth_per_wave": 0.08,
+    "lodestone_dps_per_attacker": 8.0,
+    "repair_energy_per_sec": 2.0,
+    "repair_hp_per_sec": 5.0,
+    "repair_range_m": 18.0,
+    "source_factions": [
+      "undead",
+      "horde",
+      "beast",
+      "infernal"
     ]
   },
   "auras": {
