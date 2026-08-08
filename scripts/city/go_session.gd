@@ -34,6 +34,9 @@ var _board_n: int = 19
 var _epoch: int = 0
 ## False once we learn the loaded GDExtension predates genmove_eval.
 var _engine_has_eval: bool = true
+## WorkerThreadPool task currently inside KataGo (genmove / final_status). Joined
+## before pool shutdown so stream-out cannot destroy the handle under a search.
+var _search_task_id: int = -1
 
 
 func begin_match(
@@ -119,10 +122,13 @@ func end_session(reason: String = "leave") -> void:
 	set_process(false)
 	_epoch += 1
 	_busy = false
+	## Must finish before pool.shutdown may tear down the native handle.
+	_join_search_if_pending()
 	if _owned_engine:
 		GoEnginePoolScript.release()
 		_owned_engine = false
 		## Destroy the net only when the district leaves — restart reuses it warm.
+		## Shutdown returns immediately; destroy runs on WorkerThreadPool.
 		if reason == "unload":
 			GoEnginePoolScript.shutdown()
 	_eng = null
@@ -131,6 +137,15 @@ func end_session(reason: String = "leave") -> void:
 	## "restart" is an internal handoff; emitting would flip the arena UI mid-start.
 	if reason != "restart":
 		session_ended.emit(reason)
+
+
+## Exactly one caller joins each search task (this session or the awaiter — not both).
+func _join_search_if_pending() -> void:
+	var id := _search_task_id
+	if id < 0:
+		return
+	_search_task_id = -1
+	WorkerThreadPool.wait_for_task_completion(id)
 
 
 ## The match as a `WorldGames` row, or {} when there is nothing to come back to. Only a game
@@ -411,6 +426,7 @@ func _final_status_off_main(which: String) -> String:
 			state["done"] = true
 			mutex.unlock()
 	)
+	_search_task_id = task_id
 	while true:
 		mutex.lock()
 		var done: bool = bool(state["done"])
@@ -418,10 +434,9 @@ func _final_status_off_main(which: String) -> String:
 		if done:
 			break
 		if not is_inside_tree():
-			WorkerThreadPool.wait_for_task_completion(task_id)
-			return ""
+			break
 		await get_tree().process_frame
-	WorkerThreadPool.wait_for_task_completion(task_id)
+	_join_search_if_pending()
 	mutex.lock()
 	var out := str(state["text"])
 	mutex.unlock()
@@ -467,6 +482,7 @@ func _genmove_off_main(color_s: String) -> Dictionary:
 			state["done"] = true
 			mutex.unlock()
 	)
+	_search_task_id = task_id
 	while true:
 		mutex.lock()
 		var done: bool = bool(state["done"])
@@ -474,10 +490,9 @@ func _genmove_off_main(color_s: String) -> Dictionary:
 		if done:
 			break
 		if not is_inside_tree():
-			WorkerThreadPool.wait_for_task_completion(task_id)
-			return {"vertex": "pass", "eval_json": ""}
+			break
 		await get_tree().process_frame
-	WorkerThreadPool.wait_for_task_completion(task_id)
+	_join_search_if_pending()
 	mutex.lock()
 	var out := {"vertex": str(state["vertex"]), "eval_json": str(state["eval_json"])}
 	mutex.unlock()

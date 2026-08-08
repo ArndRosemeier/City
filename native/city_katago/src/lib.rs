@@ -320,7 +320,9 @@ impl NativeKataGo {
     }
 }
 
-// SAFETY: GoSession runs genmove on WorkerThreadPool (experimental-threads). Only one
-// genmove runs at a time per handle; play/clear stay on the main thread around it.
+// SAFETY: GoSession runs genmove / final_status on WorkerThreadPool (experimental-threads).
+// Only one search runs at a time per handle; play/clear stay on the main thread around it.
+// GoEnginePool also calls unload() on a worker after the session joins that search, so
+// destroy never races an in-flight genmove.
 unsafe impl Send for NativeKataGo {}
 unsafe impl Sync for NativeKataGo {}

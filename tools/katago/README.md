@@ -55,4 +55,6 @@ powershell -File tools\run_test.ps1 -Scene test_katago_gdextension -TimeoutSec 6
 - The strong `kata1-b18c384nbt.bin.gz` net is optional for play (Human-SL is required).
 - Do **not** ship CUDA/cuDNN redistributables; Eigen is the reliable default, OpenCL later.
 - Gaming district loads the human net when the player invites a ped (refcount unload when
-  the district streams out / session ends). Ambient ped-vs-ped tables do not hold a net.
+  the district streams out / session ends). Unload joins any in-flight genmove first, then
+  runs `katago_destroy` on WorkerThreadPool so stream-out does not hitch the main thread.
+  Ambient ped-vs-ped tables do not hold a net.

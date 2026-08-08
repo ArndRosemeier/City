@@ -60,6 +60,18 @@ func get_alive_units() -> Array[UndeadUnit]:
 	return out
 
 
+## Cave-cage dissolve opened something in this tile — let inert walkers try again.
+func wake_cage_inert_in_district(coord: Vector2i) -> void:
+	for u in get_alive_units():
+		if u.is_siege_tower():
+			continue
+		if not u.is_cage_inert():
+			continue
+		if DistrictCoord.from_world(u.global_position, CityRoot.VOXEL_SIZE) != coord:
+			continue
+		u.wake_from_cage()
+
+
 func is_registered(unit: UndeadUnit) -> bool:
 	return unit != null and _units.has(unit)
 

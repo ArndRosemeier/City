@@ -50,8 +50,10 @@ func setup(
 
 func _exit_tree() -> void:
 	## The row outlives the arena on purpose: streaming the district out must not forfeit a
-	## game. Only finishing one clears it.
+	## game. Only finishing one clears it. Session unload joins any in-flight search, then
+	## GoEnginePool.shutdown() tears the net down off the main thread.
 	_teardown_session("unload")
+	## Idempotent — end_session("unload") already shut the pool down when a match was open.
 	GoEnginePoolScript.shutdown()
 
 

@@ -1,10 +1,8 @@
 ## Builds the small tilted solid used as an inventory icon (gem, trap or tonic).
 ##
-## Every gem used to be the same cube, so quartz and diamond — two near-white stones in a
-## palette that is shared with the ore in the hills — were the same 64 px blob. The palette
-## belongs to the world, so the stones are told apart here instead: each gem type gets its own
-## cut, and the cave glow is turned down for the preview so the cut is visible at all rather
-## than clipped to white.
+## Quartz and diamond share a near-white palette with the hill ore, so silhouette has to
+## carry the tier: common stones use the hex column, sapphire+ the brilliant. Cave glow is
+## turned down in the preview so the cut stays visible instead of clipping to white.
 class_name InventoryItemVisual
 extends RefCounted
 
@@ -51,9 +49,8 @@ static func make_mesh(item_id: String) -> MeshInstance3D:
 	return mi
 
 
-## One cut per gem type. Colour alone cannot separate quartz from diamond or amber from topaz,
-## so the silhouette carries the identity: a blunt six-sided shaft, a resin bead, a sharp
-## square spindle, a cube, a tall step-cut block and a brilliant.
+## Two cuts, matching world ore: a blunt hex column for common stones, an octagonal
+## bipyramid for sapphire+. Colour still separates amber from topaz inside a tier.
 static func _shape_for(def: InventoryCatalog.ItemDef) -> Mesh:
 	if def.is_trap:
 		return _block(Vector3.ONE * PREVIEW_SIZE)
@@ -61,19 +58,10 @@ static func _shape_for(def: InventoryCatalog.ItemDef) -> Mesh:
 		return _flask_for(def.id)
 	if def.is_cloudstone:
 		return _bead(PREVIEW_SIZE * 0.48)
-	match def.gem_mat_id:
-		VoxelMaterial.GEM_QUARTZ:
-			return _column(6, 0.21, PREVIEW_SIZE)
-		VoxelMaterial.GEM_AMBER:
-			return _bead(PREVIEW_SIZE * 0.5)
-		VoxelMaterial.GEM_TOPAZ:
-			return _bipyramid(4, 0.27, 0.56)
-		VoxelMaterial.GEM_SAPPHIRE:
-			return _block(Vector3.ONE * 0.5)
-		VoxelMaterial.GEM_EMERALD:
-			return _block(Vector3(0.34, PREVIEW_SIZE, 0.34))
-		VoxelMaterial.GEM_DIAMOND:
+	if VoxelMaterial.is_gem(def.gem_mat_id):
+		if VoxelMaterial.is_gem_brilliant(def.gem_mat_id):
 			return _bipyramid(8, 0.30, 0.52)
+		return _column(6, 0.21, PREVIEW_SIZE)
 	push_error("InventoryItemVisual: item '%s' has no icon shape" % def.id)
 	return null
 

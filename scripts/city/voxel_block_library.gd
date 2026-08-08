@@ -129,6 +129,16 @@ static func _make_model(id: int) -> VoxelBlockyModel:
 			if id == VoxelMaterial.DOOR:
 				## Full-cell solid — motion/nav block; leaf meshes are visual only.
 				return _make_cube(id)
+			if VoxelMaterial.is_gem(id):
+				## Faceted crystal in the cell — not a filled ore cube. Culls off so host
+				## rock keeps its faces around the stone.
+				return _mesh_model(
+					id,
+					_mesh_gem(id),
+					false,
+					false,
+					AABB(Vector3(0.18, 0.10, 0.18), Vector3(0.64, 0.80, 0.64))
+				)
 			if VoxelMaterial.is_room_prop(id):
 				return _make_room_prop_model(id)
 			if VoxelMaterial.is_zoo_turf(id):
@@ -657,6 +667,86 @@ static func _mesh_orb() -> ArrayMesh:
 	_emit_uv_sphere(st, Vector3(0.5, 0.5, 0.5), 0.42, 14, 10)
 	st.index()
 	return st.commit()
+
+
+## World gem ore: two cuts. Common stones are a blunt hex column; sapphire+ get a
+## sharp octagonal bipyramid so quartz and diamond read apart even when both glow white.
+static func _mesh_gem(id: int) -> ArrayMesh:
+	if VoxelMaterial.is_gem_brilliant(id):
+		return _mesh_gem_brilliant()
+	return _mesh_gem_column()
+
+
+## Rough hexagonal prism — cheap mineral look (quartz / amber / topaz).
+static func _mesh_gem_column() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var cx := 0.5
+	var cz := 0.5
+	var y0 := 0.12
+	var y1 := 0.88
+	var radius := 0.30
+	var sides := 6
+	var ring_lo: Array[Vector3] = []
+	var ring_hi: Array[Vector3] = []
+	for i in sides:
+		var a := TAU * float(i) / float(sides) + PI / float(sides)
+		var x := cx + cos(a) * radius
+		var z := cz + sin(a) * radius
+		ring_lo.append(Vector3(x, y0, z))
+		ring_hi.append(Vector3(x, y1, z))
+	for i in sides:
+		var i1 := (i + 1) % sides
+		_add_facet(st, ring_lo[i], ring_lo[i1], ring_hi[i1])
+		_add_facet(st, ring_lo[i], ring_hi[i1], ring_hi[i])
+	## Caps — fan from centre so flat ends keep a single outward normal each.
+	var top_c := Vector3(cx, y1, cz)
+	var bot_c := Vector3(cx, y0, cz)
+	for i in sides:
+		var i1 := (i + 1) % sides
+		_add_facet(st, top_c, ring_hi[i], ring_hi[i1])
+		_add_facet(st, bot_c, ring_lo[i1], ring_lo[i])
+	st.index()
+	return st.commit()
+
+
+## Cut-stone octagonal bipyramid — expensive brilliant (sapphire / emerald / diamond).
+static func _mesh_gem_brilliant() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var center := Vector3(0.5, 0.5, 0.5)
+	var top := Vector3(0.5, 0.92, 0.5)
+	var bottom := Vector3(0.5, 0.08, 0.5)
+	var radius := 0.36
+	var sides := 8
+	var ring: Array[Vector3] = []
+	for i in sides:
+		var a := TAU * float(i) / float(sides)
+		ring.append(Vector3(center.x + cos(a) * radius, center.y, center.z + sin(a) * radius))
+	for i in sides:
+		var i1 := (i + 1) % sides
+		_add_facet(st, top, ring[i], ring[i1])
+		_add_facet(st, bottom, ring[i1], ring[i])
+	st.index()
+	return st.commit()
+
+
+## Flat facet with outward lighting normal. Winds clockwise from outside so Godot
+## front faces stay visible (cross points inward — see voxel-custom-meshes rule).
+static func _add_facet(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
+	var mid := (a + b + c) * (1.0 / 3.0)
+	var toward_out := mid - Vector3(0.5, 0.5, 0.5)
+	var cross := (b - a).cross(c - a)
+	if cross.length_squared() < 1e-12:
+		return
+	## If the geometric cross already points outward, flip winding so it points in.
+	if toward_out.length_squared() > 1e-10 and cross.dot(toward_out) > 0.0:
+		var tmp := b
+		b = c
+		c = tmp
+		cross = (b - a).cross(c - a)
+	var outward := -cross.normalized()
+	_add_tri(st, a, b, c, outward)
 
 
 static func _emit_uv_sphere(

@@ -92,8 +92,9 @@ const CAVE_HOLLOW_TARGET := 0.30
 ## Keep gems off the meadow skin and the outer CAVE_SHELL band.
 const GEM_SURFACE_MARGIN := 3
 
-## Dissolving red cage for the Unique cave boss. Sized for MONSTER nav (radius 2, height 7):
-## a tighter pen left the CageDemon "entombed", and dig-out used to erase the cage walls.
+## Dissolving red cage for the Unique cave boss. Sized for MONSTER nav (radius 2, height 7).
+## Walkers enclosed by these mats go cage-inert until dissolve wakes the district — so
+## dig-out / nearby-unstuck cannot free the boss before the player opens the pen.
 const CAGE_INNER_HALF := 3
 const CAGE_WALL := 1
 const CAGE_INNER_H := 8

@@ -482,6 +482,12 @@ static func is_gem(id: int) -> bool:
 	return id >= GEM_QUARTZ and id <= GEM_DIAMOND
 
 
+## Fancy cut (octagonal bipyramid) vs rough hex column. Sapphire+ share the brilliant;
+## quartz / amber / topaz keep the cheaper mineral silhouette.
+static func is_gem_brilliant(id: int) -> bool:
+	return id >= GEM_SAPPHIRE and id <= GEM_DIAMOND
+
+
 ## Dressed castle masonry, either course. The plinth, curtain and towers are all built
 ## from these two, so "is this the castle" is one predicate rather than two comparisons.
 static func is_castle_block(id: int) -> bool:

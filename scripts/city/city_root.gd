@@ -4889,10 +4889,21 @@ func _tick_dissolve() -> void:
 		_notify_destruction(world_hint, 18.0)
 		if _audio != null and _audio.has_method("move_dissolve_hiss"):
 			_audio.call("move_dissolve_hiss", world_hint)
+		## Cage opened (or is opening) — inert bosses in this tile may act; still-enclosed
+		## ones re-inert on their next tick.
+		if VoxelMaterial.is_cave_cage(seed_id):
+			_wake_cage_inert_at_world(world_hint)
 	if _dissolve_frontier.is_empty():
 		_dissolve_seen.clear()
 		_dissolve_seed_id = -1
 		_dissolve_removed = 0
+
+
+func _wake_cage_inert_at_world(world: Vector3) -> void:
+	if _monsters == null or not is_instance_valid(_monsters):
+		return
+	var coord := DistrictCoord.from_world(world, VOXEL_SIZE)
+	_monsters.wake_cage_inert_in_district(coord)
 
 
 ## Player damage touched explosive fabric — charged blast + boom + area damage once.

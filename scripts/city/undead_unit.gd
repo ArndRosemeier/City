@@ -91,6 +91,11 @@ const GROW_EPSILON := 0.05
 ## Extra cells carved beyond the profile footprint when a giant digs itself out, so the
 ## pocket actually satisfies the clearance the profile asks for.
 const DIG_OUT_MARGIN_CELLS := 1
+## Cardinal probe length when asking whether cave-cage walls still enclose this body.
+## Outer cage half is 4 voxels; a little slack covers stand offset inside the pen.
+const CAGE_ENCLOSE_PROBE_VOXELS := 7
+## Enclosed when at least this many of the four ±X/±Z probes hit cave-cage fabric.
+const CAGE_ENCLOSE_MIN_HITS := 3
 
 signal died(unit: UndeadUnit, was_giant: bool)
 ## Emitted whenever the pool changes (hits, grow, player-minion rebinding).
@@ -111,6 +116,10 @@ var _model: Node3D
 var _col_shape: CollisionShape3D
 var _capsule: CapsuleShape3D
 var _nav_agent: NavAgent
+## Sticky: enclosed by hill cave-cage walls. Cleared when dissolve wakes the district; the
+## next tick re-applies if the pen is still intact. Skips nav/combat so unstuck/dig-out
+## cannot free a boss the player has not opened.
+var _cage_inert: bool = false
 ## Set when a spawner shrinks this body out of the envelope its catalogue profile assumes.
 ## Negative means "ask the catalogue", which is what every body does until then.
 var _nav_profile_override: int = -1
@@ -1209,6 +1218,34 @@ func _on_trapped(_world_pos: Vector3, _escape: NavLadder.Escape) -> void:
 	pass
 
 
+func _enter_cage_inert() -> void:
+	_cage_inert = true
+	velocity = Vector3.ZERO
+	if _nav_agent != null:
+		_nav_agent.abandon_goal()
+	CityProfiler.add_counter("undead_cage_inert")
+
+
+## True when cave-cage walls still surround this body on most sides. Zoo fence never counts —
+## only the hill dissolve pen. Siege towers are never pen-held.
+func _enclosed_by_cave_cage() -> bool:
+	if is_siege_tower():
+		return false
+	if _city == null or not _city.has_method("probe_solid_ray"):
+		return false
+	var origin := muzzle_world()
+	var reach := CityRoot.VOXEL_SIZE * float(CAGE_ENCLOSE_PROBE_VOXELS)
+	var hits := 0
+	var dirs: Array[Vector3] = [Vector3.RIGHT, Vector3.LEFT, Vector3.FORWARD, Vector3.BACK]
+	for dir: Vector3 in dirs:
+		var hit: Dictionary = _city.probe_solid_ray(origin, origin + dir * reach)
+		if hit.is_empty():
+			continue
+		if VoxelMaterial.is_cave_cage(int(hit.get("voxel_id", VoxelMaterial.AIR))):
+			hits += 1
+	return hits >= CAGE_ENCLOSE_MIN_HITS
+
+
 ## A `can_break` body is entombed, and breaking out is what the profile promised. The pocket
 ## is carved through CityBrush — the one live write funnel — so `voxels_changed` fires and
 ## the nav field rebuilds over the hole instead of the body standing in a stale one.
@@ -1299,12 +1336,26 @@ func is_trap_held() -> bool:
 	return false
 
 
+func is_cage_inert() -> bool:
+	return _cage_inert
+
+
+## District dissolve destroyed cave-cage fabric — try acting again next tick.
+func wake_from_cage() -> void:
+	_cage_inert = false
+
+
 func tick(delta: float) -> void:
 	if not _alive:
 		return
 	if not _city.is_player_alive():
 		return
 	if is_trap_held():
+		velocity = Vector3.ZERO
+		return
+	if not _cage_inert and _enclosed_by_cave_cage():
+		_enter_cage_inert()
+	if _cage_inert:
 		velocity = Vector3.ZERO
 		return
 	CityProfiler.begin("undead_unit")

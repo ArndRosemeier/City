@@ -1597,7 +1597,8 @@ func _clear_dungeon_summoners() -> void:
 	dungeon_summoners.clear()
 
 
-## One Unique CageDemon per Hill — stands inside the blastable red cage baked by HillComposer.
+## One Unique CageDemon per Hill — stands inside the dissolving red cage. It goes cage-inert
+## on its first tick (enclosed by CAVE_CAGE_*) until dissolve wakes the district.
 func _spawn_cave_cage_boss(gen: DistrictGenerator, p_origin_vox: Vector3i) -> void:
 	cave_cage_stand_world = Vector3.INF
 	if gen == null:

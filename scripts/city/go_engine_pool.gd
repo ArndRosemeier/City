@@ -1,6 +1,7 @@
 ## Process-wide refcounted NativeKataGo handle (Human-SL rank ladder).
 ## Model load runs on WorkerThreadPool so match start stays hitch-free.
-## The loaded net stays warm across matches; call shutdown() when the district leaves.
+## Unload also runs off the main thread — stream-out must not block on
+## `katago_destroy` / NNEvaluator teardown (multi-second hitches).
 class_name GoEnginePool
 extends RefCounted
 
@@ -19,6 +20,10 @@ static var _load_mutex: Mutex = Mutex.new()
 static var _load_state: Dictionary = {"done": true, "ok": false}
 ## When true, the in-flight loader must unload as soon as it finishes.
 static var _shutdown_pending: bool = false
+## Background `katago_destroy` in flight (district stream-out).
+static var _unloading: bool = false
+static var _unload_task_id: int = -1
+static var _unload_monitor_running: bool = false
 
 
 static func is_ready() -> bool:
@@ -29,11 +34,18 @@ static func is_ready() -> bool:
 	)
 
 
+## True while a background load or unload still owns the native handle.
+static func is_busy() -> bool:
+	return _loading or _unloading
+
+
 ## Synchronous load (blocks the calling thread). Prefer `acquire_async` from gameplay.
 static func acquire(rank: String) -> Object:
 	if not ClassDB.class_exists(&"NativeKataGo"):
 		push_error("GoEnginePool: NativeKataGo missing — build tools/build_city_katago.ps1")
 		return null
+	## Sync callers (tests) must not race a stream-out unload still tearing down the net.
+	_join_unload_if_pending()
 	var token := normalize_rank(rank)
 	_refs += 1
 	_shutdown_pending = false
@@ -80,6 +92,12 @@ static func acquire_async(host: Node, rank: String) -> Object:
 	var token := normalize_rank(rank)
 	_refs += 1
 	_shutdown_pending = false
+	## Wait out a district-unload destroy so we do not instantiate a second net on top of it.
+	while _unloading:
+		if not is_instance_valid(host) or not host.is_inside_tree():
+			release()
+			return null
+		await host.get_tree().process_frame
 	if is_ready():
 		_eng.call("set_rank", token)
 		_rank = token
@@ -100,7 +118,7 @@ static func acquire_async(host: Node, rank: String) -> Object:
 			release()
 			return null
 		await host.get_tree().process_frame
-	if _shutdown_pending or not is_ready():
+	if _shutdown_pending or _unloading or not is_ready():
 		release()
 		return null
 	_eng.call("set_rank", token)
@@ -114,13 +132,14 @@ static func release() -> void:
 
 
 ## Unload the net (district stream-out / process exit). Safe with zero refs.
+## Returns immediately; `katago_destroy` runs on WorkerThreadPool.
 static func shutdown() -> void:
 	_refs = 0
 	_shutdown_pending = true
 	if _loading:
+		## `_monitor_load` will begin unload when the load task finishes.
 		return
-	_unload_engine()
-	_shutdown_pending = false
+	_begin_unload()
 
 
 static func normalize_rank(rank: String) -> String:
@@ -134,11 +153,53 @@ static func normalize_rank(rank: String) -> String:
 	return "5k"
 
 
-static func _unload_engine() -> void:
-	if _eng != null and is_instance_valid(_eng):
-		_eng.call("unload")
+## Detach the pool ref and destroy the native handle off the main thread.
+static func _begin_unload() -> void:
+	if _unloading:
+		return
+	var eng := _eng
 	_eng = null
 	_rank = "5k"
+	if eng == null or not is_instance_valid(eng):
+		_shutdown_pending = false
+		return
+	_unloading = true
+	## Capture keeps the RefCounted alive until unload finishes; Drop is then a no-op.
+	_unload_task_id = WorkerThreadPool.add_task(
+		func() -> void:
+			if eng != null and is_instance_valid(eng):
+				eng.call("unload")
+	)
+	if not _unload_monitor_running:
+		_unload_monitor_running = true
+		_monitor_unload()
+
+
+## Join the unload worker exactly once (monitor or a sync acquire — not both).
+static func _join_unload_if_pending() -> void:
+	var id := _unload_task_id
+	if id < 0:
+		return
+	_unload_task_id = -1
+	WorkerThreadPool.wait_for_task_completion(id)
+	_unloading = false
+	_shutdown_pending = false
+
+
+static func _monitor_unload() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	while true:
+		var id := _unload_task_id
+		if id < 0:
+			break
+		if WorkerThreadPool.is_task_completed(id):
+			break
+		if tree != null:
+			await tree.process_frame
+		else:
+			OS.delay_msec(5)
+	_join_unload_if_pending()
+	_unload_monitor_running = false
 
 
 static func _kick_background_load(rank: String) -> bool:
@@ -192,9 +253,8 @@ static func _monitor_load() -> void:
 	_load_mutex.unlock()
 	if not ok:
 		push_error("GoEnginePool: NativeKataGo.load failed")
-		_unload_engine()
 	_loading = false
 	_monitor_running = false
-	if _shutdown_pending:
-		_unload_engine()
-		_shutdown_pending = false
+	## Failed load or stream-out during load: destroy any wrapper/handle off-main.
+	if _shutdown_pending or not ok:
+		_begin_unload()
